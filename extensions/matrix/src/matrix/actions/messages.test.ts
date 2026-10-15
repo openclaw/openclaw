@@ -167,6 +167,26 @@ function createEditClient(originalContent: Record<string, unknown>) {
   return { client, sendMessage };
 }
 
+function createFailingReadClient(error: unknown) {
+  const doRequest = vi.fn(async () => {
+    throw error;
+  });
+  const getRelations = vi.fn(async () => {
+    throw error;
+  });
+  return {
+    client: {
+      doRequest,
+      hydrateEvents: vi.fn(),
+      getEvent: vi.fn(async () => null),
+      getRelations,
+      stop: vi.fn(),
+    } as unknown as MatrixClient,
+    doRequest,
+    getRelations,
+  };
+}
+
 function expectRecordFields(value: unknown, expected: Record<string, unknown>) {
   if (!value || typeof value !== "object") {
     throw new Error("Expected record");
@@ -737,5 +757,78 @@ describe("matrix message actions", () => {
     expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$thread-root");
     expect(result.messages.map((message) => message.eventId)).toEqual(["$thread-reply"]);
     expect(result.nextBatch).toBeNull();
+  });
+
+  it("explains the cursor recovery path when a homeserver rejects an event id used as a read cursor", async () => {
+    const homeserverError = Object.assign(
+      new Error("MatrixError: [400] 'from' parameter is invalid"),
+      { httpStatus: 400, errcode: "M_INVALID_PARAM" },
+    );
+    const { client, doRequest } = createFailingReadClient(homeserverError);
+
+    const error = (await readMatrixMessages("room:!room:example.org", {
+      client,
+      limit: 25,
+      after: "$event-id-used-as-a-cursor",
+    }).then(
+      () => undefined,
+      (err: unknown) => err,
+    )) as (Error & { cause?: unknown }) | undefined;
+
+    expect(doRequest).toHaveBeenCalledWith(
+      "GET",
+      "/_matrix/client/v3/rooms/!room%3Aexample.org/messages",
+      { dir: "f", limit: 25, from: "$event-id-used-as-a-cursor" },
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.message).toContain("nextBatch or prevBatch");
+    expect(error?.message).toContain("$event-id-used-as-a-cursor");
+    expect(error?.cause).toBe(homeserverError);
+  });
+
+  it("adds the same cursor guidance to a rejected threaded relations read", async () => {
+    const homeserverError = Object.assign(
+      new Error("MatrixError: [400] 'from' parameter is invalid (GET /relations)"),
+      { httpStatus: 400 },
+    );
+    const { client, getRelations, doRequest } = createFailingReadClient(homeserverError);
+
+    await expect(
+      readMatrixMessages("room:!room:example.org", {
+        client,
+        threadId: "$thread-root",
+        limit: 5,
+        before: "$thread-event-id",
+      }),
+    ).rejects.toThrow(/nextBatch or prevBatch/);
+
+    expect(getRelations).toHaveBeenCalledWith(
+      "!room:example.org",
+      "$thread-root",
+      "m.thread",
+      undefined,
+      { dir: "b", from: "$thread-event-id", limit: 5 },
+    );
+    expect(doRequest).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "an unrelated 400",
+      Object.assign(new Error("MatrixError: [400] Bad request"), { httpStatus: 400 }),
+    ],
+    [
+      "a forbidden room",
+      Object.assign(new Error("MatrixError: [403] M_FORBIDDEN"), {
+        httpStatus: 403,
+        errcode: "M_FORBIDDEN",
+      }),
+    ],
+  ])("passes %s through unchanged", async (_name, homeserverError) => {
+    const { client } = createFailingReadClient(homeserverError);
+
+    await expect(
+      readMatrixMessages("room:!room:example.org", { client, limit: 5, after: "t42" }),
+    ).rejects.toBe(homeserverError);
   });
 });

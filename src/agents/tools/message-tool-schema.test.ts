@@ -54,4 +54,11 @@ describe("message schema variants", () => {
     expect(Value.Check(next, { action: "poll" })).toBe(true);
     expect(next.properties).toHaveProperty("pollOptionId");
   });
+
+  it("describes read before/after as pagination cursors rather than ids", () => {
+    const schema = buildMessageToolSchemaFromActions(["read"], options);
+    const properties = schema.properties as Record<string, { description?: string }>;
+    expect(properties.before?.description).toContain("nextBatch/prevBatch");
+    expect(properties.after?.description).toContain("nextBatch/prevBatch");
+  });
 });

@@ -1,5 +1,9 @@
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  formatMatrixInvalidPaginationTokenError,
+  isMatrixInvalidPaginationTokenError,
+} from "../errors.js";
 import { resolveMatrixReplacementContent } from "../media-text.js";
 import { fetchMatrixPollMessageSummary, resolveMatrixPollRootEventId } from "../poll-summary.js";
 import { isPollEventType, isPollStartType } from "../poll-types.js";
@@ -15,6 +19,23 @@ import {
 } from "./types.js";
 
 const MATRIX_THREAD_RELATIONS_START_CURSOR_PREFIX = "openclaw.matrix.thread-relations-start:";
+
+// `before`/`after` are forwarded verbatim as the homeserver `from` pagination
+// token, so a caller that passes a message id gets an opaque HTTP 400. Attach
+// the recovery path without masking unrelated Matrix failures.
+async function withMatrixReadCursorContext<T>(
+  token: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (token !== undefined && isMatrixInvalidPaginationTokenError(err)) {
+      throw new Error(formatMatrixInvalidPaginationTokenError(token), { cause: err });
+    }
+    throw err;
+  }
+}
 
 function resolveMatrixReplacementTarget(event: MatrixRawEvent): string | undefined {
   const relation = event.content["m.relates_to"];
@@ -145,25 +166,31 @@ export async function readMatrixMessages(
     }
     const relationPage =
       threadId && relationLimit > 0
-        ? await client.getRelations(resolvedRoom, threadId, "m.thread", undefined, {
-            dir: dir as Direction,
-            from: token,
-            limit: relationLimit,
-          })
+        ? await withMatrixReadCursorContext(token, () =>
+            client.getRelations(resolvedRoom, threadId, "m.thread", undefined, {
+              dir: dir as Direction,
+              from: token,
+              limit: relationLimit,
+            }),
+          )
         : null;
     // Flat room history uses the low-level endpoint for compatibility; threaded reads use
     // the SDK relations helper so encrypted rooms get the SDK's event-type translation.
     const flatPage = threadId
       ? null
-      : ((await client.doRequest(
-          "GET",
-          `/_matrix/client/v3/rooms/${encodeURIComponent(resolvedRoom)}/messages`,
-          {
-            dir,
-            limit,
-            from: token,
-          },
-        )) as { chunk: MatrixRawEvent[]; start?: string; end?: string });
+      : await withMatrixReadCursorContext(
+          token,
+          async () =>
+            (await client.doRequest(
+              "GET",
+              `/_matrix/client/v3/rooms/${encodeURIComponent(resolvedRoom)}/messages`,
+              {
+                dir,
+                limit,
+                from: token,
+              },
+            )) as { chunk: MatrixRawEvent[]; start?: string; end?: string },
+        );
     const hydratedChunk = await client.hydrateEvents(
       resolvedRoom,
       relationPage ? (rootFillsThreadPage ? [] : relationPage.events) : (flatPage?.chunk ?? []),

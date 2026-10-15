@@ -312,8 +312,12 @@ const MESSAGE_SCHEMA_GROUPS: ReadonlyArray<{
       limit: optionalPositiveIntegerSchema({ description: "Maximum number of results to return." }),
       pageSize: optionalPositiveIntegerSchema(),
       pageToken: optionalStringSchema(),
-      before: optionalStringSchema(),
-      after: optionalStringSchema(),
+      before: optionalStringSchema(
+        "Read/search before this point. Cursor-paging channels (Matrix) take the nextBatch/prevBatch token from a previous read here, not a message id.",
+      ),
+      after: optionalStringSchema(
+        "Read/search after this point. Cursor-paging channels (Matrix) take the nextBatch/prevBatch token from a previous read here, not a message id.",
+      ),
       around: optionalStringSchema(),
       fromMe: optionalBooleanSchema(),
       includeArchived: optionalBooleanSchema(),

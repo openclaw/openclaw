@@ -68,6 +68,12 @@ describe("message read legacy option visibility", () => {
     expect(help).toContain("--around <id>");
     expect(help).toContain("--thread-id <id>");
     expect(help).not.toContain("--include-thread");
+    expect(read!.options.find((option) => option.long === "--before")?.description).toContain(
+      "nextBatch/prevBatch",
+    );
+    expect(read!.options.find((option) => option.long === "--after")?.description).toContain(
+      "nextBatch/prevBatch",
+    );
   });
 
   const engines = [
