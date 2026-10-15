@@ -14,8 +14,9 @@ import {
   updateWhatsAppMainLastRoute,
 } from "./inbound-dispatch.js";
 
-const { readAgentRunTerminalOutcome } = vi.hoisted(() => ({
+const { readAgentRunTerminalOutcome, verboseLog } = vi.hoisted(() => ({
   readAgentRunTerminalOutcome: vi.fn(),
+  verboseLog: vi.fn(),
 }));
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
@@ -24,8 +25,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
 vi.mock("./runtime-api.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./runtime-api.js")>()),
   getAgentScopedMediaLocalRoots: () => [],
-  logVerbose: () => {},
-  shouldLogVerbose: () => false,
+  logVerbose: verboseLog,
+  shouldLogVerbose: () => true,
 }));
 vi.mock("../../media.js", () => ({ loadWebMedia: vi.fn() }));
 
@@ -165,6 +166,7 @@ const replacement = { text: "captioned replacement", mediaUrls: ["/tmp/a.jpg"] }
 
 beforeEach(() => {
   readAgentRunTerminalOutcome.mockReset();
+  verboseLog.mockClear();
   vi.mocked(loadWebMedia).mockReset();
 });
 
@@ -284,6 +286,22 @@ describe("prepared WhatsApp inbound boundary", () => {
 });
 
 describe("WhatsApp reply delivery", () => {
+  it("records visible delivery without logging the reply content", async () => {
+    const text = "private WhatsApp reply with confidential account details";
+    const { deliver, deliverReply, plan } = await fixture();
+    const result = await deliver({ text });
+
+    expect(deliverReply).toHaveBeenCalledWith(
+      expect.objectContaining({ replyResult: expect.objectContaining({ text }) }),
+    );
+    expect(result?.visibleReplySent).toBe(true);
+    expect(
+      plan.finalize({ queuedFinal: false, counts: { final: 1 }, observedReplyDelivery: true }),
+    ).toBe(true);
+    expect(verboseLog).toHaveBeenCalledWith(`Reply delivered: ${text.length} chars -> +1000`);
+    expect(JSON.stringify(verboseLog.mock.calls)).not.toContain(text);
+  });
+
   it("does not force a self-chat response prefix without identity", () => {
     expect(
       resolveWhatsAppResponsePrefix({ cfg: { messages: {} }, agentId: "main", isSelfChat: true }),

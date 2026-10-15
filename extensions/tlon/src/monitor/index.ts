@@ -952,12 +952,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       const messageText = rawText;
       const ownerDm = !isClubMessage && isOwner(senderShip);
       if (ownerDm && (await handleApprovalResponse(messageText))) {
-        runtime.log?.(`[tlon] Processed approval response from owner: ${messageText}`);
+        runtime.log?.("[tlon] Processed approval response from owner");
         return;
       }
 
       if (ownerDm && (await handleAdminCommand(messageText))) {
-        runtime.log?.(`[tlon] Processed admin command from owner: ${messageText}`);
+        runtime.log?.("[tlon] Processed admin command from owner");
         return;
       }
 

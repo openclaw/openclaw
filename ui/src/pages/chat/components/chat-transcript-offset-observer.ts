@@ -49,13 +49,12 @@ export function isTranscriptProgrammaticScroll(
   state: TranscriptOffsetState,
   element: HTMLDivElement | null,
 ): boolean {
-  // Lit’s listener can precede the offset observer. Read the committed viewport
-  // so the final event publishes settled follow policy.
-  const distanceFromEnd = (maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0);
   return (
-    isTranscriptMaintenanceScroll(state, element) ||
     state.pendingScrollOffset !== null ||
-    (state.scrollCommand !== null && distanceFromEnd > CHAT_TRANSCRIPT_END_THRESHOLD_PX)
+    isTranscriptMaintenanceScroll(state, element) ||
+    (state.scrollCommand !== null &&
+      (maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0) >
+        CHAT_TRANSCRIPT_END_THRESHOLD_PX)
   );
 }
 
