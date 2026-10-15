@@ -193,8 +193,8 @@ describe("Heartbeat cron and exec event ownership", () => {
     "ignores foreign active and queued %s work but protects the target session",
     async (lane) => {
       await withHeartbeat(async (f) => {
-        const release = createDeferred<void>();
-        const started = createDeferred<void>();
+        const release = createDeferred();
+        const started = createDeferred();
         const target = { agentId: "other", sessionKey: "agent:other:main", sessionId: "other" };
         const active = enqueueCommandInLane(
           lane,
