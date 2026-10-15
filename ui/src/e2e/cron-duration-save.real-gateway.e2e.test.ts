@@ -24,6 +24,7 @@ const suite = createControlUiE2eSuite({
     const owner = await createOpenClawTestInstance({
       name: "control-ui-exact-stagger",
       config: {
+        agents: { defaults: { model: "openai/gpt-4.1" } },
         gateway: { controlUi: { enabled: true } },
         cron: {
           enabled: false,
@@ -40,6 +41,16 @@ const suite = createControlUiE2eSuite({
     });
     instance = owner;
     try {
+      await owner.state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          "openai:cron-duration-fixture": {
+            type: "api_key",
+            provider: "openai",
+            key: "synthetic-cron-duration-inference-key",
+          },
+        },
+      });
       await owner.startGateway();
       return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
     } catch (error) {
@@ -295,7 +306,7 @@ async function withGatewayCommands(artifactName: string, run: (cliJson: CliJson)
       stdout:
         args[0] === "dashboard" ? "[one-time browser handoff omitted]" : redact(result.stdout),
     });
-    expect(result.code, args.join(" ")).toBe(0);
+    expect(result.code, `${args.join(" ")}\n${redact(result.stderr)}`).toBe(0);
     expect(result.signal).toBeNull();
     return requireRecord(JSON.parse(result.stdout));
   };
