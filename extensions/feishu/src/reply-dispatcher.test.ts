@@ -1105,7 +1105,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       resolveFeishuAccountMock.mockReturnValue(createReplyAccount(mode, "partial", "feishu"));
       const { result, options } = createDispatcherHarness();
       await options.onReplyStart?.();
-      result.replyOptions.onAssistantMessageStart?.();
+      if (mode === "auto") {
+        result.replyOptions.onAssistantMessageStart?.();
+      }
       await options.onIdle?.();
       expectNoStaticReply();
       expect(streamingInstances).toHaveLength(mode === "card" ? 1 : 0);
