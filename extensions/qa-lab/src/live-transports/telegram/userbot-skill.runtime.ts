@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 type TelegramUserCredential = {
@@ -37,13 +38,63 @@ type TelegramTestApiProxy = {
 type TelegramUserbotSkillRuntime = {
   createStateRoot(): string;
   parseCredential(value: unknown): TelegramTestCredential;
-  restoreCredential(this: void, value: unknown, stateRoot: string): RestoredTelegramTestCredential;
+  restoreCredential(value: unknown, stateRoot: string): RestoredTelegramTestCredential;
   startApiProxy(leaseHealth: {
     assertHealthy(): void;
     whenUnhealthy: Promise<Error>;
   }): Promise<TelegramTestApiProxy>;
   userDriverPath: string;
 };
+
+function requireString(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  if (typeof value !== "string" || !value) {
+    throw new Error(`Telegram userbot runtime returned invalid ${key}.`);
+  }
+  return value;
+}
+
+function parseCredentialResult(value: unknown): TelegramTestCredential {
+  if (!isRecord(value)) {
+    throw new Error("Telegram userbot credential parser returned an invalid value.");
+  }
+  if (value.schemaVersion !== 1 || value.environment !== "test") {
+    throw new Error("Telegram userbot credential parser returned an unsupported credential.");
+  }
+  return {
+    schemaVersion: 1,
+    environment: "test",
+    groupId: requireString(value, "groupId"),
+    sutToken: requireString(value, "sutToken"),
+    sutUsername: requireString(value, "sutUsername"),
+    sutBotId: requireString(value, "sutBotId"),
+    testerUserId: requireString(value, "testerUserId"),
+    tdlibArchiveBase64: requireString(value, "tdlibArchiveBase64"),
+    tdlibArchiveSha256: requireString(value, "tdlibArchiveSha256"),
+    tdlibVersion: requireString(value, "tdlibVersion"),
+  };
+}
+
+function parseRestoredCredential(value: unknown): RestoredTelegramTestCredential {
+  const credential = parseCredentialResult(value);
+  if (!isRecord(value) || !isRecord(value.driverEnv)) {
+    throw new Error("Telegram userbot credential restore returned invalid driverEnv.");
+  }
+  const driverEnv = Object.fromEntries(
+    Object.entries(value.driverEnv).map(([key, entry]) => {
+      if (typeof entry !== "string") {
+        throw new Error(`Telegram userbot credential restore returned invalid ${key}.`);
+      }
+      return [key, entry];
+    }),
+  );
+  return {
+    ...credential,
+    driverEnv,
+    stateRoot: requireString(value, "stateRoot"),
+    userDriverDir: requireString(value, "userDriverDir"),
+  };
+}
 
 export async function loadTelegramUserbotSkillRuntime(params?: {
   env?: NodeJS.ProcessEnv;
@@ -65,25 +116,16 @@ export async function loadTelegramUserbotSkillRuntime(params?: {
       );
     }
   }
-  // The selected skill owns credential validation and restoration. Its trusted
-  // module results are internal facts, not another credential-input boundary.
-  const [credentialModule, proxyModule]: [
-    {
-      parseTelegramTestCredential: TelegramUserbotSkillRuntime["parseCredential"];
-      restoreTelegramTestCredential: TelegramUserbotSkillRuntime["restoreCredential"];
-    },
-    {
-      startTelegramTestApiProxy(params: {
-        leaseHealth: Parameters<TelegramUserbotSkillRuntime["startApiProxy"]>[0];
-      }): Promise<TelegramTestApiProxy>;
-    },
-  ] = await Promise.all([
+  const [credentialModuleValue, proxyModuleValue]: unknown[] = await Promise.all([
     import(pathToFileURL(credentialPath).href),
     import(pathToFileURL(proxyPath).href),
   ]);
-  const parseCredential = credentialModule.parseTelegramTestCredential;
-  const restoreCredential = credentialModule.restoreTelegramTestCredential;
-  const startApiProxy = proxyModule.startTelegramTestApiProxy;
+  if (!isRecord(credentialModuleValue) || !isRecord(proxyModuleValue)) {
+    throw new Error("Telegram userbot skill modules did not load.");
+  }
+  const parseCredential = credentialModuleValue.parseTelegramTestCredential;
+  const restoreCredential = credentialModuleValue.restoreTelegramTestCredential;
+  const startApiProxy = proxyModuleValue.startTelegramTestApiProxy;
   if (
     typeof parseCredential !== "function" ||
     typeof restoreCredential !== "function" ||
@@ -95,8 +137,60 @@ export async function loadTelegramUserbotSkillRuntime(params?: {
     userDriverPath,
     createStateRoot: () =>
       fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-qa-telegram-")),
-    parseCredential,
-    restoreCredential,
-    startApiProxy: (leaseHealth) => startApiProxy({ leaseHealth }),
+    parseCredential(value) {
+      const normalized: unknown = Reflect.apply(parseCredential, undefined, [value]);
+      const credential = parseCredentialResult(normalized);
+      // The skill parser owns validation; retain only its normalized optional fixture fields.
+      if (isRecord(normalized)) {
+        if (typeof normalized.forumGroupId === "string") {
+          credential.forumGroupId = normalized.forumGroupId;
+        }
+        if (typeof normalized.forumTopicId === "number") {
+          credential.forumTopicId = normalized.forumTopicId;
+        }
+        if (Array.isArray(normalized.participants)) {
+          credential.participants = normalized.participants.map((participant: unknown) => {
+            if (!isRecord(participant)) {
+              throw new Error("Telegram userbot parser returned an invalid participant.");
+            }
+            return {
+              alias: requireString(participant, "alias"),
+              testerUserId: requireString(participant, "testerUserId"),
+              tdlibArchiveBase64: requireString(participant, "tdlibArchiveBase64"),
+              tdlibArchiveSha256: requireString(participant, "tdlibArchiveSha256"),
+              tdlibVersion: requireString(participant, "tdlibVersion"),
+            };
+          });
+        }
+      }
+      return credential;
+    },
+    restoreCredential(value, stateRoot) {
+      return parseRestoredCredential(
+        Reflect.apply(restoreCredential, undefined, [value, stateRoot]),
+      );
+    },
+    async startApiProxy(leaseHealth) {
+      const value: unknown = await Reflect.apply(startApiProxy, undefined, [{ leaseHealth }]);
+      if (
+        !isRecord(value) ||
+        typeof value.apiRoot !== "string" ||
+        typeof value.close !== "function" ||
+        typeof value.drainUpdates !== "function"
+      ) {
+        throw new Error("Telegram userbot Test Bot API proxy returned an invalid runtime.");
+      }
+      const close = value.close;
+      const drainUpdates = value.drainUpdates;
+      return {
+        apiRoot: value.apiRoot,
+        async close() {
+          await Reflect.apply(close, value, []);
+        },
+        async drainUpdates(token) {
+          await Reflect.apply(drainUpdates, value, [token]);
+        },
+      };
+    },
   };
 }

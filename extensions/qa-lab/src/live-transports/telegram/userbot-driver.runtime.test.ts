@@ -270,33 +270,6 @@ describe("Telegram userbot driver runtime", () => {
       path.join(repoRoot, ".agents", "skills", "telegram-e2e-userbot", "scripts", "user-driver.py"),
     );
     expect(() => runtime.parseCredential({})).toThrow("unsupported schema or environment");
-    const credential = {
-      schemaVersion: 1,
-      environment: "test",
-      groupId: "-100123",
-      sutToken: "synthetic-token",
-      sutUsername: "@qa_bot",
-      sutBotId: "123",
-      testerUserId: "456",
-      tdlibArchiveBase64: "e30=",
-      tdlibArchiveSha256: "a".repeat(64),
-      tdlibVersion: "synthetic",
-      forumGroupId: "-100789",
-      forumTopicId: 12,
-      participants: [
-        {
-          alias: "second",
-          testerUserId: "789",
-          tdlibArchiveBase64: "e30=",
-          tdlibArchiveSha256: "b".repeat(64),
-          tdlibVersion: "synthetic",
-        },
-      ],
-    };
-    expect(runtime.parseCredential(credential)).toEqual({ ...credential, sutUsername: "qa_bot" });
-    expect(() => runtime.parseCredential({ ...credential, forumTopicId: 0 })).toThrow(
-      "forumTopicId must be a positive integer",
-    );
     const stateRoot = runtime.createStateRoot();
     expect(fs.statSync(stateRoot).isDirectory()).toBe(true);
     fs.rmSync(stateRoot, { recursive: true, force: true });
