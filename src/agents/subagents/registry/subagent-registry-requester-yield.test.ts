@@ -361,21 +361,6 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
 });
 
 describe("settleRequesterTurnAfterSessionSpawns", () => {
-  it("commits the wake and requester release in one durable write", async () => {
-    const child = makeRun("atomic-transfer");
-    const runs = new Map([[child.runId, child]]);
-    const write = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
-
-    expect(await settleRuns([child], { runs })).toBe(true);
-
-    expect(write).toHaveBeenCalledOnce();
-    expect(loadSubagentRegistryFromSqlite().get(child.runId)).toMatchObject({
-      requesterTurnRunId: undefined,
-      requesterTurnYielded: undefined,
-      requesterSettleWake: { status: "pending", requesterYieldBatch: true },
-    });
-  });
-
   function nestedRequester(delivery: "pending" | "delivered" = "delivered"): SubagentRunRecord {
     return {
       ...makeRun(REQUESTER_TURN),
@@ -651,7 +636,9 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         calls.push("persist");
       };
       const schedule = vi.fn(() => calls.push("schedule"));
+      const write = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
       expect(await settleRuns(entries, { runs, beforeWrite, schedule })).toBe(true);
+      expect(write).toHaveBeenCalledOnce();
       const batchRunIds = entries.map((entry) => entry.runId).toSorted();
       for (const entry of entries) {
         expect(runs.get(entry.runId)!.requesterSettleWake).toEqual({
@@ -667,9 +654,11 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         expect(runs.get(entry.runId)!.requesterTurnRunId).toBeUndefined();
         expect(runs.get(entry.runId)!.retireAfterRequesterTurn).toBeUndefined();
       }
-      expect(
-        loadSubagentRegistryFromSqlite().get(first.runId)?.requesterSettleWake?.batchRunIds,
-      ).toEqual(batchRunIds);
+      expect(loadSubagentRegistryFromSqlite().get(first.runId)).toMatchObject({
+        requesterTurnRunId: undefined,
+        requesterTurnYielded: undefined,
+        requesterSettleWake: { status: "pending", requesterYieldBatch: true, batchRunIds },
+      });
       expect(calls).toEqual(
         kind === "running" ? ["persist", "persist"] : ["persist", "persist", "schedule"],
       );

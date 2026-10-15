@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { observeGcSamples } from "../infra/gc-observer.js";
 import { serveWorkerTasks, type WorkerTaskChannel } from "../infra/worker-task-server.js";
 import { CODE_MODE_CONTROLLER_SOURCE } from "./code-mode-controller-source.js";
+import { CodeModeHeadlessTimeoutError } from "./code-mode-errors.js";
 import {
   boundCodeModeError,
   captureCodeModeValue,
@@ -22,6 +23,7 @@ import {
 import { CODE_MODE_MODULE_ACCESS_ERROR, prepareSource } from "./code-mode-source.js";
 import type {
   CodeModeConfig,
+  CodeModeFailurePhase,
   CodeModeNodeInput,
   CodeModeWorkerContinuation,
   CodeModeWorkerThreadResult,
@@ -204,7 +206,7 @@ const rejectionScript = compileController(
 function evaluate(current: NodeCell, script: Script): unknown {
   const remaining = current.deadline - performance.now();
   if (remaining <= 0) {
-    throw new Error("code mode timeout exceeded");
+    throw new CodeModeHeadlessTimeoutError();
   }
   // The host interrupts this Worker; vm.timeout would create a native thread per evaluation.
   return script.runInContext(current.context);
@@ -216,26 +218,6 @@ function sourceFrames(stack: string | undefined, location: SourceLocation): stri
       ?.split("\n")
       .filter((line) => line.includes(USER_SOURCE_FILE) && /^\s+at /u.test(line)) ?? []
   );
-}
-
-function guestError(error: unknown, location: SourceLocation): string {
-  if (!types.isNativeError(error)) {
-    return String(error);
-  }
-  const frames = sourceFrames(error.stack, location);
-  if (frames.length === 0 && error.name === "SyntaxError") {
-    const syntax = /^openclaw-code-mode:user\.js:(\d+)\n[^\n]*\n([ \t]*)\^/u.exec(
-      error.stack ?? "",
-    );
-    const line = syntax?.[1];
-    const prefix = syntax?.[2];
-    if (line !== undefined && prefix !== undefined) {
-      frames.push(
-        ...sourceFrames(`    at ${USER_SOURCE_FILE}:${line}:${prefix.length + 1}`, location),
-      );
-    }
-  }
-  return [`${error.name}: ${error.message}`, ...frames].join("\n");
 }
 
 function createCell(
@@ -252,7 +234,7 @@ function createCell(
     preparedAt + (input.executionTimeoutMs ?? Infinity),
   );
   if (deadline <= preparedAt) {
-    throw new Error("code mode timeout exceeded");
+    throw new CodeModeHeadlessTimeoutError();
   }
   const program = buildUserSource(source, input.prelude, "utf16");
   const context = createContext(Object.create(null), { microtaskMode: "afterEvaluate" });
@@ -381,7 +363,7 @@ function failed(
   code: "invalid_input" | "internal_error" | "timeout",
   error: string,
   output = EMPTY_CODE_MODE_OUTPUT,
-  failurePhase?: "bridge",
+  failurePhase?: CodeModeFailurePhase,
 ): Extract<NodeResult, { status: "failed" }> {
   return {
     status: "failed",
@@ -438,7 +420,7 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
       output = progress.output();
       const pending = !current.outcome;
       if (pending && current.pendingRequests.length === 0) {
-        throw new Error("code mode promise is pending without host work");
+        throw new ToolInputError("code mode promise is pending without host work");
       }
       if (pending || current.pendingRequests.length > 0) {
         const settlementMode = pending
@@ -481,7 +463,7 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
           command.timeoutMs <= 0 ||
           command.timeoutMs > config.timeoutMs
         ) {
-          throw new Error("code mode timeout exceeded");
+          throw new Error("invalid code mode continuation timeout");
         }
         current.deadline = performance.now() + command.timeoutMs;
         current.pendingRequests = command.pendingRequests;
@@ -522,14 +504,17 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
       };
     }
   } catch (error) {
+    const timeout = error instanceof CodeModeHeadlessTimeoutError;
+    // Guest exceptions arrive through the observed outcome; this catch owns worker failures.
+    const failurePhase =
+      error instanceof ToolInputError ? "input" : timeout && progress.deadline ? "guest" : "host";
     channel?.notify({
       status: "failure",
       error: types.isNativeError(error)
         ? { name: error.name, message: error.message, stack: error.stack }
         : String(error),
-      failurePhase: "guest",
+      failurePhase,
     });
-    const timeout = types.isNativeError(error) && error.message === "code mode timeout exceeded";
     if (cell && output.count === 0 && !timeout) {
       output = progress.output();
     }
@@ -538,14 +523,13 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
       boundCodeModeError(
         timeout
           ? "code mode timeout exceeded"
-          : cell
-            ? guestError(error, cell.location)
-            : error instanceof Error
-              ? error.message
-              : String(error),
+          : types.isNativeError(error)
+            ? error.message
+            : String(error),
         config.maxOutputBytes,
       ),
       timeout ? progress.output() : output,
+      failurePhase,
     );
   } finally {
     // Rejected source and failed settlement still release the task's input custody.

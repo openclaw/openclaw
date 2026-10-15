@@ -107,6 +107,11 @@ returns `UNAVAILABLE` with the committed config details. It does not wait for
 another file event. Repair the file, run `config.get`, then reapply the intended
 config. The Gateway does not overwrite the external edit.
 
+When the Gateway applies a valid external edit picked up by that final reread,
+a waiting write whose saved values were overwritten reports `superseded`
+instead of success. An unrelated edit that preserves the saved values can still
+complete successfully. Run `config.get` before reapplying.
+
 If you see `config reload skipped (invalid config)` or startup reports `Invalid
 config`, inspect the config, run `openclaw config validate`, then run `openclaw
 doctor --fix` for repair. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config)

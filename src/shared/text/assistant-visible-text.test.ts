@@ -3,6 +3,7 @@ import {
   assistantTraceTextFilter,
   assistantVisibleTextFilters,
   minimaxToolCallTextFilter,
+  plainToolCallTextFilter,
   sanitizeAssistantFinalAnswerText,
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
@@ -293,6 +294,78 @@ describe("sanitizeAssistantVisibleText", () => {
 });
 
 describe("assistantTraceTextFilter streamed projection", () => {
+  it.each([
+    {
+      name: "a real trace head",
+      filter: assistantTraceTextFilter,
+      prefix: "tool call: hidden\n",
+      line: "An ordinary explanation continues with a function call and a tool call.\n",
+      suffix: "Done.",
+      visiblePrefix: "",
+    },
+    {
+      name: "a completed citation paragraph with unrelated inline code",
+      filter: assistantTraceTextFilter,
+      prefix: "tool call: hidden\nSee [1] and use `foo`.\n\n",
+      line: "An ordinary explanation continues with a function call and a tool call.\n",
+      suffix: "Done.",
+      visiblePrefix: "See [1] and use `foo`.\n\n",
+    },
+    {
+      name: "a completed image paragraph with unrelated inline code",
+      filter: assistantTraceTextFilter,
+      prefix: "tool call: hidden\nSee ![photo][id] and use `foo`.\n\n",
+      line: "An ordinary explanation continues with a function call and a tool call.\n",
+      suffix: "Done.",
+      visiblePrefix: "See ![photo][id] and use `foo`.\n\n",
+    },
+    {
+      name: "fenced payload markers",
+      filter: plainToolCallTextFilter,
+      prefix: "```ts\n",
+      line: 'const value = { label: "example", nested: { count: 42 } };\n',
+      suffix: "```\nDone.",
+      visiblePrefix: "```ts\n",
+    },
+    {
+      name: "indented fenced payload markers",
+      filter: plainToolCallTextFilter,
+      prefix: "   ~~~ts\n",
+      line: 'const value = { label: "example", nested: { count: 42 } };\n',
+      suffix: "   ~~~\nDone.",
+      visiblePrefix: "   ~~~ts\n",
+    },
+    {
+      name: "a reference definition before fenced payload markers",
+      filter: plainToolCallTextFilter,
+      prefix: "[id]: /url\n\n```ts\n",
+      line: 'const value = { label: "example", nested: { count: 42 } };\n',
+      suffix: "```\nDone.",
+      visiblePrefix: "[id]: /url\n\n```ts\n",
+    },
+  ])("bounds canonical work after $name", ({ filter, prefix, line, suffix, visiblePrefix }) => {
+    const source = prefix + line.repeat(256) + suffix;
+    const projection = createTextProjection([filter]);
+    let testedCharacters = 0;
+    const probe = vi.spyOn(RegExp.prototype, "test").mockImplementation(function (
+      this: RegExp,
+      text,
+    ) {
+      testedCharacters += text.length;
+      return this.exec(text) !== null;
+    });
+    try {
+      for (let offset = 0; offset < source.length; offset += 4) {
+        projection.append(source.slice(offset, offset + 4));
+      }
+    } finally {
+      probe.mockRestore();
+    }
+    expect(projection.text).toBe(visiblePrefix + line.repeat(256) + suffix);
+    expect(testedCharacters).toBeGreaterThan(0);
+    expect(testedCharacters).toBeLessThan(source.length * 128);
+  });
+
   it.each([" ", "\n"])("bounds trace work for prose separated by %j", (separator) => {
     const source = Array(256)
       .fill("A helper function call returns the tool call payload for the value.")
@@ -359,6 +432,66 @@ describe("assistantTraceTextFilter streamed projection", () => {
       `Visible intro.\nFUNCTION_CALL${"\t".repeat(80)}= hidden\nVisible outro.`,
       "Visible intro.\nVisible outro.",
     ],
+    [
+      "trace and payload markers across repeated fence boundaries",
+      "tool call: hidden\n```ts\nconst x = { value: 1 };\ntool call: literal\n```\n~~~text\n[tool:read] {}\n~~~\nfunction call: hidden\nDone.",
+      "```ts\nconst x = { value: 1 };\ntool call: literal\n```\n~~~text\n[tool:read] {}\n~~~\nDone.",
+    ],
+    [
+      "a provisional closing fence that becomes literal code",
+      "tool call: hidden\n````text\ntool call: literal\n````not a close\ntool call: still literal\n````\ntool call: hidden\nDone.",
+      "````text\ntool call: literal\n````not a close\ntool call: still literal\n````\nDone.",
+    ],
+    [
+      "multiline inline code gaining ownership",
+      "tool call: hidden\nAn open `example\ntool call: literal\nends here`.\nDone.",
+      "An open `example\ntool call: literal\nends here`.\nDone.",
+    ],
+    [
+      "a container-owned fence",
+      "tool call: hidden\n> ```text\n> tool call: literal\n> { value: 1 }\n> ```\n\nDone.",
+      "> ```text\n> tool call: literal\n> { value: 1 }\n> ```\n\nDone.",
+    ],
+    [
+      "CRLF fence boundaries",
+      "tool call: hidden\r\n```ts\r\nconst x = {};\r\ntool call: literal\r\n```\r\nDone.",
+      "```ts\r\nconst x = {};\r\ntool call: literal\r\n```\r\nDone.",
+    ],
+    [
+      "indented fence boundaries",
+      "Intro.\ntool call: hidden\n   ~~~text\ntool call: literal\n   ~~~\ntool call: hidden\nDone.",
+      "Intro.\n   ~~~text\ntool call: literal\n   ~~~\nDone.",
+    ],
+    [
+      "a late image reference that revokes inline-code protection",
+      "tool call: hidden\n![example `x\ntool call: literal\nx`][id]\n\nAfter\n\n[id]: /url",
+      "![example `x\nx`][id]\n\nAfter\n\n[id]: /url",
+    ],
+    [
+      "a late image reference with escaped and code-owned brackets",
+      "tool call: hidden\n![a \\[b `]x\ntool call: literal\nx`][id]\n\nAfter\n\n[id]: /url",
+      "![a \\[b `]x\nx`][id]\n\nAfter\n\n[id]: /url",
+    ],
+    [
+      "a settled definition before an image reference",
+      "tool call: hidden\n\n[id]: /url\n\nIntro.\n\n![example `x\ntool call: literal\nx`][id]\n",
+      "[id]: /url\n\nIntro.\n\n![example `x\nx`][id]",
+    ],
+    [
+      "an unfinished image description with nested brackets",
+      "tool call: hidden\n\n[id]: /url\n\n![a [b]\nmore\n`x\ntool call: literal\nx`][id]",
+      "[id]: /url\n\n![a [b]\nmore\n`x\nx`][id]",
+    ],
+    [
+      "a multiline inline-link title",
+      'tool call: hidden\n[label](/url "title\nmore\n`x\ntool call: literal\nx`")',
+      '[label](/url "title\nmore\n`x\nx`")',
+    ],
+    [
+      "a definition absorbing its optional next-line title",
+      'tool call: hidden\n\n[id]: /url\n"title\nmore\n`x\ntool call: literal\nx`"',
+      '[id]: /url\n"title\nmore\n`x\nx`"',
+    ],
   ])("projects %s in token-sized chunks", (_name, source, expected) => {
     for (const size of [1, 3, 7]) {
       const projection = createTextProjection(assistantVisibleTextFilters("delivery", true));
@@ -382,6 +515,11 @@ describe("assistantTraceTextFilter streamed projection", () => {
     expect(projection.replace("```\ntool call: literal\n```").text).toBe(
       "```\ntool call: literal\n```",
     );
+    expect(projection.append("\ntool call: hidden\nFresh").text).toBe(
+      "```\ntool call: literal\n```\nFresh",
+    );
+    expect(projection.replace("").text).toBe("");
+    expect(projection.append("tool call: hidden\nReset").text).toBe("Reset");
   });
 });
 
