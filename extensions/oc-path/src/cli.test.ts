@@ -368,6 +368,54 @@ describe("openclaw path CLI", () => {
   });
 
   describe("set", () => {
+    it.each(["\n", "\r\n", "mixed"])(
+      "preserves JSONL bytes outside a leaf and across append with %j separators",
+      async (ending) => {
+        const workspaceDir = tempDirs.make("oc-path-cli-");
+        const filePath = join(workspaceDir, "events.jsonl");
+        const firstEnding = ending === "mixed" ? "\r\n" : ending;
+        const lastEnding = ending === "mixed" ? "\n" : ending;
+        const before =
+          '\uFEFF{ "id": 9007199254740993, "ratio": 1.0000000000000001 } // note' +
+          firstEnding +
+          '{ "items": [{"event":"old", "id":9007199254740993, "ratio":1.0000000000000001}], "literal":"\\u0041" }' +
+          lastEnding +
+          lastEnding +
+          "// keep this comment" +
+          lastEnding +
+          "broken record" +
+          lastEnding;
+        const expected = before.replace('"event":"old"', '"event":"updated"');
+        writeFileSync(filePath, before, "utf8");
+        const address = "oc://events.jsonl/L2/items.$last/event";
+        const preview = createTestRuntime();
+        await pathSetCommand(
+          address,
+          "updated",
+          { file: filePath, json: true, dryRun: true },
+          preview,
+        );
+        expect(preview.exitCode).toBe(0);
+        expect(JSON.parse(stdoutText(preview)).bytes).toBe(expected);
+        expect(readFileSync(filePath, "utf8")).toBe(before);
+
+        const write = createTestRuntime();
+        await pathSetCommand(address, "updated", { file: filePath, json: true }, write);
+        expect(write.exitCode).toBe(0);
+        expect(readFileSync(filePath, "utf8")).toBe(expected);
+
+        const append = createTestRuntime();
+        await pathSetCommand(
+          "oc://events.jsonl/+",
+          '{"event":"next"}',
+          { file: filePath, json: true, valueJson: true },
+          append,
+        );
+        expect(append.exitCode).toBe(0);
+        expect(readFileSync(filePath, "utf8")).toBe(`${expected}{"event":"next"}${lastEnding}`);
+      },
+    );
+
     it("CLI-S09 refuses an undecodable file instead of rewriting untouchable bytes", async () => {
       const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
