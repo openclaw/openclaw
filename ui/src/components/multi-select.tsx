@@ -5,6 +5,7 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  merge,
   onCleanup,
   onSettled,
   untrack,
@@ -29,7 +30,20 @@ function providerFromValue(value: string): string | undefined {
   return separator > 0 ? value.slice(0, separator) : undefined;
 }
 
-export function MultiSelectView(props: MultiSelectProps) {
+export function MultiSelect(initial: Partial<MultiSelectProps> & { class?: string }) {
+  const defaults: MultiSelectProps = {
+    options: [],
+    value: [],
+    isExcluded: () => false,
+    getValueKey: (value: string) => value,
+    placeholder: "",
+    accessibleLabel: "",
+    allowCustom: false,
+    disabled: false,
+    onChange: (_value: string[]) => {},
+    onOpen: () => {},
+  };
+  const props = merge(defaults, initial);
   const id = `openclaw-multi-select-${++instanceCounter}`;
   let field!: HTMLDivElement;
   let input!: HTMLInputElement;
@@ -195,7 +209,7 @@ export function MultiSelectView(props: MultiSelectProps) {
     }
   };
   return (
-    <>
+    <openclaw-multi-select class={props.class}>
       <div
         ref={(node) => {
           field = node;
@@ -312,6 +326,14 @@ export function MultiSelectView(props: MultiSelectProps) {
           <div class="multi-select__empty">{t("common.multiSelect.noMatches")}</div>
         </Show>
       </div>
-    </>
+    </openclaw-multi-select>
   );
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-multi-select": HTMLAttributes<HTMLElement>;
+    }
+  }
 }

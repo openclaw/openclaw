@@ -115,6 +115,7 @@ describe("session companion RPC", () => {
   });
 
   it("carries the authenticated model policy and releases it after answering", async () => {
+    const controller = new AbortController();
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       await captureRuntimeConfigAsyncReader()();
       const client = { ...roleClient("view", "companion-policy"), connId: "policy-connection" };
@@ -148,6 +149,8 @@ describe("session companion RPC", () => {
       let captured: AdmittedRunOperatorAuthority | undefined;
       const ask = vi.fn(async (request: Parameters<SessionCompanionService["ask"]>[0]) => {
         captured = request.operatorAuthority;
+        expect(request.signal).toBe(controller.signal);
+        expect(request.connId).toBe("policy-connection");
         expect(captured?.profileId).toBe(client.authenticatedUserProfile?.profileId);
         expect(captured?.modelPolicy?.models).toEqual([
           { provider: "test-provider", model: "allowed" },
@@ -160,10 +163,10 @@ describe("session companion RPC", () => {
         { sessionKey, question: "What happened?" },
         { ask },
         client,
-        undefined,
+        controller.signal,
         cfg,
       );
-      expect(respond).toHaveBeenCalledWith(true, { answer: "Allowed answer.", ts: 125 });
+      expect(respond).toHaveBeenCalledExactlyOnceWith(true, { answer: "Allowed answer.", ts: 125 });
       expect(captured).toBeDefined();
       expect(() => captured?.assertCurrent()).toThrow("no longer active");
     });
@@ -241,28 +244,6 @@ describe("session companion RPC", () => {
       );
     },
   );
-
-  it("forwards the authenticated request lifetime and emits one final response", async () => {
-    const controller = new AbortController();
-    const ask = vi.fn(async () => ({ answer: "Bound to this connection.", ts: 124 }));
-    const respond = await invoke(
-      "sessions.companion.ask",
-      { sessionKey: "agent:main:main", question: "Who owns this ask?" },
-      { ask },
-      { connId: "conn-1" },
-      controller.signal,
-    );
-
-    expect(ask).toHaveBeenCalledWith({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      question: "Who owns this ask?",
-      connId: "conn-1",
-      assertSourceCurrent: expect.any(Function),
-      signal: controller.signal,
-    });
-    expect(respond.mock.calls).toEqual([[true, { answer: "Bound to this connection.", ts: 124 }]]);
-  });
 
   it.each([
     {

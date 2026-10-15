@@ -24,8 +24,10 @@ workspace preparation, environment provisioning, context preparation, and
 model startup.
 
 The first assistant delta or tool start permanently replaces startup status for
-that run. Approval status takes precedence while a tool is waiting for operator
-action. Worktree creation and initial cloud dispatch happen before a chat run
+that run. Session-list and sidebar activity stays on until the run settles,
+including while the final reply is still streaming or being delivered. An answer
+delta or attempt-level finishing signal alone does not mark the session idle.
+Approval status takes precedence while a tool is waiting for operator action. Worktree creation and initial cloud dispatch happen before a chat run
 exists, so their pre-run RPC progress is not presented as run startup status;
 environment provisioning appears here only when an active run reprovisions a
 reclaimed worker.

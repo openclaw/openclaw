@@ -383,7 +383,7 @@ export function renderUsage(props: UsageProps) {
                     {
                       id: "daily-csv",
                       label: t("usage.export.dailyCsv"),
-                      disabled: props.data.costDaily.length === 0,
+                      disabled: props.data.exporting || props.data.costDaily.length === 0,
                     },
                     {
                       id: "json",

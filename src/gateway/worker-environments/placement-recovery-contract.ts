@@ -15,6 +15,7 @@ export type WorkerPlacementRecoveryAdmission = (
 ) => Promise<boolean>;
 
 export type PlacementRecoveryDeps = {
+  isShuttingDown?: () => boolean;
   placements: WorkerDispatchPlacementStore;
   environments: Pick<
     WorkerDispatchEnvironmentService,

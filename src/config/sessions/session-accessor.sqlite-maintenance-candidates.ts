@@ -50,20 +50,27 @@ function maintenanceCandidates(database: Pick<OpenClawAgentDatabase, "db">) {
 }
 
 export function collectSqliteSessionMaintenanceBaseKeys(
-  store: Record<string, SessionEntry>,
+  readProjection: (sessionKeys: readonly string[]) => Record<string, SessionEntry>,
   activeSessionKeys: Iterable<string>,
+  baseKeys: readonly string[] = [],
 ): string[] {
-  const keys: string[] = [];
-  const seen = new Set<string>();
-  for (const activeSessionKey of activeSessionKeys) {
-    let currentKey = normalizeStoreSessionKey(activeSessionKey);
-    while (currentKey && !seen.has(currentKey)) {
-      seen.add(currentKey);
-      keys.push(currentKey);
-      currentKey = normalizeStoreSessionKey(store[currentKey]?.parentSessionKey ?? "");
+  const keys = new Set(baseKeys);
+  let pending = [...activeSessionKeys];
+  while (pending.length > 0) {
+    pending = [...new Set(pending.map(normalizeStoreSessionKey))].filter(
+      (key) => key && !keys.has(key),
+    );
+    if (pending.length === 0) {
+      break;
     }
+    pending.forEach((key) => keys.add(key));
+    const projection = readProjection(pending);
+    pending = pending.flatMap((key) => {
+      const parent = projection[key]?.parentSessionKey;
+      return parent ? [parent] : [];
+    });
   }
-  return keys;
+  return [...keys];
 }
 
 export function readSessionMaintenanceKeyProjection(
@@ -96,26 +103,41 @@ export function readSessionMaintenanceAgeCandidates(params: {
   database: Pick<OpenClawAgentDatabase, "db">;
   minimumAgeMs: number | null;
   pruneAfterMs: number;
+  archiveDashboardAfterMs: number | null;
+  modelRunPruneAfterMs: number | null;
 }): Record<string, SessionEntry> {
   if (params.minimumAgeMs == null || params.minimumAgeMs <= 0) {
     return {};
   }
   const db = getSessionKysely(params.database.db);
   const store: Record<string, SessionEntry> = {};
+  const now = Date.now();
   for (const row of iterateSqliteQuerySync(
     params.database.db,
     db
       .selectFrom(maintenanceCandidates(params.database).as("candidates"))
       .selectAll()
-      .where("updated_at", "<", Date.now() - params.minimumAgeMs)
+      .where("updated_at", "<", now - params.minimumAgeMs)
       .where("archived_at", "is", null)
       .where((eb) =>
         eb.or([
-          ...(params.pruneAfterMs > 0
-            ? [eb("updated_at", "<", Date.now() - params.pruneAfterMs)]
+          ...(params.pruneAfterMs > 0 ? [eb("updated_at", "<", now - params.pruneAfterMs)] : []),
+          ...(params.archiveDashboardAfterMs != null && params.archiveDashboardAfterMs > 0
+            ? [
+                eb.and([
+                  eb("session_key", "like", "%dashboard:%"),
+                  eb("updated_at", "<", now - params.archiveDashboardAfterMs),
+                ]),
+              ]
             : []),
-          eb("session_key", "like", "%dashboard:%"),
-          eb("session_key", "like", "%model-run-%"),
+          ...(params.modelRunPruneAfterMs != null && params.modelRunPruneAfterMs > 0
+            ? [
+                eb.and([
+                  eb("session_key", "like", "%model-run-%"),
+                  eb("updated_at", "<", now - params.modelRunPruneAfterMs),
+                ]),
+              ]
+            : []),
         ]),
       )
       .orderBy("updated_at", "asc"),

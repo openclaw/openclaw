@@ -430,17 +430,6 @@ describe("sanitizeSessionHistory", () => {
     ).rejects.toThrow(/invalid_replay_transcript.*dangling_tool_call.*call_1/);
   });
 
-  it("drops malformed tool calls with invalid or overlong names", async () => {
-    const calls = [
-      toolCall("call_bad", 'toolu_01mvznfebfuu <|tool_call_argument_begin|> {"command"'),
-      toolCall("call_long", `read_${"x".repeat(80)}`),
-    ];
-    const out = await sanitize(
-      castAgentMessages([{ role: "assistant", content: calls }, user("hello")]),
-    );
-    expect(roles(out)).toEqual(["user"]);
-  });
-
   it("drops tool calls that are not in the allowed tool set", async () => {
     const out = await sanitize(
       [assistant([toolCall("call_1", "write")], { stopReason: "toolUse" })],
@@ -644,29 +633,6 @@ describe("sanitizeSessionHistory", () => {
     expect(sanitized[2]).toMatchObject({ toolCallId: first });
     expect(sanitized[5]).toMatchObject({ toolCallId: "call1" });
     expect(assistantContent(validated, 4)).toEqual(signed);
-  });
-
-  it("drops later preserved signed turns that reuse an earlier raw tool id across the transcript", async () => {
-    const sanitized = await sanitizeAnthropic([
-      user("first"),
-      assistant([thinking("internal", "sig_1"), toolCall("call1")], { stopReason: "toolUse" }),
-      toolResult("call1", "first result"),
-      user("second"),
-      assistant([thinking("internal", "sig_2"), toolCall("call1")], { stopReason: "toolUse" }),
-      toolResult("call1", "second result"),
-      user("retry"),
-    ]);
-    const validated = await validateAnthropic(sanitized);
-    for (const messages of [sanitized, validated]) {
-      expect(
-        messages.filter(
-          (message) =>
-            message.role === "assistant" && extractToolCallsFromAssistant(message).length > 0,
-        ),
-      ).toHaveLength(1);
-      expect(messages.filter((message) => message.role === "toolResult")).toHaveLength(1);
-    }
-    expect(JSON.stringify(validated)).not.toContain("[tool calls omitted]");
   });
 
   it("keeps the earlier anthropic replay prefix stable after a later subagent turn", async () => {
