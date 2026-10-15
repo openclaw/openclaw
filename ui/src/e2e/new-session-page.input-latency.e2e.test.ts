@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -24,9 +25,12 @@ suite.define(() => {
           kind: "direct",
           childOwnerSessionKeys: [],
           label: "Research session " + index,
-          updatedAt: 1000 + index,
+          // Keep the changed row in the admitted shared page, not overflow
+          // whose promotion correctly requires an authoritative membership read.
+          updatedAt: 2000 - index,
         })),
       });
+      await page.clock.install();
       await page.goto(suite.server.baseUrl + "new");
       await page.locator('[data-chat-model-option="fixture/model-1999"]').waitFor({
         state: "attached",
@@ -40,6 +44,12 @@ suite.define(() => {
             requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
           }),
       );
+      const sessionKey = "agent:main:dashboard:typing-0";
+      const sidebarRow = page
+        .locator('aside.sidebar [data-session-key="' + sessionKey + '"]')
+        .first();
+      await expect.poll(() => sidebarRow.textContent()).toContain("Research session 0");
+      await pauseVirtualClock(page);
       const observation = await page.evaluateHandle(() => {
         let catalogLabelReads = 0;
         const textarea = document.querySelector(".new-session-page__message");
@@ -71,11 +81,10 @@ suite.define(() => {
           },
         };
       });
-      const samples: number[] = [];
-      const sessionKey = "agent:main:dashboard:typing-0";
       const row = await gateway.getSessionRow(sessionKey);
       const requestsBefore = await gateway.getRequests();
       for (const key of "abcdefghij") {
+        const now = await page.evaluate(() => Date.now());
         await gateway.emitGatewayEvent("sessions.changed", {
           agentId: "main",
           sessionKey,
@@ -85,37 +94,24 @@ suite.define(() => {
             ...row,
             label: "Background update " + key,
             displayName: "Background update " + key,
-            updatedAt: Date.now(),
-            snapshotAt: Date.now(),
+            updatedAt: now,
+            snapshotAt: now,
           },
         });
-        const start = performance.now();
         await input.press(key);
-        await page.evaluate(
-          () =>
-            new Promise<void>((resolve) => {
-              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-            }),
-        );
-        samples.push(performance.now() - start);
+        await page.clock.runFor(32);
       }
-      // Keep timing diagnostic-only: the deterministic regression is catalog work,
-      // not a wall-clock threshold sensitive to the machine running this test.
-      console.log("New Session key + two frames (ms)", samples);
+      // Cross the entire event-collection window so a wrongly queued read
+      // cannot pass just because this runner typed faster than the debounce.
+      // The paused clock keeps independent 60-second fallbacks outside it.
+      await page.clock.fastForward(5_001);
       expect(await input.inputValue()).toBe("Warmup abcdefghij");
       expect(await observation.evaluate((value) => value.finish())).toEqual({
         catalogLabelReads: 0,
         sameTextarea: true,
         sameModelOption: true,
       });
-      await expect
-        .poll(() =>
-          page
-            .locator('aside.sidebar [data-session-key="' + sessionKey + '"]')
-            .first()
-            .textContent(),
-        )
-        .toContain("Background update j");
+      await expect.poll(() => sidebarRow.textContent()).toContain("Background update j");
       expect((await gateway.getRequests()).slice(requestsBefore.length)).toEqual([]);
       await observation.dispose();
     });

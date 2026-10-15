@@ -360,6 +360,18 @@ begin/end timing for fast steps too. The supervisor deadline remains
 the hard upper bound. Clean database restart proof is published only after writer
 leases, checkpointing, and native connection closure settle; one database's idle
 receipt alone does not authorize process exit.
+
+Worker-placement maintenance stops admitting new candidates when drain begins.
+Optional session-evidence reads and disk probes are canceled. Node retention stops
+new preparation and cancels supported requests; an in-progress shared bundle
+build remains joined. An accepted retirement, workspace recovery, reclaim, or
+publication effect still settles before its database or transport closes. A later restart
+resumes deferred maintenance from durable state. Deadline diagnostics name the
+pending placement subphase, such as
+`shutdown.worker-placement.reconcile.session-retirement`, `reconcile.active`, or
+`reconcile.publications`. These joins keep the worker transports and shared
+database available until accepted effects have recorded their outcomes.
+
 A restart without a supervisor handoff uses the existing shutdown
 deadline for cleanup. This includes foreground Gateways inside another service's
 cgroup, restarts with `OPENCLAW_NO_RESPAWN=1`, and standalone updates that must

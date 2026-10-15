@@ -582,6 +582,7 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
         data-view={view()}
       >
         <Menu
+          lazy
           id={`chat-composer-plus-${id}`}
           panelClass="agent-chat__capability-menu-panel"
           placement="top-start"

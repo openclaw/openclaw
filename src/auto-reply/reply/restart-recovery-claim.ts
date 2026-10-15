@@ -213,6 +213,7 @@ export function createReplyRestartRecoveryClaimController(params: {
         {
           skipMaintenance: true,
           takeCacheOwnership: true,
+          preserveActivity: options.patch.updatedAt === options.entry.updatedAt,
           workerGuard: { assertCurrent },
         },
       );
@@ -393,7 +394,8 @@ export function createReplyRestartRecoveryClaimController(params: {
               restartRecoveryDeliveryRequestFingerprint: undefined,
             }),
         restartRecoverySourceIngress: entry.restartRecoverySourceIngress ?? "control-ui",
-        updatedAt: Date.now(),
+        // Input acceptance already records activity; adoption only changes custody.
+        updatedAt: entry.updatedAt,
       };
       if (isMainRestartRecoveryCandidate(entry, params.sessionKey)) {
         patch.restartRecoveryRuns = entry.restartRecoveryRuns;

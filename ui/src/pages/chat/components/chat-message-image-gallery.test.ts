@@ -144,7 +144,7 @@ describe("message image gallery loading", () => {
     const expectedSrc = `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-inbound&${new URLSearchParams({ filename })}`;
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
-    ).toBe(expectedSrc);
+    ).toBe(`${expectedSrc}&variant=thumbnail`);
     const tile = container.querySelector<HTMLButtonElement>(".chat-message-image-button");
     expect(tile).not.toBeNull();
     expect(tile?.getAttribute("aria-label")).toBe(`Open image ${filename}`);

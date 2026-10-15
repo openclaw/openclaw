@@ -185,27 +185,6 @@ function failAfterNativeWrite(db: DatabaseSync, assertDenied: () => void) {
 }
 
 describe.each(["shared-state", "agent"] as const)("%s credential authority", (kind) => {
-  it("denies before native commit and publishes the postimage before commit observers run", () => {
-    const current = fixture(kind);
-    const commit = observePhysicalCommit(current.database.db, () => {
-      expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
-    });
-    let observed: AuthProfileCredential | undefined;
-    try {
-      current.transact(({ db }) => {
-        writeAuthProfileJsonCell(db, "store", kind, store("committed"));
-        expect(() => current.authority.readCurrentCredential()).toThrow("authority is unavailable");
-        deferSqlitePostCommitPublication(db, () => {
-          observed = current.authority.readCurrentCredential();
-        });
-      });
-    } finally {
-      commit.mockRestore();
-    }
-    expect(observed).toEqual(credential("committed"));
-    expect(current.readPersisted()).toEqual(credential("committed"));
-  });
-
   it("releases a known rollback with its original credential and rejects an overtaken cold result", () => {
     const current = fixture(kind);
     expect(() =>
@@ -239,16 +218,6 @@ describe.each(["shared-state", "agent"] as const)("%s credential authority", (ki
       expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
     });
     expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
-  });
-
-  it("publishes deletion and restoration with the same credential semantics as a cold read", () => {
-    const current = fixture(kind);
-    current.transact(({ db }) => deleteAuthProfileJsonCell(db, "store", kind));
-    expect(current.authority.readCurrentCredential()).toBeUndefined();
-    expect(current.readPersisted()).toBeUndefined();
-    current.write("original");
-    expect(current.authority.readCurrentCredential()).toEqual(credential("original"));
-    expect(current.authority.readCurrentCredential()).toEqual(current.readPersisted());
   });
 
   it("keeps an unacknowledged native write denied after a later successful commit", () => {

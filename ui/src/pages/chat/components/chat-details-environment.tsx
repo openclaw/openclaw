@@ -1,4 +1,4 @@
-import { Show, createMemo } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
@@ -115,18 +115,16 @@ export function ChatDetailsContext(props: Props) {
               <span>{t("chat.composer.contextUsage.latestRunTokens")}</span>
             </div>
             <dl class="chat-details__stats">
-              <Show when={usage().input !== null}>
-                <div>
-                  <dt>{t("usage.breakdown.input")}</dt>
-                  <dd>{formatCompactTokenCount(usage().input!)}</dd>
-                </div>
-              </Show>
-              <Show when={usage().output !== null}>
-                <div>
-                  <dt>{t("usage.breakdown.output")}</dt>
-                  <dd>{formatCompactTokenCount(usage().output!)}</dd>
-                </div>
-              </Show>
+              <For each={["input", "output"] as const}>
+                {(kind) => (
+                  <Show when={usage()[kind] !== null}>
+                    <div>
+                      <dt>{t(`usage.breakdown.${kind}`)}</dt>
+                      <dd>{formatCompactTokenCount(usage()[kind]!)}</dd>
+                    </div>
+                  </Show>
+                )}
+              </For>
             </dl>
           </Show>
         </details>

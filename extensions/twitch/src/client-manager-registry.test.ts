@@ -10,6 +10,28 @@ import { twitchOutbound } from "./outbound.js";
 import { BASE_TWITCH_TEST_ACCOUNT, makeTwitchTestConfig } from "./test-fixtures.js";
 import type { ChannelLogSink, TwitchAccountConfig } from "./types.js";
 
+vi.mock("@twurple/auth", () => ({
+  StaticAuthProvider: function StaticAuthProvider() {},
+  RefreshingAuthProvider: function RefreshingAuthProvider() {},
+}));
+
+vi.mock("@twurple/chat", () => ({
+  ChatClient: class {
+    private ready: (() => void) | undefined;
+    onAuthenticationSuccess(handler: () => void) {
+      this.ready = handler;
+      return { unbind() {} };
+    }
+    onAuthenticationFailure = vi.fn(() => ({ unbind() {} }));
+    onDisconnect = vi.fn(() => ({ unbind() {} }));
+    onMessage = vi.fn(() => ({ unbind() {} }));
+    connect = () => this.ready?.();
+    quit = vi.fn();
+    say = vi.fn(async (_channel: string, _message: string) => {});
+  },
+  LogLevel: { WARNING: 2 },
+}));
+
 function makeLogger(): ChannelLogSink {
   return {
     info: vi.fn(),
@@ -25,18 +47,13 @@ const account = {
   enabled: true,
 } satisfies TwitchAccountConfig;
 
-function attachFakeTransport(manager: ReturnType<typeof getOrCreateClientManager>) {
-  const transport = {
-    quit: vi.fn(),
-    say: vi.fn((_channel: string, _message: string) => Promise.resolve()),
+async function attachFakeTransport(manager: ReturnType<typeof getOrCreateClientManager>) {
+  const transport = await manager.getClient(account, makeTwitchTestConfig(account), "default");
+  manager.onMessage(vi.fn());
+  return {
+    quit: vi.spyOn(transport, "quit"),
+    say: vi.spyOn(transport, "say"),
   };
-  const state = manager as unknown as {
-    clients: Map<string, typeof transport>;
-    messageHandlers: Map<string, unknown>;
-  };
-  state.clients.set(manager.getAccountKey(account), transport);
-  manager.onMessage(account, vi.fn());
-  return { state, transport };
 }
 
 describe("client manager registry", () => {
@@ -49,7 +66,7 @@ describe("client manager registry", () => {
     async (outcome) => {
       const logger = makeLogger();
       const firstManager = getOrCreateClientManager("default", logger);
-      const { state, transport } = attachFakeTransport(firstManager);
+      const transport = await attachFakeTransport(firstManager);
       const cleanup = createDeferred<void>();
       const disconnect = firstManager.disconnectAll.bind(firstManager);
       const disconnectAll = vi.spyOn(firstManager, "disconnectAll").mockImplementation(async () => {
@@ -62,8 +79,6 @@ describe("client manager registry", () => {
       try {
         expect(disconnectAll).toHaveBeenCalledOnce();
         expect(transport.quit).toHaveBeenCalledOnce();
-        expect(state.clients.size).toBe(0);
-        expect(state.messageHandlers.size).toBe(0);
         expect(getClientManager("default")).toBeUndefined();
         expect(logger.info).not.toHaveBeenCalledWith(unregisterMessage);
 
@@ -92,18 +107,14 @@ describe("client manager registry", () => {
   it("keeps outbound delivery off a retired manager and sends through its replacement", async () => {
     const logger = makeLogger();
     const firstManager = getOrCreateClientManager("default", logger);
-    const first = attachFakeTransport(firstManager);
+    const first = await attachFakeTransport(firstManager);
     const cleanup = createDeferred<void>();
     const disconnect = firstManager.disconnectAll.bind(firstManager);
     vi.spyOn(firstManager, "disconnectAll").mockImplementation(async () => {
       await disconnect();
       await cleanup.promise;
     });
-    const getClient = firstManager.getClient.bind(firstManager);
-    const reconnect = vi.spyOn(firstManager, "getClient").mockImplementation(async (...args) => {
-      first.state.clients.set(firstManager.getAccountKey(account), first.transport);
-      return await getClient(...args);
-    });
+    const reconnect = vi.spyOn(firstManager, "getClient");
     const config = makeTwitchTestConfig(account);
     const removal = removeClientManager("default");
 
@@ -119,10 +130,10 @@ describe("client manager registry", () => {
         "Client manager not found for account: default. Please start the Twitch gateway first.",
       );
       expect(reconnect).not.toHaveBeenCalled();
-      expect(first.transport.say).not.toHaveBeenCalled();
+      expect(first.say).not.toHaveBeenCalled();
 
       const replacement = getOrCreateClientManager("default", makeLogger());
-      const { transport } = attachFakeTransport(replacement);
+      const transport = await attachFakeTransport(replacement);
       const afterRestart = await twitchOutbound.sendText!({
         to: "#testchannel",
         text: "after restart",

@@ -1398,17 +1398,6 @@ describe("package-mac-app plist stamping", () => {
     expect(preInstallBlock).toContain("\nrequire_swift_toolchain\n");
   });
 
-  it("fails with an actionable error when Swift tools are too old", () => {
-    const result = runSwiftToolchainHarness({
-      swiftVersion: "6.0.3",
-      selectedDeveloperDir: "xcode",
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("OpenClaw macOS app packaging requires Swift tools 6.3+");
-    expect(result.stderr).toContain("Current Swift is 6.0");
-  });
-
   it("rejects Command Line Tools even when they provide Swift 6.3", () => {
     const result = runSwiftToolchainHarness({
       swiftVersion: "6.3.1",

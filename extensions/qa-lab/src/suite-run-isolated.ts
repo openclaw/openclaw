@@ -185,12 +185,9 @@ export async function runQaFlowSuiteIsolated(
             outputDir,
             scenarioOutputDir,
           );
-          if (childInput.schemaVersion !== 3) {
-            throw new Error("isolated child requires its captured invocation");
-          }
           workerParams.evidenceContinuation = childInput;
           workerParams.onEvidence = (summary) => {
-            childEvidence = structuredClone(summary);
+            childEvidence = summary;
           };
           startedScenarioIndexes.add(index);
           const childSuiteResult: QaSuiteResult = await runQaFlowSuite(workerParams);

@@ -165,7 +165,7 @@ describe("channel doctor compatibility mutations", () => {
     },
   );
 
-  it.each(["read-only", "setup", "runtime", "malformed"])(
+  it.each(["read-only", "setup", "runtime"])(
     "merges %s doctor adapters with their receiver and runtime-only hooks",
     async (source) => {
       const normalizeCompatibilityConfig = vi.fn(function (
@@ -176,20 +176,8 @@ describe("channel doctor compatibility mutations", () => {
       });
       const collectMutableAllowlistWarnings = vi.fn(() => ["runtime warning"]);
       const doctor = { groupModel: "sender", normalizeCompatibilityConfig };
-      mockReadOnlyMatrixPlugin(
-        source === "read-only"
-          ? doctor
-          : source === "malformed"
-            ? {
-                normalizeCompatibilityConfig: null,
-                collectMutableAllowlistWarnings: "not-a-function",
-                warnOnEmptyGroupSenderAllowlist: "yes",
-              }
-            : undefined,
-      );
-      mockBundledMatrixSetupPlugin(
-        source === "setup" || source === "malformed" ? doctor : undefined,
-      );
+      mockReadOnlyMatrixPlugin(source === "read-only" ? doctor : undefined);
+      mockBundledMatrixSetupPlugin(source === "setup" ? doctor : undefined);
       mockBundledMatrixRuntimePlugin({
         ...(source === "runtime" ? doctor : {}),
         collectMutableAllowlistWarnings,

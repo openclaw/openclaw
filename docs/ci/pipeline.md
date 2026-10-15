@@ -142,6 +142,11 @@ and scene readiness; it does not compare pixels against a baseline.
 
 ### Test runtime selection
 
+Local development and tests now default to the pinned Bun fork; CI keeps its
+planner-selected runtime. Main-only Node lanes, including Control UI tests, are
+a known Bun coverage gap: a change can pass main CI while breaking local Bun
+execution. PR and dual-runtime validation provide the current Bun coverage.
+
 CI's `setup-test-bun` action consumes `scripts/lib/openclaw-bun.json` through
 `scripts/stage-openclaw-bun.sh`, the same owner used by the macOS and Tauri apps.
 Every pin bump requires **both** the paired CI Bun-lane replay and Bun-only smoke,
@@ -348,11 +353,18 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `65d94e7156da4b6aca649dac5f19b8294b757570` with WebKit
+The pinned build pairs Bun `94f8f5ffec48f47b3b3fb84891ef5ced046f5814` with WebKit
 `01f208ae7a87661e7503f514c946a37bc76ad1d1` in prerelease
-`openclaw-v1.4.3-20261010-65d94e7156-webkit-01f208ae7a-r2`.
-This build shares source buffers on `node:vm` cache hits, refactors module
-resolution, aligns TLS teardown with Node, fixes subprocess retirement, and
+`openclaw-v1.4.3-20261014-94f8f5ffec-webkit-01f208ae7a`.
+This build measures CPU profiles over the full monotonic capture interval, drains
+Worker stdio before exit, preserves unpaired UTF-16 surrogates in `node:path`, and
+waits for the final socket write before setting `ServerResponse.writableFinished`.
+It cancels destroyed child stdin only when a write is pending, exposes native HTTPS
+request sockets as `tls.TLSSocket`, and preserves cloneable Worker loader errors.
+ESM specifiers now decode URL escapes per Node; a literal `#` starts a fragment,
+so filenames containing `#` must use `%23` in their import URL.
+It retains shared source buffers on `node:vm` cache hits, refactored module
+resolution, Node-compatible TLS teardown, subprocess retirement fixes, and
 enforces Node-compatible process and Worker heap limits. It fixes N-API cleanup
 and external strings across Workers, releases Worker-local event-name state,
 and skips the preliminary full collection at Worker shutdown. WebKit fixes
@@ -360,7 +372,7 @@ stale VM-entry storage initialization, uses a two-pointer VMEntryScope, and
 fixes Linux foreign-stack suspension deadlocks.
 It retains deferred VM bytecode generation, integral heap-sampling byte sizes,
 inspector snapshot cleanup, and the previous worker heap-cap, module-resolution,
-test-deadline, GC cadence, and idle-worker fixes. This same-commit rebuild publishes
+test-deadline, GC cadence, and idle-worker fixes. The release publishes
 Darwin/Linux targets and Authenticode-signed Windows x64/arm64 targets from the
 OpenClaw Foundation. Darwin executables remain Developer ID signed and notarized;
 the shared pin records Windows targets as signed and not test-only.

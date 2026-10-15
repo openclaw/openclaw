@@ -36,7 +36,7 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
   let stopped = false;
   let dropped = 0;
   let delayMaxMs = 0;
-  let depth = 0;
+  let active = false;
   let startedAt = 0;
   let segmentAt = 0;
   let task = "unattributed";
@@ -49,30 +49,6 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       longestMs = elapsed;
     }
     segmentAt = at;
-  };
-  const before = () => {
-    if (depth++ !== 0) {
-      return;
-    }
-    startedAt = segmentAt = now();
-    task = longestTask = "unattributed";
-    longestMs = 0;
-  };
-  const after = () => {
-    if (depth === 0 || --depth !== 0) {
-      return;
-    }
-    const at = now();
-    segment(at);
-    const elapsedMs = at - startedAt;
-    delayMaxMs = Math.max(delayMaxMs, elapsedMs);
-    if (elapsedMs > STALL_MS) {
-      if (pending.length < MAX_PENDING_STALLS) {
-        pending.push({ elapsedMs, task: longestTask, taskMs: longestMs });
-      } else {
-        dropped++;
-      }
-    }
   };
   const observer: TaskObserver = {
     stop() {
@@ -88,18 +64,31 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       delayMaxMs = 0;
     },
     enter(name) {
-      const ownsTurn = depth === 0;
+      const ownsTurn = !active;
       if (ownsTurn) {
-        before();
+        active = true;
+        startedAt = segmentAt = now();
+        task = longestTask = "unattributed";
+        longestMs = 0;
       }
       segment(now());
       const previous = task;
       task = name;
       return () => {
-        segment(now());
+        const at = now();
+        segment(at);
         task = previous;
         if (ownsTurn) {
-          after();
+          active = false;
+          const elapsedMs = at - startedAt;
+          delayMaxMs = Math.max(delayMaxMs, elapsedMs);
+          if (elapsedMs > STALL_MS) {
+            if (pending.length < MAX_PENDING_STALLS) {
+              pending.push({ elapsedMs, task: longestTask, taskMs: longestMs });
+            } else {
+              dropped++;
+            }
+          }
         }
       };
     },

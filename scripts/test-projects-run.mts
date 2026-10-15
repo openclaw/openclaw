@@ -649,11 +649,13 @@ export async function runTestProjects(
     throw error;
   } finally {
     try {
-      await workers?.dispose().catch((error: unknown) => {
-        reportFailure ??= String(error);
-        process.exitCode = vitestInfrastructureExitCode(Number(process.exitCode));
-        console.error(error);
-      });
+      await workers
+        ?.dispose({ interrupted: Boolean(termination.signal) })
+        .catch((error: unknown) => {
+          reportFailure ??= String(error);
+          process.exitCode = vitestInfrastructureExitCode(Number(process.exitCode));
+          console.error(error);
+        });
       if (reports) {
         const reportCode = await reports.finish(
           async (mergeArgs) => {

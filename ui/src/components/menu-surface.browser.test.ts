@@ -158,14 +158,14 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     expect(distant).toEqual([false, true]);
   });
 
-  it("paints a dropdown above the divider through its own popover", async () => {
+  it("paints a native menu above the divider through its own popover", async () => {
     await useDesktopViewport();
     const { nav, divider } = mountShell();
     const dividerBounds = divider.getBoundingClientRect();
-    mountSolid(
+    const mounted = mountSolid(
       () =>
-        Menu({
-          id: "sidebar-sort",
+        createComponent(Menu, {
+          id: "sort-menu-stacking",
           label: "Sort sessions",
           panelClass: "sidebar-session-sort-menu",
           triggerAttributes: {
@@ -179,6 +179,7 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
         }),
       { container: nav },
     );
+    onTestFinished(mounted.unmount);
     flush();
     const { page } = await import("vitest/browser");
     await page.elementLocator(nav.querySelector<HTMLElement>(".oc-menu-trigger")!).click();
@@ -187,7 +188,6 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     await expect.poll(() => menu.dataset.phase).toBe("open");
     expect(menu.matches(":popover-open")).toBe(true);
     expect(menu.closest("openclaw-menu-surface")).toBeNull();
-
     const menuBounds = menu.getBoundingClientRect();
     expect(menuBounds.right).toBeGreaterThan(dividerBounds.left);
     const hit = document.elementFromPoint(

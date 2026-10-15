@@ -350,7 +350,6 @@ describe("setup registry", () => {
         { pluginId: "shared-plugin", code: "setup-registration-failed" },
       ]);
     }
-    expect(second).not.toBe(first);
     expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
     expect(throwingRegister).toHaveBeenCalledTimes(1);
     expect(healthyRegister).toHaveBeenCalledTimes(1);

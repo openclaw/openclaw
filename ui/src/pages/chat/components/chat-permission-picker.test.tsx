@@ -39,6 +39,9 @@ it("includes the documentation link in keyboard menu navigation", async () => {
   trigger.dispatchEvent(
     new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
   );
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-controls__permission-learn-more")).not.toBeNull(),
+  );
   const link = container.querySelector<HTMLAnchorElement>(".chat-controls__permission-learn-more")!;
   await waitForSolid(() => expect(document.activeElement).toBe(link));
   expect(link.getAttribute("href")).toBe("https://docs.openclaw.ai/gateway/permission-modes");

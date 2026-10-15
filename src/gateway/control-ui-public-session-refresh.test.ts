@@ -1,83 +1,132 @@
 import { runInNewContext } from "node:vm";
+import { JSDOM } from "jsdom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { renderPublicSessionDocument } from "./control-ui-public-session-render.js";
 
-// Exercise the exact inline script the rendered page ships (and its CSP hash covers).
-const renderedEntryScript = renderPublicSessionDocument({
-  messages: [],
-  title: "Shared",
-  truncated: false,
-  latestUrl: "/share/session",
-  cardUrl: "https://example.test/card.png",
-  assetBasePath: "/control",
-}).match(/<script>([\s\S]*)<\/script><\/body>/)?.[1];
-if (renderedEntryScript === undefined) {
+const message = (id: string) => ({ role: "assistant", __openclaw: { id }, content: id });
+const messages = [
+  message("first"),
+  message("second"),
+  {
+    role: "assistant",
+    content: [{ type: "toolCall", name: "read", arguments: { path: "example.ts" } }],
+  },
+  message("last"),
+];
+function render(overrides: Partial<Parameters<typeof renderPublicSessionDocument>[0]> = {}) {
+  return renderPublicSessionDocument({
+    messages,
+    title: "Shared",
+    truncated: false,
+    latestUrl: "/chat/main/topic",
+    cardUrl: "https://example.test/card.png",
+    assetBasePath: "/control",
+    entryUrl: "/__openclaw__/session-entry?path=topic",
+    ...overrides,
+  });
+}
+const script = render().match(/<script>([\s\S]*)<\/script><\/body>/)?.[1];
+if (!script) {
   throw new Error("rendered public session page has no entry script");
 }
-const PUBLIC_SESSION_ENTRY_SCRIPT: string = renderedEntryScript;
+const entryScript: string = script;
+const dispose: (() => void)[] = [];
+afterEach(() => {
+  for (const close of dispose.splice(0)) {
+    close();
+  }
+  vi.useRealTimers();
+});
 
-afterEach(() => vi.useRealTimers());
-function fixture() {
+function fixture(
+  overrides: Partial<Parameters<typeof renderPublicSessionDocument>[0]> = {},
+  initialRowHeight = 400,
+) {
   vi.useFakeTimers();
-  const listeners = new Map<string, () => void>();
-  let enabled = true;
-  const replaceWith = vi.fn((next: { enabled: boolean }) => {
-    enabled = next.enabled;
-  });
-  const clearPending = vi.fn();
-  const document = {
-    hidden: false,
-    title: "Before",
-    getElementById: () => null,
-    // The copy-control enhancer scans the document and each refreshed main; this stub has no code blocks.
-    querySelectorAll: () => [],
-    querySelector: (selector: string) =>
-      selector.includes("entry-pending")
-        ? null
-        : selector.includes("refresh")
-          ? enabled
-            ? {}
-            : null
-          : { replaceWith },
-    addEventListener: (name: string, callback: () => void) => {
-      listeners.set(name, callback);
-    },
+  const dom = new JSDOM(render(overrides), { url: "https://example.test/chat/main/topic" });
+  dispose.push(() => dom.window.close());
+  const { document } = dom.window;
+  // The protected login probe is covered separately; exercise the shipped reader lifecycle.
+  document.getElementById("session-login")?.remove();
+  let hidden = false;
+  Object.defineProperty(document, "hidden", { get: () => hidden });
+  const window = {
+    scrollY: 0,
+    innerHeight: 600,
+    scrollTo: vi.fn(({ top }: { top: number }) => {
+      window.scrollY = top;
+    }),
+    addEventListener: dom.window.addEventListener.bind(dom.window),
+    matchMedia: () => ({ matches: true }),
   };
+  // DOM behavior is real; only browser layout is deterministic in this Node test.
+  let rowHeight = initialRowHeight;
+  dom.window.Element.prototype.getBoundingClientRect = function () {
+    const rows = Array.from(document.querySelectorAll(".transcript > *"));
+    const index = rows.indexOf(this);
+    const top = this.matches(".transcript") ? 300 : 300 + Math.max(0, index) * rowHeight;
+    const bottom = this.matches(".transcript") ? 300 + rows.length * rowHeight : top + rowHeight;
+    return new dom.window.DOMRect(0, top - window.scrollY, 720, bottom - top);
+  };
+  const replaceWith = vi.spyOn(document.querySelector("main")!, "replaceWith");
   const fetch = vi.fn<typeof globalThis.fetch>();
   const response = (status: number, body = "updated", etag = '"revision-1"') =>
-    new Response(status === 304 ? null : body, { status, headers: { ETag: etag } });
+    new Response(
+      status === 304
+        ? null
+        : render(
+            body === "revoked"
+              ? { title: "Conversation unavailable", unavailable: true, messages: [] }
+              : { ...overrides, title: body, messages: [...messages, message(body)] },
+          ),
+      { status, headers: { ETag: etag } },
+    );
   fetch.mockResolvedValue(response(200));
-  runInNewContext(PUBLIC_SESSION_ENTRY_SCRIPT, {
+  let resized: () => void = () => {};
+  runInNewContext(entryScript, {
     document,
+    window,
     fetch,
-    location: { href: "https://example.test/chat/main/topic" },
-    Math: { random: () => 0.5, floor: Math.floor, max: Math.max },
+    location: dom.window.location,
+    Math: Object.assign(Object.create(Math), { random: () => 0.5 }),
     Number,
     Date,
     AbortSignal,
     setTimeout,
     clearTimeout,
-    DOMParser: class {
-      parseFromString(body: string) {
-        return {
-          title: body,
-          querySelector: () => ({
-            enabled: body !== "revoked",
-            hasAttribute: () => body === "revoked",
-            removeAttribute: clearPending,
-            querySelectorAll: () => [],
-            querySelector: () => ({ textContent: "Conversation unavailable" }),
-          }),
-        };
+    DOMParser: dom.window.DOMParser,
+    ResizeObserver: class {
+      constructor(callback: () => void) {
+        resized = callback;
       }
+      observe() {}
+      disconnect() {}
     },
   });
-  const visibility = (hidden: boolean) => {
-    document.hidden = hidden;
-    listeners.get("visibilitychange")?.();
+  const visibility = (value: boolean) => {
+    hidden = value;
+    document.dispatchEvent(new dom.window.Event("visibilitychange"));
   };
-  return { document, fetch, response, replaceWith, visibility, clearPending };
+  const event = (name: string) => dom.window.dispatchEvent(new dom.window.Event(name));
+  const scroll = (top: number) => {
+    window.scrollY = top;
+    event("scroll");
+  };
+  return {
+    document,
+    window,
+    fetch,
+    response,
+    replaceWith,
+    visibility,
+    event,
+    scroll,
+    resize: (height: number) => {
+      rowHeight = height;
+      resized();
+    },
+  };
 }
 
 describe("public reader refresh lifecycle", () => {
@@ -87,7 +136,7 @@ describe("public reader refresh lifecycle", () => {
     expect(f.fetch).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1500);
     expect(f.fetch).toHaveBeenCalledTimes(1);
-    expect(f.document.title).toBe("updated");
+    expect(f.document.title).toBe("updated · OpenClaw");
     f.fetch.mockResolvedValue(f.response(304));
     await vi.advanceTimersByTimeAsync(16500);
     expect(f.fetch).toHaveBeenLastCalledWith(
@@ -111,7 +160,7 @@ describe("public reader refresh lifecycle", () => {
     f.fetch.mockResolvedValue(f.response(404, "revoked"));
     await vi.advanceTimersByTimeAsync(16500);
     expect(f.document.title).toBe("Conversation unavailable · OpenClaw");
-    expect(f.clearPending).toHaveBeenCalledExactlyOnceWith("data-entry-pending");
+    expect(f.document.querySelector("[data-entry-pending]")).toBeNull();
     await vi.advanceTimersByTimeAsync(60000);
     expect(f.fetch).toHaveBeenCalledTimes(1);
   });
@@ -124,7 +173,7 @@ describe("public reader refresh lifecycle", () => {
     pending.resolve(f.response(200));
     await vi.advanceTimersByTimeAsync(0);
     expect(f.replaceWith).not.toHaveBeenCalled();
-    expect(f.document.title).toBe("Before");
+    expect(f.document.title).toBe("Shared · OpenClaw");
   });
   it("honors Retry-After without replacing the readable transcript", async () => {
     const f = fixture();
@@ -136,8 +185,100 @@ describe("public reader refresh lifecycle", () => {
     f.visibility(false);
     await vi.advanceTimersByTimeAsync(60000);
     expect(f.fetch).toHaveBeenCalledTimes(1);
-    expect(f.document.title).toBe("Before");
+    expect(f.document.title).toBe("Shared · OpenClaw");
     await vi.advanceTimersByTimeAsync(1500);
     expect(f.fetch).toHaveBeenCalledTimes(2);
+  });
+  it("follows new messages and late layout only at the transcript end, not in the colophon", async () => {
+    const f = fixture();
+    f.scroll(1300);
+    await vi.advanceTimersByTimeAsync(16500);
+    expect(f.window.scrollY).toBe(1788);
+    f.resize(500);
+    expect(f.window.scrollY).toBe(2288);
+    f.scroll(3000);
+    f.window.scrollTo.mockClear();
+    f.fetch.mockResolvedValue(f.response(200, "more", '"revision-2"'));
+    await vi.advanceTimersByTimeAsync(16500);
+    expect(f.window.scrollTo).not.toHaveBeenCalled();
+  });
+  it.each([false, true])(
+    "follows a short visible conversation (explicit Latest: %s)",
+    async (explicitLatest) => {
+      const f = fixture({}, 40);
+      if (explicitLatest) {
+        f.document.querySelector<HTMLButtonElement>("[data-public-latest]")!.click();
+        f.scroll(0);
+      }
+      await vi.advanceTimersByTimeAsync(16500);
+      f.resize(200);
+      expect(f.window.scrollY).toBe(788);
+    },
+  );
+  it("keeps the visible message and expanded tools when the latest page rolls forward", async () => {
+    const f = fixture();
+    f.scroll(750);
+    f.document.querySelector("details")!.open = true;
+    const body = render({ messages: [...messages.slice(1), message("new")] });
+    f.fetch.mockResolvedValue(new Response(body, { status: 200 }));
+    await vi.advanceTimersByTimeAsync(16500);
+    expect(f.window.scrollY).toBe(350);
+    expect(f.document.querySelector("details")!.open).toBe(true);
+  });
+  it("offers top/latest controls and refreshes manually without a navigation", async () => {
+    const f = fixture();
+    f.scroll(800);
+    const top = f.document.querySelector<HTMLButtonElement>("[data-public-top]");
+    expect(top).not.toBeNull();
+    top!.click();
+    expect(f.window.scrollY).toBe(0);
+    f.document.querySelector<HTMLButtonElement>("[data-public-latest]")!.click();
+    expect(f.window.scrollY).toBe(1388);
+    f.document.querySelector<HTMLAnchorElement>("[data-public-refresh-now]")!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.fetch).toHaveBeenCalledTimes(1);
+    expect(f.document.querySelector("[data-public-refresh-status]")?.textContent).toBe(
+      "Up to date",
+    );
+  });
+  it("refreshes legacy links in place and clears a plain revoked response", async () => {
+    const f = fixture({ entryUrl: undefined });
+    await vi.advanceTimersByTimeAsync(16500);
+    expect(f.fetch).toHaveBeenCalledTimes(1);
+    f.fetch.mockResolvedValue(new Response("This public session is unavailable.", { status: 404 }));
+    await vi.advanceTimersByTimeAsync(16500);
+    expect(f.document.querySelector(".transcript")).toBeNull();
+    expect(f.document.body.textContent).toContain("no longer publicly available");
+    expect(f.document.querySelector(".reader-controls")?.hasAttribute("hidden")).toBe(true);
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(f.fetch).toHaveBeenCalledTimes(2);
+  });
+  it("retains readable content and visibly recovers from a failed update", async () => {
+    const f = fixture();
+    f.fetch.mockRejectedValueOnce(new Error("offline"));
+    await vi.advanceTimersByTimeAsync(16500);
+    expect(f.document.querySelector(".transcript")?.textContent).toContain("first");
+    expect(f.document.querySelector("[data-public-refresh-status]")?.textContent).toContain(
+      "Could not refresh",
+    );
+    f.event("online");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.document.title).toBe("updated · OpenClaw");
+  });
+  it("catches up on reconnect without overlapping requests, and keeps older pages still", async () => {
+    const f = fixture();
+    const pending = createDeferred<Response>();
+    f.fetch.mockReturnValue(pending.promise);
+    f.event("online");
+    await vi.advanceTimersByTimeAsync(0);
+    f.event("online");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.fetch).toHaveBeenCalledTimes(1);
+    pending.resolve(f.response(200));
+    await vi.advanceTimersByTimeAsync(0);
+    const older = fixture({ isLatest: false });
+    older.event("online");
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(older.fetch).not.toHaveBeenCalled();
   });
 });

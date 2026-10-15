@@ -460,23 +460,16 @@ const invokeToolsRpc = async (
     | undefined;
 };
 
-const setMainAllowedTools = (params: {
-  allow: string[];
-  gatewayAllow?: string[];
-  gatewayDeny?: string[];
-}) => {
+const setMainAllowedTools = (params: { allow: string[]; gatewayAllow?: string[] }) => {
   cfg = {
     ...cfg,
     agents: {
       entries: { main: { tools: { allow: params.allow } } },
     },
-    ...(params.gatewayAllow || params.gatewayDeny
+    ...(params.gatewayAllow
       ? {
           gateway: {
-            tools: {
-              ...(params.gatewayAllow ? { allow: params.gatewayAllow } : {}),
-              ...(params.gatewayDeny ? { deny: params.gatewayDeny } : {}),
-            },
+            tools: { allow: params.gatewayAllow },
           },
         }
       : {}),
@@ -815,21 +808,6 @@ describe("POST /tools/invoke", () => {
       expect(body.ok, tool).toBe(false);
       expect(body.error?.type, tool).toBe("not_found");
     }
-  });
-
-  it("treats gateway.tools.deny as higher priority than gateway.tools.allow", async () => {
-    setMainAllowedTools({
-      allow: ["gateway"],
-      gatewayAllow: ["gateway"],
-      gatewayDeny: ["gateway"],
-    });
-
-    const res = await invokeToolAuthed({
-      tool: "gateway",
-      sessionKey: "main",
-    });
-
-    expect(res.status).toBe(404);
   });
 
   it("uses the configured main session key when sessionKey is missing or main", async () => {

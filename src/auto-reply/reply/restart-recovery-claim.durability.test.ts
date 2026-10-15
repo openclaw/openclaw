@@ -100,6 +100,11 @@ it.each(["new input", "accepted input"] as const)(
       expect(admitted.restartRecoveryRuns).toEqual([
         { runId: executionRunId, lifecycleGeneration },
       ]);
+      if (admission === "accepted input") {
+        expect(admitted.updatedAt).toBe(1);
+      } else {
+        expect(admitted.updatedAt).toBeGreaterThan(1);
+      }
 
       const startedAt = expectDefined(admitted.startedAt, "admission records a start time") + 10;
       const event = { runId: executionRunId, lifecycleGeneration, sessionId: entry.sessionId };

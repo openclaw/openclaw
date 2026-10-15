@@ -16,6 +16,7 @@ import {
   createPrefixedOutputWriter,
   parseMode,
   resolveBoundaryRootShimsTimeoutMs,
+  resolveDeclarationCompilerEnv,
   runNodeStep as runNodeStepImpl,
   runNodeSteps as runNodeStepsImpl,
   runNodeStepsInParallel as runNodeStepsInParallelImpl,
@@ -721,6 +722,30 @@ child.once("message", () => process.exit(${exitCode}));
     expect(parseMode([])).toBe("all");
     expect(parseMode(["--mode=package-boundary"])).toBe("package-boundary");
     expect(() => parseMode(["--mode=nope"])).toThrow("Unknown mode: nope");
+  });
+
+  it("sizes serial CI declaration compilers to the constrained runner", () => {
+    const gib = 1024 ** 3;
+    const host = { logicalCpuCount: 4, totalMemoryBytes: 15 * gib, memoryCapacityBytes: 15 * gib };
+    const pick = (env: NodeJS.ProcessEnv) => {
+      const { GOMAXPROCS, GOGC, GOMEMLIMIT } = env;
+      return { GOMAXPROCS, GOGC, GOMEMLIMIT };
+    };
+
+    expect(pick(resolveDeclarationCompilerEnv({ CI: "true" }, host))).toEqual({
+      GOMAXPROCS: "4",
+      GOGC: "100",
+      GOMEMLIMIT: "11520MiB",
+    });
+    expect(pick(resolveDeclarationCompilerEnv({ CI: "true", GOMAXPROCS: "3" }, host))).toEqual({
+      GOMAXPROCS: "3",
+      GOGC: "100",
+      GOMEMLIMIT: "11520MiB",
+    });
+    // Unknown cgroup ownership keeps the conservative constrained-runner limits.
+    expect(
+      pick(resolveDeclarationCompilerEnv({ CI: "true" }, { ...host, memoryCapacityBytes: null })),
+    ).toEqual({ GOMAXPROCS: "2", GOGC: "30", GOMEMLIMIT: "3GiB" });
   });
 
   it("gives cold root shim generation macOS runner headroom", () => {

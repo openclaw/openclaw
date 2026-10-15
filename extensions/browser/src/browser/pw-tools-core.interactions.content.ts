@@ -7,7 +7,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { FileChooser, Locator, Page } from "playwright-core";
-import { ACT_MAX_WAIT_TIME_MS, resolveActWaitTimeoutMs } from "./act-policy.js";
+import { resolveActWaitTimeoutMs } from "./act-policy.js";
 import {
   DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
   DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
@@ -30,7 +30,6 @@ import {
   type InteractionTargetOptions,
   interactionNavigationPolicy,
   reconcileRemoteDialogAfterActionSettled,
-  resolveBoundedDelayMs,
   runCancellablePageInteraction,
   throwIfInteractionAborted,
 } from "./pw-tools-core.interactions.navigation.js";
@@ -61,9 +60,13 @@ const PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES = 50 * 1024 * 1024;
 const PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES =
   Math.floor((EXTENSION_RELAY_MAX_PAYLOAD_BYTES * 3) / 4) - 1024 * 1024;
 
-async function toPlaywrightFilePayloads(paths: string[]) {
+async function toPlaywrightFilePayloads(paths: string[], fallbackOnPayloadLimit: boolean) {
   const stats = await Promise.all(paths.map(async (filePath) => await fs.stat(filePath)));
   const totalSize = stats.reduce((size, stat) => size + stat.size, 0);
+  // Local extension handoff avoids a base64 payload larger than the relay accepts.
+  if (fallbackOnPayloadLimit && totalSize >= PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES) {
+    return paths;
+  }
   if (totalSize >= PLAYWRIGHT_FILE_PAYLOAD_SIZE_LIMIT_BYTES) {
     throw new Error(
       "Cannot set buffer larger than 50Mb, please write it to a file and pass its path instead.",
@@ -82,11 +85,6 @@ async function toPlaywrightFilePayloads(paths: string[]) {
   );
 }
 
-async function measureExistingUploadPathsSize(paths: string[]): Promise<number> {
-  const stats = await Promise.all(paths.map(async (filePath) => await fs.stat(filePath)));
-  return stats.reduce((size, stat) => size + stat.size, 0);
-}
-
 async function resolvePlaywrightUploadFiles(opts: GuardedInteractionOptions & { paths: string[] }) {
   return await racePromiseWithAbortSignal(
     (async () => {
@@ -97,16 +95,10 @@ async function resolvePlaywrightUploadFiles(opts: GuardedInteractionOptions & { 
       if (!(opts.ssrfPolicy && opts.browserFilesystemLocal !== true)) {
         return resolved.paths;
       }
-      if (
-        opts.uploadPathsFallbackOnPayloadLimit === true &&
-        (await measureExistingUploadPathsSize(resolved.paths)) >=
-          PLAYWRIGHT_RELAY_SAFE_PAYLOAD_SIZE_BYTES
-      ) {
-        // Preserve path handoff for extensions with local file access when the
-        // payload would exceed the relay limit.
-        return resolved.paths;
-      }
-      return await toPlaywrightFilePayloads(resolved.paths);
+      return await toPlaywrightFilePayloads(
+        resolved.paths,
+        opts.uploadPathsFallbackOnPayloadLimit === true,
+      );
     })(),
     opts.signal,
     ({ reason }) => toErrorObject(reason ?? new Error("aborted"), "Non-Error rejection"),
@@ -167,7 +159,7 @@ export async function waitForViaPlaywright(
 ): Promise<void> {
   const page = await getPageForTargetId(opts);
   const timeout = resolveActWaitTimeoutMs(opts.timeoutMs);
-  const fn = normalizeOptionalString(opts.fn) ?? "";
+  const fn = opts.fn;
   const predicateSource = fn ? normalizeBrowserEvaluateFunctionSource(fn) : "";
   const predicate = fn ? createBrowserWaitPredicate(predicateSource) : undefined;
   const { abortPromise, cleanup } = createAbortPromiseWithListener(opts.signal);
@@ -183,12 +175,8 @@ export async function waitForViaPlaywright(
   const runWaitSequence = async (
     waitFor: <T>(stepPromise: Promise<T>) => Promise<void>,
   ): Promise<void> => {
-    if (typeof opts.timeMs === "number" && Number.isFinite(opts.timeMs)) {
-      await waitFor(
-        page.waitForTimeout(
-          resolveBoundedDelayMs(opts.timeMs, "wait timeMs", ACT_MAX_WAIT_TIME_MS),
-        ),
-      );
+    if (opts.timeMs !== undefined) {
+      await waitFor(page.waitForTimeout(opts.timeMs));
     }
     for (const field of ["text", "textGone"] as const) {
       const text = opts[field];
@@ -198,16 +186,10 @@ export async function waitForViaPlaywright(
       }
     }
     if (opts.selector) {
-      const selector = normalizeOptionalString(opts.selector) ?? "";
-      if (selector) {
-        await waitFor(page.locator(selector).first().waitFor({ state: "visible", timeout }));
-      }
+      await waitFor(page.locator(opts.selector).first().waitFor({ state: "visible", timeout }));
     }
     if (opts.url) {
-      const url = normalizeOptionalString(opts.url) ?? "";
-      if (url) {
-        await waitFor(page.waitForURL(url, { timeout }));
-      }
+      await waitFor(page.waitForURL(opts.url, { timeout }));
     }
     if (opts.loadState) {
       await waitFor(page.waitForLoadState(opts.loadState, { timeout }));

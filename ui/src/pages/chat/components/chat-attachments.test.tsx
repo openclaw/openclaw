@@ -314,7 +314,9 @@ describe("chat attachment read failures", () => {
           (tooltip) => tooltip.content.includes("bad.png") && !tooltip.content.startsWith("Remove"),
         ),
       ).toBe(true);
-      expect(tiles[1]?.textContent?.trim()).toBe("");
+      expect(container.querySelector(".chat-attachment-failures")?.textContent).toContain(
+        "Could not attach: bad.png",
+      );
     } else {
       expect(reads.pendingReads).toBe(1);
       await vi.advanceTimersByTimeAsync(15_001);
@@ -350,6 +352,7 @@ describe("chat attachment read failures", () => {
     });
     expect(admitted).toBe(2);
     expect(reads.project([]).map(({ attachment }) => attachment.fileName)).toEqual([
+      "second.png",
       "first.png",
       "third.png",
     ]);
@@ -384,7 +387,7 @@ describe("chat attachment read failures", () => {
     ).toBe(0);
     expect(
       reads.project(attachments).map(({ attachment }) => attachment.fileName ?? attachment.id),
-    ).toEqual(["ready", "reading.png"]);
+    ).toEqual(["ready", "reading.png", "overflow.png"]);
     await waitForSolid(() =>
       expect(toastHost.querySelector(".app-toast__message")?.textContent).toBe(
         "Too large to send: overflow.png",
@@ -435,6 +438,7 @@ describe("chat attachment read failures", () => {
     expect(reads.project(attachments).map(({ attachment }) => attachment.fileName)).toEqual([
       "large.png",
       "first.txt",
+      "overflow.txt",
       "fits.txt",
     ]);
     await waitForSolid(() => {

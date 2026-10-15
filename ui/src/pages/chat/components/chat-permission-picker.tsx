@@ -155,6 +155,7 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
   });
   return (
     <Menu
+      lazy
       id={`chat-permission-${id}`}
       label={`${t("chat.permissionControls.label")}: ${modeLabel(props.mode, props.defaultMode)}`}
       class="chat-controls__inline-select chat-controls__permission-picker"
