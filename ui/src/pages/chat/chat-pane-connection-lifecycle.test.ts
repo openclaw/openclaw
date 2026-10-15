@@ -1,5 +1,4 @@
 // Keep the registered pane class on this file's module graph.
-import { html, render } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-connection-lifecycle.test/"} */
@@ -10,6 +9,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { emptyLegacyContent } from "../../lit/solid-content.tsx";
+import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
@@ -127,10 +127,10 @@ describe("chat pane connection lifecycle", () => {
       const runBefore = getChatSessionProjection(state).runs["pairing-run"];
       const view = document.createElement("div");
       onTestFinished(() => {
-        render(null, view);
+        renderPaneLegacyContent(null, view);
       });
       const renderReply = () => {
-        render(
+        renderPaneLegacyContent(
           renderMessageGroup(
             createMessageGroup(state.chatMessages[0], "assistant", { key: "pairing-reply" }),
             {
@@ -231,7 +231,7 @@ describe("chat pane connection lifecycle", () => {
       readonly conversationPresented: boolean;
     };
     lifecycle.render = () => ({
-      layout: html`${emptyLegacyContent}`,
+      layout: emptyLegacyContent,
       capabilityDialogs: undefined,
     });
     const shell = document.createElement("openclaw-app-shell");
@@ -264,7 +264,7 @@ describe("chat pane connection lifecycle", () => {
     });
     const lifecycle = pane;
     lifecycle.render = () => ({
-      layout: html`${emptyLegacyContent}`,
+      layout: emptyLegacyContent,
       capabilityDialogs: undefined,
     });
     connectPaneTestView(lifecycle);

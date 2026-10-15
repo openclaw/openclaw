@@ -2803,6 +2803,31 @@ remains visible in the existing cache-status fields. An older implementation
 ignores the new representation's version and reconstructs its prior cache from
 transcripts, so rollback needs no reverse data migration.
 
+## Background exec notification obligations
+
+The exec completion owner stores `pendingExecNotifications` in the existing
+private session-row JSON when an eligible process becomes backgrounded. Each
+unique registry process-instance ID retains the public process ID, owning session ID and lifecycle revision, Gateway
+incarnation, start time, a generic command label, and the existing completion
+policy and route. Arguments, environment, output, operating-system handles, approvals,
+and execution authority are not persisted.
+
+This additive field needs no schema migration or index. The existing session
+writer commits it; startup filters the private fact in SQL and reads only matching
+session-list projections in pages of 64 through the existing worker after store
+admission. Unrelated entry payloads and saved prompts stay in SQLite. Storage grows
+with pending background completions. The notification uses current session
+admission and a stable source-turn identity; it cannot re-run the command. The
+fact remains until transcript adoption, explicit cancellation/removal, reset,
+archive, or rejection by current notification policy. Incognito sessions do not
+persist obligations. Normal session deletion removes the field with its row.
+
+Older binaries ignore this field and do not recover its notifications; a later
+upgrade can report the pending unknown outcome. Rollback does not alter history,
+execute commands, or require a database restore. The maintainer-authorized
+restart-continuity repair accepts this narrowly scoped durability change; owner
+and separate-Gateway-process tests cover lifecycle cleanup and restart handoff.
+
 ## Review checkpoint for material changes
 
 An explicit maintainer repair-and-land request covers internal scheduling,
