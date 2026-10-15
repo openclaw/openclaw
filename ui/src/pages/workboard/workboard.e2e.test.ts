@@ -23,6 +23,7 @@ import {
   type MockGatewayRequest,
 } from "../../test-helpers/control-ui-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
+import { openPicker } from "../../test-helpers/select-picker-e2e.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Workboard mocked Gateway E2E",
@@ -95,12 +96,17 @@ async function chooseWorkboardDisplayOption(page: Page, option: string) {
     .click();
 }
 
-async function chooseWorkboardBoard(page: Page, boardId: string) {
+async function openWorkboardBoardPicker(page: Page) {
   await openWorkboardFilters(page);
   const picker = page.locator("openclaw-select-picker").filter({
     has: page.getByRole("button", { name: /^Filter by board:/u }),
   });
-  await picker.getByRole("button", { name: /^Filter by board:/u }).click();
+  await openPicker(picker);
+  return picker;
+}
+
+async function chooseWorkboardBoard(page: Page, boardId: string) {
+  const picker = await openWorkboardBoardPicker(page);
   await picker.locator(`[role="option"][data-value="${boardId}"]`).click();
 }
 
@@ -645,13 +651,6 @@ suite.define(() => {
       });
       await waitForNextRequest(writableGateway, "workboard.boards.list", boardsBeforeLiveRefresh);
       await writableGateway.resolveDeferred("workboard.boards.list");
-      await expect
-        .poll(() =>
-          writable.page
-            .getByRole("option", { name: /Live metadata/u, includeHidden: true })
-            .count(),
-        )
-        .toBe(1);
       expect(await writableGateway.getRequests("workboard.cards.list")).toHaveLength(
         listBeforeLiveRefresh,
       );
@@ -664,6 +663,7 @@ suite.define(() => {
           .getByRole("heading", { name: liveRefreshedCard.title, exact: true, includeHidden: true })
           .count(),
       ).toBe(0);
+      await writableGateway.deferNext("workboard.cards.list");
       await editForm
         .locator(":scope > .workboard-modal__actions")
         .getByRole("button", { name: "Cancel", exact: true })
@@ -673,6 +673,14 @@ suite.define(() => {
         .getByRole("button", { name: "Discard", exact: true })
         .click();
       await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeLiveRefresh);
+      const liveBoardPicker = await openWorkboardBoardPicker(writable.page);
+      await expect
+        .poll(() => liveBoardPicker.getByRole("option", { name: /Live metadata/u }).count())
+        .toBe(1);
+      await liveBoardPicker.locator(".picker-select__trigger").click();
+      await liveBoardPicker.locator(".picker-select__menu").waitFor({ state: "hidden" });
+      await closeWorkboardFilters(writable.page);
+      await writableGateway.resolveDeferred("workboard.cards.list");
       await cardInColumn(writable.page, "Review", liveRefreshedCard.title).waitFor({
         state: "visible",
       });
@@ -1055,9 +1063,10 @@ suite.define(() => {
       expect(new URL(recorded.page.url()).search).toBe("?agent=main");
       expect(await recorded.page.evaluate(() => history.length)).toBe(historyBeforeFilter);
       expect(await recorded.page.getByText(defaultCard.title).count()).toBe(0);
-      expect(
-        await recorded.page.getByRole("option", { name: /Old work/u, includeHidden: true }).count(),
-      ).toBeGreaterThan(0);
+      const boardPicker = await openWorkboardBoardPicker(recorded.page);
+      expect(await boardPicker.getByRole("option", { name: /Old work/u }).count()).toBeGreaterThan(
+        0,
+      );
       await captureScreenshot(recorded.page, artifacts, "10-board-filter-ops");
     } finally {
       await closeRecordedPage(recorded, artifacts, "workboard-board-filter");
