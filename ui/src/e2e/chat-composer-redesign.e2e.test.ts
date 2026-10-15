@@ -260,14 +260,21 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await expect
         .poll(() =>
-          effort.evaluate((node) => ({
-            focused: node === document.activeElement,
-            activeTag: document.activeElement?.tagName ?? null,
-            activeClass: document.activeElement?.getAttribute("class") ?? null,
-            activeRole: document.activeElement?.getAttribute("role") ?? null,
-          })),
+          effort.evaluate((node) =>
+            node === document.activeElement
+              ? "effort trigger"
+              : JSON.stringify({
+                  activeTag: document.activeElement?.tagName ?? null,
+                  activeClass: document.activeElement?.getAttribute("class") ?? null,
+                  activeRole: document.activeElement?.getAttribute("role") ?? null,
+                  openPickers: [
+                    ...document.querySelectorAll("details[data-chat-native-picker][open]"),
+                  ].map((picker) => picker.className),
+                  openTooltips: document.querySelectorAll("openclaw-tooltip[open]").length,
+                }),
+          ),
         )
-        .toMatchObject({ focused: true });
+        .toBe("effort trigger");
     });
   });
 

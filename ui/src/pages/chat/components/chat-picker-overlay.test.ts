@@ -107,6 +107,13 @@ describe("chat picker overlay", () => {
     onTestFinished(() => document.removeEventListener("keydown", dismissLegacyDetails, true));
     onTestFinished(installChatComposerPickerDismissal(document));
     onTestFinished(bindChatPickerOverlay(picker));
+    const trigger = picker.querySelector("summary")!;
+    const surface = picker.querySelector<HTMLElement>("[data-anchored-overlay]")!;
+    expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(trigger.getAttribute("aria-controls")).toBe(surface.id);
+    expect(document.getElementById(surface.getAttribute("aria-labelledby")!)).toBe(trigger);
+    expect(surface.getAttribute("role")).toBe("dialog");
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
     picker.open = true;
     picker.dispatchEvent(new Event("toggle"));
     const search = picker.querySelector("input")!;
@@ -119,10 +126,12 @@ describe("chat picker overlay", () => {
     escape();
     expect(search.value).toBe("");
     expect(picker.open).toBe(true);
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
     expect(document.activeElement).toBe(search);
     escape();
     expect(picker.open).toBe(false);
-    expect(document.activeElement).toBe(picker.querySelector("summary"));
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
   });
 
   it("shares dismissal until the final owner releases it and can reconnect", () => {

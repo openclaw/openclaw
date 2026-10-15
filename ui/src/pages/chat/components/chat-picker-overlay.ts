@@ -37,6 +37,12 @@ export function bindChatPickerOverlay(details: HTMLDetailsElement): () => void {
     acquireOcclusion: acquireNativeOverlaySurface,
     onEscape: clearChatModelSearchOnEscape,
   });
+  trigger.id = `${overlay.id}-trigger`;
+  trigger.setAttribute("aria-haspopup", "dialog");
+  trigger.setAttribute("aria-controls", overlay.id);
+  surface.id = overlay.id;
+  surface.setAttribute("role", "dialog");
+  surface.setAttribute("aria-labelledby", trigger.id);
   overlay.bindSurface(surface);
   overlay.bindTrigger(trigger);
   const anchor = createOverlayAnchor(surface);
