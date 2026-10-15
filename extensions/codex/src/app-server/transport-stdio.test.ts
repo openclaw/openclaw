@@ -44,6 +44,19 @@ describe("createStdioTransport", () => {
     expect(spawnMock).toHaveBeenCalledTimes(2);
   });
 
+  it("runs the managed package launcher with the current interpreter, independent of PATH", async () => {
+    const command = "/installed/node_modules/@openai/codex/bin/codex.js";
+    await createStdioTransport(
+      { ...startOptions(command), commandSource: "resolved-managed" },
+      { PATH: "/wrong-architecture/bin" },
+    );
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      [command, "app-server", "--listen", "stdio://"],
+      expect.any(Object),
+    );
+  });
+
   it.each([
     { errno: -86, code: "Unknown system error -86", reason: "is not runnable on this CPU" },
     { code: "ENOENT", reason: "or its working directory was not found" },
@@ -116,6 +129,43 @@ describe("createStdioTransport", () => {
       );
     },
   );
+
+  it("preserves wrapper prefixes, root option values, and raw override ordering", async () => {
+    const overrides = ["-c", 'developer_instructions="app-server = literal"'];
+    const args = [
+      "/wrapper.js",
+      ...overrides,
+      "--profile",
+      "app-server",
+      "app-server",
+      "--listen",
+      "stdio://",
+      "--config=model_reasoning_effort=high",
+    ];
+    await createStdioTransport({ ...startOptions("node"), args });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "node",
+      [
+        "/wrapper.js",
+        ...overrides,
+        "--profile",
+        "app-server",
+        "--config=model_reasoning_effort=high",
+        "app-server",
+        "--listen",
+        "stdio://",
+      ],
+      expect.any(Object),
+    );
+    expect(args[1]).toBe("-c");
+  });
+
+  it("does not reinterpret a wrapper's positional arguments after --", async () => {
+    const args = ["/wrapper.js", "--", "-c", "opaque", "app-server"];
+    await createStdioTransport({ ...startOptions("node"), args });
+    expect(spawnMock).toHaveBeenCalledWith("node", args, expect.any(Object));
+  });
 
   it("preserves a subcommand-shaped socket value", async () => {
     await createStdioTransport({
