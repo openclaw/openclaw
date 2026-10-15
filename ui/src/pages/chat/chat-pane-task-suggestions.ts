@@ -20,7 +20,7 @@ import { resolveChatAgentId } from "./chat-state-route.ts";
 import type {
   TaskSuggestionAcceptance,
   TaskSuggestionStartMode,
-} from "./components/chat-task-suggestions.ts";
+} from "./components/chat-task-suggestions.tsx";
 
 type TaskSuggestionOperation =
   | { action: "dismiss"; resolved: boolean }

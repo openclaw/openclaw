@@ -4,7 +4,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { LitContent } from "../../../lit/solid-content.tsx";
 import { rawMessageTimestamp } from "../chat-thread-items.ts";
-import { renderForwardedAttribution } from "./chat-forwarded-attribution.ts";
+import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
 import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import "./chat-session-activity.css";
@@ -63,11 +63,12 @@ export function ChatSessionActivity(props: ChatSessionActivityProps) {
             {/* One summary for both states, so only the chevron moves on toggle. The
                 source link's click is canceled by the transcript's navigation
                 handler, which also cancels the summary's toggle activation. */}
-            <LitContent
-              value={renderForwardedAttribution(props.group, {
+            <ForwardedAttribution
+              group={props.group}
+              options={{
                 ...props.options,
                 updateCount: count(),
-              })}
+              }}
             />
             <Show when={!props.options.searchResult}>
               <span class="chat-session-activity__chevron" aria-hidden="true">

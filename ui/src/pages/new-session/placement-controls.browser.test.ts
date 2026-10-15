@@ -35,7 +35,7 @@ it.each([
   { width: 390, shortLabels: true, direction: "ltr" },
   { width: 390, shortLabels: false, direction: "rtl" },
 ])(
-  "caps and fades phone placement text at $width px ($direction, short=$shortLabels)",
+  "keeps placement controls inline with truncated labels at $width px ($direction, short=$shortLabels)",
   async ({ width, shortLabels, direction }) => {
     await page.viewport(width, 900);
     controls.dir = direction;
@@ -122,118 +122,58 @@ it.each([
     )!;
     const envBox = environment.getBoundingClientRect();
     const workspaceBox = workspaceTrigger.getBoundingClientRect();
-    if (width <= 560) {
-      expect(workspaceBox.top).toBeGreaterThanOrEqual(envBox.bottom);
-      expect(direction === "rtl" ? workspaceBox.right : workspaceBox.left).toBeCloseTo(
-        direction === "rtl" ? envBox.right : envBox.left,
-        0,
-      );
-      const environmentIcon = environment
-        .querySelector<HTMLElement>(".new-session-page__target-icon")!
-        .getBoundingClientRect();
-      const workspaceIcon = workspaceTrigger
-        .querySelector<HTMLElement>(".new-session-page__target-icon")!
-        .getBoundingClientRect();
-      expect(environmentIcon.width).toBeCloseTo(workspaceIcon.width, 1);
-      expect(environmentIcon.left + environmentIcon.width / 2).toBeCloseTo(
-        workspaceIcon.left + workspaceIcon.width / 2,
-        1,
-      );
-      const label = environment.querySelector<HTMLElement>(".new-session-page__trigger-label")!;
-      const summary = environment.querySelector<HTMLElement>(".new-session-page__trigger-summary")!;
-      expect(summary.getBoundingClientRect().top).toBeGreaterThanOrEqual(
-        label.getBoundingClientRect().bottom,
-      );
-      expect(summary.textContent).toBe("Windows (WSL2) · Large");
+    // Flex aligns the slots; inline button baselines can differ inside them.
+    const envRow = environment.closest(".new-session-page__select")!.getBoundingClientRect();
+    const workspaceRow = workspaceTrigger
+      .closest(".new-session-page__select")!
+      .getBoundingClientRect();
+    expect(workspaceRow.top + workspaceRow.height / 2).toBeCloseTo(
+      envRow.top + envRow.height / 2,
+      0,
+    );
+    if (direction === "rtl") {
+      expect(workspaceBox.right).toBeLessThanOrEqual(envBox.left);
     } else {
-      const environmentRow = environment
-        .closest(".new-session-page__select")!
-        .getBoundingClientRect();
-      const workspaceRow = workspaceTrigger
-        .closest(".new-session-page__select")!
-        .getBoundingClientRect();
-      expect(workspaceRow.top + workspaceRow.height / 2).toBeCloseTo(
-        environmentRow.top + environmentRow.height / 2,
-        0,
-      );
       expect(workspaceBox.left).toBeGreaterThanOrEqual(envBox.right);
     }
+    const summary = environment.querySelector<HTMLElement>(".new-session-page__trigger-summary")!;
+    expect(summary.textContent).toBe("Windows (WSL2) · Large");
+    expect(summary.checkVisibility()).toBe(width > 560);
     for (const trigger of [environment, workspaceTrigger]) {
       const box = trigger.getBoundingClientRect();
       expect(box.left).toBeGreaterThanOrEqual(0);
       expect(box.right).toBeLessThanOrEqual(width);
       expect(box.height).toBeGreaterThanOrEqual(width <= 560 ? 44 : 26);
-      const chevron = trigger.querySelector<HTMLElement>(
-        width <= 560
-          ? ".new-session-page__trigger-chevron--mobile"
-          : ".new-session-page__trigger-chevron--desktop",
-      )!;
-      const labelBoxes = Array.from(
-        trigger.querySelectorAll<HTMLElement>(
+      if (width <= 560) {
+        const slot = trigger.closest<HTMLElement>(".new-session-page__select")!;
+        expect(box.width).toBeCloseTo(slot.clientWidth, 0);
+        expect(box.width).toBeGreaterThanOrEqual(44);
+      }
+      const chevron = trigger
+        .querySelector<HTMLElement>(
+          width <= 560
+            ? ".new-session-page__trigger-chevron--mobile"
+            : ".new-session-page__trigger-chevron--desktop",
+        )!
+        .getBoundingClientRect();
+      const labels = [
+        ...trigger.querySelectorAll<HTMLElement>(
           ".new-session-page__trigger-label, .new-session-page__trigger-summary",
         ),
-        (label) => label.getBoundingClientRect(),
-      );
-      const labelGap =
+      ].filter((label) => label.checkVisibility());
+      const boxes = labels.map((label) => label.getBoundingClientRect());
+      const gap =
         direction === "rtl"
-          ? Math.min(...labelBoxes.map((labelBox) => labelBox.left)) -
-            chevron.getBoundingClientRect().right
-          : chevron.getBoundingClientRect().left -
-            Math.max(...labelBoxes.map((labelBox) => labelBox.right));
-      expect(labelGap).toBeGreaterThanOrEqual(width <= 560 ? 4 : 8);
-      if (width <= 560) {
-        expect(labelGap).toBeLessThanOrEqual(4.5);
-        const availableWidth = trigger.closest<HTMLElement>(
-          ".new-session-page__select",
-        )!.clientWidth;
-        expect(box.width).toBeLessThanOrEqual(availableWidth * 0.9 + 1);
-        const overflows = Array.from(
-          trigger.querySelectorAll<HTMLElement>(
-            ".new-session-page__trigger-label, .new-session-page__trigger-summary",
-          ),
-        ).some((label) => label.scrollWidth > label.clientWidth + 1);
-        if (overflows) {
-          expect(box.width).toBeCloseTo(availableWidth * 0.9, 0);
-        } else {
-          const textBoxes = Array.from(
-            trigger.querySelectorAll<HTMLElement>(
-              ".new-session-page__trigger-label, .new-session-page__trigger-summary",
-            ),
-            (label) => {
-              const range = document.createRange();
-              range.selectNodeContents(label);
-              return range.getBoundingClientRect();
-            },
-          );
-          const visibleGap =
-            direction === "rtl"
-              ? Math.min(...textBoxes.map((textBox) => textBox.left)) -
-                chevron.getBoundingClientRect().right
-              : chevron.getBoundingClientRect().left -
-                Math.max(...textBoxes.map((textBox) => textBox.right));
-          // The fade padding and chevron margin form one spacing budget.
-          expect(visibleGap).toBeGreaterThanOrEqual(4);
-          expect(visibleGap).toBeLessThanOrEqual(12.5);
-        }
-      }
-      for (const label of trigger.querySelectorAll<HTMLElement>(
-        ".new-session-page__trigger-label, .new-session-page__trigger-summary",
-      )) {
+          ? Math.min(...boxes.map((label) => label.left)) - chevron.right
+          : chevron.left - Math.max(...boxes.map((label) => label.right));
+      expect(gap).toBeGreaterThanOrEqual(width <= 560 ? 3 : 8);
+      for (const label of labels) {
         const style = getComputedStyle(label);
         expect(style.whiteSpace).toBe("nowrap");
+        expect(style.textOverflow).toBe("ellipsis");
+        expect(style.maskImage).toBe("none");
         expect(label.scrollHeight).toBeLessThanOrEqual(label.clientHeight + 1);
-        if (width <= 560) {
-          expect(style.textOverflow).toBe("clip");
-          expect(style.maskImage).toContain(direction === "rtl" ? "to left" : "to right");
-          if (shortLabels) {
-            const textRange = document.createRange();
-            textRange.selectNodeContents(label);
-            expect(textRange.getBoundingClientRect().right).toBeLessThanOrEqual(
-              label.getBoundingClientRect().right - Number.parseFloat(style.paddingInlineEnd) + 1,
-            );
-          }
-        } else {
-          expect(style.maskImage).toBe("none");
+        if (shortLabels || width > 560) {
           expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth + 1);
         }
       }

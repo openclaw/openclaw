@@ -55,13 +55,7 @@ const sidebarSessionGatewayBindings = new WeakMap<
 export type SidebarLifecycleState = AppSidebarElement &
   Omit<AppSidebarOwner, keyof AppSidebarElement>;
 
-export type TestSessionMenu = HTMLElement & {
-  forkDisabled: boolean;
-  forkFromLastCompleted: boolean;
-  onAction: (action: { kind: "fork" }) => void;
-  selectionCount: number;
-  readonly updateComplete: Promise<boolean>;
-};
+export type TestSessionMenu = HTMLElementTagNameMap["openclaw-session-menu"];
 
 export function createGatewayHarness(client: GatewayBrowserClient) {
   const originalRequest =

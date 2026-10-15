@@ -5,6 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   getOrLoadSqliteDatabaseAdmissionForPath,
@@ -495,6 +496,17 @@ export function readRegisteredAgentDatabases(
 export async function inspectOpenClawRegisteredAgentDatabases(
   options: AgentDatabaseRegistryListOptions = {},
 ): Promise<OpenClawRegisteredAgentDatabase[]> {
+  if (getDatabaseEngineSelection()?.input) {
+    const read = await executeExistingOpenClawStateRead(
+      options,
+      { type: "agentDatabaseRegistry.read" },
+      { current: true },
+    );
+    if (read?.result.status === "unavailable") {
+      throw new Error(`OpenClaw state database ${resolveDatabasePath(options)} is unavailable.`);
+    }
+    return cloneRegisteredAgentDatabases(read?.result.entries ?? [], options);
+  }
   return readRegisteredAgentDatabases(options, true);
 }
 
