@@ -45,17 +45,51 @@ describe("Docker healthcheck", () => {
   });
 
   it.each([
-    { name: "environment", port: "19001", expected: 19001 },
-    { name: "config", port: undefined, expected: 19002 },
-  ])("probes the canonical $name port when no active lock exists", async ({ port, expected }) => {
-    vi.stubEnv("OPENCLAW_GATEWAY_PORT", port);
+    {
+      name: "environment",
+      port: "19001",
+      expected: 19001,
+      configLoaded: false,
+    },
+    { name: "config", port: undefined, expected: 19002, configLoaded: true },
+  ])(
+    "probes the canonical $name port when no active lock exists",
+    async ({ port, expected, configLoaded }) => {
+      vi.stubEnv("OPENCLAW_GATEWAY_PORT", port);
 
-    await expect(probeDockerGatewayHealth()).resolves.toBe(true);
-    expect(fetch).toHaveBeenCalledWith(`http://127.0.0.1:${expected}/healthz`);
-    expect(createConfigIO).toHaveBeenCalledWith({
-      pluginValidation: "skip",
-      shellEnvFallback: "defer",
-    });
+      await expect(probeDockerGatewayHealth()).resolves.toBe(true);
+      expect(fetch).toHaveBeenCalledWith(`http://127.0.0.1:${expected}/healthz`);
+      if (configLoaded) {
+        expect(createConfigIO).toHaveBeenCalledWith({
+          pluginValidation: "skip",
+          shellEnvFallback: "defer",
+        });
+      } else {
+        expect(createConfigIO).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("still probes the env port when config resolution throws", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_PORT", "19001");
+    const defaultImpl = vi.mocked(createConfigIO).getMockImplementation()!;
+    vi.mocked(createConfigIO).mockImplementationOnce((...args) => ({
+      ...defaultImpl(...args),
+      loadConfigAsync: async () => {
+        throw new Error("invalid config");
+      },
+    }));
+
+    try {
+      await expect(probeDockerGatewayHealth()).resolves.toBe(true);
+      expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:19001/healthz");
+      expect(createConfigIO).not.toHaveBeenCalled();
+    } finally {
+      // The env short-circuit never consumes the once implementation; restore it so
+      // later tests still load config through the default mock.
+      vi.mocked(createConfigIO).mockReset();
+      vi.mocked(createConfigIO).mockImplementation(defaultImpl);
+    }
   });
 
   it("probes the configured port when the active lock cannot be read", async () => {
