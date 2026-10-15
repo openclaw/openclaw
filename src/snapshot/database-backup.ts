@@ -7,7 +7,6 @@ import { readEngineAnchor } from "../infra/database-engine/open.js";
 import {
   withDatabasePortPostgres,
   withDatabasePortConnection,
-  requireDatabasePortProvider,
 } from "../infra/database-engine/port-provider.js";
 import { admitDatabasePortDescriptor } from "../infra/database-engine/port.worker.js";
 import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
@@ -175,7 +174,9 @@ async function preparePostgresRestoreInWorker(params: {
     throw new Error("PostgreSQL rollback capture belongs to a different store.");
   }
   return await withDatabasePortConnection(params.config, async (client) => {
-    const descriptor = await requireDatabasePortProvider(manifest.source.owner).loadDescriptor();
+    const { loadDatabasePortDescriptor } =
+      await import("../infra/database-engine/port-provider-descriptor.js");
+    const descriptor = await loadDatabasePortDescriptor(manifest.source.owner, params.config);
     return restorePostgresBackup({ ...params, client, descriptor, manifest });
   });
 }

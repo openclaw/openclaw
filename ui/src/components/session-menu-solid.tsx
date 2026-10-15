@@ -20,6 +20,7 @@ import { useSessionMenuControllers } from "./session-menu-controllers.ts";
 import { SessionMenuItem } from "./session-menu-item.tsx";
 import { SessionMenuShortcut, useSessionMenuView } from "./session-menu-view.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
 
 /** Only resolved local worktree destinations are offered by the menu host. */
 export type SessionMenuWork = {
@@ -229,20 +230,13 @@ function SessionMenuContent(props: SessionMenuProps, host: SolidBridgeElement<Se
           }}
         >
           <button
+            {...pointMenuTriggerAttributes({
+              x: Math.max(8, Math.min(anchor.x, window.innerWidth - 248)),
+              y: Math.max(8, Math.min(anchor.y, window.innerHeight - 468)),
+            })}
             slot="trigger"
             type="button"
-            tabindex={-1}
-            aria-hidden="true"
             aria-label={label()}
-            style={{
-              position: "fixed",
-              left: `${Math.max(8, Math.min(anchor.x, window.innerWidth - 248))}px`,
-              top: `${Math.max(8, Math.min(anchor.y, window.innerHeight - 468))}px`,
-              width: "1px",
-              height: "1px",
-              opacity: "0",
-              "pointer-events": "none",
-            }}
           />
           <Show when={props.compact && compactView() !== "root"} fallback={<RootMenu />}>
             <view.Compact view={compactView()} />

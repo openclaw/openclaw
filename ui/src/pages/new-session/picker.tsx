@@ -9,8 +9,6 @@ type PickerState = Pick<
   | "submitting"
   | "pendingPlacement"
   | "popoverOpen"
-  | "popoverHiding"
-  | "onGuardTransition"
   | "onPopoverShow"
   | "onPopoverHide"
   | "onPopoverAfterHide"
@@ -51,20 +49,12 @@ export function SessionPicker(props: {
             trigger = node;
           }}
           type="button"
-          class={[
-            "new-session-page__trigger",
-            { "new-session-page__trigger--hiding": props.state.popoverHiding },
-          ]}
+          class="new-session-page__trigger"
           aria-haspopup="dialog"
           aria-controls={`new-session-${props.kind}-popover`}
           aria-expanded={props.state.popoverOpen ? "true" : "false"}
           disabled={props.state.submitting || props.state.pendingPlacement}
-          onClick={(event) => {
-            props.state.onGuardTransition(event);
-            if (!event.defaultPrevented) {
-              popover.overlay.request(!popover.overlay.open);
-            }
-          }}
+          onClick={() => popover.overlay.request(!popover.overlay.open)}
         >
           <span class="new-session-page__target-icon" aria-hidden="true">
             {props.icon}

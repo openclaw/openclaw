@@ -1,22 +1,9 @@
 import { I18nController } from "../../i18n/lib/lit-controller.ts";
-
-export interface PageLifecycle {
-  hostConnected?(): void;
-  hostDisconnected?(): void;
-  hostUpdate?(): void;
-  hostUpdated?(): void;
-}
-
-export interface ControllerHost {
-  addController(controller: PageLifecycle): void;
-  removeController(controller: PageLifecycle): void;
-  requestUpdate(): void;
-  readonly updateComplete: Promise<boolean>;
-}
+import type { SolidController, SolidControllerHost } from "../../lit/solid-controller-host.ts";
 
 /** Keeps synchronous page owners and their subscriptions independent of the renderer. */
-export class ModelPageController implements ControllerHost {
-  private readonly controllers = new Set<PageLifecycle>();
+export class ModelPageController implements SolidControllerHost {
+  private readonly controllers = new Set<SolidController>();
   protected readonly i18nController = new I18nController(this);
   private connected = false;
   private settle: ((settled: boolean) => void) | undefined;
@@ -37,14 +24,14 @@ export class ModelPageController implements ControllerHost {
     return this.connected;
   }
 
-  addController(controller: PageLifecycle): void {
+  addController(controller: SolidController): void {
     this.controllers.add(controller);
     if (this.connected) {
       controller.hostConnected?.();
     }
   }
 
-  removeController(controller: PageLifecycle): void {
+  removeController(controller: SolidController): void {
     this.controllers.delete(controller);
   }
 
