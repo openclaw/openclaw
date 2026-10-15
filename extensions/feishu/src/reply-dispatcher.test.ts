@@ -1744,7 +1744,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "partial", "feishu"));
       const { result, options } = createDispatcherHarness();
       await options.onReplyStart?.();
-      result.replyOptions.onItemEvent?.(projectAgentToolActivity(event));
+      await result.replyOptions.onItemEvent?.(projectAgentToolActivity(event));
       result.replyOptions.onPartialReply?.({ text: "final answer" });
       await options.onIdle?.();
       const updates = streamingUpdateTexts().join("\n");

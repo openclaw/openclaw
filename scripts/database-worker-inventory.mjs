@@ -1567,12 +1567,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: [
-          "readActiveCronRunReceiptOwnersInDatabase",
-          "readActiveCronRunReceiptsInDatabase",
-        ],
+        operations: ["readActiveCronRunReceiptsInDatabase"],
         evidence:
-          "read-command.ts currentReceipt/activeReceiptOwners and run-recovery.read.ts route through openclaw-state-read.worker.ts; remaining direct callers are run-admission.worker.ts and runtime-maintenance.worker.ts",
+          "read-command.ts currentReceipt and run-recovery.read.ts route through openclaw-state-read.worker.ts; remaining direct callers are run-admission.worker.ts and runtime-maintenance.worker.ts",
       },
     ],
   ],
@@ -3507,6 +3504,8 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
     texts,
     (file, operation) => classify(file, operation).tier !== "T1",
     classifyKnownEntry,
+    // Historical snapshots supply counts; only current-source diagnostics are consumed below.
+    !ref,
   );
   if (!ref && compatibility.violations.length > 0) {
     throw new Error(

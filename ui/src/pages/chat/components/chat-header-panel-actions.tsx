@@ -5,6 +5,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { LitContent } from "../../../lit/solid-content.tsx";
+import { ExternalPanelLink } from "../chat-pane-embedded-view.tsx";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import {
   ensureSidebarConversation,
@@ -167,6 +168,8 @@ function layoutModel(props: ChatPaneLayoutMenuProps, openDetails: () => void) {
     allActions,
     mainHeaderAction: mainDefinition?.headerAction,
     sideHeaderAction: sideDefinition?.headerAction,
+    mainHeaderLink: mainDefinition?.headerLink,
+    sideHeaderLink: sideDefinition?.headerLink,
   };
 }
 export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
@@ -176,7 +179,9 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
   let menu!: WaDropdown;
   let pendingAction: (() => void) | undefined;
   return (
-    <Show when={model().allActions.length > 0 || model().mainHeaderAction}>
+    <Show
+      when={model().allActions.length > 0 || model().mainHeaderAction || model().mainHeaderLink}
+    >
       <wa-dropdown
         ref={(element) => {
           menu = element;
@@ -244,7 +249,9 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
             {(action) => <ChatQuickActionItem action={action()} value={action().id} layout />}
           </For>
           <LitContent value={model().mainHeaderAction} />
+          <Show when={model().mainHeaderLink}>{(link) => <ExternalPanelLink {...link()} />}</Show>
           <LitContent value={model().sideHeaderAction} />
+          <Show when={model().sideHeaderLink}>{(link) => <ExternalPanelLink {...link()} />}</Show>
         </Show>
       </wa-dropdown>
     </Show>

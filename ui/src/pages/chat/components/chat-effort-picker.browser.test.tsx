@@ -144,9 +144,31 @@ describe("effort bar colour and flow", () => {
     textarea.focus();
     await page.elementLocator(trigger).click();
     await expect.poll(() => surface.matches(":popover-open")).toBe(true);
-    await expect
-      .poll(() => surface.getAnimations().every((animation) => animation.playState === "finished"))
-      .toBe(true);
+    try {
+      await expect
+        .poll(() =>
+          surface.getAnimations().every((animation) => animation.playState === "finished"),
+        )
+        .toBe(true);
+    } catch (error) {
+      console.error(
+        "Unfinished effort picker animations",
+        surface.getAnimations().map((animation) => {
+          const effect = animation.effect;
+          const target = effect instanceof KeyframeEffect ? effect.target : null;
+          return {
+            name: animation instanceof CSSAnimation ? animation.animationName : null,
+            target: target instanceof Element ? `${target.tagName}.${target.className}` : null,
+            playState: animation.playState,
+            pending: animation.pending,
+            currentTime: animation.currentTime,
+            playbackRate: animation.playbackRate,
+            timing: effect?.getComputedTiming(),
+          };
+        }),
+      );
+      throw error;
+    }
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => details.open).toBe(false);
     await userEvent.keyboard("{Enter}");

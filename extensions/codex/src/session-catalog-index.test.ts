@@ -94,32 +94,32 @@ describe("resident Codex catalog", () => {
     });
     try {
       await index.initialize();
-      expect(readNative).toHaveBeenCalledOnce();
+      expect(readNative).toHaveBeenCalledTimes(4);
 
       await vi.advanceTimersByTimeAsync(15 * 60_000);
-      expect(readNative).toHaveBeenCalledOnce();
+      expect(readNative).toHaveBeenCalledTimes(4);
 
       // A missed native notification changes an older thread beyond an unchanged prefix.
       nativeRows = [...recent, missed];
       readNative.mockRejectedValueOnce(new Error("native unavailable"));
       const page = await index.list({ limit: 100 });
       expect(page.sessions).toHaveLength(64);
-      await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(5));
 
       // A failed walk preserves cached rows and does not retry on a busy reader.
       await index.list({ limit: 100 });
-      expect(readNative).toHaveBeenCalledTimes(2);
+      expect(readNative).toHaveBeenCalledTimes(5);
       await vi.advanceTimersByTimeAsync(15 * 60_000);
-      expect(readNative).toHaveBeenCalledTimes(2);
+      expect(readNative).toHaveBeenCalledTimes(5);
 
       const stale = await index.list({ limit: 100 });
       expect(stale.sessions).toHaveLength(64);
-      await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(4));
+      await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(10));
       const refreshed = await index.list({ limit: 100 });
       expect(refreshed.sessions).toHaveLength(64);
       const tail = await index.list({ limit: 100, cursor: refreshed.nextCursor });
       expect(tail.sessions.map((session) => session.threadId)).toEqual(["missed"]);
-      expect(readNative).toHaveBeenCalledTimes(4);
+      expect(readNative).toHaveBeenCalledTimes(10);
     } finally {
       await index.close();
     }
@@ -213,13 +213,14 @@ describe("resident Codex catalog", () => {
     ).toHaveLength(removed.length);
   });
 
-  it("retains only display-sized previews from large native responses", async () => {
-    const f = fixture(80, 1024 * 1024);
+  it("requests small native pages without losing threads or retaining large previews", async () => {
+    const f = fixture(33, 128 * 1024);
     for (const row of f.rows) {
       row.name = null;
     }
     const page = await (await f.make()).listPage({ limit: 100 });
-    expect(f.fetched[0]).toHaveLength(64);
+    expect(f.fetched.every((batch) => batch.length <= 16)).toBe(true);
+    expect(f.fetched.flat()).toEqual(f.rows.map((row) => row.id));
     expect(page.sessions.every((row) => row.fallbackName?.length === 500)).toBe(true);
     expect(JSON.stringify(page).length).toBeLessThan(64 * 4_096);
   });

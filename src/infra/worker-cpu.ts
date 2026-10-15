@@ -253,6 +253,12 @@ function trackWorker(worker: WorkerCpuHandle): void {
     // oxlint-disable-next-line typescript/unbound-method -- call preserves custom own/subclass methods and the receiver.
     const emit = !nativePrototype || Object.hasOwn(worker, "emit") ? worker.emit : undefined;
     worker.emit = function (this: Worker, event: string | symbol, ...args: unknown[]) {
+      if (event === "error" && source.script === "code-mode-node.worker.js") {
+        // Capture native failure before the pool's generic failure/close cleanup runs.
+        const error = args[0];
+        source.retirementReason ??=
+          isRecord(error) && error.code === "ERR_CODE_MODE_GC_THRASH" ? "gc-thrash" : "crash";
+      }
       if (event === "message") {
         if (source.lifecycleMessages) {
           recordWorkerMessage("lifecycle", "from_worker", workerMessagePayloadBytes(args[0]));
@@ -378,13 +384,44 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
         // Capture registry-owned identity before a native exit can free this slot.
         const workerThreadId = worker.threadId;
         const workerSlot = source.workerSlot;
-        void import("../logging/subsystem.js").then(({ createSubsystemLogger }) =>
-          createSubsystemLogger("agents/code-mode").warn("Code Mode worker GC storm", {
-            ...record.gcStorm,
+        void import("../logging/subsystem.js").then(async ({ createSubsystemLogger }) => {
+          const { profiles, ...storm } = record.gcStorm;
+          const metadata = {
+            ...storm,
             workerThreadId,
             workerSlot,
-          }),
-        );
+          };
+          const log = createSubsystemLogger("agents/code-mode");
+          if (profiles) {
+            try {
+              const { writeWorkerGcProfiles } =
+                await import("../logging/diagnostic-worker-gc-profile.js");
+              const profileFiles = await writeWorkerGcProfiles(profiles);
+              log.warn("Code Mode worker GC storm", { ...metadata, profileFiles });
+            } catch {
+              log.warn("Code Mode worker GC storm", {
+                ...metadata,
+                captureStatus: "unavailable",
+                captureReason: "profile-write-failed",
+              });
+            }
+          } else {
+            log.warn("Code Mode worker GC storm", metadata);
+          }
+          if (storm.captureStatus === "requested") {
+            // Workers cannot query process-wide tracing. Admit here before enabling their profiler.
+            const { getEnabledCategories } = await import("node:trace_events");
+            if (getEnabledCategories()) {
+              log.warn("Code Mode worker GC storm", {
+                ...metadata,
+                captureStatus: "unavailable",
+                captureReason: "tracing-active",
+              });
+            } else if (source.memoryPort === port) {
+              port.postMessage({ captureGcProfile: storm });
+            }
+          }
+        });
         return;
       }
       // Known numeric payload bytes; object envelopes and GC kind labels are excluded.

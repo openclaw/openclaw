@@ -522,7 +522,9 @@ async function dispatchSlackMessageWithSetup(
             return false;
           }
           progress.progressWorkCounter.noteItem(payload);
-          return progress.preambleOnlyProgress && payload.kind !== "preamble"
+          return progress.preambleOnlyProgress &&
+            payload.kind !== "preamble" &&
+            payload.kind !== "model-wait"
             ? await progress.progressDraft.noteActivity()
             : await progress.progressDraft.pushItemEvent(payload);
         },

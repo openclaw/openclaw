@@ -54,9 +54,11 @@ metadata and ignored-file provisioning are not mounted or copied into it.
 On Btrfs, APFS, and ReFS, new private checkouts with a committed `pnpm-lock.yaml`
 can reuse installed dependencies. OpenClaw prepares the dependencies once in a
 disposable sandbox, then clones the prepared checkout for each session. After the
-Gateway is ready, it prepares the default session base for configured agent
-repositories in the background. A session arriving during preparation waits for
-the same build; later checkouts arrive with `node_modules`. Other selected commits
+Gateway is ready, it prepares the default session base for agent repositories
+with sandbox mode `all` or `non-main` in the background. Agents with sandbox mode
+`off` skip background dependency preparation; creator-role-required sandboxes
+still prepare dependencies on first use. A session arriving during preparation
+waits for the same build; later checkouts arrive with `node_modules`. Other selected commits
 still prepare their dependencies on first use. Shutdown cancels preparation and
 waits for the disposable installer to be removed.
 The private checkout storage must support filesystem acceleration, and
@@ -165,7 +167,7 @@ Preparation logs include `templateDetails` with the backend, selection or failur
 
 Private Git index copies for template checkouts prefer native copy-on-write, including on APFS, and fall back to independent byte copies when cloning is unavailable. Safety snapshots use Git's read-only status and cached file metadata to identify changes. Clean checkouts reuse the committed tree without building a private snapshot index; changed checkouts hash only selected paths. Hidden index flags do not exclude edits from snapshots.
 
-On Btrfs, OpenClaw compares the first warm template checkout against a measured Git checkout and records its selection in the logs. If the template is slower by more than 250 ms, subsequent creates use Git for that repository, destination root, commit, and source policy until the process restarts or the commit changes. A cold template build supplies the Git measurement. When reusing a template after restart, one requested checkout supplies that measurement instead; OpenClaw does not create an extra benchmark checkout. Cold template preparation is excluded from the comparison.
+On Btrfs, OpenClaw compares template checkout against a measured Git checkout and records its selection in the logs. If the template is slower by more than 250 ms, subsequent creates use Git for that repository, destination root, backend, and source policy until the process restarts. Commit changes retain this performance hint, while template contents remain specific to the selected commit and checkout policy. A cold template build supplies the Git measurement and compares it with that template's first application, excluding the one-time template construction. When reusing a template after restart, one requested checkout supplies the Git measurement instead; OpenClaw does not create an extra benchmark checkout. A substantial repository change may make the retained strategy slower, but cannot reuse content from another commit.
 
 New checkouts with no file data, including empty session workspaces, use normal Git checkout without preparing or cloning a template.
 

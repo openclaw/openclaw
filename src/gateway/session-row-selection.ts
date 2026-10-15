@@ -1,6 +1,7 @@
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { isConfiguredGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
+import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   projectSessionOwner,
@@ -13,12 +14,12 @@ import {
   type SelectionRow as SelectionTarget,
   type SelectionChange,
 } from "./session-row-projection-record.js";
-import type { SessionRowProjection } from "./session-row-projection.js";
+import type { prepareSessionRowScopes } from "./session-row-scope.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 
 const sentinel = (key: string) => key === "global" || key === "unknown";
-type SelectionScope = ReturnType<SessionRowProjection["state"]["scope"]>;
+type SelectionScope = ReturnType<ReturnType<typeof prepareSessionRowScopes>["select"]>;
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
 type IndexedTarget = { row: SelectionTarget; pair: SessionEntryPair; position: number };
 
@@ -27,6 +28,7 @@ export function createSessionRowSelection(
   scope: SelectionScope,
   activeOnly: boolean,
   getContext: () => SessionListRowContext,
+  indexCreators = false,
 ) {
   const groups = new Map<string, Map<string, IndexedTarget>>();
   const winners = new Map<string, IndexedTarget>();
@@ -39,10 +41,53 @@ export function createSessionRowSelection(
       entries: SessionEntryPair[];
     }
   >();
+  // Fixed partitions bound refiltering after exact publications without retaining old rosters.
+  let partitions: Array<{ revision: object; entries: Map<string, SessionEntryPair> }> | undefined;
+  const partitionFor = (key: string) => {
+    let hash = 0;
+    for (let i = 0; i < key.length; i++) {
+      hash = (Math.imul(hash, 31) + key.charCodeAt(i)) | 0;
+    }
+    return partitions?.[hash & 63];
+  };
   const personalInvolvements = new Map<string, Set<string>>();
   const relatedInvolvements = new Map<string, Set<string>>();
   const rowInvolvements = new Map<string, { personal: Set<string>; related: Set<string> }>();
   const changedInvolvements = new Set<string>();
+  const creators = new Map<string, Map<string, IndexedTarget>>();
+  const creatorOrders = new Map<string, IndexedTarget[]>();
+  const updateCreator = (target: IndexedTarget | undefined, remove = false) => {
+    const profileId = target && sessionCreatorProfileId(target.row.entry.createdActor);
+    if (!indexCreators || !target || !profileId) {
+      return;
+    }
+    const entries = creators.get(profileId) ?? new Map<string, IndexedTarget>();
+    if (remove) {
+      entries.delete(target.row.key);
+    } else {
+      entries.set(target.row.key, target);
+    }
+    if (entries.size) {
+      creators.set(profileId, entries);
+    } else {
+      creators.delete(profileId);
+    }
+    // Retired arrays remain stable for readers awaiting repository facts.
+    creatorOrders.delete(profileId);
+  };
+  const compareCreated = (left: IndexedTarget, right: IndexedTarget) =>
+    (right.row.entry.updatedAt ?? 0) - (left.row.entry.updatedAt ?? 0) ||
+    left.row.key.localeCompare(right.row.key) ||
+    scope.paths.get(left.row.storeTarget.storePath)! -
+      scope.paths.get(right.row.storeTarget.storePath)! ||
+    Buffer.compare(Buffer.from(left.row.key), Buffer.from(right.row.key));
+  const assertCanonical = () => {
+    for (const key of duplicates) {
+      throw canonicalSessionKeyMigrationRequiredError(
+        `duplicate rows resolve to canonical session key ${key}`,
+      );
+    }
+  };
   // Store-admission scopes also include ACP IDs; owner facets use only the agent roster.
   const configuredAgentIds = scope.ownerAgentIds;
   let involvementRevision: object | undefined;
@@ -180,6 +225,17 @@ export function createSessionRowSelection(
     if (winner === oldWinner) {
       return;
     }
+    updateCreator(oldWinner, true);
+    updateCreator(winner);
+    const partition = partitionFor(key);
+    if (partition) {
+      partition.revision = {};
+      if (winner) {
+        partition.entries.set(key, winner.pair);
+      } else {
+        partition.entries.delete(key);
+      }
+    }
     if (involvementRevision) {
       // Publication records only the changed metadata; identity preparation stays in the reader.
       removeInvolvement(key);
@@ -218,17 +274,52 @@ export function createSessionRowSelection(
     change(change: Exclude<SelectionChange, { kind: "reset" }>) {
       update(change.id, keyFor(change), change.row);
     },
+    createdEntries(profileIds: ReadonlySet<string>): Iterable<SelectionTarget> {
+      assertCanonical();
+      const profileOrders = Array.from(profileIds, (profileId) => {
+        let entries = creatorOrders.get(profileId);
+        if (!entries) {
+          entries = [...(creators.get(profileId)?.values() ?? [])].toSorted(compareCreated);
+          creatorOrders.set(profileId, entries);
+        }
+        return { entries, offset: 0 };
+      });
+      return (function* () {
+        for (;;) {
+          let selected: (typeof profileOrders)[number] | undefined;
+          for (const order of profileOrders) {
+            const candidate = order.entries[order.offset];
+            if (
+              candidate &&
+              (!selected || compareCreated(candidate, selected.entries[selected.offset]!) < 0)
+            ) {
+              selected = order;
+            }
+          }
+          if (!selected) {
+            return;
+          }
+          yield selected.entries[selected.offset++]!.row;
+        }
+      })();
+    },
     read(
       sortBy?: SessionsListParams["sortBy"],
       candidates?: Iterable<Pick<SelectionTarget, "key" | "agentId">>,
     ) {
-      for (const key of duplicates) {
-        throw canonicalSessionKeyMigrationRequiredError(
-          `duplicate rows resolve to canonical session key ${key}`,
-        );
+      assertCanonical();
+      if (!candidates && !partitions) {
+        partitions = Array.from({ length: 64 }, () => ({
+          revision: {},
+          entries: new Map<string, SessionEntryPair>(),
+        }));
+        for (const [key, target] of winners) {
+          partitionFor(key)!.entries.set(key, target.pair);
+        }
       }
       return {
         configuredAgentIds,
+        partitions: candidates ? undefined : partitions,
         entries(this: void, archived: SessionsListParams["archived"]) {
           const orderKey = `${sortBy}:${archived ?? false}`;
           let entries = !candidates && sortBy && orders.get(orderKey)?.entries;

@@ -581,13 +581,13 @@ describe("recoverEmbeddedRunAttempt", () => {
       expectedSleepMs: 9_897_000,
     },
     {
-      label: "still sleeps the same floor with no fallback",
+      label: "stops same-profile retries past the cap without model fallback",
       errorMessage: "429 rate_limit_exceeded; Retry-After: 9897",
       fallbackConfigured: false,
       replaySafe: true,
       providerRetryMaxDelayMs: 30_000,
-      expectedAction: "retry",
-      expectedSleepMs: 9_897_000,
+      expectedAction: "proceed",
+      expectedSleepMs: undefined,
     },
     {
       label: "keeps a floor inside the cap on the same model",

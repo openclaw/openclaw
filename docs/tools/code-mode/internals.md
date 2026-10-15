@@ -240,8 +240,9 @@ bridge as QuickJS. Suspension retains the worker, context, and pending promises;
 `wait` continues that context without replaying the source. Cancellation,
 expiry, terminal results, and shutdown release the retained execution.
 
-After successful completion, Node keeps up to four idle workers warm for five
-minutes each, reusing only workers with the same runtime entry and heap limit.
+After successful completion, Node keeps up to four idle workers for 30 seconds
+to reuse short bursts, then retains one for up to five minutes since its last
+completion. Reuse requires the same runtime entry and heap limit.
 Reuse stays within the creating Gateway or CLI command lifetime; closing that
 host joins worker retirement. Standalone executor calls without a host close
 their completed worker immediately. Each new cell still gets a fresh VM context.

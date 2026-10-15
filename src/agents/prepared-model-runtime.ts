@@ -121,17 +121,14 @@ const getBlockingReplacement = (input?: PreparedModelRuntimeInput) => {
   const agentIds = replacement?.agentIds;
   const owner =
     agentIds && input && !input.readOnly ? resolveConfiguredOwner(owners, input) : undefined;
-  if (
-    agentIds &&
+  return agentIds &&
     owner?.input.agentId &&
     !agentIds.has(owner.input.agentId) &&
     owner.snapshot &&
     !owner.needsRefresh &&
     !owner.pending
-  ) {
-    return undefined;
-  }
-  return replacement;
+    ? undefined
+    : replacement;
 };
 const getAdmissionReplacement = (input?: PreparedModelRuntimeInput) =>
   modelRuntimeDrain.pending ?? getBlockingReplacement(input);
@@ -456,10 +453,14 @@ export function markPreparedModelRuntimeSnapshotsStale(
   } else {
     replyDispatchPublication.clear();
   }
+  const requestEpoch = ++refreshRequestEpoch;
   if (options.waitForReplacement) {
     const superseded = pendingModelRuntimeReplacement;
-    pendingModelRuntimeReplacement = createPreparedModelRuntimeReplacement(options.agentIds);
-    authPublication.adopt(pendingModelRuntimeReplacement.gateId);
+    const replacement = createPreparedModelRuntimeReplacement(options.agentIds);
+    pendingModelRuntimeReplacement = replacement;
+    // Admission precedes queued work; retain its failure before retiring acquisition.
+    publicationQueue.admit(replacement.promise, () => requestEpoch === refreshRequestEpoch);
+    authPublication.adopt(replacement.gateId);
     // Superseded readers retry against the newer replacement gate.
     superseded?.resolve();
   } else if (!options.preserveReplacementWait && pendingModelRuntimeReplacement) {
@@ -467,7 +468,6 @@ export function markPreparedModelRuntimeSnapshotsStale(
     pendingModelRuntimeReplacement = undefined;
     cancelled.resolve();
   }
-  refreshRequestEpoch += 1;
   const staleError = new Error(reason);
   updateOwnersForScopedRefresh(owners, options.agentIds, staleError, {
     retireStandalone: true,

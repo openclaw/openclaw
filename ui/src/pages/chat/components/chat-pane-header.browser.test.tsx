@@ -198,7 +198,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
               onActivate: onTerminal,
             },
           ],
-          detailsControl: html`<openclaw-chat-details .presented=${true}></openclaw-chat-details>`,
+          detailsControl: { chat: undefined, mobile: false, presentation: true, setRef: () => {} },
           sidebarLayout: { columns: [] },
           onLayoutChange: vi.fn(),
           onToggleSidePanel: vi.fn(),

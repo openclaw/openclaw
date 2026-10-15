@@ -118,6 +118,7 @@ type SessionTitleParams = {
   /** Settles with the turn this title overlapped; a failed label retries once after it. */
   retryAfter?: Promise<void>;
   onFallback?: () => void;
+  onTitleStateChanged?: () => void;
 };
 
 function isAutoTitleSessionKey(sessionKey: string): boolean {
@@ -342,7 +343,6 @@ export async function prepareDashboardSessionTitle(params: {
 export async function generateWorktreeSessionTitle(
   params: SessionTitleParams & {
     onError: (error: unknown) => void;
-    onPersisted: () => void;
   },
 ): Promise<string | undefined> {
   const scope = {
@@ -350,11 +350,7 @@ export async function generateWorktreeSessionTitle(
     sessionKey: resolveStoredSessionKeyForAgentStore(params),
     storePath: params.storePath,
   };
-  const request = maybeGenerateSessionTitle(params).then((persisted) => {
-    if (persisted) {
-      params.onPersisted();
-    }
-  });
+  const request = maybeGenerateSessionTitle(params);
   try {
     await withTimeout(request, WORKTREE_SESSION_TITLE_WAIT_MS, "worktree title generation");
   } catch (error) {
@@ -520,5 +516,5 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       { cancelOnError: true },
     );
   };
-  return await sessionTitleRequests.run(requestTarget, run);
+  return await sessionTitleRequests.run(requestTarget, run, params.onTitleStateChanged);
 }
