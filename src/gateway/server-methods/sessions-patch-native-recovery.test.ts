@@ -118,17 +118,17 @@ it.each([
 });
 
 it("applies remembered native permissions on selection without creating per-chat consent", async () => {
-  const config: OpenClawConfig = {
+  const config = {
     ...cfg,
     agents: { ...cfg.agents, entries: { main: { nativeRuntimeConsent: ["native-fixture"] } } },
-  };
+  } satisfies OpenClawConfig;
   const entry = { ...original };
   expect((await prepare(entry, true, config)).ok).toBe(true);
   expect(entry).toMatchObject({ permissionMode: "full", sandboxMode: "off" });
   expect(entry).not.toHaveProperty("nativeRuntimeConsent");
   expect((await prepare({ ...original, sandbox: "required" }, true, config)).ok).toBe(false);
   expect((await prepare({ ...original }, false, config)).ok).toBe(false);
-  config.agents!.entries!.main.nativeRuntimeConsent = [];
+  config.agents.entries.main.nativeRuntimeConsent = [];
   expect((await prepare({ ...original }, true, config)).ok).toBe(false);
 });
 
