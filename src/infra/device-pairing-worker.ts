@@ -97,7 +97,9 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
   let admittedAt = startedAt;
   let publicationMs = 0;
   const operation = withDevicePairingLock(async () => {
-    if (startedAt !== undefined) admittedAt = performance.now();
+    if (startedAt !== undefined) {
+      admittedAt = performance.now();
+    }
     context.admission.assertCurrent();
     options.assertCurrent?.();
     // Join codes and retained setup cleanup cannot change paired-device authority.
@@ -141,7 +143,9 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
         if (receipt.tokensReplaced) {
           options.onTokensReplaced?.(receipt.tokensReplaced.deviceId, receipt.tokensReplaced.roles);
         }
-        if (publishingAt !== undefined) publicationMs += performance.now() - publishingAt;
+        if (publishingAt !== undefined) {
+          publicationMs += performance.now() - publishingAt;
+        }
       }
     };
     const removeService = publication?.servicePending(install);

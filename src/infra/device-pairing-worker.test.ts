@@ -407,7 +407,9 @@ test("serves reconnect lookups from committed rows while the read worker is unav
 
 test("coalesces reconnect presence without rewriting recent last-seen or replacement approvals", async () => {
   const device = await getPairedDevice("paired-rich", baseDir);
-  if (!device) throw new Error("expected paired fixture");
+  if (!device) {
+    throw new Error("expected paired fixture");
+  }
   const patch = { lastSeenAtMs: 100_000, lastSeenReason: "connect" };
   await Promise.all(
     Array.from({ length: 160 }, () =>
