@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { dispatchInboundMessageWithBufferedDispatcher } from "../auto-reply/dispatch.js";
 import { dispatchLowLevelChannelReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
+import type { MsgContext } from "../auto-reply/templating.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -31,6 +32,11 @@ import {
   respond,
   toolResult,
 } from "./gateway.sessions-send-provenance.provider-test-support.js";
+import {
+  prepareProofSend,
+  releaseProofSends,
+  writeSinkPlugin,
+} from "./gateway.sessions-send-provenance.transport.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -123,7 +129,7 @@ export const outbound: Outbound[] = [];
 export const providerErrors: string[] = [];
 export let gateway: Awaited<ReturnType<typeof startGatewayWithClient>>;
 let gatewayKernel: Awaited<ReturnType<typeof import("./server-kernel.js").createGatewayKernel>>;
-let gatewayContext: GatewayRequestContext;
+export let gatewayContext: GatewayRequestContext;
 let workspace: string;
 
 export function waitForProofRun(runId: unknown): Promise<RunResult> {
@@ -158,6 +164,15 @@ async function startProviderAndSink() {
       const body: unknown = JSON.parse(raw);
       if (!isRecord(body)) {
         throw new Error("Expected a provider or sink object");
+      }
+      if (request.method === "POST" && request.url === "/prepare-send") {
+        if (typeof body.to !== "string") {
+          throw new Error("Send preparation requires a target");
+        }
+        await prepareProofSend(body.to);
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end("{}");
+        return;
       }
       if (request.method === "POST" && request.url === "/sink") {
         if (typeof body.to !== "string" || typeof body.text !== "string") {
@@ -337,62 +352,6 @@ async function startProviderAndSink() {
   return `http://127.0.0.1:${port.port}`;
 }
 
-async function writeSinkPlugin(sinkUrl: string) {
-  const directory = path.join(workspace, ".openclaw", "extensions", "provenance-sink");
-  await fs.mkdir(directory, { recursive: true });
-  await fs.writeFile(
-    path.join(directory, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: "provenance-sink",
-      channels: ["telegram"],
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-    }),
-  );
-  // The configured plugin owns synthetic channel I/O and group configuration.
-  // Core policy composition, action dispatch, and execution admission stay real.
-  await fs.writeFile(
-    path.join(directory, "index.cjs"),
-    `module.exports = {
-      id: "provenance-sink",
-      register(api) {
-        api.registerChannel({ plugin: {
-          id: "telegram",
-          meta: { id: "telegram", label: "Proof sink", selectionLabel: "Proof sink", docsPath: "/proof", blurb: "Isolated proof transport" },
-          capabilities: { chatTypes: ["direct", "group"] },
-          reload: { configPrefixes: [], noopPrefixes: ["channels.telegram.groups"] },
-          config: {
-            listAccountIds: () => ["default"],
-            resolveAccount: () => ({ accountId: "default", enabled: true, configured: true }),
-            isEnabled: () => true,
-            isConfigured: () => true,
-          },
-          actions: { describeMessageTool: () => ({ actions: ["send"], capabilities: [] }) },
-          groups: {
-            resolveToolPolicy: ({ cfg, groupId }) => cfg.channels?.telegram?.groups?.[groupId]?.tools,
-          },
-          messaging: {
-            normalizeTarget: (value) => value,
-            targetResolver: { looksLikeId: (value) => value.startsWith("provenance-") },
-          },
-          outbound: {
-            deliveryMode: "direct",
-            resolveTarget: ({ to }) => to ? { ok: true, to } : { ok: false, error: new Error("Missing sink target") },
-            async sendText({ to, text, accountId }) {
-              const response = await fetch(${JSON.stringify(sinkUrl)}, {
-                method: "POST", headers: { "content-type": "application/json" },
-                body: JSON.stringify({ to, text, accountId }),
-              });
-              if (!response.ok) throw new Error("Proof sink rejected delivery");
-              return await response.json();
-            },
-          },
-        } });
-      },
-    };`,
-  );
-  return directory;
-}
-
 beforeAll(async () => {
   resetGatewayState();
   const home = tempDirs.make("openclaw-sessions-provenance-");
@@ -447,7 +406,7 @@ beforeAll(async () => {
     ),
   );
   const endpoint = await startProviderAndSink();
-  const sinkPlugin = await writeSinkPlugin(`${endpoint}/sink`);
+  const sinkPlugin = await writeSinkPlugin(workspace, `${endpoint}/sink`);
   const provider = buildMockOpenAiResponsesProvider(`${endpoint}/v1`, "proof-model");
   const cfg: OpenClawConfig = {
     agents: {
@@ -545,6 +504,7 @@ beforeEach(async () => {
 });
 
 async function cleanupProof() {
+  releaseProofSends();
   for (const scenario of scenarios) {
     scenario.releaseTarget.resolve();
     scenario.releaseIncumbent.resolve();
@@ -655,10 +615,9 @@ export async function updateSenderPolicies(policies: Record<string, { deny: stri
   );
 }
 
-export function runHuman(
-  scenario: Scenario,
+export function dispatchProofHuman(
+  ctx: MsgContext,
   sender: string,
-  prompt: string,
   mode: "steer" | "followup",
   signal: AbortSignal,
 ) {
@@ -670,28 +629,7 @@ export function runHuman(
     },
     () =>
       dispatchInboundMessageWithBufferedDispatcher({
-        ctx: {
-          Body: prompt,
-          BodyForAgent: prompt,
-          CommandBody: prompt,
-          From: `telegram:group:${scenario.sourceRecipient}`,
-          To: scenario.sourceRecipient,
-          SessionKey: scenario.sourceKey,
-          AccountId: "default",
-          SenderId: sender,
-          SenderName: sender,
-          ChatType: "group",
-          ChatId: scenario.sourceRecipient,
-          Provider: "telegram",
-          Surface: "telegram",
-          OriginatingChannel: "telegram",
-          OriginatingTo: scenario.sourceRecipient,
-          MessageSid: randomUUID(),
-          WasMentioned: true,
-          CommandAuthorized: true,
-          InboundAccessAuthorized: true,
-          GroupSubject: "Synthetic shared conversation",
-        },
+        ctx,
         cfg: getRuntimeConfig(),
         dispatchReplyFromConfig: dispatchLowLevelChannelReplyFromConfig,
         dispatcherOptions: {
@@ -701,5 +639,41 @@ export function runHuman(
         },
         replyOptions: { queueModeOverride: mode, disableBlockStreaming: true, abortSignal: signal },
       }),
+  );
+}
+
+export function runHuman(
+  scenario: Scenario,
+  sender: string,
+  prompt: string,
+  mode: "steer" | "followup",
+  signal: AbortSignal,
+) {
+  return dispatchProofHuman(
+    {
+      Body: prompt,
+      BodyForAgent: prompt,
+      CommandBody: prompt,
+      From: `telegram:group:${scenario.sourceRecipient}`,
+      To: scenario.sourceRecipient,
+      SessionKey: scenario.sourceKey,
+      AccountId: "default",
+      SenderId: sender,
+      SenderName: sender,
+      ChatType: "group",
+      ChatId: scenario.sourceRecipient,
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: scenario.sourceRecipient,
+      MessageSid: randomUUID(),
+      WasMentioned: true,
+      CommandAuthorized: true,
+      InboundAccessAuthorized: true,
+      GroupSubject: "Synthetic shared conversation",
+    },
+    sender,
+    mode,
+    signal,
   );
 }

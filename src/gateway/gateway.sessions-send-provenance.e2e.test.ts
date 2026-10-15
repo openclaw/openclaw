@@ -7,6 +7,7 @@ import {
 } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
+import { verifyLinkedPrincipalDelivery } from "./gateway.sessions-send-provenance.authority.test-support.js";
 import { verifyCollaborativeCancellation } from "./gateway.sessions-send-provenance.cancellation.test-support.js";
 import {
   createScenario,
@@ -1006,5 +1007,7 @@ it(
     await verifyCrossHumanAdmission(signal, true, "different");
     phase = "collaborative cancellation";
     await verifyCollaborativeCancellation(signal);
+    phase = "linked principal final delivery";
+    await verifyLinkedPrincipalDelivery(signal);
   },
 );
