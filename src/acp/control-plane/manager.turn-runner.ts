@@ -489,21 +489,27 @@ export async function runManagerTurn(params: {
               "ACP turn ended without a terminal done event.",
             );
           }
-          ({ handle, meta } = await params.reconcileRuntimeSessionIdentifiers({
-            cfg: input.cfg,
-            sessionKey,
-            agentId,
-            isCurrentActor: params.isCurrentActor,
-            runtime,
-            handle,
-            meta,
-            failOnStatusError: false,
-            failOnWriteError: meta.mode === "oneshot",
-            statusTimeoutMs: ACP_POST_TURN_STATUS_TIMEOUT_MS,
-            revalidateControl: () => params.acceptedTurn.revalidateCancel?.("publication"),
-            assertCurrent: () => params.acceptedTurn.assertCancelCurrent?.("publication"),
-          }));
-          runtimeIdentifiersReconciled = true;
+          if (
+            meta.mode === "oneshot" &&
+            turnOutcome.terminalStatus === "completed" &&
+            !params.acceptedTurn.abortController.signal.aborted
+          ) {
+            ({ handle, meta } = await params.reconcileRuntimeSessionIdentifiers({
+              cfg: input.cfg,
+              sessionKey,
+              agentId,
+              isCurrentActor: params.isCurrentActor,
+              runtime,
+              handle,
+              meta,
+              failOnStatusError: false,
+              failOnWriteError: true,
+              statusTimeoutMs: ACP_POST_TURN_STATUS_TIMEOUT_MS,
+              revalidateControl: () => params.acceptedTurn.revalidateCancel?.("publication"),
+              assertCurrent: () => params.acceptedTurn.assertCancelCurrent?.("publication"),
+            }));
+            runtimeIdentifiersReconciled = true;
+          }
           const resumableIdentity = resolveOneShotResumeIdentity(meta, turnOutcome.terminalStatus);
           if (resumableIdentity && !params.acceptedTurn.abortController.signal.aborted) {
             const resumeReadyAt = Date.now();
