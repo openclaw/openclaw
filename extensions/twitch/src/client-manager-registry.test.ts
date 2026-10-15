@@ -50,7 +50,10 @@ const account = {
 async function attachFakeTransport(manager: ReturnType<typeof getOrCreateClientManager>) {
   const transport = await manager.getClient(account, makeTwitchTestConfig(account), "default");
   manager.onMessage(vi.fn());
-  return transport;
+  return {
+    quit: vi.spyOn(transport, "quit"),
+    say: vi.spyOn(transport, "say"),
+  };
 }
 
 describe("client manager registry", () => {
