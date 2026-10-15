@@ -30,6 +30,7 @@ import { createInfraVitestConfig } from "./vitest/vitest.infra.config.ts";
 import { createPluginsVitestConfig } from "./vitest/vitest.plugins.config.ts";
 import { createRuntimeConfigVitestConfig } from "./vitest/vitest.runtime-config.config.ts";
 import { createScopedVitestConfig } from "./vitest/vitest.scoped-config.ts";
+import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
 import { toolingIsolatedTestFiles } from "./vitest/vitest.tooling-isolated-paths.mjs";
 import { createToolingIsolatedVitestConfig } from "./vitest/vitest.tooling-isolated.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
