@@ -16,6 +16,7 @@ import {
 } from "../infra/deferred-plugin-session-sources.js";
 import * as sessionVerification from "../infra/deferred-plugin-session-verification.js";
 import * as migrationArtifacts from "../infra/session-sqlite-migration-artifact.js";
+import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
 import { readOnlySqliteValidationSnapshot } from "../infra/session-sqlite-migration-readers.js";
 import { migrateLegacyAcpSessionMetadata } from "../infra/state-migrations.session-store.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
@@ -303,3 +304,55 @@ it.each(["receipt", "physical", "foreign"] as const)(
     });
   },
 );
+
+it("discovers archived sources once per phase for a stale receipt with missing transcripts", async () => {
+  await withOpenClawTestState({ label: "stale-session-receipt-manifest-reads" }, async (state) => {
+    const { cfg, storePath } = await seedStaleDeferredPluginSessionImport(state);
+    const storeDir = path.dirname(storePath);
+    // Give the foreign receipt several retained originals that are all gone, so each
+    // entry falls back to archive discovery.
+    const missing = 4;
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const row = db
+          .prepare(
+            "SELECT report_json FROM migration_sources WHERE migration_kind = 'deferred-plugin-session-import'",
+          )
+          .get()!;
+        const report = JSON.parse(String(row.report_json));
+        const template = report.sources[0];
+        for (let index = 0; index < missing; index++) {
+          report.sources.push({
+            ...template,
+            path: path.join(storeDir, `legacy-missing-${index}.jsonl`),
+          });
+        }
+        db.prepare(
+          "UPDATE migration_sources SET report_json = ? WHERE migration_kind = 'deferred-plugin-session-import'",
+        ).run(JSON.stringify(report));
+      },
+      { env: state.env },
+    );
+    for (let index = 0; index < missing; index++) {
+      expect(fs.existsSync(path.join(storeDir, `legacy-missing-${index}.jsonl`))).toBe(false);
+    }
+    const discovery = vi.spyOn(migrationRun, "listSessionSqliteMigrationManifestPaths");
+    try {
+      const report = await runDoctorSessionSqlite({
+        cfg,
+        env: state.env,
+        allAgents: true,
+        mode: "import",
+      });
+      expect(report.targets.flatMap((target) => target.issues)).toContainEqual(
+        expect.objectContaining({ code: "retained_plugin_receipt_superseded" }),
+      );
+      // Archive discovery parses every migration manifest, so the stale-receipt loop
+      // must reuse the phase verification instead of paying a fresh discovery per
+      // missing retained original.
+      expect(discovery.mock.calls.length).toBeLessThan(missing * 2);
+    } finally {
+      discovery.mockRestore();
+    }
+  });
+});

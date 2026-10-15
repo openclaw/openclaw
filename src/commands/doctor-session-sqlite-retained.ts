@@ -250,7 +250,16 @@ export async function prepareRetainedSessionImport(
         if (current?.isFile() && current.size > 0) {
           continue;
         }
-        if (resolveVerifiedSessionSource(source, sourceVerification.resolvedTarget, params.env)) {
+        // Reuse the phase verification: archive discovery parses every migration
+        // manifest, so a per-source cache rereads them once per missing transcript.
+        if (
+          resolveVerifiedSessionSource(
+            source,
+            sourceVerification.resolvedTarget,
+            params.env,
+            sourceVerification.verification,
+          )
+        ) {
           continue;
         }
       } catch (error) {
