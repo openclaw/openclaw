@@ -174,6 +174,12 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       );
       return;
     }
+    if (!backend.modelProvider?.trim()) {
+      reportRegistrationWarning(
+        record,
+        `cli backend "${id}" is missing modelProvider; provider-to-runtime binding will be skipped. Set modelProvider to the canonical model provider id to enable this binding.`,
+      );
+    }
     if (backend.prepareExecution) {
       getPluginInstance(record)?.admitFactory(backend.prepareExecution);
     }
