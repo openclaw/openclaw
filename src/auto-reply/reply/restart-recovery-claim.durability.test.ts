@@ -87,7 +87,10 @@ it.each(["new input", "accepted input"] as const)(
       }
       await closeOpenClawAgentDatabasesAsync(state.root);
       closeOpenClawAgentDatabasesForTest(state.root);
-      const admitted = expectDefined(loadSessionEntry({ ...scope, readConsistency: "latest" }));
+      const admitted = expectDefined(
+        loadSessionEntry({ ...scope, readConsistency: "latest" }),
+        "admitted session survives restart",
+      );
       expect(admitted.lifecycleRunId).toBe(executionRunId);
       expect(admitted.status).toBeUndefined();
       expect(admitted.endedAt).toBeUndefined();
@@ -98,7 +101,7 @@ it.each(["new input", "accepted input"] as const)(
         { runId: executionRunId, lifecycleGeneration },
       ]);
 
-      const startedAt = expectDefined(admitted.startedAt) + 10;
+      const startedAt = expectDefined(admitted.startedAt, "admission records a start time") + 10;
       const event = { runId: executionRunId, lifecycleGeneration, sessionId: entry.sessionId };
       await persistGatewaySessionLifecycleEvent({
         ...scope,
@@ -115,7 +118,10 @@ it.each(["new input", "accepted input"] as const)(
       });
       await closeOpenClawAgentDatabasesAsync(state.root);
       closeOpenClawAgentDatabasesForTest(state.root);
-      const settled = expectDefined(loadSessionEntry({ ...scope, readConsistency: "latest" }));
+      const settled = expectDefined(
+        loadSessionEntry({ ...scope, readConsistency: "latest" }),
+        "settled session survives restart",
+      );
       expect(settled).toMatchObject({
         status: "done",
         startedAt,
