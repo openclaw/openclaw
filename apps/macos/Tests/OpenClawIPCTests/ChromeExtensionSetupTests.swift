@@ -363,15 +363,15 @@ struct ChromeExtensionSetupTests {
             #expect(state.connectionMode == .local)
             #expect(state._testDirtyGatewayConfigFields.isEmpty)
 
-            #expect(OpenClawConfigFile.saveDict([
-                "gateway": [
-                    "remote": [
-                        "transport": "direct",
-                        "url": "wss://remote.example:18789",
-                        "token": ["$secretRef": "gateway-token"],
-                    ],
+            var externalRoot = OpenClawConfigFile.loadDict()
+            externalRoot["gateway"] = [
+                "remote": [
+                    "transport": "direct",
+                    "url": "wss://remote.example:18789",
+                    "token": ["$secretRef": "gateway-token"],
                 ],
-            ]))
+            ]
+            #expect(OpenClawConfigFile.saveDict(externalRoot, allowGatewayModeRemoval: true))
             state.applyConfigFromDisk()
             #expect(state.connectionMode == .remote)
             #expect(state._testDirtyGatewayConfigFields == ["gateway.mode"])
