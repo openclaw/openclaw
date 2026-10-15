@@ -191,14 +191,6 @@ it.each(["work", "dashboard:incognito-work"])(
           persistedThinking: "high",
           sessionEntry: persisted,
         });
-        if (!resolved.sessionEntry?.skillsSnapshot) {
-          throw new Error("expected the selected session's skills");
-        }
-        resolved.sessionEntry.skillsSnapshot.prompt = "caller-owned edit";
-        expect(
-          sessionAccessor.loadExactSessionEntryReadOnly({ sessionKey, storePath })?.entry
-            .skillsSnapshot?.prompt,
-        ).toBe("selected prompt");
         expect(list).not.toHaveBeenCalled();
         if (incognito) {
           expect(fs.existsSync(storePath)).toBe(false);

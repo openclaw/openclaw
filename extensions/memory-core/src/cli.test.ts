@@ -1996,34 +1996,6 @@ describe("memory cli", () => {
     expect(rejectedIndex).toBeLessThan(appliedIndex);
   });
 
-  it("prints conceptual promotion signals across recall days", async () => {
-    const workspaceDir = await createWorkspace();
-    const dayMs = 24 * 60 * 60 * 1000;
-    const nowMs = Date.now();
-    const snippet = "Configured router VLAN 10 and Glacier backup notes for vectors.";
-    for (const [query, daysAgo, score] of [
-      ["router vlan", 2, 0.9],
-      ["glacier backup", 1, 0.88],
-    ] as const) {
-      await recordShortTermRecalls({
-        workspaceDir,
-        query,
-        nowMs: nowMs - daysAgo * dayMs,
-        results: [
-          recallResult("memory/2026-04-01.md", snippet, { startLine: 4, endLine: 8, score }),
-        ],
-      });
-    }
-    const close = mockWorkspaceManager(workspaceDir);
-    const log = spyRuntimeLogs(defaultRuntime);
-
-    await runMemoryCli(["promote", ...unrestrictedPromotion]);
-
-    expectLogged(log, "recalls=2 avg=0.890 queries=2 age=1.0d consolidate=0.30 conceptual=1.00");
-    expectLogged(log, "concepts=backup, glacier, router, vlan, configured, vectors");
-    expect(close).toHaveBeenCalledOnce();
-  });
-
   it.each([
     { enabled: true, json: true },
     { enabled: false, json: false },

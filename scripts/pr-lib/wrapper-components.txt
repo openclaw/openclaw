@@ -627,6 +627,7 @@ src/config/schema.walk.ts
 src/config/sensitive-paths.ts
 src/config/sessions/archive-compression.ts
 src/config/sessions/artifacts.ts
+src/config/sessions/transcript-file-names.ts
 src/config/sessions/auth-profile-override-provenance.ts
 src/config/sessions/goals-operations.types.ts
 src/config/sessions/group-display.ts
@@ -1855,6 +1856,7 @@ src/state/openclaw-state-db-initialization.ts
 src/state/openclaw-state-db-integrity-admission.ts
 src/state/openclaw-state-db-legacy-backfills.ts
 src/state/openclaw-state-db-maintenance.ts
+src/state/openclaw-state-db-meeting-chronology-migration.ts
 src/state/openclaw-state-db-open.ts
 src/state/openclaw-state-db-operator-approval-migration.ts
 src/state/openclaw-state-db-permissions.ts
@@ -1874,6 +1876,7 @@ src/state/openclaw-state-db-schema-v12-foldin.ts
 src/state/openclaw-state-db-schema-v13-widerow.ts
 src/state/openclaw-state-db-schema-v21-columns.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
+src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-version.ts
 src/state/openclaw-state-db-session-watch-migration.ts
 src/state/openclaw-state-db-snapshot-owner.ts
@@ -2208,9 +2211,12 @@ packages/gateway-protocol/src/schema/ui-appearance-typefaces.ts
 packages/gateway-protocol/src/schema/users-background.ts
 packages/gateway-protocol/src/schema/users.ts
 packages/gateway-protocol/src/schema/wizard.ts
+packages/markdown-core/src/fences.ts
+packages/markdown-core/src/image-code-retention.ts
 packages/markdown-core/src/reasoning-tag-parser.ts
 packages/markdown-core/src/reasoning-tags.ts
 packages/media-core/src/base64.ts
+packages/media-core/src/inline-image-data-url.ts
 packages/memory-host-sdk/src/host/session-entry-projection.ts
 packages/memory-host-sdk/src/host/session-reset-recall.ts
 packages/memory-host-sdk/src/host/session-transcript-corpus-policy.ts

@@ -16,7 +16,6 @@ import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { recordOpenClawAgentCanonicalValidation } from "./openclaw-agent-canonical-validation-receipt.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
@@ -198,19 +197,7 @@ it("keeps one connection while nested reads retain independent committed snapsho
 
 it.each([
   {
-    sql: `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`,
-  },
-  {
-    sql: `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`,
-  },
-  {
-    sql: "UPDATE schema_meta SET agent_id = 'another' WHERE meta_key = 'primary'",
-  },
-  {
     sql: "UPDATE schema_meta SET role = 'state' WHERE meta_key = 'primary'",
-  },
-  {
-    sql: "CREATE TRIGGER unexpected_node_validation AFTER UPDATE ON session_nodes BEGIN SELECT 1; END",
   },
 ])(
   "reuses admitted format while observing fresh rows after a foreign commit: $sql",

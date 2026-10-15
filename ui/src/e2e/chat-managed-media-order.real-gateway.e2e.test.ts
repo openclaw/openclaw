@@ -16,6 +16,7 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
@@ -144,6 +145,7 @@ const suite = createControlUiE2eSuite({
           agents: {
             ownership: "explicit",
             defaults: {
+              workspace: "${OPENCLAW_WORKSPACE_DIR}",
               model: "media-order-fixture/echo",
               utilityModel: "media-order-fixture/metadata",
               models: {
@@ -172,6 +174,7 @@ const suite = createControlUiE2eSuite({
           plugins: { allow: ["openai"] },
         },
       });
+      instance.env.OPENCLAW_WORKSPACE_DIR = instance.state.path("public-workspace");
       const mediaDir = instance.state.statePath("media", "ordering-fixture");
       await mkdir(mediaDir, { recursive: true });
       const first = path.join(mediaDir, "blue-card.png");
@@ -217,17 +220,20 @@ async function runCli(args: string[]) {
 
 async function capture(page: Page, bubble: Locator, name: string) {
   const body = (await page.locator("body").textContent()) ?? "";
-  for (const privateValue of [
-    instance.gatewayToken,
-    instance.hookToken,
-    instance.stateDir,
-    instance.homeDir,
-    process.cwd(),
+  // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- Distinguish rendered disclosure from hidden DOM text.
+  const renderedBody = await page.locator("body").innerText();
+  for (const [field, privateValue] of Object.entries({
+    gatewayToken: instance.gatewayToken,
+    hookToken: instance.hookToken,
+    stateDir: instance.stateDir,
+    homeDir: instance.homeDir,
+    workingDirectory: process.cwd(),
     fixtureKey,
-  ]) {
-    expect(body.includes(privateValue), "Capture must contain only synthetic public content").toBe(
-      false,
-    );
+  })) {
+    expect(
+      body.includes(privateValue),
+      `Capture must contain only synthetic public content (field: ${field}, rendered: ${renderedBody.includes(privateValue)})`,
+    ).toBe(false);
   }
   expect(new URL(page.url()).hash).toBe("");
   const content = [
@@ -263,6 +269,76 @@ async function renderedOrder(bubble: Locator) {
         return text ? [text] : [];
       }),
     );
+}
+
+async function recordImageDecodeFailure(bubble: Locator) {
+  const images = await bubble.locator("img.chat-message-image").evaluateAll(async (elements) =>
+    Promise.all(
+      elements.map(async (image) => {
+        if (!(image instanceof HTMLImageElement)) {
+          throw new Error("Expected an image element");
+        }
+        const source = image.src;
+        const url = new URL(source, document.baseURI);
+        const scheme =
+          url.protocol === "blob:"
+            ? "blob"
+            : url.protocol === "data:"
+              ? "data"
+              : url.protocol === "http:" || url.protocol === "https:"
+                ? "http"
+                : "other";
+        const state = {
+          scheme,
+          route:
+            scheme !== "http"
+              ? null
+              : url.pathname.includes("/__openclaw__/assistant-media")
+                ? "assistant-media"
+                : url.pathname.includes("/api/chat/media/outgoing/")
+                  ? "managed-media"
+                  : "other",
+          complete: image.complete,
+          naturalWidth: image.naturalWidth,
+          naturalHeight: image.naturalHeight,
+          currentSrcMatchesSrc: image.currentSrc === source,
+        };
+        try {
+          const response = await fetch(source, { signal: AbortSignal.timeout(5_000) });
+          const bytes = new Uint8Array(await response.arrayBuffer());
+          const hex = (value: Uint8Array) =>
+            Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("");
+          return {
+            ...state,
+            fetch: {
+              ok: response.ok,
+              status: response.status,
+              contentType: response.headers.get("content-type"),
+              byteLength: bytes.byteLength,
+              first16Hex: hex(bytes.subarray(0, 16)),
+              sha256: hex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))),
+            },
+          };
+        } catch (error) {
+          return {
+            ...state,
+            fetch: { errorName: error instanceof Error ? error.name : "UnknownError" },
+          };
+        }
+      }),
+    ),
+  );
+  const record = { schemaVersion: 1, kind: "managed-image-decode", images };
+  console.error("[control-ui-e2e] image decode failure", JSON.stringify(record));
+  const artifactDir = createControlUiE2eArtifactDir(
+    "failure",
+    process.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR?.trim() ||
+      path.resolve(".artifacts/control-ui-e2e-timeouts/local"),
+  );
+  await writeFile(
+    path.join(artifactDir, "failure.public.json"),
+    `${JSON.stringify(record, null, 2)}\n`,
+  );
 }
 
 suite.define(() => {
@@ -322,16 +398,27 @@ suite.define(() => {
                 await expect
                   .poll(() => page.locator(".chat-group.assistant img.chat-message-image").count())
                   .toBe(2);
-                await bubble.locator("img.chat-message-image").evaluateAll(async (images) => {
-                  await Promise.all(
-                    images.map(async (image) => {
-                      if (!(image instanceof HTMLImageElement)) {
-                        throw new Error("Expected an image element");
-                      }
-                      await image.decode();
-                    }),
-                  );
-                });
+                await expect.poll(() => bubble.locator("img.chat-message-image").count()).toBe(2);
+                try {
+                  await bubble.locator("img.chat-message-image").evaluateAll(async (images) => {
+                    await Promise.all(
+                      images.map(async (image) => {
+                        if (!(image instanceof HTMLImageElement)) {
+                          throw new Error("Expected an image element");
+                        }
+                        await image.decode();
+                      }),
+                    );
+                  });
+                } catch (error) {
+                  await recordImageDecodeFailure(bubble).catch((captureError: unknown) => {
+                    console.error(
+                      "[control-ui-e2e] image decode diagnostics failed",
+                      captureError instanceof Error ? captureError.name : "UnknownError",
+                    );
+                  });
+                  throw error;
+                }
                 expect(
                   await bubble
                     .locator("img.chat-message-image")

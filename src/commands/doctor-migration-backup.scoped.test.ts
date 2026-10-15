@@ -79,6 +79,7 @@ async function backup(
   fixture: ReturnType<typeof createFixture>,
   pendingPaths = [fixture.agent],
   databasePaths = pendingPaths,
+  versionMigrationsOnly = true,
 ) {
   const maintenance = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
@@ -87,6 +88,7 @@ async function backup(
   try {
     return await maintenance.run(() =>
       backupDoctorMigrationDatabases({
+        versionMigrationsOnly,
         env: fixture.env,
         pendingDatabasePaths: pendingPaths,
         pendingMigrations: pendingPaths.map((pathname) => ({
@@ -115,6 +117,14 @@ function expectFullBackup(databasePath: string, earlierBackups: readonly string[
 }
 
 describe("Doctor table-scoped migration backup selection", () => {
+  it("keeps the complete Doctor repair run on full images even for declared versions", async () => {
+    const fixture = createFixture();
+    const result = await backup(fixture, [fixture.agent], [fixture.agent], false);
+    expect(result.versionMigrations).toBeUndefined();
+    expectFullBackup(fixture.agent);
+    expectFullBackup(fixture.shared);
+  });
+
   it("restores a failed scoped migration through Doctor without overwriting unrelated writes", async () => {
     const fixture = createFixture();
     const result = await backup(fixture);

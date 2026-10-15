@@ -1,6 +1,7 @@
 // WhatsApp monitor inbox behavior split by ownership.
 import { observeChannelIngressQueueWrite } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearWhatsAppApprovalReactionTargetsForTest,
@@ -30,6 +31,18 @@ import {
 } from "./monitor-inbox.test-harness.js";
 
 const approvalResolver = vi.hoisted(() => vi.fn());
+const inboundLogRecords = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>();
+  return {
+    ...actual,
+    getChildLogger: (...args: Parameters<typeof actual.getChildLogger>) => {
+      const logger = actual.getChildLogger(...args);
+      logger.attachTransport({ format: () => "", write: inboundLogRecords });
+      return logger;
+    },
+  };
+});
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: approvalResolver,
 }));
@@ -235,6 +248,25 @@ describe("web monitor inbox delivery and dedupe", () => {
     });
 
     await listener.close();
+  });
+
+  it("delivers inbound text without copying it into diagnostics", async () => {
+    setLoggerOverride({ level: "trace" });
+    inboundLogRecords.mockClear();
+    const onMessage = vi.fn();
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const body = "private WhatsApp message containing confidential account details";
+    try {
+      sock.ev.emit("messages.upsert", dmUpsert(nextMessageId("private-inbound"), body));
+      await waitForInboundWorkDrained();
+
+      expect(inboundMessage(onMessage).payload.body).toBe(body);
+      expect(inboundLogRecords).toHaveBeenCalled();
+      expect(JSON.stringify(inboundLogRecords.mock.calls)).toContain(`"textLength":${body.length}`);
+      expect(JSON.stringify(inboundLogRecords.mock.calls)).not.toContain(body);
+    } finally {
+      await listener.close();
+    }
   });
 
   it("delivery coordinator delays read receipts until inbound handlers complete", async () => {

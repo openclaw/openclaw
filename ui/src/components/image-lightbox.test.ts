@@ -22,7 +22,7 @@ vi.mock("@panzoom/panzoom", () => ({
   })),
 }));
 
-import "./image-lightbox.ts";
+import "./image-lightbox.tsx";
 
 let container: HTMLDivElement;
 let restoreDialogPolyfill: () => void;
@@ -104,6 +104,10 @@ describe("openclaw-image-lightbox", () => {
           originalSrc || "blob:lightbox-original",
         ),
       );
+      const footer = root.querySelector("openclaw-modal-actions.lightbox-footer");
+      expect(root.querySelector(".header .open-original")).toBeNull();
+      expect(footer?.parentElement?.lastElementChild).toBe(footer);
+      expect(footer?.querySelector(".open-original")).not.toBeNull();
       if (isVideo) {
         const video = root.querySelector<HTMLVideoElement>("video")!;
         expect(video.controls).toBe(true);
@@ -113,12 +117,13 @@ describe("openclaw-image-lightbox", () => {
           "Close video preview",
         );
         const openOriginal = root.querySelector<HTMLAnchorElement>(".open-original");
-        video.focus();
-        video.dispatchEvent(
+        const close = root.querySelector<HTMLButtonElement>(".close")!;
+        openOriginal?.focus();
+        openOriginal?.dispatchEvent(
           new KeyboardEvent("keydown", { key: "Tab", bubbles: true, composed: true }),
         );
-        expect(document.activeElement).toBe(openOriginal);
-        openOriginal?.dispatchEvent(
+        expect(document.activeElement).toBe(close);
+        close.dispatchEvent(
           new KeyboardEvent("keydown", {
             key: "Tab",
             shiftKey: true,
@@ -126,7 +131,7 @@ describe("openclaw-image-lightbox", () => {
             composed: true,
           }),
         );
-        expect(document.activeElement).toBe(video);
+        expect(document.activeElement).toBe(openOriginal);
       } else {
         expect(media.getAttribute("alt")).toBe("Generated lobster");
         expect(modal.hasAttribute("title")).toBe(false);
@@ -266,15 +271,16 @@ describe("openclaw-image-lightbox", () => {
       expect(root?.querySelector<HTMLAnchorElement>(".open-original")).toBeTruthy(),
     );
     const openOriginal = root?.querySelector<HTMLAnchorElement>(".open-original");
-    zoomIn?.focus();
+    const close = root.querySelector<HTMLButtonElement>(".close")!;
+    openOriginal?.focus();
 
-    zoomIn?.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
-    expect(document.activeElement).toBe(openOriginal);
+    openOriginal?.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    expect(document.activeElement).toBe(close);
 
-    openOriginal?.dispatchEvent(
+    close.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }),
     );
-    expect(document.activeElement).toBe(zoomIn);
+    expect(document.activeElement).toBe(openOriginal);
   });
 
   it("pans zoomed images with Shift+arrows while plain arrows still navigate the gallery", async () => {

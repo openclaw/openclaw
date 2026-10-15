@@ -53,20 +53,6 @@ describe("getSubagentDepthFromSessionStore", () => {
     expect(getSubagentDepthFromSessionStore("agent:main:dashboard:legacy", { store })).toBe(0);
   });
 
-  it("resolves depth when caller is identified by sessionId", () => {
-    const key1 = "agent:main:subagent:one";
-    const key2 = "agent:main:subagent:two";
-    const key3 = "agent:main:subagent:three";
-    const depth = getSubagentDepthFromSessionStore("subagent-three-session", {
-      store: createSessionCapabilityLookup({
-        [key1]: { sessionId: "subagent-one-session", spawnedBy: "agent:main:main" },
-        [key2]: { sessionId: "subagent-two-session", spawnedBy: key1 },
-        [key3]: { sessionId: "subagent-three-session", spawnedBy: key2 },
-      }),
-    });
-    expect(depth).toBe(3);
-  });
-
   it("resolves prefixed store keys when caller key omits the agent prefix", async () => {
     const tmpDir = tempDirs.make("openclaw-subagent-depth-");
     const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");

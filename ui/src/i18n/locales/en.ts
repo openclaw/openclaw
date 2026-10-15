@@ -634,6 +634,7 @@ export const en: TranslationMap & {
       checkFailed: "Could not check the latest update. Try again.",
       updating: "Updating Gateway…",
       availableTitle: "Update available",
+      availableBadge: "Available",
       availableSummary: "A newer revision is ready.",
       blockedTitle: "Update blocked",
       blockedSummary: "The selected revision could not be applied to this checkout.",
@@ -786,7 +787,6 @@ export const en: TranslationMap & {
     advanced: "Advanced",
     copyDetails: "Copy details",
     copyLink: "Copy link",
-    archiveSessionOnly: "Session only",
     communication: {
       title: "Cross-session messaging",
       send: "Send messages",
@@ -1978,7 +1978,7 @@ export const en: TranslationMap & {
       dialogLabel: "Provider sign-in",
       prepareDialogLabel: "Local model setup",
       title: "Sign in with a provider",
-      connected: "Account connected. Choose a model when you want to test a reply.",
+      connected: "Account connected.",
       prepareTitle: "Set up a local model",
       starting: "Starting provider sign-in…",
       prepareStarting: "Starting local model setup…",
@@ -3147,7 +3147,7 @@ export const en: TranslationMap & {
       fullscreenFailed: "Could not change fullscreen mode: {error}",
       workboardCard: "Workboard card: {title}, {status}",
       defaultTab: "Main",
-      mockPlaceholder: "Board view seam · {tabs} tabs · {widgets} widgets",
+      mockPlaceholder: "Board view · {tabs} tabs · {widgets} widgets",
       resetTitle: "Reset conversation?",
       resetDescription: "The conversation context resets. Your dashboard stays.",
     },
@@ -3354,7 +3354,6 @@ export const en: TranslationMap & {
       },
       restartRecovery: {
         label: "System · restart recovery",
-        summary: "Gateway restarted. Resuming your interrupted request.",
         interrupted:
           "The Gateway restarted. Automatic recovery was interrupted before the agent could resume. Send a message to continue.",
         cancelled:
@@ -3670,7 +3669,6 @@ export const en: TranslationMap & {
       selectionQuoteOnly:
         "The selection is too long to attach. A short quote is ready in Side chat.",
       askSubmit: "Ask",
-      askPending: "Answering from this session…",
       askBusy: "Side chat is already answering a question.",
       askHistoryUnavailable: "Couldn't load this session's history.",
       askMissing: "This session is no longer available.",
@@ -3759,7 +3757,6 @@ export const en: TranslationMap & {
     },
     pendingInputs: {
       agentUpdate: {
-        queued: "Agent update received · waiting for delivery.",
         cancelled: "This agent update was cancelled before delivery.",
         interrupted: "Delivery interrupted. This saved agent update is not scheduled to retry.",
       },
@@ -3782,6 +3779,11 @@ export const en: TranslationMap & {
     composer: {
       running: "running",
       composerInput: "Chat composer",
+      usePrediction: "Use suggestion",
+      predictionShortcut: "Tab",
+      dismissPrediction: "Dismiss suggestion",
+      predictionAvailable:
+        "Suggested message: {text}. Press Tab to use it, or Escape to dismiss. It will not be sent automatically.",
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
       emptyHint: "Write a message to send.",
@@ -3993,6 +3995,8 @@ export const en: TranslationMap & {
     voice: {
       asking: "Asking OpenClaw...",
       replyFailed: "The voice reply was interrupted. Start Talk again to retry.",
+      replyTimedOut:
+        "Talk stopped waiting. The agent's answer will appear in chat when it finishes.",
       preparing: "Preparing voice session...",
       connecting: "Connecting voice input...",
       listening: "Listening...",

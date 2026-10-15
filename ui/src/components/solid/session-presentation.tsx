@@ -241,14 +241,14 @@ export function SidebarSessionSubtitle(props: SidebarSessionSubtitle) {
           </span>
         </openclaw-tooltip>
       </Show>
-      <Show
-        when={props.narration}
-        fallback={<span class="sidebar-recent-session__subtitle">{props.subtitle}</span>}
+      <span
+        class={[
+          "sidebar-recent-session__subtitle",
+          { "sidebar-recent-session__subtitle--narration": Boolean(props.narration) },
+        ]}
       >
-        <span class="sidebar-recent-session__subtitle sidebar-recent-session__subtitle--narration">
-          {props.subtitle}
-        </span>
-      </Show>
+        {props.subtitle}
+      </span>
     </Show>
   );
 }
@@ -305,6 +305,36 @@ function SessionIdleState(props: { session: SidebarRecentSession }) {
   );
 }
 
+export function summarizeTeamSessionSlots(
+  rows: readonly SidebarRecentSession[],
+  includeChildren: boolean,
+) {
+  const attention = summarizeSidebarSessionAttention(
+    rows.flatMap((row) =>
+      includeChildren
+        ? [row.attention]
+        : [
+            row.ownAttention ?? row.attention,
+            ...(row.subagentSummary ? [row.subagentSummary.attention] : []),
+          ],
+    ),
+  );
+  let active = 0;
+  let queued = 0;
+  let unread = 0;
+  let failed = false;
+  for (const row of rows) {
+    const children = includeChildren ? row : row.subagentSummary;
+    const visuallyActive = row.isRunVisuallyActive ?? row.hasActiveRun;
+    active += Number(visuallyActive) + (children?.runningChildCount ?? 0);
+    queued += Number(visuallyActive && row.status === "queued") + (children?.queuedChildCount ?? 0);
+    unread += Number(row.unread) + (children?.unreadChildCount ?? 0);
+    failed ||=
+      row.status === "failed" || row.status === "timeout" || (children?.failedChildCount ?? 0) > 0;
+  }
+  return { attention, active, queued, unread, failed };
+}
+
 export type TeamSessionSlotsProps = {
   rows: readonly SidebarRecentSession[];
   includeChildren: boolean;
@@ -314,34 +344,7 @@ export type TeamSessionSlotsProps = {
 };
 
 export function TeamSessionSlots(props: TeamSessionSlotsProps) {
-  const summary = createMemo(() => {
-    const attention = summarizeSidebarSessionAttention(
-      props.rows.flatMap((row) =>
-        props.includeChildren
-          ? [row.attention]
-          : [
-              row.ownAttention ?? row.attention,
-              ...(row.subagentSummary ? [row.subagentSummary.attention] : []),
-            ],
-      ),
-    );
-    let active = 0,
-      queued = 0,
-      unread = 0,
-      failed = false;
-    for (const row of props.rows) {
-      const children = props.includeChildren ? row : row.subagentSummary;
-      active += Number(row.hasActiveRun) + (children?.runningChildCount ?? 0);
-      queued +=
-        Number(row.hasActiveRun && row.status === "queued") + (children?.queuedChildCount ?? 0);
-      unread += Number(row.unread) + (children?.unreadChildCount ?? 0);
-      failed ||=
-        row.status === "failed" ||
-        row.status === "timeout" ||
-        (children?.failedChildCount ?? 0) > 0;
-    }
-    return { attention, active, queued, unread, failed };
-  });
+  const summary = createMemo(() => summarizeTeamSessionSlots(props.rows, props.includeChildren));
   const idleChild = createMemo(() =>
     props.rows.length === 1 &&
     props.rows[0]?.isChild &&
@@ -358,18 +361,17 @@ export function TeamSessionSlots(props: TeamSessionSlotsProps) {
       Boolean(idleChild()),
   );
   return (
-    <Show
-      when={(props.includeChildren && props.childCount > 0) || summary().unread > 0 || hasState()}
-    >
+    <Show when={props.childCount > 0 || summary().unread > 0 || hasState()}>
       <span class="sidebar-session-team-state">
-        <Show when={(props.includeChildren && props.childCount > 0) || summary().unread > 0}>
+        <Show when={props.childCount > 0 || summary().unread > 0}>
           <span class="sidebar-session-team-state__counts">
-            <Show when={props.includeChildren && props.childCount > 0}>
+            <Show when={props.childCount > 0}>
               <span
                 class="sidebar-child-session-toggle__count"
                 role="img"
                 aria-label={t("sessionsView.childSessions") + ": " + props.childCount}
               >
+                <Icon name="gitFork" />
                 {props.childCount}
               </span>
             </Show>
@@ -453,13 +455,14 @@ export function renderSessionLeadingState(props: SessionLeadingStateProps) {
   const subagentsWorking = createMemo(
     () => !props.trailingState && session().runningChildCount > 0,
   );
-  const running = createMemo(() => session().hasActiveRun || subagentsWorking());
-  const ownRunQueued = createMemo(() => session().hasActiveRun && session().status === "queued");
+  const ownRunActive = () => session().isRunVisuallyActive ?? session().hasActiveRun;
+  const running = createMemo(() => ownRunActive() || subagentsWorking());
+  const ownRunQueued = createMemo(() => ownRunActive() && session().status === "queued");
   const showRun = createMemo(
     () => running() && !props.trailingState && session().attention.kind !== "question",
   );
   const runningLabel = createMemo(() =>
-    subagentsWorking() && (!session().hasActiveRun || ownRunQueued())
+    subagentsWorking() && (!ownRunActive() || ownRunQueued())
       ? t("sessionsView.subagentsWorking")
       : undefined,
   );

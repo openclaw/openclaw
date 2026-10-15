@@ -956,6 +956,7 @@ describe("openclaw state database", () => {
           `Re-anchored agent database registry path ${copiedForeignPath} to the current state directory`,
           `Removed duplicate agent database registry path ${dualForeignPath}`,
           "Qualified historical cron creator attribution as unknown (v14)",
+          "Replaced retained task indexes with ordered cron history indexes (v24)",
         ],
         warnings: [],
       });
@@ -1170,6 +1171,7 @@ describe("openclaw state database", () => {
       changes: [
         "Folded singleton state tables into config_machine_state (v12)",
         "Qualified historical cron creator attribution as unknown (v14)",
+        "Replaced retained task indexes with ordered cron history indexes (v24)",
       ],
       warnings: [],
     });
@@ -1435,6 +1437,7 @@ describe("openclaw state database", () => {
         "Migrated shared state session watch cursors → provenance column (0 ambient, 0 sentinels removed)",
         "Consolidated shared state tables (v13)",
         "Qualified historical cron creator attribution as unknown (v14)",
+        "Replaced retained task indexes with ordered cron history indexes (v24)",
       ],
       warnings: [],
     });
@@ -1820,6 +1823,7 @@ describe("openclaw state database", () => {
       { kind: "conversation-binding-targets-v15", path: fixture.databasePath },
       { kind: "predicate-columns-v21", path: fixture.databasePath },
       { kind: "portable-identity-columns-v22", path: fixture.databasePath },
+      { kind: "task-run-indexes-v24", path: fixture.databasePath },
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);
@@ -1840,23 +1844,20 @@ describe("openclaw state database", () => {
         "Consolidated shared state tables (v13)",
         "Qualified historical cron creator attribution as unknown (v14)",
         "Removed redundant conversation binding target projections (v15)",
+        "Replaced retained task indexes with ordered cron history indexes (v24)",
         "Migrated shared state tables to SQLite STRICT typing (48)",
       ],
       warnings: [],
     });
     const migrated = openOpenClawStateDatabase(options);
-
-    expect(readSqliteNumberPragma(requireNativeSqliteDatabase(migrated.db), "user_version")).toBe(
-      OPENCLAW_STATE_SCHEMA_VERSION,
-    );
+    const native = requireNativeSqliteDatabase(migrated.db);
+    expect(readSqliteNumberPragma(native, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(
       migrated.db
         .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
         .get(),
     ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
-    expect(migrated.db.prepare("PRAGMA integrity_check").all()).toEqual([
-      { integrity_check: "ok" },
-    ]);
+    expect(native.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     // The shipped v2026.7.1-2 database really carried these curator projections.
     for (const tableName of ["skill_lifecycle", "skill_workshop_proposal_origin_runs"]) {
@@ -1868,11 +1869,9 @@ describe("openclaw state database", () => {
     }
     // Published v1 state has no deletion history to lose; migration initializes its journal.
     const expected = createInitialStateSchemaShape();
-    expect(
-      normalizeSqliteSchemaShapeSql(
-        collectSqliteSchemaShape(requireNativeSqliteDatabase(migrated.db)),
-      ),
-    ).toEqual(normalizeSqliteSchemaShapeSql(expected));
+    expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(native))).toEqual(
+      normalizeSqliteSchemaShapeSql(expected),
+    );
     expect(readRetainedAgentDeletionsFromDatabase(migrated.db, fixture.databasePath)).toEqual({
       status: "empty",
     });
@@ -2143,6 +2142,8 @@ describe("openclaw state database", () => {
       { kind: "creator-namespace-v14", path: seeded.databasePath },
       { kind: "predicate-columns-v21", path: seeded.databasePath },
       { kind: "portable-identity-columns-v22", path: seeded.databasePath },
+      { kind: "meeting-transcript-start-time", path: seeded.databasePath },
+      { kind: "task-run-indexes-v24", path: seeded.databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: seeded.databasePath },
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
@@ -2150,6 +2151,7 @@ describe("openclaw state database", () => {
         "Migrated cloud worker placements to execution modes",
         "Migrated shared state session watch cursors → provenance column (2 ambient, 5 sentinels removed)",
         "Qualified historical cron creator attribution as unknown (v14)",
+        "Replaced retained task indexes with ordered cron history indexes (v24)",
       ],
       warnings: [],
     });
@@ -2227,7 +2229,7 @@ describe("openclaw state database", () => {
         ALTER TABLE claw_installs DROP COLUMN bootstrap_content_digest;
       `);
 
-      shippedSchema.exec("DROP INDEX idx_task_runs_status;");
+      shippedSchema.exec("DROP INDEX idx_task_runs_runtime_run;");
 
       expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(
         OPENCLAW_STATE_SCHEMA_VERSION,
@@ -2308,42 +2310,46 @@ describe("openclaw state database", () => {
     readOnly?.walMaintenance.close();
   });
 
-  it("rejects a missing current-schema table instead of recreating it empty", () => {
-    const stateDir = createTempStateDir();
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const databasePath = materializeCurrentStateDatabase(stateDir);
+  it.each([22, 23, OPENCLAW_STATE_SCHEMA_VERSION])(
+    "rejects a missing v%i table instead of recreating it empty",
+    (version) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
 
-    const { DatabaseSync } = requireNodeSqlite();
-    const drifted = new DatabaseSync(databasePath);
-    drifted.exec("DROP TABLE apns_registration_tombstones;");
-    const schemaBefore = hashSqliteSchema(drifted);
-    drifted.close();
+      const { DatabaseSync } = requireNodeSqlite();
+      const drifted = new DatabaseSync(databasePath);
+      drifted.exec("DROP TABLE apns_registration_tombstones;");
+      markStateDatabaseVersion(drifted, version);
+      const schemaBefore = hashSqliteSchema(drifted);
+      drifted.close();
 
-    expect(() => openOpenClawStateDatabase(options)).toThrow(
-      /missing table apns_registration_tombstones/iu,
-    );
-    const refusal = {
-      changes: [],
-      warnings: [
-        `Failed migrating shared state database schema at ${databasePath}: SqliteSchemaMismatchError: SQLite schema is incomplete or noncanonical for ${databasePath}: missing table apns_registration_tombstones; run openclaw doctor --fix to repair it.`,
-      ],
-    };
-    expect(repairOpenClawStateDatabaseSchema(options)).toEqual(refusal);
+      expect(() => openOpenClawStateDatabase(options)).toThrow(
+        /missing table apns_registration_tombstones/iu,
+      );
+      const refusal = {
+        changes: [],
+        warnings: [
+          `Failed migrating shared state database schema at ${databasePath}: SqliteSchemaMismatchError: SQLite schema is incomplete or noncanonical for ${databasePath}: missing table apns_registration_tombstones; run openclaw doctor --fix to repair it.`,
+        ],
+      };
+      expect(repairOpenClawStateDatabaseSchema(options)).toEqual(refusal);
 
-    const after = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(hashSqliteSchema(after)).toBe(schemaBefore);
-      expect(
-        after
-          .prepare(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'apns_registration_tombstones'",
-          )
-          .get(),
-      ).toBeUndefined();
-    } finally {
-      after.close();
-    }
-  });
+      const after = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(hashSqliteSchema(after)).toBe(schemaBefore);
+        expect(
+          after
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'apns_registration_tombstones'",
+            )
+            .get(),
+        ).toBeUndefined();
+      } finally {
+        after.close();
+      }
+    },
+  );
 
   it("rejects a missing stable v5 table before migration through startup admission", async () => {
     const stateDir = createTempStateDir();

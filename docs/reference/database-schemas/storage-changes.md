@@ -139,11 +139,18 @@ COMMIT;
 Use a disposable schema for this readiness check; it does not enable shared-state
 PostgreSQL support or migrate an existing store.
 
-Both engines use the same shared-state schema version (currently 22). Every
+Both engines use the same shared-state schema version (currently 24). Every
 future version change must supply both engines' forward migration and catalog
 equivalence proof together. JSON stays canonical: a query/index projection is
 derived once in TypeScript and committed in the same statement as its JSON.
 See the [accepted design](https://github.com/openclaw/openclaw/issues/169254).
+
+Schema 24 includes `state-v23-v24.postgres.sql`, generated from the migration
+owner's retired index names and the canonical replacement index definitions.
+It contains forward DDL only; the caller supplies the transaction, namespace,
+and version publication. PostgreSQL conformance verifies the upgraded index
+definitions against a fresh schema and preserves retained rows and local indexes.
+This readiness artifact does not enable shared-state PostgreSQL runtime support.
 
 Generation refuses unsupported shared-state tables, columns, defaults, CHECKs,
 indexes, and foreign keys with their exact source and reason. Text uses C
@@ -1999,8 +2006,8 @@ candidate transcript, compaction checkpoint, or trajectory files. Prompt-referen
 projection runs only when prompt blobs exist. Age, exclusion, and containment
 checks still govern every removal.
 
-Automatic session-entry maintenance first checks the unarchived count and
-store-scoped age facts. Writes below the existing cap high-water mark skip
+Automatic session-entry maintenance first uses the owner's receipt-updated
+unarchived count and store-scoped age facts. Writes below the existing cap high-water mark skip
 candidate and protection-key reads until pruning or dashboard archiving could
 change an entry. A plan records the next age boundary and a 30-minute recheck
 deadline under the current age policy. Every maintenance entry point rejects
@@ -2025,14 +2032,15 @@ invalid-row queries remain separate costs; this is not a constant-work guarantee
 for every maintenance pass.
 
 The shared worker connection owns age facts and retains the planning snapshot
-before write admission. Applying the plan revalidates its rows and revision under
+before write admission. Applying the plan revalidates selected rows under
 the writer lane. Committed entry receipts carry activity changes to that owner before row
 observers run; native-compatible writes publish through the same post-commit
 boundary. The scheduler coalesces these changes and acknowledges only the batch
 consumed by the worker, preserving newer backdates, restores, and inserts across
-asynchronous settlement. No-op plans validate the connection incarnation,
-revision, and age capture before publishing their next deadline. Rolled-back
-planning does not publish a fact.
+asynchronous settlement. Delivery settlement retains the count and advances the
+deadline from its receipt, so a young store below capacity skips planning and its
+empty write transaction. No-op plans retain the database lease check without
+discarding age facts after unrelated writes. Rolled-back planning does not publish a fact.
 
 The host retains coalescing, the one-second write quiet window, bounded rejection
 backoff, and timers. Its owner binds the physical database path and executor
@@ -2096,7 +2104,7 @@ without discarding the prepared candidates. The write transaction rereads select
 rows, transcript versions, and active ancestry, then rejects only candidates that
 changed or became protected. The parent still rejects policy or protection changes
 after admission and before commit. Unrelated activity during planning can therefore
-commit without another planning pass; unrelated writes invalidate stale age hints.
+commit without another planning pass; entry receipts update retained age hints.
 Changed candidates roll back that planning pass before a fresh pass begins. Bounded
 finalization preserves changed entries and publishes removals only for committed
 entries. Transcript sizing and empty-transcript validation run on archive workers;
@@ -2773,6 +2781,10 @@ writes or pruning invalidate rollup inputs. Worker retirement discards the worki
 set. Reports keep their independent read snapshots. A concurrent repair during a
 refresh can defer correction to the next refresh; it does not require another
 metadata comparison on the ordinary background path.
+Full refreshes submit pruning only when their metadata scan found stale rows;
+deletion still matches each observed row's checkpoint and update timestamp.
+Doctor owns cleanup of retired cache scopes, so ordinary refreshes do not repeat
+legacy deletions. Retired rows may remain until `openclaw doctor --fix` runs.
 Deletion, transcript rewind or branch changes, and pricing revisions rebuild
 through the same owner. SQL and single-agent aggregation run in workers.
 Cross-agent reports fold worker summaries in global session order on the Gateway

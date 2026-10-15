@@ -440,7 +440,9 @@ describe("AppSidebar session indicators", () => {
       },
     });
     await settleLitElement(sidebar);
-    sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
+    expect(
+      sidebar.querySelector("[data-child-session-toggle]")?.getAttribute("aria-expanded"),
+    ).toBe("true");
     await waitForFast(() =>
       expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(4),
     );

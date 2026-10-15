@@ -3,6 +3,7 @@ import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { sessionChangeAffectsStoredRow } from "../../sessions/session-row-facts.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import {
   readPreparedSessionEntryChange,
@@ -269,6 +270,7 @@ function discard(cell: ReplicaCell): void {
   }
   pool.bytes -= cell.bytes;
   cell.transcript = undefined;
+  cell.transcriptBytes = 0;
   cell.snapshot = undefined;
   cell.entry = undefined;
   cell.bytes = 0;
@@ -276,7 +278,7 @@ function discard(cell: ReplicaCell): void {
 
 function retainEntry(cell: ReplicaCell, entry: SessionActorEntryFacts): void {
   discard(cell);
-  cell.entry = entry;
+  cell.entry = freezeJsonSnapshot(entry);
   cell.bytes = estimateReplicaBytes(entry);
   pool.snapshots += 1;
   pool.bytes += cell.bytes;
@@ -293,6 +295,13 @@ function retainSnapshot(
   }
   const previousTranscript = cell.transcript;
   discard(cell);
+  // Freeze borrowed entry facts once per installed revision, not on every read.
+  freezeJsonSnapshot(state.target);
+  freezeJsonSnapshot(state.entry);
+  freezeJsonSnapshot(state.members);
+  freezeJsonSnapshot(state.participants);
+  Object.freeze(state.dependencySessionIds);
+  Object.freeze(state.transcript.watermark);
   cell.snapshot = state;
   cell.generation = generation;
   cell.bytes = estimateReplicaBytes(state);
@@ -312,9 +321,10 @@ function retainTranscript(cell: ReplicaCell, transcript: SessionActorTranscriptR
   if (!cell.snapshot && !cell.entry && !cell.transcript) {
     pool.snapshots += 1;
   }
-  const previousBytes = cell.transcript ? estimateReplicaBytes(cell.transcript) : 0;
+  const previousBytes = cell.transcriptBytes;
   const bytes = estimateReplicaBytes(transcript);
   cell.transcript = transcript;
+  cell.transcriptBytes = bytes;
   cell.bytes += bytes - previousBytes;
   pool.bytes += bytes - previousBytes;
   touch(cell);
@@ -401,7 +411,7 @@ function readCurrentEntryCell(target: FileTarget, admitted?: DatabasePathIdentit
   return token ? { cell, state, incarnation: cell.generation } : undefined;
 }
 
-/** Entry projections share actor residency; they never certify live authority. */
+/** Borrow frozen entry facts; callers copy changed fields and retain their own live authority. */
 export function readSessionActorEntryFacts(
   target: FileTarget,
   snapshotFields: SessionActorEntryFacts["snapshots"] = "full",
@@ -412,12 +422,11 @@ export function readSessionActorEntryFacts(
   }
   const { cell, state, incarnation } = current;
   const snapshots = cell.snapshot ? "full" : (cell.entry?.snapshots ?? "full");
-  // Project a shallow shell before cloning potentially large, unrequested snapshots.
-  return structuredClone({
-    target,
+  return Object.freeze({
+    target: state.target,
     entry:
       state.entry && snapshotFields !== "full"
-        ? attachSessionEntrySnapshots({ ...state.entry }, {}, snapshotFields)
+        ? Object.freeze(attachSessionEntrySnapshots({ ...state.entry }, {}, snapshotFields))
         : state.entry,
     members: state.members,
     participants: state.participants,
@@ -427,12 +436,14 @@ export function readSessionActorEntryFacts(
     snapshots:
       snapshotFields === "full"
         ? snapshots
-        : snapshotFields.filter((field) => snapshots === "full" || snapshots.includes(field)),
+        : Object.freeze(
+            snapshotFields.filter((field) => snapshots === "full" || snapshots.includes(field)),
+          ),
     projection: cell.snapshot
-      ? {
+      ? Object.freeze({
           hasBoard: cell.snapshot.hasBoard,
           activitySummaryWatermark: cell.snapshot.transcript.watermark,
-        }
+        })
       : cell.entry?.projection,
     dependencySessionIds: state.dependencySessionIds,
     writeToken: state.writeToken,
@@ -500,7 +511,13 @@ export function readSessionActorTranscriptAnchorsFromReplica(
   const current = readCurrentEntryCellForPath(params);
   const snapshot = current?.cell.snapshot;
   return snapshot && snapshot.entry?.sessionId === params.sessionId
-    ? readSessionActorTranscriptAnchors(snapshot, params, selection, current?.cell.transcript?.tail)
+    ? readSessionActorTranscriptAnchors(
+        snapshot,
+        params,
+        selection,
+        current?.cell.transcript?.tail,
+        current?.cell.transcript?.anchors,
+      )
     : undefined;
 }
 
@@ -556,7 +573,7 @@ export function retainSessionActorEntryFacts(
     const key = targetKey(target);
     let cell = pool.cells.get(key);
     if (!cell) {
-      cell = { target, handles: 0, bytes: 0 };
+      cell = { target, handles: 0, bytes: 0, transcriptBytes: 0 };
       pool.cells.set(key, cell);
     }
     if (cell.snapshot) {
@@ -567,16 +584,7 @@ export function retainSessionActorEntryFacts(
       }
     }
     cell.generation = incarnation;
-    // The private copy isolates mutable reader results; no borrowed reference escapes this owner.
-    retainEntry(
-      cell,
-      structuredClone({
-        ...facts,
-        target,
-        dependencySessionIds,
-        writeToken,
-      }),
-    );
+    retainEntry(cell, { ...facts, target, dependencySessionIds, writeToken });
   }
 }
 
@@ -591,7 +599,7 @@ export function createSessionActorReplica(params: {
   const key = targetKey(target);
   let cell = pool.cells.get(key);
   if (!cell) {
-    cell = { target, handles: 0, bytes: 0 };
+    cell = { target, handles: 0, bytes: 0, transcriptBytes: 0 };
     pool.cells.set(key, cell);
   }
   const owned = cell;

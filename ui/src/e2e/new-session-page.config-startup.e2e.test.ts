@@ -176,7 +176,7 @@ suite.define(() => {
       const message = page.locator(".new-session-page__message");
       await message.fill("Keep this draft after the config error");
       await composer.getByRole("button", { name: "Add attachment" }).click();
-      const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      const menu = composer.locator(".agent-chat__capability-menu");
       const search = menu.getByRole("menuitemcheckbox", { name: "Web search" });
       await expect.poll(() => search.isVisible()).toBe(true);
       expect(await gateway.getRequests("config.get")).toHaveLength(1);

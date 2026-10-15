@@ -234,7 +234,7 @@ extensions/discord/src/internal/commands.ts	1
 extensions/discord/src/internal/components.message.ts	8
 extensions/discord/src/internal/components.modal.ts	1
 extensions/discord/src/internal/entity-cache.ts	3
-extensions/discord/src/internal/gateway-dispatch.ts	7
+extensions/discord/src/internal/gateway-dispatch.ts	5
 extensions/discord/src/internal/gateway-payload.ts	1
 extensions/discord/src/internal/gateway.ts	2
 extensions/discord/src/internal/interaction-dispatch.ts	6
@@ -367,7 +367,7 @@ extensions/google/music-generation-provider.ts	1
 extensions/google/oauth-token-shared.ts	1
 extensions/google/provider-registration.ts	2
 extensions/google/realtime-voice-provider.ts	4
-extensions/google/transport-stream.ts	13
+extensions/google/transport-stream.ts	12
 extensions/google/vertex-adc.ts	4
 extensions/google/video-generation-provider.ts	13
 extensions/googlechat/src/approval-card-actions.ts	1
@@ -1017,7 +1017,7 @@ packages/ai/src/providers/anthropic.ts	2
 packages/ai/src/providers/azure-openai-responses.ts	1
 packages/ai/src/providers/clean-for-gemini.ts	4
 packages/ai/src/providers/google-shared.ts	2
-packages/ai/src/providers/mistral.ts	2
+packages/ai/src/providers/mistral.ts	1
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
 packages/ai/src/providers/openai-chatgpt-responses.ts	17
 packages/ai/src/providers/openai-completions-tool-calls.ts	1
@@ -1360,7 +1360,7 @@ src/agents/provider-secret-egress.ts	1
 src/agents/provider-tool-policy.ts	1
 src/agents/provider-transport-fetch.ts	1
 src/agents/runtime-plan/build.ts	4
-src/agents/runtime-plan/tools.ts	3
+src/agents/runtime-plan/tools.ts	2
 src/agents/runtime/proxy.ts	3
 src/agents/sandbox-paths.ts	1
 src/agents/sandbox-tool-policy.ts	1
@@ -1493,7 +1493,6 @@ src/auto-reply/reply/agent-runner-utils.ts	1
 src/auto-reply/reply/block-streaming.ts	3
 src/auto-reply/reply/commands-acp/diagnostics.ts	2
 src/auto-reply/reply/commands-allowlist.ts	6
-src/auto-reply/reply/commands-config.ts	1
 src/auto-reply/reply/commands-context-report.ts	1
 src/auto-reply/reply/commands-context.ts	1
 src/auto-reply/reply/commands-login.ts	1
@@ -2068,7 +2067,6 @@ src/infra/channel-summary.ts	1
 src/infra/channels-status-issues.ts	2
 src/infra/clawhub-client.ts	2
 src/infra/clawhub-install-trust.ts	2
-src/infra/control-ui-assets.ts	1
 src/infra/delivery-queue-sqlite-bound.ts	2
 src/infra/delivery-recovery.shared.ts	4
 src/infra/diagnostic-events.ts	2
@@ -2178,7 +2176,6 @@ src/infra/state-migrations.state-dir.ts	1
 src/infra/state-migrations.tui-last-session.ts	2
 src/infra/state-migrations.workspace-setup-store.ts	1
 src/infra/state-migrations.workspace-setup.ts	1
-src/infra/system-presence.ts	1
 src/infra/tailscale.ts	4
 src/infra/tmp-openclaw-dir.ts	1
 src/infra/update-check-package-target.ts	2
@@ -2676,7 +2673,6 @@ ui/src/pages/chat/components/chat-selection-popup.ts	1
 ui/src/pages/chat/components/chat-session-workspace.ts	1
 ui/src/pages/chat/components/chat-task-suggestions.ts	1
 ui/src/pages/chat/components/chat-thread-interactions.ts	2
-ui/src/pages/chat/components/chat-voice-activity.ts	1
 ui/src/pages/chat/components/widget-card.ts	3
 ui/src/pages/chat/components/widget-export.ts	1
 ui/src/pages/chat/connect-error.ts	1

@@ -66,7 +66,7 @@ function renderConfirmation(props: () => ConfirmationProps) {
           </div>
         </div>
         <p class="gateway-switch__note">{notes()}</p>
-        <div class="gateway-switch__actions">
+        <openclaw-modal-actions class="gateway-switch__actions">
           <button type="button" class="btn primary" onClick={() => props().onConfirm()}>
             {t("connection.switchGateway.confirm", {
               host: formatGatewayHost(props().pendingGatewayUrl ?? ""),
@@ -75,7 +75,7 @@ function renderConfirmation(props: () => ConfirmationProps) {
           <button type="button" class="btn" onClick={() => props().onCancel()}>
             {t("connection.switchGateway.cancel")}
           </button>
-        </div>
+        </openclaw-modal-actions>
       </div>
     </openclaw-modal-dialog>
   );

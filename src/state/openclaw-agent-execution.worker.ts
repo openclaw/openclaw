@@ -80,7 +80,6 @@ import {
   loadConversationRegistryOperations,
   loadAgentPendingInputOperations,
   loadAgentArchivePruningOperations,
-  loadUsageCacheOperations,
   loadSessionRowBackfillOperations,
   type RegisteredAgentWorkerOperations,
 } from "./openclaw-agent-execution-operations.js";
@@ -88,6 +87,7 @@ import {
   loadAgentTranscriptOperations,
   prepareAgentTranscript,
 } from "./openclaw-agent-execution-transcript.worker.js";
+import { loadUsageCacheOperations } from "./openclaw-agent-execution-usage.worker.js";
 import { loadAgentVoiceSessionOperations } from "./openclaw-agent-execution-voice-operations.js";
 import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
 import {
@@ -477,6 +477,7 @@ function openAgentDatabaseBackend(
     "session.maintenance.release": loadMaintenanceOperations,
     "usageCache.writeRollup": loadUsageCacheOperations,
     "usageCache.prune": loadUsageCacheOperations,
+    "usageCache.retireLegacy": loadUsageCacheOperations,
     "session.rowTranscript.backfill": loadSessionRowBackfillOperations,
   });
   const context: AgentWorkerOperationContext = {

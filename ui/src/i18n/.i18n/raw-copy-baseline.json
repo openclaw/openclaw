@@ -144,41 +144,6 @@
     {
       "count": 1,
       "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/components/board/board-view.test-support.ts",
-      "text": "Alpha status"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/components/board/board-view.test-support.ts",
-      "text": "Beta chart"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/components/board/board-view.test-support.ts",
-      "text": "Main"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/components/board/board-view.test-support.ts",
-      "text": "Operations"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/components/board/board-view.test-support.ts",
-      "text": "Queue depth"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
       "name": "label",
       "path": "ui/src/components/command-palette-catalog-search.ts",
       "text": "/verbose"
@@ -376,13 +341,6 @@
       "count": 1,
       "kind": "object-property",
       "name": "title",
-      "path": "ui/src/pages/chat/components/chat-pane-header.test-support.ts",
-      "text": "Session title"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
       "path": "ui/src/pages/chat/components/chat-sidebar-editor-menu.tsx",
       "text": "Open in editor"
     },
@@ -392,13 +350,6 @@
       "name": "text",
       "path": "ui/src/pages/cloud-workers/cloud-worker-snapshot-rows.tsx",
       "text": ".openclaw/worktree-setup.sh"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/cloud-workers/cloud-worker-snapshots.test-support.ts",
-      "text": "github.com/acme/app"
     },
     {
       "count": 1,
@@ -534,20 +485,6 @@
       "text": "openclaw update"
     },
     {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/new-session/where-chip.test-support.ts",
-      "text": "Build runner"
-    },
-    {
-      "count": 2,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/new-session/where-chip.test-support.ts",
-      "text": "Duplicate runner"
-    },
-    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
@@ -560,104 +497,6 @@
       "name": "text",
       "path": "ui/src/pages/plugins/consent-dialog.tsx",
       "text": "v"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Chat with your agent from Telegram groups and direct messages."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Connect OpenClaw to Matrix rooms and direct messages."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Coordinate work using the included calendar plugin."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Dashboard workboard for agent-owned issues and sessions."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Matrix access token"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Matrix homeserver URL"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Plan and coordinate work from a shared calendar."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Run typed workflows with resumable approvals."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Send and receive Matrix messages."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Web extraction and crawling."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Access token"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Enabled"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Homeserver"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Mode"
     },
     {
       "count": 1,
@@ -686,13 +525,6 @@
       "name": "text",
       "path": "ui/src/pages/skills/library-view.tsx",
       "text": "SKILL.md"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/skills/view.test-support.ts",
-      "text": "Skill description"
     },
     {
       "count": 1,

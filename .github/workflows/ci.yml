@@ -4589,7 +4589,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.14.8"
 
       - name: Install Python tooling
         id: python_tooling
@@ -6356,7 +6356,7 @@ jobs:
           print(selected)
           PY
           )"
-          "$ANDROID_SDK_ROOT/build-tools/36.0.0/zipalign" -c -P 16 -v 4 "$apk"
+          "$ANDROID_SDK_ROOT/build-tools/37.0.0/zipalign" -c -P 16 -v 4 "$apk"
 
       - name: Upload Access native test reports
         if: ${{ !cancelled() }}

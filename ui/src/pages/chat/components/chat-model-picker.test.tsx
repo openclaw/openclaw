@@ -1,16 +1,19 @@
 /* @vitest-environment jsdom */
 
 import { createSignal } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { ModelProviderAuthLabel } from "../../../lib/model-provider-auth-label.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
+import { openDetails } from "../../../test-helpers/web-awesome.ts";
 import { ChatModelPicker } from "./chat-model-picker.tsx";
+
+afterEach(() => document.body.replaceChildren());
 
 it.each([false, true])(
   "initially expands the selected provider and retains toggles on reopen (inherited=%s)",
   async (inherited) => {
-    const container = document.createElement("div");
+    const container = document.body.appendChild(document.createElement("div"));
     const params: Parameters<typeof ChatModelPicker>[0] = {
       disabled: false,
       modelSelectionLocked: false,
@@ -90,7 +93,7 @@ it.each([false, true])(
 );
 
 it.each([false, true])("keeps current visible with Default=%s", (hasDefault) => {
-  const container = document.createElement("div");
+  const container = document.body.appendChild(document.createElement("div"));
   mountSolid(
     () => (
       <ChatModelPicker
@@ -128,7 +131,7 @@ it.each([false, true])("keeps current visible with Default=%s", (hasDefault) => 
 it.each([false, true])(
   "drops the All models row once expanded so the rest continue the group (rest disabled=%s)",
   async (restDisabled) => {
-    const container = document.createElement("div");
+    const container = document.body.appendChild(document.createElement("div"));
     document.body.append(container);
     mountSolid(
       () => (
@@ -168,6 +171,7 @@ it.each([false, true])(
     flush();
     await Promise.resolve();
     const more = container.querySelector<HTMLButtonElement>("[data-chat-model-more-toggle]")!;
+    await openDetails(container.querySelector("details")!);
     const rest = container.querySelector<HTMLButtonElement>(
       '[data-chat-model-option="fixture/rest"]',
     )!;
@@ -197,7 +201,7 @@ it.each([false, true])(
 );
 
 it("groups Anthropic refs pinned to Claude CLI under Claude CLI", () => {
-  const container = document.createElement("div");
+  const container = document.body.appendChild(document.createElement("div"));
   const option = (provider: string, id: string, agentRuntimeId?: string) => ({
     provider,
     value: `${provider}/${id}`,

@@ -7,6 +7,25 @@ const { fixture, reconciledMergeAfterCleanup, outcomeRef, describePosix, unknown
   createMergeOutcomeFixtureHarness();
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
+  it("lands ordinary green CI with a MAINTAIN writer without exception policy reads", () => {
+    const f = fixture();
+    const state = f.state();
+    state.repoAuthority.permissions = { admin: false, maintain: true, push: true };
+    state.restPolicy = "not-found";
+    state.priorCi.membership = "member";
+    f.save(state);
+
+    const result = f.run();
+
+    expect(result.status, result.output).toBe(0);
+    expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
+    expect(f.state().mutations).toBe(1);
+    expect(f.state().calls.some((call) => call.some((arg) => arg.includes("/protection")))).toBe(
+      false,
+    );
+    expect(f.state().calls.some((call) => call.some((arg) => arg.startsWith("orgs/")))).toBe(false);
+  });
+
   it.each([
     { phase: "initial", settles: true },
     { phase: "initial", settles: false },

@@ -76,7 +76,7 @@ import { UpdateSchemaRefusalError } from "./openclaw-update-schema-refusal.js";
 export function repairStateSchema(
   pathname: string,
   env: NodeJS.ProcessEnv,
-  scope: "automatic" | "doctor" | "readability" | "indexes",
+  scope: "automatic" | "doctor" | "readability" | "indexes" | "version",
 ): {
   changes: string[];
   warnings: string[];
@@ -113,6 +113,34 @@ export function repairStateSchema(
         }),
         warnings: [],
       };
+    }
+    if (scope === "version") {
+      const changes = runStateSchemaMigrationTransaction(
+        db,
+        pathname,
+        () => {
+          assertOpenClawStateDatabaseOwner(db, { pathname });
+          const previousVersion = readStateSchemaContentVersion(db);
+          if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
+            return [];
+          }
+          const applied = migrateBoundedStateSchema(db, previousVersion, {
+            versionMigrationOnly: true,
+          });
+          if (!applied) {
+            throw new Error(`No bounded shared-state migration from v${previousVersion}.`);
+          }
+          markCurrentStateSchemaVersion(db);
+          return applied;
+        },
+        {
+          busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+          databaseLabel: pathname,
+          operationLabel: "state.schema.version-migration",
+        },
+      );
+      // Full-shape admission and quarantine cleanup belong to later Doctor repair.
+      return { changes, warnings: [] };
     }
     const repairAdmittedSchema = prepareStateDatabaseSchemaRepair(db, pathname, env);
     const canInspectIndexes =

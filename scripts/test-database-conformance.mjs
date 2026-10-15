@@ -51,9 +51,11 @@ const targets =
     ? []
     : [
         "extensions/workboard",
+        "extensions/logbook/src/postgres-store.test.ts",
         "src/infra/postgres-sync",
         "src/infra/database-engine",
         "src/state/openclaw-state-db.postgres.test.ts",
+        "src/transcripts/meeting-chronology.postgres.test.ts",
       ];
 const child = spawn(
   process.execPath,

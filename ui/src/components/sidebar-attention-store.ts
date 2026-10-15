@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CronCompactJob, ModelAuthStatusResult } from "../api/types.ts";
 import { createMentionsCapability, type MentionsCapability } from "../app/mentions.ts";
 import { hasOperatorReadAccess } from "../app/operator-access.ts";
@@ -40,6 +41,41 @@ type SidebarAttentionOwner = {
   dismissalKey: string | null;
 };
 
+function isCronAttentionJob(job: unknown): job is CronAttentionJob {
+  if (
+    !isRecord(job) ||
+    typeof job.id !== "string" ||
+    !job.id ||
+    typeof job.name !== "string" ||
+    typeof job.enabled !== "boolean" ||
+    typeof job.updatedAtMs !== "number" ||
+    (job.agentId !== undefined && typeof job.agentId !== "string") ||
+    !isRecord(job.state)
+  ) {
+    return false;
+  }
+  const state = job.state;
+  const disabled = state.autoDisabled;
+  return (
+    [job.updatedAtMs, state.nextRunAtMs, state.lastRunAtMs, state.runningAtMs].every(
+      (value) =>
+        value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0),
+    ) &&
+    [state.lastRunStatus, state.lastStatus].every(
+      (value) => value === undefined || value === "ok" || value === "error" || value === "skipped",
+    ) &&
+    (disabled === undefined ||
+      (isRecord(disabled) &&
+        (disabled.reason === "consecutive-failures" || disabled.reason === "schedule-errors") &&
+        typeof disabled.atMs === "number" &&
+        Number.isFinite(disabled.atMs) &&
+        disabled.atMs >= 0 &&
+        typeof disabled.consecutiveErrors === "number" &&
+        Number.isSafeInteger(disabled.consecutiveErrors) &&
+        disabled.consecutiveErrors > 0))
+  );
+}
+
 export class SidebarAttentionStoreController implements StoreController {
   readonly mentions: MentionsCapability;
   private cronJobs: CronAttentionJob[] = [];
@@ -76,7 +112,11 @@ export class SidebarAttentionStoreController implements StoreController {
     this.stopSubscriptions = [
       sources.gateway.subscribe(() => this.synchronizeGateway()),
       sources.gateway.subscribeEvents((event) => {
-        if (event.event === "cron" || event.event === "config.changed") {
+        if (event.event === "cron") {
+          if (!this.applyCronEvent(event.payload)) {
+            this.load(false);
+          }
+        } else if (event.event === "config.changed") {
           this.load(false);
         } else if (modelAuthEventInvalidates(event)) {
           this.load(true, false);
@@ -267,6 +307,54 @@ export class SidebarAttentionStoreController implements StoreController {
       key: this.dismissalKey,
       scope,
     });
+  }
+
+  private applyCronEvent(payload: unknown): boolean {
+    // A pending/partial inventory still needs its trailing read. Applying an event
+    // there would let an older page overwrite it or certify missing rows.
+    if (
+      this.cronRefresh ||
+      this.cronRefreshNeeded ||
+      this.cronSchedulerEnabled === null ||
+      !isGatewayAvailable(this.sources.gateway.snapshot) ||
+      document.visibilityState === "hidden" ||
+      !isRecord(payload) ||
+      typeof payload.action !== "string" ||
+      !["removed", "started", "finished", "scheduled"].includes(payload.action) ||
+      !isCronAttentionJob(payload.job) ||
+      payload.jobId !== payload.job.id
+    ) {
+      return false;
+    }
+    const job = payload.job;
+    const scopeId = this.sources.agentSelection.state.scopeId;
+    const index = this.cronJobs.findIndex((entry) => entry.id === job.id);
+    // Events do not establish list membership: even All agents can be access-
+    // filtered, and completion can carry a removed job's historical snapshot.
+    if (index < 0) {
+      return false;
+    }
+    if (payload.action === "removed") {
+      this.cronJobs.splice(index, 1);
+    } else {
+      const { id, name, agentId, enabled, updatedAtMs } = job;
+      const { nextRunAtMs, lastRunAtMs, lastRunStatus, lastStatus, runningAtMs, autoDisabled } =
+        job.state;
+      // Retain attention facts only; event jobs also contain full task payloads.
+      const attention = {
+        id,
+        name,
+        agentId,
+        enabled,
+        updatedAtMs,
+        state: { nextRunAtMs, lastRunAtMs, lastRunStatus, lastStatus, runningAtMs, autoDisabled },
+      };
+      this.cronJobs[index] = attention;
+    }
+    this.reconcileDismissals({ cronInventoryComplete: scopeId === null, modelAuthAgentId: null });
+    this.scheduleHealthRefresh();
+    this.onChange();
+    return true;
   }
 
   private load(refreshModelAuth = true, refreshCron = true): void {

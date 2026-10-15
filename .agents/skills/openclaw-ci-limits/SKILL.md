@@ -64,8 +64,8 @@ availability, Blacksmith control-plane health, and downstream queue drains.
 ## Rejected Experiments
 
 - **Declaration-fixture owner selection (2026-10-02):**
-  `test/scripts/tsdown-declaration-fixture.ts` copies 26 real runtime owners by
-  path, so product PRs that edit one do not select the four declaration suites
+  `test/scripts/tsdown-declaration-fixture.ts` derives real source copies from its runtime
+  entrypoint closures, so product PRs that edit one do not select the four declaration suites
   built on it. [PR #162614](https://github.com/openclaw/openclaw/pull/162614)
   broke `write-unified-entry-dts` that way; hourly scheduled CI
   ([run 36979748808](https://github.com/openclaw/openclaw/actions/runs/36979748808))
@@ -340,9 +340,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   leaves thirteen inside the unchanged 84-row allowance and 5,110 bound.
 
 - Automatic canonical hybrid first attempts count every selected hosted row in
-  preflight. `HYBRID_HOSTED_BASE_ROW_LIMIT = 40` admits at most five optional
-  rows within `HYBRID_HOSTED_ROW_LIMIT = 45`: security, three Control UI unit
-  rows, and only browser-extension E2E. Above 40 base rows, retain their
+  preflight. `HYBRID_HOSTED_BASE_ROW_LIMIT = 40` admits at most two optional
+  rows within `HYBRID_HOSTED_ROW_LIMIT = 45`: security and browser-extension
+  E2E. Control UI unit rows retain the 8-class on eligible first attempts.
+  Above 40 base rows, retain the optional rows' existing
   Blacksmith routes; an eligible base above 45 warns with counts and retains
   the complete base manifest. The budget limits optional admission, not coverage.
   Record base/total rows and compare the actual workflow expansion in guards.
@@ -595,11 +596,11 @@ These are intentionally guarded by the `ci-workflow-guards`,
   elapsed-time, actual memory and cleanup proof; requested labels are not capacity.
 - The whole Blacksmith agent-support group requests `blacksmith-32vcpu-ubuntu-2404`.
   Its file inventory and resource-derived worker policy remain unchanged.
-- Precisely selected serial CLI and Gateway client jobs use the 16-class when
-  every group belongs to either family, has one or two explicit files, and keeps
-  its two-worker fallback, without build, dist, memory, or large-runner anchors.
-  Gateway client groups must pair `agentic-gateway-core-2` with
-  `vitest.gateway-client.config.ts`; other Gateway owners retain planned capacity.
+- Precisely selected serial CLI, Gateway client/server, and embedded-agent jobs
+  use the 16-class when every group has one qualified config, one or two explicit
+  files, and a two-worker pin or fallback. An explicit wider pin disqualifies the
+  group. Keep build, dist, memory, large-runner anchors, and unqualified configs
+  at planned capacity; resource-gated tooling tests are not qualified by this rule.
   Apply capacity after packing; preserve inventories, runtime selection, timing
   identities, and process boundaries. Full families retain their planned capacity.
   RunsOn inherits the hybrid choice for these retained Blacksmith jobs.

@@ -7,7 +7,7 @@ import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer, createComposerProps } from "./chat-composer.test-support.ts";
-import { renderAttachmentPreview } from "./components/chat-attachments.ts";
+import { renderAttachmentPreview } from "./components/chat-attachments.test-support.ts";
 import { ChatGoal } from "./components/chat-composer-goal.tsx";
 import { ComposerMenu } from "./components/chat-composer-menu.tsx";
 import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
@@ -101,17 +101,19 @@ describe("composer overflow presentation", () => {
       render(renderChatComposer(props), container);
       await page
         .elementLocator(
-          container.querySelector<HTMLElement>('.agent-chat__attach-menu > [slot="trigger"]')!,
+          container.querySelector<HTMLElement>(
+            ".agent-chat__attach-menu .agent-chat__input-btn--attach",
+          )!,
         )
         .click();
       await page
-        .elementLocator(container.querySelector<HTMLElement>('[value="open-skills"]')!)
+        .elementLocator(container.querySelector<HTMLElement>('[data-value="open-skills"]')!)
         .click();
       await afterLayout();
       const dropdown = container.querySelector<HTMLElement>(".agent-chat__capability-menu")!;
-      const menu = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
+      const menu = dropdown.querySelector<HTMLElement>(".oc-menu")!;
       expect(menu.scrollHeight).toBeGreaterThan(menu.clientHeight);
-      const rows = [...dropdown.querySelectorAll<HTMLElement>('[value^="skill:"]')];
+      const rows = [...dropdown.querySelectorAll<HTMLElement>('[data-value^="skill:"]')];
       expect(rows).toHaveLength(16);
 
       for (const row of rows) {

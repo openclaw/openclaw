@@ -673,7 +673,9 @@ The shared-state writer maintains SQLite planner statistics once during its
 `PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;` under the existing writer
 admission and transaction authority, with no busy wait. SQLite analyzes only
 tables with missing or stale statistics, including tables this maintenance
-connection has not queried. Contention skips that attempt;
+connection has not queried. On supported SQLite versions before 3.46, the cached
+native admission version selects bounded `ANALYZE main` because their optimizer
+cannot discover all missing or stale statistics. Contention skips that attempt;
 later periodic maintenance retries. Checkpoint-only ticks, database admission,
 opens, and ordinary writes do not analyze tables. Vacuum continuation units do
 not repeat the analysis. Shutdown joins accepted maintenance before native close.
@@ -796,6 +798,13 @@ artifact-preserving reader. Retirement closes the native database borrow before
 a later request opens a replacement actor. An actor that returns from an
 operation with a tracked reader still active fails settlement and retires
 immediately.
+
+At the broker's 64-client limit, new opens can retire an owner-confirmed idle
+shared-state client before its normal deadline. Accepted scopes, pending commands,
+maintenance clients, and clients from another runtime generation are protected.
+Retirement joins native cleanup before admission resumes, and later use reopens
+the retired client transparently. If no client is eligible, the capacity refusal
+remains; the limit and stored data do not change.
 
 Observations belong to the open database handle in the Gateway process. They
 reset when that handle is replaced or the Gateway restarts. Status and Doctor

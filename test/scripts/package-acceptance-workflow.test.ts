@@ -10740,7 +10740,7 @@ describe("package artifact reuse", () => {
     const imageWorkflow = readFileSync(LIVE_MEDIA_RUNNER_IMAGE_WORKFLOW, "utf8");
     const buildJob = workflowJob(LIVE_MEDIA_RUNNER_IMAGE_WORKFLOW, "build");
     const buildStep = workflowStep(buildJob, "Build and push live media runner image");
-    expect(imageDockerfile).toMatch(/^FROM ubuntu:24\.04$/m);
+    expect(imageDockerfile).toMatch(/^FROM ubuntu:24\.04@sha256:[a-f0-9]{64}$/m);
     expect(imageDockerfile).toContain("apt-get install -y --no-install-recommends");
     for (const packageName of ["bash", "curl", "ffmpeg", "git", "openssh-client", "zstd"]) {
       expect(imageDockerfile).toContain(`    ${packageName} \\`);

@@ -45,15 +45,16 @@ export function renderSentCommentAttachments(
   if (comments.length === 0) {
     return nothing;
   }
-  const renderComments = (admission?: AttachmentAdmission) => html`<openclaw-chat-sent-comments
-    .sources=${comments.map((item) =>
-      admission?.observeElement
-        ? { identity: item.attachment.url, pending: true, fallback: nothing }
-        : resolve(item),
-    )}
-    .scope=${JSON.stringify([options.sessionKey, options.agentId, options.messageId, options.connectionEpoch, options.resourceBasePath, options.authToken, options.policyKey])}
-    .admission=${admission}
-  ></openclaw-chat-sent-comments>`;
+  const renderComments = (admission?: AttachmentAdmission) =>
+    html`<openclaw-chat-sent-comments
+      .sources=${comments.map((item) =>
+        admission?.observeElement
+          ? { identity: item.attachment.url, pending: true, fallback: nothing }
+          : resolve(item),
+      )}
+      .scope=${JSON.stringify([options.sessionKey, options.agentId, options.messageId, options.connectionEpoch, options.resourceBasePath, options.authToken, options.policyKey])}
+      .admission=${admission}
+    ></openclaw-chat-sent-comments>`;
   return comments.some((item) => needsAttachmentSourceAdmission(item.attachment))
     ? renderChatAttachmentAdmission({
         attachments: comments.map((item) => item.attachment),

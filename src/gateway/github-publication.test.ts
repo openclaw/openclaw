@@ -825,6 +825,50 @@ describe("Gateway GitHub publication", () => {
     },
   );
 
+  it("reports an in-run publication notice into the requesting run", async () => {
+    await persistPublicationTestSession();
+    const runtime = createGitHubPublicationRuntime({
+      placements: createWorkerSessionPlacementStore({
+        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
+      }),
+      loadSessionRuntime: async () => {
+        const sessionUtils = await import("./session-utils.js");
+        const worker = await import("./session-utils-store-worker.js");
+        return {
+          resolveCanonicalSessionEntryFromStoreKeys:
+            sessionUtils.resolveCanonicalSessionEntryFromStoreKeys,
+          resolveGatewaySessionStoreTargetInWorker: worker.resolveGatewaySessionStoreTargetInWorker,
+        };
+      },
+      warn: (message) => {
+        throw new Error(message);
+      },
+    });
+
+    const result = await runtime.coordinator.requestForSessionV2({
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+      idempotencyKey: "publish-during-run",
+      expectedRunId: "run-publishing",
+    });
+    expect(result.status).toBe("published");
+    await runtime.reconcilePublications();
+
+    const events = await loadTranscriptEvents({
+      agentId: "main",
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+    });
+    expect(publicationTranscriptMessages(events, result.requestId)).toEqual([
+      expect.objectContaining({
+        message: expect.objectContaining({
+          __openclaw: expect.objectContaining({ runId: "run-publishing" }),
+        }),
+      }),
+    ]);
+    expect(await runtime.coordinator.listUnreportedResultsAsync()).toEqual([]);
+  });
+
   it("projects an accepted worker publication exactly once across transcript-report restart", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     const placements = createWorkerSessionPlacementStore({ database });
