@@ -68,6 +68,10 @@ describe("meeting transcript chronology migration", () => {
       INSERT INTO meeting_transcript_summaries
         (session_id, session_started_at, markdown, utterance_count)
         VALUES ('iso', '2026-01-01T00:00:00Z', 'Retained summary', 1);
+      INSERT INTO plugin_blob_entries
+        (plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
+        VALUES ('retained-plugin', 'retained', 'bytes', '{"keep":"bytes"}',
+          X'00010200FFFE', 9223372036854775807, NULL);
       ANALYZE;`);
     expect(db.prepare("SELECT 1 FROM sqlite_stat1 LIMIT 1").get()).toBeDefined();
   });
@@ -77,7 +81,7 @@ describe("meeting transcript chronology migration", () => {
   });
 
   it.each(["runtime", "doctor"] as const)(
-    "backfills once through %s and preserves every unrelated table and statistic",
+    "backfills once through %s and preserves undeclared table bytes, schema, and statistics",
     async (owner) => {
       const stateDir = directories.make(`meeting-chronology-${owner}-`);
       const pathname = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
