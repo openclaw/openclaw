@@ -20,11 +20,6 @@
   overflow-wrap: anywhere;
 }
 
-.chat-session-activity__summary [data-session-title-only] {
-  min-width: 0;
-  max-width: 100%;
-}
-
 .chat-session-activity__summary .session-label {
   display: block;
   max-width: 100%;

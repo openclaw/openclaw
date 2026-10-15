@@ -11,7 +11,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamSimpleOpenAICodexResponses } from "../../../packages/ai/src/providers/openai-chatgpt-responses.js";
-import { prepareModelRequestBody } from "../../../packages/ai/src/transports/model-request-body.js";
+import {
+  modelRequestBodyState,
+  prepareModelRequestBody,
+  serializeModelRequestBody,
+} from "../../../packages/ai/src/transports/model-request-body.js";
 import * as guardedFetch from "../../infra/net/fetch-guard.js";
 import * as undiciRuntime from "../../infra/net/undici-runtime.js";
 import "../ai-transport-runtime-host.js";
@@ -132,6 +136,11 @@ describe("prepared session fork provider boundary", () => {
           return replay(requestModel, requestContext, options);
         }
         liveOptions.push(options!);
+        modelRequestBodyState(options!).encode = async (payload) => {
+          const encoded = serializeModelRequestBody(payload);
+          references.push(new WeakRef(encoded.body.buffer));
+          return encoded;
+        };
         const encode = boundary === "unencoded" ? undefined : prepareModelRequestBody(options);
         const payload = {
           model: model.id,
@@ -153,7 +162,7 @@ describe("prepared session fork provider boundary", () => {
       await nextTurn();
       queryObjects(WeakRef);
       expect(control.deref()).toBeUndefined();
-      expect(references[0]?.deref()).toBeUndefined();
+      expect(references.filter((reference) => reference.deref())).toHaveLength(0);
       expect(liveOptions[0]?.onPayload).toBeTypeOf("function");
       await expect(fork()).resolves.toBe("Answer");
       expect(JSON.stringify(replayPayloads[0]?.input)).toContain("Prepared parent prefix");
