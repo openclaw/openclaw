@@ -336,7 +336,9 @@ describe("promptSingleChannelSecretInput", () => {
   ])("selects $name", async ({ expected, name: _name, ...params }) => {
     if (expected.action === "set") {
       vi.stubEnv("OPENCLAW_TEST_TOKEN", "secret-token");
-      onTestFinished(() => vi.unstubAllEnvs());
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
     }
     const prompter = createSecretInputPrompter(params);
     const result = await runPromptSingleChannelSecretInput({ ...params, prompter });
