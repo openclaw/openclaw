@@ -5,7 +5,7 @@ import type { MarkdownGitHubContext } from "../../../components/markdown-render-
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
-import type { LegacyTemplateResult } from "../../../lit/solid-content.tsx";
+import type { LegacyDirectiveResult } from "../../../lit/solid-content.tsx";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import type {
@@ -88,7 +88,7 @@ type AttachmentSidebarContent = Omit<AttachmentSidebarSource, "src"> & {
   sourceIdentity?: string;
   voiceNote?: boolean;
   plainText?: boolean;
-  renderActions?: () => LegacyTemplateResult;
+  renderActions?: () => LegacyDirectiveResult;
   /** Authorize and read fresh bytes for each explicit download. */
   download?: (signal: AbortSignal) => Promise<Blob | null>;
   resolveSource?: (
