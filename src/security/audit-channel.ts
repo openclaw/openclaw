@@ -16,6 +16,7 @@ import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-ins
 import { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseToolsBySenderTypedKey } from "../config/types.tools.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   listExactDirectMessageBindingPeerIds,
@@ -31,6 +32,34 @@ type DmPrincipalRoute = {
   logicalPrincipalKey: string;
   bucketKey: string;
 };
+
+/** Finds toolsBySender keys that only match mutable sender attributes. */
+function* mutableToolsBySenderKeys(
+  value: unknown,
+  path: string,
+): Generator<{ path: string; key: string }> {
+  const record = asNullableRecord(value);
+  if (!record) {
+    return;
+  }
+  for (const [key, child] of Object.entries(record)) {
+    if (key === "toolsBySender") {
+      const policies = asNullableRecord(child);
+      for (const senderKey of Object.keys(policies ?? {})) {
+        const typed = parseToolsBySenderTypedKey(senderKey);
+        if (typed?.type === "name" || typed?.type === "username") {
+          yield { path: `${path}.toolsBySender`, key: typed.type };
+        }
+      }
+      continue;
+    }
+    // Nested account maps are audited as their own account scope.
+    if (key === "accounts") {
+      continue;
+    }
+    yield* mutableToolsBySenderKeys(child, `${path}.${key}`);
+  }
+}
 
 function hasExplicitProviderAccountConfig(
   cfg: OpenClawConfig,
@@ -312,6 +341,29 @@ export async function collectChannelSecurityFindingsCore(params: {
         account,
       });
       const nameMatchingEnabled = isDangerousNameMatchingEnabled(accountConfig);
+      const mutableToolKeys = [
+        ...mutableToolsBySenderKeys(
+          accountConfig,
+          hasExplicitAccountPath
+            ? `channels.${plugin.id}.accounts.${accountId}`
+            : `channels.${plugin.id}`,
+        ),
+      ];
+      if (mutableToolKeys.length > 0) {
+        const uniqueScopes = [...new Set(mutableToolKeys.map((entry) => entry.path))];
+        findings.push({
+          checkId: `channels.${plugin.id}.toolsBySender.mutable_entries`,
+          severity: "warn",
+          title: `${plugin.meta.label ?? plugin.id} toolsBySender uses mutable sender keys${accountNote}`,
+          detail: `${mutableToolKeys.length} toolsBySender ${mutableToolKeys.length === 1 ? "entry" : "entries"} in ${uniqueScopes
+            .slice(0, 3)
+            .join(
+              ", ",
+            )}${uniqueScopes.length > 3 ? ", …" : ""} match mutable username:/name: sender attributes. Because group members can change their display names or handles, another sender could select that tool policy override.`,
+          remediation:
+            "Prefer stable id: or channel: keys in toolsBySender, especially for entries that grant extra tools or override group deny rules.",
+        });
+      }
       const configuredEntries = (dmPolicy?.allowFrom ?? [])
         .map(String)
         .filter((raw) => raw.trim() !== "*");

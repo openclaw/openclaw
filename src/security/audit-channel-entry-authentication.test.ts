@@ -34,6 +34,7 @@ function createFixturePlugin(params: {
     {
       allowFrom: Array<string | number>;
       dangerouslyAllowNameMatching?: boolean;
+      groups?: Record<string, unknown>;
     }
   >;
 }): ChannelPlugin {
@@ -60,6 +61,7 @@ function createFixturePlugin(params: {
           config: {
             dangerouslyAllowNameMatching:
               params.accounts[resolvedAccountId]?.dangerouslyAllowNameMatching,
+            groups: params.accounts[resolvedAccountId]?.groups,
           },
         };
       },
@@ -70,6 +72,7 @@ function createFixturePlugin(params: {
           config: {
             dangerouslyAllowNameMatching:
               params.accounts[resolvedAccountId]?.dangerouslyAllowNameMatching,
+            groups: params.accounts[resolvedAccountId]?.groups,
           },
         };
       },
@@ -173,5 +176,42 @@ describe("channel entry authentication audit", () => {
       ),
     });
     expect(JSON.stringify(findings)).not.toContain(name);
+  });
+
+  it("warns when toolsBySender uses mutable name:/username: keys without leaking identifiers", async () => {
+    const plugin = createFixturePlugin({
+      accounts: {
+        default: {
+          allowFrom: [stableId],
+          groups: {
+            ops: {
+              tools: { deny: ["exec"] },
+              toolsBySender: {
+                "name:operator": { alsoAllow: ["exec"] },
+                "username:alice": { allow: ["read"] },
+                "id:12345": { allow: ["exec"] },
+              },
+            },
+          },
+        },
+      },
+    });
+    const findings = await collectChannelSecurityFindingsCore({
+      cfg,
+      plugins: [plugin],
+      mode: "doctor",
+    });
+    const finding = findings.find(
+      (entry) => entry.checkId === "channels.whatsapp.toolsBySender.mutable_entries",
+    );
+    expect(finding).toMatchObject({
+      severity: "warn",
+      detail: expect.stringContaining(
+        "2 toolsBySender entries in channels.whatsapp.groups.ops.toolsBySender match mutable username:/name: sender attributes",
+      ),
+    });
+    const serialized = JSON.stringify(findings);
+    expect(serialized).not.toContain("operator");
+    expect(serialized).not.toContain("alice");
   });
 });
