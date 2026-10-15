@@ -83,8 +83,7 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
         sentinel = getLatestUpdateRestartSentinel();
       }
       mark("checkout");
-      const config = context?.getRuntimeConfig?.();
-      if ((params.refreshCheckout === true || immutable) && context?.getRuntimeConfig) {
+      if (params.refreshCheckout === true || immutable) {
         try {
           await refreshGatewayUpdateStatus(context.getRuntimeConfig);
         } catch (err) {
@@ -128,25 +127,21 @@ export const updateStatusHandlers: GatewayRequestHandlers = {
         campaign?.reconcileRun(campaignRun);
       }
       mark("identity");
-      let currentConfig = context?.getRuntimeConfig?.() ?? config;
-      let effectiveChannel =
-        normalizeUpdateChannel(currentConfig?.update?.channel) ??
-        (currentConfig ? undefined : normalizeUpdateChannel(getUpdateSchedule()?.channel));
+      let currentConfig = context.getRuntimeConfig();
+      let effectiveChannel = normalizeUpdateChannel(currentConfig.update?.channel);
       if (!effectiveChannel) {
         try {
           effectiveChannel = await getUpdateEffectiveChannel();
         } catch (err) {
           warn("install identity", err);
         }
-        currentConfig = context?.getRuntimeConfig?.() ?? currentConfig;
+        currentConfig = context.getRuntimeConfig();
         effectiveChannel =
           normalizeUpdateChannel(currentConfig?.update?.channel) ?? effectiveChannel;
       }
-      const schedule = currentConfig
-        ? effectiveChannel
-          ? getGatewayUpdateSchedule(currentConfig, effectiveChannel)
-          : undefined
-        : getUpdateSchedule();
+      const schedule = effectiveChannel
+        ? getGatewayUpdateSchedule(currentConfig, effectiveChannel)
+        : undefined;
       mark("response");
       const result: UpdateStatusResult = {
         sentinel,
