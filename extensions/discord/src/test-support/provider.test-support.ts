@@ -1,4 +1,5 @@
 // Discord provider module implements model/runtime integration.
+import { EventEmitter } from "node:events";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { Mock } from "vitest";
@@ -331,7 +332,10 @@ vi.mock("../internal/gateway.js", () => ({
 }));
 
 vi.mock("../internal/voice.js", () => ({
-  VoicePlugin: function VoicePlugin() {},
+  VoicePlugin: class {
+    id = "voice";
+    registerClient() {}
+  },
 }));
 
 vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
@@ -487,7 +491,13 @@ vi.mock(buildDiscordSourceModuleId("monitor/exec-approvals.js"), () => ({
 }));
 
 vi.mock(buildDiscordSourceModuleId("monitor/gateway-plugin.js"), () => ({
-  createDiscordGatewayPlugin: () => ({ id: "gateway-plugin" }),
+  createDiscordGatewayPlugin: () =>
+    clientGetPluginMock("gateway") ?? {
+      id: "gateway",
+      emitter: new EventEmitter(),
+      isConnected: false,
+      disconnect: vi.fn(),
+    },
   waitForDiscordGatewayPluginRegistration: () => undefined,
 }));
 

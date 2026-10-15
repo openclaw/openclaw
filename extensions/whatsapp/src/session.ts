@@ -259,15 +259,7 @@ async function createWaSocketInternal(
           return observeCredentialPersistence(Promise.resolve(cachedSignalKeys.get(type, ids)));
         },
         set(data) {
-          const task = (async () => {
-            try {
-              await cachedSignalKeys.set(data);
-            } catch (error) {
-              reportCredentialPersistenceError(error);
-              throw error;
-            }
-          })();
-          return observeCredentialPersistence(task);
+          return observeCredentialPersistence(Promise.resolve(cachedSignalKeys.set(data)), true);
         },
       }
     : cachedSignalKeys;
@@ -379,11 +371,9 @@ async function createWaSocketInternal(
   });
 
   // Handle WebSocket-level errors to prevent unhandled exceptions from crashing the process
-  if (sock.ws && typeof (sock.ws as unknown as { on?: unknown }).on === "function") {
-    sock.ws.on("error", (err: Error) => {
-      sessionLogger.error({ error: String(err) }, "WebSocket error");
-    });
-  }
+  sock.ws.on("error", (err: Error) => {
+    sessionLogger.error({ error: String(err) }, "WebSocket error");
+  });
 
   return sock;
 }
