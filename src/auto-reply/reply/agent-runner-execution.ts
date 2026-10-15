@@ -711,6 +711,11 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
     retainReplyOperationUntilComplete(params.replyOperation);
   }
   const runId = params.opts?.runId ?? crypto.randomUUID();
+  params.typingSignals.bindRunIdentity?.(
+    runId,
+    params.sessionKey,
+    params.followupRun.run.sessionId,
+  );
   const executionParams =
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
   return await runAgentTurnWithOutcome(executionParams, runId, () =>

@@ -132,13 +132,8 @@ export async function processDiscordMessage(
     },
   });
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
-  const routedAgentConfig = resolveAgentConfig(cfg, route.agentId);
-  const configuredTypingMode = routedAgentConfig?.typingMode ?? cfg.agents?.defaults?.typingMode;
-  const configuredTypingInterval = cfg.agents?.defaults?.typingIntervalSeconds;
-  const shouldDisableCoreTypingKeepalive =
-    sourceRepliesAreToolOnly &&
-    configuredTypingMode === undefined &&
-    configuredTypingInterval === undefined;
+  const configuredTypingMode =
+    resolveAgentConfig(cfg, route.agentId)?.typingMode ?? cfg.agents?.defaults?.typingMode;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const isRoomEvent = ctx.inboundEventKind === "room_event";
   const reactions = createDiscordMessageReactionRuntime({
@@ -186,7 +181,6 @@ export async function processDiscordMessage(
     processContext,
     replyReference,
     sourceRepliesAreToolOnly,
-    shouldDisableCoreTypingKeepalive,
     isRoomEvent,
     dispatchStartedAt,
     feedbackRest: reactions.feedbackRest,
@@ -506,7 +500,6 @@ export async function processDiscordMessage(
         abortSignal,
         skillFilter: ctx.channelConfig?.skills,
         sourceReplyDeliveryMode,
-        typingKeepalive: shouldDisableCoreTypingKeepalive ? false : undefined,
         // The primary turn already owns one correlation; each queued followup
         // needs a fresh owner so its eventual delivery clears room history.
         queuedDeliveryCorrelations: isRoomEvent

@@ -14,6 +14,16 @@ export function bindReplyOperationTyping(
   typingByReplyOperation.set(operation, typing);
   runAfterReplyOperationClear(operation, () => {
     typingByReplyOperation.delete(operation);
+    // Clearing a successfully yielded reply releases its lane, not its live
+    // request-owned background work. The controller still owns the sole cadence.
+    // Failure, cancellation, supersession, and unproven outcomes revoke it.
+    if (operation.result?.kind === "completed" && !operation.abortSignal.aborted) {
+      typing.markRunComplete();
+      typing.markDispatchIdle();
+      if (typing.shouldRetainChannelCallbacks?.()) {
+        return;
+      }
+    }
     typing.cleanup();
   });
 }

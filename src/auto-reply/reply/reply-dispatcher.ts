@@ -57,6 +57,7 @@ import {
   type ReplyDispatcher,
   type ReplyFollowupAdmissionBarrierTimeoutPolicy,
 } from "./reply-dispatcher.types.js";
+import { bindReplyTypingChannelCallbacks } from "./reply-typing-channel-bindings.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
@@ -724,21 +725,20 @@ export function createReplyDispatcherWithTyping(
     ...dispatcherOptions
   } = options;
   const resolvedOnReplyStart = onReplyStart ?? typingCallbacks?.onReplyStart;
-  const resolvedOnIdle = onIdle ?? typingCallbacks?.onIdle;
+  const resolvedOnIdle: ReplyDispatcherWithTypingOptions["onIdle"] =
+    onIdle ?? typingCallbacks?.onIdle;
   const resolvedOnCleanup = onCleanup ?? typingCallbacks?.onCleanup;
   let typingController: TypingController | undefined;
+  const stopChannelCallbacks = () =>
+    typingController?.shouldRetainChannelCallbacks?.() ? undefined : resolvedOnIdle?.();
   const dispatcher = createReplyDispatcher({
     ...dispatcherOptions,
     onIdle: async () => {
       typingController?.markDispatchIdle();
-      const idle = resolvedOnIdle?.();
-      if (idle) {
-        await Promise.resolve(idle);
-      }
+      await stopChannelCallbacks();
       await onSettled?.();
     },
   });
-
   return {
     dispatcher,
     replyOptions: {
@@ -746,11 +746,12 @@ export function createReplyDispatcherWithTyping(
       onTypingCleanup: resolvedOnCleanup,
       onTypingController: (typing) => {
         typingController = typing;
+        bindReplyTypingChannelCallbacks(typing, typingCallbacks);
       },
     },
     markDispatchIdle: () => {
       typingController?.markDispatchIdle();
-      resolvedOnIdle?.();
+      void stopChannelCallbacks();
     },
     markRunComplete: () => {
       typingController?.markRunComplete();

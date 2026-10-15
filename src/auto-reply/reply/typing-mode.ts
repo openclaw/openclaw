@@ -52,6 +52,7 @@ export type TypingSignaler = {
   shouldStartOnMessageStart: boolean;
   shouldStartOnText: boolean;
   shouldStartOnReasoning: boolean;
+  bindRunIdentity?: (runId: string, sessionKey?: string, sessionId?: string) => void;
   signalRunStart: () => Promise<void>;
   signalMessageStart: () => Promise<void>;
   signalTextDelta: (text?: string) => Promise<void>;
@@ -86,6 +87,8 @@ export function createTypingSignaler(params: {
 
   return {
     mode,
+    bindRunIdentity: (runId, sessionKey, sessionId) =>
+      typing.bindRunIdentity?.(runId, sessionKey, sessionId),
     shouldStartImmediately,
     shouldStartOnMessageStart,
     shouldStartOnText,
@@ -128,6 +131,7 @@ export function createTypingSignaler(params: {
     },
     async signalExecutionActivity() {
       if (!disabled) {
+        typing.markExecutionResumed?.();
         await refreshTyping(true);
       }
     },

@@ -18,10 +18,13 @@ import {
   isProcessSessionIdTaken,
   listFinishedSessions,
   listRunningSessions,
+  listActiveBackgroundProcessSessions,
   markBackgrounded,
+  markProcessSessionCancellationRequested,
   markExited,
   prepareSessionPoll,
   recordNotifyOnExitRemoval,
+  subscribeProcessSessionChanges,
   tail,
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
@@ -78,6 +81,41 @@ describe("bash process registry", () => {
     randomMocks.generateSecureInt.mockReset();
     randomMocks.generateSecureInt.mockReturnValue(0);
     resetProcessRegistryForTests();
+  });
+
+  it("binds promoted process work to its exact agent run and publishes terminal ownership", () => {
+    const session = createRegistrySession({
+      id: "attributed-background",
+      maxOutputChars: 10_000,
+      pendingMaxOutputChars: 30_000,
+      backgrounded: false,
+    });
+    session.agentRunId = "request-run";
+    session.sessionKey = "agent:main:discord:channel:123";
+    session.scopeKey = session.sessionKey;
+    session.pid = 456;
+    session.processActivity = { resultSettled: false, lastOutputAtMs: Date.now() };
+    const changed = vi.fn();
+    const unsubscribe = subscribeProcessSessionChanges(changed);
+    try {
+      addSession(session);
+      expect(listActiveBackgroundProcessSessions()).toEqual([]);
+      markBackgrounded(session);
+      expect(listActiveBackgroundProcessSessions()).toEqual([session]);
+      expect(changed).toHaveBeenCalledWith(session);
+
+      // Hiding the poll record does not retire the actual process owner.
+      deleteSession(session.id);
+      expect(listActiveBackgroundProcessSessions()).toEqual([session]);
+
+      markProcessSessionCancellationRequested(session);
+      expect(session.cancellationRequested).toBe(true);
+      markExited(session, null, "SIGTERM", "killed", "manual-cancel");
+      expect(listActiveBackgroundProcessSessions()).toEqual([]);
+      expect(session.exited).toBe(true);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("suppresses a notify-on-exit event when terminal poll acknowledgement wins the race", () => {

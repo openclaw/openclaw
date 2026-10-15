@@ -15,6 +15,7 @@ import {
   getSession,
   listExecSessionsForCancellation,
   waitForExecSession,
+  markProcessSessionCancellationRequested,
   type ProcessSession,
 } from "./bash-process-registry.js";
 
@@ -36,8 +37,8 @@ export function cancelBackgroundExecSession(sessionId: string): boolean {
     return false;
   }
   const supervisor = getProcessSupervisor();
+  markProcessSessionCancellationRequested(session);
   supervisor.cancel(sessionId, "manual-cancel");
-  session.cancellationRequested = true;
   return true;
 }
 

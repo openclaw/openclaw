@@ -1361,6 +1361,7 @@ export async function processGatewayAllowlist(
               notifyOnExitEmptySuccess: false,
               scopeKey: params.scopeKey,
               sessionKey: params.notifySessionKey ?? params.sessionKey,
+              agentRunId: params.runId,
               timeoutSec: effectiveTimeout,
               startupSignal: params.signal,
               assertCurrent,

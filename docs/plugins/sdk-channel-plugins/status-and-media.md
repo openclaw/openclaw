@@ -27,6 +27,27 @@ resolved heartbeat delivery target before the heartbeat model run starts and
 uses the shared typing keepalive/cleanup lifecycle. Add
 `heartbeat.clearTyping(...)` when the platform needs an explicit stop signal.
 
+### Request-owned reply typing
+
+The shared typing-callback factory remains reply-scoped by default. An adapter
+opts into request-owned background typing explicitly with `backgroundWorkKeepalive: true`;
+leaving it unset preserves existing callback cleanup and failure-recovery behavior.
+Use the opt-in only when the transport can update and stop typing for a correctly
+scoped audience. Provide a stable audience key that includes the channel account
+and conversation identity. Core arbitrates ownership for that audience and owns
+the only keepalive cadence; adapters must not add a competing timer.
+
+When the requesting reply yields to a linked child run or background process,
+core retains the exact callback owner. A known human-input wait suspends visible
+typing without discarding that owner; receiving an answer is not evidence that
+the child has resumed execution. Typing resumes only on a matching
+execution-running observation for that owner. Terminal completion, error, run cancellation, generation replacement, audience
+retirement, or the adapter's
+repeated-start-failure guard ends that ownership. Report transport failures
+through the normal start-error callback; the core failure-retirement hook only
+retires that opt-in background owner. Terminal cleanup calls the adapter cleanup
+hook to stop its typing indicator.
+
 ## Media source params
 
 Resolve account media limits with `resolveChannelMediaMaxBytes(...)` from

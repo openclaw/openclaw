@@ -7,7 +7,13 @@ import { createTypingKeepaliveLoop } from "./typing-lifecycle.js";
 export type TypingCallbacks = {
   onReplyStart: () => Promise<void>;
   onIdle?: () => void;
-  /** Called when the typing controller is cleaned up (e.g. on NO_REPLY). */
+  /** Stable channel/account/conversation identity for opted-in public-audience ownership. */
+  backgroundWorkAudienceKey?: string;
+  /** Pause this request's visible typing while retaining its exact owner through a known wait. */
+  onBackgroundWorkPause?: () => void;
+  /** Core installs this only for opted-in background work to retire an owner after its failure guard trips. */
+  setBackgroundWorkFailureHandler?: (handler: () => void) => void;
+  /** Stop the transport indicator when the typing controller reaches terminal cleanup. */
   onCleanup?: () => void;
 };
 
@@ -21,6 +27,11 @@ export type CreateTypingCallbacksParams = {
   maxConsecutiveFailures?: number;
   /** Maximum duration for typing indicator before auto-cleanup (safety TTL). Default: 60s */
   maxDurationMs?: number;
+  /**
+   * Explicit opt-in to request-attributed background-work typing. Core retains
+   * one keepalive cadence and preserves existing callback recovery when absent.
+   */
+  backgroundWorkKeepalive?: true;
 };
 
 const DEFAULT_MAX_CONSECUTIVE_TYPING_FAILURES = 2;
@@ -39,7 +50,9 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
   );
   const maxDurationMs = resolveTimerTimeoutMs(params.maxDurationMs, 60_000, 0);
   let closed = false;
+  let pauseGeneration = 0;
   let ttlTimer: ReturnType<typeof setTimeout> | undefined;
+  let onBackgroundWorkFailure: () => void = () => {};
 
   let consecutiveFailures = 0;
   let tripped = false;
@@ -56,6 +69,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
       if (consecutiveFailures >= maxConsecutiveFailures) {
         tripped = true;
         keepaliveLoop.stop();
+        onBackgroundWorkFailure();
       }
     }
   };
@@ -104,12 +118,17 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     if (closed) {
       return;
     }
-    consecutiveFailures = 0;
-    tripped = false;
+    // Background-owned typing spans core refresh callbacks; retain its failure
+    // count until a transport start succeeds so the circuit breaker can retire it.
+    if (params.backgroundWorkKeepalive !== true) {
+      consecutiveFailures = 0;
+      tripped = false;
+    }
     clearTtlTimer();
+    const startGeneration = pauseGeneration;
     const startPromise = fireStart();
     void startPromise.then(() => {
-      if (closed || tripped) {
+      if (closed || tripped || startGeneration !== pauseGeneration) {
         return;
       }
       // Core can refresh an active reply independently of this channel loop.
@@ -121,22 +140,54 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     await Promise.resolve();
   };
 
-  const fireStop = () => {
-    if (closed) {
-      return;
-    }
-    closed = true;
-    keepaliveLoop.stop();
-    clearTtlTimer();
+  const stopChannelTyping = () => {
     if (!stop) {
       return;
     }
-    // An admitted start may publish activity after cleanup. Its terminal stop
+    // An admitted start may publish activity after a pause or cleanup. Its stop
     // must follow that work so late acknowledgments cannot leave typing visible.
     void (startInFlight ? startInFlight.then(stop) : stop()).catch((err: unknown) =>
       (params.onStopError ?? params.onStartError)(err),
     );
   };
 
-  return { onReplyStart, onIdle: fireStop, onCleanup: fireStop };
+  const firePause = () => {
+    if (closed) {
+      return;
+    }
+    // An admitted transport start may settle later; it must not rearm a
+    // paused audience's cadence or TTL. A genuine resume uses this generation.
+    pauseGeneration += 1;
+    keepaliveLoop.stop();
+    clearTtlTimer();
+    stopChannelTyping();
+  };
+
+  const fireStop = () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    onBackgroundWorkFailure = () => {};
+    keepaliveLoop.stop();
+    clearTtlTimer();
+    stopChannelTyping();
+  };
+  if (params.backgroundWorkKeepalive === true) {
+    onBackgroundWorkFailure = fireStop;
+  }
+
+  return {
+    onReplyStart,
+    onIdle: fireStop,
+    onCleanup: fireStop,
+    ...(params.backgroundWorkKeepalive === true
+      ? {
+          onBackgroundWorkPause: firePause,
+          setBackgroundWorkFailureHandler(handler: () => void) {
+            onBackgroundWorkFailure = closed ? () => {} : handler;
+          },
+        }
+      : {}),
+  };
 }
