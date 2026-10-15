@@ -503,10 +503,10 @@ describe("Gateway repeated-request recovery", () => {
           }),
         ),
       ]);
-      // The stalled turn never replied, so the queued request answers with the
-      // interruption guidance instead of a retry notice or an extra recovery turn.
+      // The interrupted attempt settles as a fallback failure rather than a
+      // stuck-run abort, so the queued request answers without stalled-turn guidance.
       expect(requests.filter((request) => request.prompt === "queued")).toEqual([
-        expect.objectContaining({ outcome: "success", stallGuidance: true }),
+        expect.objectContaining({ outcome: "success", stallGuidance: false }),
       ]);
 
       const finalEvents = (await readStability(gateway, baselineSeq)).events ?? [];
