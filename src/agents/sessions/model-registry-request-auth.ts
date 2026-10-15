@@ -15,7 +15,8 @@ export async function resolveModelRegistryRequestAuth(params: {
   try {
     const noAuth = resolveExplicitProviderNoAuth({
       provider: model.provider,
-      providerConfig: { auth: providerConfig?.auth, api: model.api, baseUrl: model.baseUrl },
+      providerConfig: { auth: providerConfig?.auth },
+      modelApi: model.api,
     });
     const usesAwsSdkAuth = providerConfig?.auth === "aws-sdk";
     const apiKeyFromAuthStorage = noAuth

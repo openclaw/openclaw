@@ -422,7 +422,7 @@ describe("applyCustomApiConfig", () => {
   });
 
   it("accepts no-auth flags when the selected model overrides Responses with Completions", () => {
-    const model = makeProviderModelFixture({
+    const model = makeProviderModelFixture<"openai-completions">({
       provider: "custom",
       id: "foo-large",
       baseUrl: "https://llm.example.com/v1",

@@ -818,7 +818,7 @@ describe("setupWizardCommand", () => {
     );
   });
 
-  it.each([false, true])("accepts Responses setup before reset (no-auth: %s)", async (noAuth) => {
+  it.each([false, true])("preflights Responses after reset (no-auth: %s)", async (noAuth) => {
     const runtime = makeRuntime();
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
@@ -861,9 +861,17 @@ describe("setupWizardCommand", () => {
       runtime,
     );
 
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(mocks.handleReset).toHaveBeenCalledOnce();
-    expect(mocks.runNonInteractiveSetup).toHaveBeenCalledOnce();
+    expect(runtime.error.mock.calls).toEqual(
+      noAuth
+        ? [
+            [
+              'auth: "none" requires the openai-completions adapter. Select that adapter or configure an API key.',
+            ],
+          ]
+        : [],
+    );
+    expect(mocks.handleReset).toHaveBeenCalledTimes(noAuth ? 0 : 1);
+    expect(mocks.runNonInteractiveSetup).toHaveBeenCalledTimes(noAuth ? 0 : 1);
   });
 
   it("rejects ambiguous interactive provider flags before reset", async () => {

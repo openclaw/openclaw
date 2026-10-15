@@ -12,7 +12,7 @@ import { SettingsManager } from "./settings-manager.js";
 it.each(["none", undefined] as const)(
   "honors provider auth %s after the session merges caller headers",
   async (auth) => {
-    const model: Model = {
+    const model = {
       provider: "custom",
       id: "model",
       name: "Synthetic model",
@@ -23,7 +23,7 @@ it.each(["none", undefined] as const)(
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 8192,
       maxTokens: 1024,
-    };
+    } satisfies Model;
     const registry = ModelRegistry.inMemory(
       AuthStorage.inMemory({ custom: { type: "api_key", key: "synthetic-stored-key" } }),
     );

@@ -140,7 +140,7 @@ export function isNonSecretApiKeyMarker(
 /** Explicit no-auth is terminal before any credential lookup or plugin preparation. */
 export function resolveExplicitProviderNoAuth(params: {
   provider: string;
-  providerConfig?: Pick<ModelProviderConfig, "auth" | "api" | "baseUrl">;
+  providerConfig?: Pick<ModelProviderConfig, "auth" | "api">;
   modelApi?: string;
 }): ResolvedProviderAuth | null {
   if (params.providerConfig?.auth !== "none") {
