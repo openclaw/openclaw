@@ -591,11 +591,11 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     prepareTeamScaleSidebarListChurn({ sessions, people, liveEvents, selectedSessionKey, now });
   }
   if (options.sidebarLiveChurn) {
-    // After five seconds only receipt/heartbeat clocks change, never visible output.
+    // Changes stop at 14 seconds; allow a second to settle before the quiet window.
     liveEvents.splice(0, liveEvents.length);
     for (let index = 0; index < 125; index++) {
       const atMs = (index + 1) * 160;
-      const genuineChange = atMs < 4_480;
+      const genuineChange = atMs < 14_000;
       const ts = now + atMs;
       if (index % 3 !== 2) {
         liveEvents.push({
@@ -608,7 +608,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
               ts,
               user: { ...entry.user },
               watchedSessions:
-                genuineChange && personIndex === 1 && index % 2
+                genuineChange && personIndex === 1 && index % 2 === 0
                   ? []
                   : [...(entry.watchedSessions ?? [])],
             })),
@@ -647,7 +647,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     events,
     liveEvents,
     sidebarLiveChurn: options.sidebarLiveChurn
-      ? { equivalentAfterMs: 5_000, durationMs: 20_000 }
+      ? { equivalentAfterMs: 14_000, quietAfterMs: 15_000, durationMs: 20_000 }
       : undefined,
     sidebarListChurn: options.sidebarListChurn
       ? {
