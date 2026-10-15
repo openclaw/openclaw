@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { parseRedactPatternSource } from "./redact-pattern-runtime.js";
 import { AWS_SECRET_ACCESS_KEY_MATCHER, DEFAULT_REDACT_PATTERNS } from "./redact-patterns.js";
@@ -228,15 +228,30 @@ describe("configured source language preservation", () => {
     }
   });
 
-  it("drops malformed non-string entries instead of throwing on pattern.exec", () => {
-    // A rejected config can still carry this list, and the directory-resolution
-    // warning runs through redaction: an unknown entry must not abort it (#173461).
-    const malformed = JSON.parse('{"mode":"tools","patterns":[1]}');
-    const input = "token=fixtureValue1234567890";
-    expect(() => redactSensitiveText(input, malformed)).not.toThrow();
-
-    // The malformed entry is dropped rather than carried into the matcher set.
-    const resolved = resolveRedactOptions(malformed).patterns;
-    expect(resolved.some((pattern) => typeof pattern === "number")).toBe(false);
+  it("keeps valid and default redaction with malformed patterns and warns only once", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {
+      throw new Error("diagnostic sink unavailable");
+    });
+    try {
+      for (const patterns of [
+        "[1]",
+        "[null]",
+        '[false, {}, {"exec": 1}, [], "[", "customer-[0-9]+"]',
+        '"customer-[0-9]+"',
+        '{"length": 1}',
+      ]) {
+        const options = JSON.parse(`{"mode":"tools","patterns":${patterns}}`);
+        expect(redactSensitiveText("ghp_abcdefghijklmnopqrstuvwxyz123456", options)).toBe(
+          "ghp_ab…3456",
+        );
+      }
+      const mixed = JSON.parse('{"patterns":[1,null,"customer-[0-9]+"]}');
+      expect(redactSensitiveText("customer-1234567890", mixed)).toBe("custom…7890");
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("logging.redactPatterns"),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
