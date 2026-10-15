@@ -245,6 +245,7 @@ export async function withInterruptedTurn(
     const attempt = {
       config: {},
       contextTokenBudget: 8000,
+      timeoutMs: 120_000,
       model: testModel,
       modelId: testModel.id,
       provider: testModel.provider,
@@ -267,6 +268,13 @@ export async function withInterruptedTurn(
       throw new Error("Replay fixture requires a selected worker reader");
     }
     let active = true;
+    const runAbortController = new AbortController();
+    const assertCurrent = () => {
+      runAbortController.signal.throwIfAborted();
+      if (!active) {
+        throw new Error("original writer closed");
+      }
+    };
     const withOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) =>
       withOwnedSessionTranscriptWrites(
         {
@@ -277,9 +285,7 @@ export async function withInterruptedTurn(
           },
           sessionReader,
           assertCommitAllowed: () => {
-            if (!active) {
-              throw new Error("original writer closed");
-            }
+            assertCurrent();
           },
           withTranscriptWrite: (write) => lifecycle.withTranscriptWrite(write),
         },
@@ -296,13 +302,16 @@ export async function withInterruptedTurn(
           prepareEmbeddedAttemptSessionManager({
             ...extra,
             attempt,
+            assertCurrent: extra?.assertCurrent ?? assertCurrent,
             agentDir: state.agentDir("main"),
             effectiveCwd: state.workspaceDir,
             effectiveWorkspace: state.workspaceDir,
             onSessionManagerCreated: onCreated ?? (() => {}),
             replayAllowedToolNames: new Set(["read"]),
             resolveActiveContextEnginePluginId: () => undefined,
+            runAbortSignal: extra?.runAbortSignal ?? runAbortController.signal,
             sessionAgentId: target.agentId,
+            sessionTarget: target,
             withOwnedTranscriptWrite,
           }),
       });

@@ -101,6 +101,11 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   const effectiveToolCount = effectiveTools.length;
   const sessionPreparation = {
     attempt,
+    assertCurrent: () => {
+      runAbortSignal.throwIfAborted();
+      sessionLock.ownedTranscriptWriteContext.assertCommitAllowed?.();
+      sessionLock.ownedTranscriptWriteContext.initialWriter?.assertActive();
+    },
     ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
     agentDir: input.agentDir,
     effectiveCwd,
@@ -112,6 +117,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     () =>
       prepareEmbeddedAttemptSessionManager({
         ...sessionPreparation,
+        sessionTarget: sessionLock.ownedTranscriptWriteContext.sessionTarget,
+        runAbortSignal,
         onSessionManagerCreated: (manager) => {
           resources.sessionManager = manager;
         },
