@@ -329,8 +329,9 @@ const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEF
 // Complete ordinary retries inside their diagnostic request allowance, then
 // leave the fifth request active so recovery can honor both the cumulative
 // no-progress bound and the current request's own allowance. The stalled
-// request stays live with SSE keepalives, which reset the client's idle
-// watchdog but not its progress deadline, so it outlives that allowance.
+// request starts its response, then stays live with SSE keepalives, which reset
+// the client's idle watchdog but not its progress deadline, so it outlives that
+// allowance.
 const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 80_000;
 const QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS = 180_000;
 const QA_REPEATED_REQUEST_STALLED_KEEPALIVE_MS = 5_000;

@@ -27,21 +27,15 @@ export async function writeMockOpenAiResponsesHttp(
   }
   if (dispatched.responsePauseMs !== undefined) {
     if (stream && dispatched.responseKeepaliveMs !== undefined) {
-      // Accept the stream and keep the connection live without model progress.
-      writeSseHeaders(res);
-      const keepalive = setInterval(() => {
-        if (!res.destroyed && !res.writableEnded) {
-          res.write(": keepalive\n\n");
-        }
-      }, dispatched.responseKeepaliveMs);
-      try {
-        await sleep(dispatched.responsePauseMs);
-      } finally {
-        clearInterval(keepalive);
-      }
-    } else {
-      await sleep(dispatched.responsePauseMs);
+      await writeHeldSse(
+        res,
+        dispatched,
+        dispatched.responsePauseMs,
+        dispatched.responseKeepaliveMs,
+      );
+      return;
     }
+    await sleep(dispatched.responsePauseMs);
   }
   if (!stream) {
     const completion = dispatched.events.at(-1);
@@ -60,5 +54,32 @@ export async function writeMockOpenAiResponsesHttp(
     dispatched.previewPauseMs,
     dispatched.previewPause,
   );
+  dispatched.onResponseSent?.();
+}
+
+// A live provider can start a response, then hold it open with SSE comment
+// keepalives while making no model progress.
+async function writeHeldSse(
+  res: ServerResponse,
+  dispatched: QaMockProviderDispatchResult,
+  pauseMs: number,
+  keepaliveMs: number,
+): Promise<void> {
+  const [first, ...rest] = dispatched.events;
+  writeSseHeaders(res);
+  if (first) {
+    res.write(`data: ${JSON.stringify(first)}\n\n`);
+  }
+  const keepalive = setInterval(() => {
+    if (!res.destroyed && !res.writableEnded) {
+      res.write(": keepalive\n\n");
+    }
+  }, keepaliveMs);
+  try {
+    await sleep(pauseMs);
+  } finally {
+    clearInterval(keepalive);
+  }
+  await writeSse(res, rest, "responses", dispatched.previewPauseMs, dispatched.previewPause);
   dispatched.onResponseSent?.();
 }

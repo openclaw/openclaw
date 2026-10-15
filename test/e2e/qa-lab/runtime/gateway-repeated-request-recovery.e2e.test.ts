@@ -70,8 +70,8 @@ const STALL_GUIDANCE_NEEDLE = "previous turn stopped making progress";
 const QA_RECOVERY_BOUND_MS = 30_000;
 const MODEL_REQUEST_ALLOWANCE_SECONDS = 45;
 const ORDINARY_RESPONSE_PAUSE_MS = 8_000;
-// The stalled fallback holds its stream open with keepalives, so the client
-// progress deadline (2x the allowance) ends it at 90 seconds. Recovery may abort
+// The stalled fallback starts its response, then holds it open with keepalives,
+// so the client progress deadline (2x the allowance) ends it at 90 seconds. Recovery may abort
 // only after the 45-second allowance, leaving a 45-second window that always
 // contains one 30-second diagnostic heartbeat.
 const STALLED_RESPONSE_PAUSE_MS = 90_000;
