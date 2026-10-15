@@ -11,6 +11,7 @@ import {
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { iconData, type IconName } from "./icon-data.ts";
 import { Icon } from "./solid/icon.tsx";
+import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
 import { Menu, type MenuEntry, type MenuItem } from "./solid/menu.tsx";
 
 type SidebarMenuPosition = { x: number; y?: number; top?: number; bottom?: number };
@@ -66,23 +67,13 @@ export function SidebarDropdown(params: SidebarDropdownProps): JSX.Element {
       open
       items={params.items}
       placement={params.position.bottom === undefined ? "bottom-start" : "top-start"}
-      triggerAttributes={{
-        tabindex: -1,
-        "aria-hidden": "true",
-        style: {
-          position: "fixed",
-          left: `${params.position.x}px`,
-          top:
-            params.position.bottom === undefined
-              ? `${params.position.top ?? params.position.y}px`
-              : undefined,
-          bottom: params.position.bottom === undefined ? undefined : `${params.position.bottom}px`,
-          width: "1px",
-          height: "1px",
-          opacity: 0,
-          "pointer-events": "none",
+      triggerAttributes={pointMenuTriggerAttributes(
+        {
+          x: params.position.x,
+          y: params.position.bottom ?? params.position.top ?? params.position.y,
         },
-      }}
+        params.position.bottom === undefined ? "top" : "bottom",
+      )}
       ref={(handle) => {
         const { overlay } = handle;
         overlay.surface.dataset.chatAutotypeExempt = "";
