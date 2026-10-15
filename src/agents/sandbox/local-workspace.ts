@@ -22,25 +22,38 @@ export async function prepareLocalSandboxWorkspace(params: {
   sandbox: SandboxConfig;
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  assertHost?: () => void;
 }) {
-  const owner = await resolveLocalWorkspaceOwner(params);
+  params.assertCurrent?.();
+  const owner = await resolveLocalWorkspaceOwner({ ...params, assertCurrent: params.assertHost });
   if (!owner) {
+    params.assertCurrent?.();
     return undefined;
   }
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    owner.assertCurrent();
+  };
+  const executionOwner = {
+    ...owner,
+    assertCurrent,
+    workerAuthority: { ...owner.workerAuthority, assertCurrent },
+  };
   try {
+    assertCurrent();
     markManagedWorktreePreparation();
     if (params.sandbox.backend !== "docker" && params.sandbox.backend !== "podman") {
       throw new Error(
         "Managed guest projects require a local Docker or Podman sandbox; this backend cannot safely reconcile a local managed checkout",
       );
     }
-    const existing = await withLocalWorkspaceProjection(owner, (state) => state.reuse());
+    const existing = await withLocalWorkspaceProjection(executionOwner, (state) => state.reuse());
     let workspaceDir: string;
     if (existing) {
       setWorktreePreparationTemplate("reused");
       workspaceDir = existing;
     } else if (params.cfg.worktreeAcceleration === false) {
-      workspaceDir = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+      workspaceDir = await withLocalWorkspaceProjection(executionOwner, (state) => state.prepare());
     } else {
       const allocated = startWorktreePreparationPhase("allocate");
       try {
@@ -48,13 +61,13 @@ export async function prepareLocalSandboxWorkspace(params: {
           {
             env: owner.env ?? process.env,
             signal: params.signal,
-            commitGuard: owner.assertCurrent,
-            workerAuthority: owner.workerAuthority,
+            commitGuard: assertCurrent,
+            workerAuthority: executionOwner.workerAuthority,
           },
           (allocation) => {
             allocated();
             return withLocalWorkspaceProjection(
-              { ...owner, workerAuthority: allocation.workerAuthority },
+              { ...executionOwner, workerAuthority: allocation.workerAuthority },
               (state) => state.prepare({ sandbox: params.sandbox, allocation }),
             );
           },
@@ -63,26 +76,27 @@ export async function prepareLocalSandboxWorkspace(params: {
         allocated();
       }
     }
-    owner.assertCurrent();
+    assertCurrent();
     return {
       workspaceDir,
       workspaceCwd: path.join(
         workspaceDir,
         path.relative(owner.worktree.path, params.workspaceDir ?? owner.worktree.path),
       ),
-      assertCurrent: owner.assertCurrent,
+      assertCurrent,
       provision: async <T>(run: () => Promise<T>, signal?: AbortSignal) =>
         await withLocalWorkspaceProjection(
-          owner,
+          executionOwner,
           async () => {
-            owner.assertCurrent();
+            assertCurrent();
             const result = await run();
-            owner.assertCurrent();
+            assertCurrent();
             return result;
           },
           { provision: true, signal },
         ),
       checkpoint: async () => {
+        // Stop closes execution admission; accepted output still settles under its workspace owner.
         await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
       },
       [Symbol.dispose]: () => owner[Symbol.dispose](),

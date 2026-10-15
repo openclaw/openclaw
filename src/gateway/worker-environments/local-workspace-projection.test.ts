@@ -19,6 +19,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
@@ -71,6 +72,7 @@ function observeAcknowledgedUpdate(
 
 const suiteDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
+    await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
@@ -151,6 +153,12 @@ afterEach(async () => {
 });
 
 describe("local sandbox workspace reconciliation", () => {
+  it("settles stopped commands without admitting new work or a replacement session", async () => {
+    const { proveStoppedLocalWorkspaceCheckpoint } =
+      await import("./local-workspace-cancellation.test-support.js");
+    await proveStoppedLocalWorkspaceCheckpoint(owner);
+  });
+
   it("provisions, synchronizes, and retains reconciliation payloads without caller-thread store SQL", async () => {
     const sql = observeLocalWorkspaceStoreSql();
     try {
