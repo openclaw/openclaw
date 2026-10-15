@@ -222,6 +222,7 @@ export async function attachAuthenticatedGatewayConnect(
   if (!profileAdmission.ok) {
     return;
   }
+  context.setConnectPhase?.("registration");
   const preparedProfile = profileAdmission.prepared;
   const authenticatedUserProfile =
     remoteIngressPrincipal?.authenticatedUserProfile ?? preparedProfile?.profile;
