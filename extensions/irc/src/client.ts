@@ -27,10 +27,7 @@ const IRC_MAX_RELAY_HOST_BYTES = 63;
 // line body. Bound a pending (unterminated) line at twice that so compliant servers
 // never trip it, while a peer that withholds the line terminator cannot grow memory.
 const IRC_MAX_INBOUND_LINE_LENGTH = 16 * 1024;
-// A dropped link (NAT eviction, network switch, sleep) can leave the socket open with nothing
-// arriving and no close event, so the bot would stay deaf while reporting connected. Servers
-// PING idle clients every minute or two, so a healthy link is never silent this long: PING the
-// server at half the window, then drop the socket so the monitor reconnects.
+// Silent network drops need a receive deadline even when TCP never reports a close.
 const IRC_LIVENESS_TIMEOUT_MS = 4 * 60_000;
 
 function takeIrcPrivmsgChunk(text: string, maxChars: number, maxBytes: number): string {
@@ -73,7 +70,6 @@ export type IrcClientOptions = {
   nickserv?: IrcNickServOptions;
   channels?: string[];
   connectTimeoutMs?: number;
-  livenessTimeoutMs?: number;
   messageChunkMaxChars?: number;
   abortSignal?: AbortSignal;
   onPrivmsg?: (event: IrcPrivmsgEvent) => void | Promise<void>;
@@ -267,26 +263,20 @@ export async function connectIrcClient(options: IrcClientOptions) {
   };
 
   let lastReceivedAt = Date.now();
-  const livenessTimeoutMs = options.livenessTimeoutMs ?? IRC_LIVENESS_TIMEOUT_MS;
-  const livenessTimer = setInterval(
-    () => {
-      if (!ready || closed) {
-        return;
-      }
-      const silentMs = Date.now() - lastReceivedAt;
-      if (silentMs >= livenessTimeoutMs) {
-        fail(
-          new Error(`IRC server sent nothing for ${Math.round(silentMs / 1000)}s; reconnecting`),
-        );
-        // Destroy directly, as for oversized input, so the close listener reports the disconnect.
-        socket.destroy();
-      } else if (silentMs >= livenessTimeoutMs / 2) {
-        sendRaw("PING :openclaw");
-      }
-    },
-    Math.max(1, Math.floor(livenessTimeoutMs / 8)),
-  );
-  livenessTimer.unref?.();
+  const livenessTimer = setInterval(() => {
+    if (!ready || closed) {
+      return;
+    }
+    const silentMs = Date.now() - lastReceivedAt;
+    if (silentMs >= IRC_LIVENESS_TIMEOUT_MS) {
+      fail(new Error(`IRC server sent nothing for ${Math.round(silentMs / 1000)}s; reconnecting`));
+      // Let the close listener notify the monitor, which owns reconnect and backoff.
+      socket.destroy();
+    } else if (silentMs >= IRC_LIVENESS_TIMEOUT_MS / 2) {
+      sendRaw("PING :openclaw");
+    }
+  }, 30_000);
+  livenessTimer.unref();
 
   const quit = (reason?: string) => {
     if (closed) {
@@ -314,6 +304,7 @@ export async function connectIrcClient(options: IrcClientOptions) {
       return;
     }
     closed = true;
+    clearInterval(livenessTimer);
     removeAbortListener?.();
     removeAbortListener = null;
     socket.destroy();
