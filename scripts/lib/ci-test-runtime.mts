@@ -289,15 +289,16 @@ const nodeRequiredProcessFiles = new Set([
   "src/process/supervisor/adapters/child.service-lifecycle.test.ts",
   "src/process/supervisor/service-child-relay-host.retirement.test.ts",
 ]);
-const bunCompatibleUnitFiles = new Set([
-  "packages/normalization-core/src/grapheme.test.ts",
-  "src/library.test.ts",
-  "src/node-host/node-worker-workspace-quiescence.acceptance.test.ts",
-  "src/worker/worker-connection-closing-window.test.ts",
-]);
-// src/state/openclaw-state-lease.retention.test.ts stays with its default Node owner:
-// cold fs-safe native initialization roots the caller's ALS through custom_gc.
-// The dependency initialization owner needs a fix; this is not V8-specific proof.
+// The census covers unit-src; other aggregate-unit owners retain their policy.
+const unitRequiresNode = (file: string) =>
+  !(
+    (file.startsWith("src/") &&
+      !file.startsWith("src/acp/") &&
+      !file.startsWith("src/security/")) ||
+    file === "packages/normalization-core/src/grapheme.test.ts"
+  );
+// State-lease retention stays with its separate infra owner on Node: the completed
+// worker-heartbeat case still retains caller async context on the pinned Bun fork.
 const runtimePartitions = new Map<
   string,
   {
@@ -333,8 +334,7 @@ const runtimePartitions = new Map<
     "test/vitest/vitest.unit.config.ts",
     {
       files: unitFiles,
-      // Preserve the shared qualification in aggregate and src-only unit owners.
-      nodeRequired: (file) => !bunCompatibleUnitFiles.has(file),
+      nodeRequired: unitRequiresNode,
     },
   ],
   [
@@ -347,7 +347,7 @@ const runtimePartitions = new Map<
             !file.startsWith("src/acp/") &&
             !file.startsWith("src/security/"),
         ),
-      nodeRequired: (file) => !bunCompatibleUnitFiles.has(file),
+      nodeRequired: unitRequiresNode,
     },
   ],
   [

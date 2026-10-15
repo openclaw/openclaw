@@ -509,7 +509,7 @@
     },
     "sessionCatalog.homes": {
       "label": "Additional Codex Homes",
-      "help": "Existing local Codex home directories to include in native session discovery. String paths use the canonical directory basename as their label; object entries can override it with label. Paths are canonicalized and deduplicated. Requires appServer.transport=stdio and a Gateway restart.",
+      "help": "Existing local Codex home directories to include in native session discovery. String paths use the last directory name of the resolved path as their label; object entries can override it with label. Paths are resolved and duplicates are removed. Requires appServer.transport=stdio and a Gateway restart.",
       "advanced": true
     },
     "codexDynamicToolsLoading": {
