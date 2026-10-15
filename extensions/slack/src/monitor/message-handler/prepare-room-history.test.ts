@@ -281,6 +281,7 @@ describe("Slack platform-authoritative automatic room history", () => {
     const active = await f.prepare();
     expect(active?.ctxPayload.RawBody).toContain("current request");
     expect(active?.ctxPayload.InboundHistory).toBeUndefined();
+    expect(active?.ctxPayload.ThreadStarterBody).toBeUndefined();
     expect(f.history).not.toHaveBeenCalled();
     expect(f.replies).not.toHaveBeenCalled();
   });
@@ -373,6 +374,7 @@ describe("Slack platform-authoritative automatic room history", () => {
       /outside thread cap|other channel discussion|future thread/,
     );
     expect(prepared?.ctxPayload.ThreadHistoryBody).toBeUndefined();
+    expect(prepared?.ctxPayload.ThreadStarterBody).toBe("thread root");
     expect(f.history).not.toHaveBeenCalled();
     expect(f.replies).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -381,6 +383,10 @@ describe("Slack platform-authoritative automatic room history", () => {
         latest: "20.000",
       }),
     );
+    const repeated = await f.prepare({ message: { ...f.message, thread_ts: "10.000" } });
+    expect(repeated?.ctxPayload.ThreadStarterBody).toBe("thread root");
+    expect(repeated?.ctxPayload.ThreadHistoryBody).toBeUndefined();
+    expect(f.replies).toHaveBeenCalledTimes(4);
   });
 
   it.each(["channel"] as const)(
@@ -401,13 +407,61 @@ describe("Slack platform-authoritative automatic room history", () => {
               ],
       }));
       const prepared = await f.prepare({ message: { ...f.message, thread_ts: "10.000" } });
-      expect(prepared?.ctxPayload.ThreadHistoryBody).toContain("initial thread note one");
+      expect(prepared?.ctxPayload.ThreadHistoryBody).not.toContain("initial thread note one");
       expect(prepared?.ctxPayload.ThreadHistoryBody).toContain("initial thread note two");
+      expect(prepared?.ctxPayload.ThreadHistoryBody?.match(/thread root/g)).toHaveLength(1);
+      expect(prepared?.ctxPayload.ThreadHistoryBody?.match(/\[slack message id:/g)).toHaveLength(2);
       expect(prepared?.ctxPayload.InboundHistory?.map((entry) => entry.body)).toEqual(
         scope === "channel" ? ["channel-wide decision"] : [],
       );
     },
   );
+
+  it.each(["available", "denied", "current bot", "unavailable", "long"] as const)(
+    "retains only authorized bounded roots on warm turns: %s",
+    async (kind) => {
+      const f = fixture(2);
+      const now = Date.now();
+      await upsertSessionEntry({
+        storePath: f.storePath,
+        sessionKey: "agent:main:slack:channel:c1:thread:10.000",
+        entry: { sessionId: "warm-root", updatedAt: now, lastInteractionAt: now },
+      });
+      const root = {
+        ts: "10.000",
+        user: kind === "denied" ? "UDENIED" : "U1",
+        bot_id: kind === "current bot" ? "B1" : undefined,
+        text: kind === "long" ? `${"x".repeat(7_999)}😀tail` : "root decision",
+      };
+      f.replies.mockResolvedValue({ messages: kind === "unavailable" ? [] : [root] });
+      const prepared = await f.prepare({ message: { ...f.message, thread_ts: "10.000" } });
+      expect(prepared?.ctxPayload.ThreadStarterBody).toBe(
+        kind === "available" ? root.text : kind === "long" ? "x".repeat(7_999) : undefined,
+      );
+      expect(prepared?.ctxPayload.ThreadHistoryBody).toBeUndefined();
+      expect(prepared?.ctxPayload.RawBody).toContain("current request");
+      expect(f.replies).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("retains room root and channel history when initial thread history is disabled", async () => {
+    const f = fixture(2);
+    f.ctx.threadHistoryScope = "channel";
+    f.account.config.thread = { initialHistoryLimit: 0 };
+    f.history.mockResolvedValue({
+      messages: [{ ts: "19.000", user: "U1", text: "channel-wide decision" }],
+    });
+    f.replies.mockResolvedValue({
+      messages: [{ ts: "10.000", user: "U1", text: "root decision" }],
+    });
+    const prepared = await f.prepare({ message: { ...f.message, thread_ts: "10.000" } });
+    expect(prepared?.ctxPayload.ThreadStarterBody).toBe("root decision");
+    expect(prepared?.ctxPayload.ThreadHistoryBody).toBeUndefined();
+    expect(prepared?.ctxPayload.InboundHistory?.map((entry) => entry.body)).toEqual([
+      "channel-wide decision",
+    ]);
+    expect(f.replies).toHaveBeenCalledTimes(1);
+  });
 
   it("omits an incomplete oldest-first thread prefix with a warning, preserving the addressed turn", async () => {
     const f = fixture(5);
@@ -419,6 +473,7 @@ describe("Slack platform-authoritative automatic room history", () => {
     const prepared = await f.prepare({ message: { ...f.message, thread_ts: "10.000" } });
     expect(prepared?.ctxPayload.InboundHistory).toEqual([]);
     expect(prepared?.ctxPayload.ThreadHistoryBody).toBeUndefined();
+    expect(prepared?.ctxPayload.ThreadStarterBody).toBe("explicit root");
     expect(prepared?.ctxPayload.Body).not.toContain("incomplete old prefix");
     expect(prepared?.ctxPayload.RawBody).toContain("current request");
     expect(f.replies).toHaveBeenCalledTimes(4);

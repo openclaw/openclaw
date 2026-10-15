@@ -63,6 +63,7 @@ export async function resolveSlackThreadContextData(params: {
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
   isGroupDm: boolean;
+  isRoomish: boolean;
   isThreadReply: boolean;
   threadTs: string | undefined;
   threadStarter: SlackThreadStarter | null;
@@ -231,6 +232,10 @@ export async function resolveSlackThreadContextData(params: {
     threadLabel = `Slack thread ${params.roomLabel}`;
   }
 
+  if (params.isRoomish && threadStarterBody) {
+    threadStarterBody = truncateUtf16Safe(threadStarterBody, 8_000);
+  }
+
   const includeBotStarterAsRootContext = Boolean(
     starter?.text && starterIsCurrentBot && shouldSeedInitialThreadContext,
   );
@@ -287,14 +292,20 @@ export async function resolveSlackThreadContextData(params: {
       };
     }
 
-    const enrichedStarter =
-      starter && threadStarterBody && threadStarterBody !== starter.text
+    // The shared renderer prefers history over the starter. Keep the authorized
+    // room root inside that bounded window when the recent slice omits it.
+    const retainedStarter =
+      starter &&
+      threadStarterBody &&
+      (params.isRoomish
+        ? !params.excludedMessageIds?.has(currentBotRootTs)
+        : threadStarterBody !== starter.text)
         ? { ...starter, text: threadStarterBody, ts: currentBotRootTs }
         : null;
     const threadHistoryWithEnrichedRoot =
-      enrichedStarter && !threadHistory.some((entry) => entry.ts === currentBotRootTs)
+      retainedStarter && !threadHistory.some((entry) => entry.ts === currentBotRootTs)
         ? [
-            enrichedStarter,
+            retainedStarter,
             ...(threadHistory.length >= threadInitialHistoryLimit
               ? threadHistory.slice(1)
               : threadHistory),

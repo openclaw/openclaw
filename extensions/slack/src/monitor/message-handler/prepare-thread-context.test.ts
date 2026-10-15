@@ -103,6 +103,7 @@ describe("resolveSlackThreadContextData", () => {
       }),
       message: createThreadMessage(params.message),
       isGroupDm: params.isGroupDm ?? false,
+      isRoomish: true,
       isThreadReply: true,
       threadTs: "100.000",
       threadStarter: params.threadStarter,
@@ -273,8 +274,9 @@ describe("resolveSlackThreadContextData", () => {
 
     const history = result.threadHistoryBody ?? "";
     expect(history.match(/\[slack message id:/g)).toHaveLength(20);
-    expect(history).not.toContain("[slack message id: 100.000 channel: C123]");
+    expect(history).toContain("[slack message id: 100.000 channel: C123]");
     expect(history).not.toContain("[slack message id: 100.001 channel: C123]");
+    expect(history).not.toContain("[slack message id: 100.002 channel: C123]");
     expect(history).toContain("prior user message 21");
     expect(history).toContain("assistant answer to retain");
     expect(history).toContain("Bot (this assistant) (assistant)");

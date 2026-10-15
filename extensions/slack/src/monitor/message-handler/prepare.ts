@@ -1265,6 +1265,7 @@ export async function prepareSlackMessage(params: {
     account,
     message,
     isGroupDm,
+    isRoomish,
     isThreadReply,
     threadTs,
     threadStarter,
@@ -1420,9 +1421,9 @@ export async function prepareSlackMessage(params: {
     media: inboundMedia,
     supplemental: {
       thread: {
-        // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
+        // Room replies retain the root after history-window eviction or compaction.
         starterBody:
-          !directThreadRoutedToDmSession && shouldSeedInitialThreadContext
+          !directThreadRoutedToDmSession && (isRoomish || shouldSeedInitialThreadContext)
             ? threadStarterBody
             : undefined,
         historyBody: supplementalThreadHistoryBody,
