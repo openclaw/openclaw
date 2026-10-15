@@ -73,6 +73,7 @@ const disposers: Array<() => void> = [];
 
 export function createPage(options: PageOptions = {}) {
   let clawsEnabled = options.clawsEnabled ?? false;
+  const ensureConfigLoaded = vi.fn(async () => undefined);
   let addCount = 0;
   let rejectedForReview = false;
   let rosterFailuresAfterAdd = 0;
@@ -83,7 +84,7 @@ export function createPage(options: PageOptions = {}) {
         sourceConfig: { gateway: { controlUi: { experimental: { claws: clawsEnabled } } } },
       },
     },
-    ensureLoaded: async () => undefined,
+    ensureLoaded: ensureConfigLoaded,
     subscribe: (listener: () => void) => {
       runtimeConfigListeners.add(listener);
       return () => runtimeConfigListeners.delete(listener);
@@ -352,6 +353,7 @@ export function createPage(options: PageOptions = {}) {
     rosterListenerCount: () => eventListeners.size - baselineEventListeners,
     request,
     navigate,
+    ensureConfigLoaded,
     agentSelection,
     gateway: source.gateway,
     setClawsEnabled: (enabled: boolean) => {

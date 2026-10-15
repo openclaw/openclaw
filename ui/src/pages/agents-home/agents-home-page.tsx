@@ -28,7 +28,7 @@ export function AgentsHomePage(props: { active?: boolean }) {
   const runtimeConfig = projectRuntimeConfig(context.runtimeConfig);
   const [catalogOpen, setCatalogOpen] = createSignal(false);
   createEffect(
-    () => props.active,
+    () => props.active ?? true,
     (active) => {
       if (!active) {
         return;

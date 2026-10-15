@@ -14,8 +14,9 @@ afterEach(cleanupAgentsHomePageTest);
 
 describe("Claws on Agents Home", () => {
   it("shows official Claws and opens their dedicated route", async () => {
-    const { page, navigate, request } = createPage({ clawsEnabled: true });
+    const { page, navigate, request, ensureConfigLoaded } = createPage({ clawsEnabled: true });
     await vi.waitFor(() => expect(page.querySelectorAll("[data-claws-entry]")).toHaveLength(1));
+    expect(ensureConfigLoaded).toHaveBeenCalledOnce();
 
     page.querySelector<HTMLButtonElement>(".agents-home__claw-card-link")?.click();
     expect(navigate).toHaveBeenCalledWith("claws", {
