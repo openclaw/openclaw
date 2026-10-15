@@ -1,24 +1,13 @@
 /** Defines unsupported secret-ref surfaces and operator-facing policy messages. */
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
-import { isRecord } from "../utils.js";
-
-const CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS = [
-  "hooks.token",
-  "hooks.gmail.pushToken",
-  "hooks.mappings[].sessionKey",
-  "auth-profiles.oauth.*",
-] as const;
+import { isRecord } from "./shared.js";
+import { expandPathTokens, parsePathPattern } from "./target-registry-pattern.js";
 
 const CORE_UNSUPPORTED_SECRETREF_CONFIG_CANDIDATE_PATTERNS = [
   "hooks.token",
   "hooks.gmail.pushToken",
   "hooks.mappings[].sessionKey",
 ] as const;
-
-type PatternToken =
-  | { kind: "key"; key: string }
-  | { kind: "array"; key: string }
-  | { kind: "wildcard" };
 
 const bundledChannelUnsupportedSecretRefSurfacePatterns = [
   ...new Set(
@@ -31,120 +20,16 @@ const bundledChannelUnsupportedSecretRefSurfacePatterns = [
 ];
 
 const unsupportedSecretRefSurfacePatterns = [
-  ...CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS,
+  ...CORE_UNSUPPORTED_SECRETREF_CONFIG_CANDIDATE_PATTERNS,
+  "auth-profiles.oauth.*",
   ...bundledChannelUnsupportedSecretRefSurfacePatterns,
 ];
 
 // Candidate scanning only sees openclaw.json; auth-profile-only surfaces are audited elsewhere.
-const unsupportedSecretRefConfigCandidatePatterns = [
+const unsupportedSecretRefConfigCandidateTokens = [
   ...CORE_UNSUPPORTED_SECRETREF_CONFIG_CANDIDATE_PATTERNS,
   ...bundledChannelUnsupportedSecretRefSurfacePatterns,
-];
-
-const parsedPatternCache = new Map<string, PatternToken[]>();
-
-function parseUnsupportedSecretRefSurfacePattern(pattern: string): PatternToken[] {
-  const cached = parsedPatternCache.get(pattern);
-  if (cached) {
-    return cached;
-  }
-  const parsed = pattern
-    .split(".")
-    .filter((segment) => segment.length > 0)
-    .map<PatternToken>((segment) => {
-      if (segment === "*") {
-        return { kind: "wildcard" };
-      }
-      if (segment.endsWith("[]")) {
-        return {
-          kind: "array",
-          key: segment.slice(0, -2),
-        };
-      }
-      return {
-        kind: "key",
-        key: segment,
-      };
-    });
-  parsedPatternCache.set(pattern, parsed);
-  return parsed;
-}
-
-function collectPatternCandidates(params: {
-  current: unknown;
-  tokens: readonly PatternToken[];
-  tokenIndex: number;
-  pathSegments: string[];
-  candidates: UnsupportedSecretRefConfigCandidate[];
-}): void {
-  if (params.tokenIndex >= params.tokens.length) {
-    params.candidates.push({
-      path: params.pathSegments.join("."),
-      value: params.current,
-    });
-    return;
-  }
-
-  const token = params.tokens[params.tokenIndex];
-  if (!token) {
-    return;
-  }
-
-  if (token.kind === "wildcard") {
-    if (!Array.isArray(params.current) && !isRecord(params.current)) {
-      return;
-    }
-    const entries: Iterable<[string | number, unknown]> = Array.isArray(params.current)
-      ? params.current.entries()
-      : Object.entries(params.current);
-    for (const [key, value] of entries) {
-      collectPatternCandidates({
-        ...params,
-        current: value,
-        tokenIndex: params.tokenIndex + 1,
-        pathSegments: [...params.pathSegments, String(key)],
-      });
-    }
-    return;
-  }
-
-  if (!isRecord(params.current)) {
-    return;
-  }
-
-  if (token.kind === "array") {
-    if (!Object.hasOwn(params.current, token.key)) {
-      return;
-    }
-    const value = params.current[token.key];
-    if (!Array.isArray(value)) {
-      return;
-    }
-    for (const [index, entry] of value.entries()) {
-      collectPatternCandidates({
-        ...params,
-        current: entry,
-        tokenIndex: params.tokenIndex + 1,
-        pathSegments: [...params.pathSegments, token.key, String(index)],
-      });
-    }
-    return;
-  }
-
-  if (!Object.hasOwn(params.current, token.key)) {
-    return;
-  }
-  collectPatternCandidates({
-    ...params,
-    current: params.current[token.key],
-    tokenIndex: params.tokenIndex + 1,
-    pathSegments: [...params.pathSegments, token.key],
-  });
-}
-
-function listUnsupportedSecretRefSurfacePatterns(): string[] {
-  return [...unsupportedSecretRefSurfacePatterns];
-}
+].map((pattern) => parsePathPattern(pattern));
 
 type UnsupportedSecretRefConfigCandidate = {
   path: string;
@@ -158,20 +43,15 @@ function collectUnsupportedSecretRefConfigCandidates(
     return [];
   }
 
-  const candidates: UnsupportedSecretRefConfigCandidate[] = [];
-  for (const pattern of unsupportedSecretRefConfigCandidatePatterns) {
-    collectPatternCandidates({
-      current: raw,
-      tokens: parseUnsupportedSecretRefSurfacePattern(pattern),
-      tokenIndex: 0,
-      pathSegments: [],
-      candidates,
-    });
-  }
-  return candidates;
+  return unsupportedSecretRefConfigCandidateTokens.flatMap((tokens) =>
+    expandPathTokens(raw, tokens, { requireOwnKeys: true }).map(({ segments, value }) => ({
+      path: segments.join("."),
+      value,
+    })),
+  );
 }
 
 export const unsupportedSecretRefSurfacePolicy = {
-  listPatterns: listUnsupportedSecretRefSurfacePatterns,
+  listPatterns: () => [...unsupportedSecretRefSurfacePatterns],
   collectConfigCandidates: collectUnsupportedSecretRefConfigCandidates,
 };

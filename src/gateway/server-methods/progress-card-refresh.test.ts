@@ -46,7 +46,7 @@ function fixture() {
   };
 }
 describe("progressCard.refresh", () => {
-  it("dispatches a fixed hidden steer under the original caller and keeps the old card", async () => {
+  it("dispatches a fixed hidden steer with caller authority and a stable session-bound retry identity", async () => {
     const f = fixture();
     await f.invoke();
     expect(send).toHaveBeenCalledOnce();
@@ -85,10 +85,6 @@ describe("progressCard.refresh", () => {
     );
     expect(f.put).not.toHaveBeenCalled();
     expect(f.invocation.context.broadcast).not.toHaveBeenCalled();
-  });
-  it("keeps retry identity stable and isolates another agent/session", async () => {
-    const f = fixture();
-    await f.invoke();
     await f.invoke();
     const original = send.mock.calls[0]?.[0].params.idempotencyKey;
     expect(original).toEqual(expect.any(String));

@@ -4,12 +4,6 @@ import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coe
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { formatWorktreeGcResult } from "../agents/worktrees/gc-result.js";
-import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
-import {
-  managedWorktrees,
-  resolveWorktreeCleanupLimits,
-  WORKTREE_GC_INTERVAL_MS,
-} from "../agents/worktrees/service.js";
 import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -20,7 +14,7 @@ import {
   captureDeliveryQueueStateContext,
   pruneExpiredDeliveryQueueTombstones,
 } from "../infra/delivery-queue-sqlite.js";
-import { pruneExpiredDevicePairSetupCompletions } from "../infra/device-bootstrap.js";
+import { startDevicePairSetupMaintenance } from "../infra/device-bootstrap.js";
 import { formatErrorMessage as formatError } from "../infra/errors.js";
 import {
   createGatewayActiveWorkSnapshot,
@@ -37,8 +31,7 @@ import {
   isGatewayWorkAdmissionClosed,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
-import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { registerSkillUsageTracking } from "../skills/workshop/curator.js";
+import { registerSkillUsageTracking } from "../skills/workshop/skill-usage.js";
 import { pruneExpiredArtifactDownloads } from "./artifact-download-grants.js";
 import {
   abortChatRunById,
@@ -53,9 +46,11 @@ import {
   createHostThawRecovery,
   type HostThawChannelRestartOutcome,
 } from "./host-thaw-recovery.js";
-import { chatAbortMarkerTimestampMs } from "./server-chat-state.js";
-import type { ChatRunState } from "./server-chat-state.js";
-import type { ChatRunEntry } from "./server-chat.js";
+import {
+  chatAbortMarkerTimestampMs,
+  type ChatRunEntry,
+  type ChatRunState,
+} from "./server-chat-state.js";
 import {
   DEDUPE_MAX,
   DEDUPE_TTL_MS,
@@ -76,6 +71,7 @@ import { setBroadcastHealthUpdate } from "./server/health-state.js";
 import { startSessionColdStorageMaintenance } from "./session-cold-storage-maintenance.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import { checkGatewayInstallationReplacement } from "./stale-install.js";
+import { startWorktreeMaintenance } from "./worktree-maintenance.js";
 
 // Hourly sweep plus a one-day grace bounds orphan storage without racing the
 // stage-before-row-commit window.
@@ -143,6 +139,7 @@ export function startGatewayMaintenanceTimers(params: {
       id: `maintenance:${id}`,
       atMs: scheduler.now() + (immediate ? 0 : everyMs),
       everyMs,
+      phase: "maintenance",
       run,
     });
   };
@@ -172,10 +169,7 @@ export function startGatewayMaintenanceTimers(params: {
     const admission = tryBeginGatewaySuspendAdmission(() => {
       invalidated = true;
     });
-    if (!admission) {
-      return { status: "retry", reason: "admission-closed" };
-    }
-    if (!admission.commit()) {
+    if (!admission?.commit()) {
       return { status: "retry", reason: "admission-closed" };
     }
     try {
@@ -244,45 +238,38 @@ export function startGatewayMaintenanceTimers(params: {
     params.nodeSendToAllSubscribed("tick", payload);
   });
 
-  // Automatic refresh warms the cache; explicit status and Doctor requests own live probes.
+  // Warm once; an unobserved Gateway needs no periodic snapshot. Health requests
+  // refresh stale snapshots, and connected clients still receive passive updates.
+  let initialHealthRefresh = true;
   schedulePeriodic(
     "health",
     HEALTH_REFRESH_INTERVAL_MS,
-    () =>
-      params
+    () => {
+      if (!initialHealthRefresh && params.clients.size === 0) {
+        return undefined;
+      }
+      initialHealthRefresh = false;
+      return params
         .refreshGatewayHealthSnapshot({ probe: false })
-        .catch((err: unknown) => params.logHealth.error(`refresh failed: ${formatError(err)}`)),
+        .catch((err: unknown) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
+    },
     true,
   );
 
-  const runWorktreeGc =
-    params.runWorktreeGc ??
-    (() => {
-      const cfg = params.getRuntimeConfig();
-      return managedWorktrees.gc({
-        // Chat runs avoid registry acquire/bump writes; recent session metadata substitutes for
-        // worktree activity so idle GC cannot remove a checkout still used by the session.
-        ...createManagedWorktreeOwnerPolicy(cfg),
-        limits: resolveWorktreeCleanupLimits(),
-      });
-    });
-  // Retention is hourly best-effort work; leave the first hour free for Gateway warmup.
-  schedulePeriodic("worktrees", WORKTREE_GC_INTERVAL_MS, () =>
-    runWorktreeGc()
-      .then((result) => {
-        if (!result) {
-          return;
-        }
-        if (result.outcome === "partial") {
-          params.logHealth.error(formatWorktreeGcResult(result));
-        } else if (result.outcome === "deferred") {
-          params.logHealth.info(formatWorktreeGcResult(result));
-        }
-      })
-      .catch((err: unknown) => {
-        params.logHealth.error(`managed worktree cleanup failed: ${formatError(err)}`);
-      }),
-  );
+  const worktreeMaintenance = startWorktreeMaintenance({
+    scheduler: params.scheduler,
+    getRuntimeConfig: params.getRuntimeConfig,
+    runGc: params.runWorktreeGc,
+    onComplete: (result) => {
+      const message = formatWorktreeGcResult(result);
+      if (result.outcome === "partial") {
+        params.logHealth.error(message);
+      } else {
+        params.logHealth.info(message);
+      }
+    },
+    onError: (message) => params.logHealth.error(`managed worktree cleanup failed: ${message}`),
+  });
 
   // Queue tombstone expiry and reference-aware media GC share one maintenance
   // cycle even when the general media TTL sweep is disabled.
@@ -302,6 +289,7 @@ export function startGatewayMaintenanceTimers(params: {
       id: `maintenance:${id}`,
       atMs: mediaScheduler.now(),
       everyMs: DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS,
+      phase: "maintenance",
       run,
     });
   };
@@ -314,35 +302,12 @@ export function startGatewayMaintenanceTimers(params: {
       );
     }
   });
-  schedulePeriodic(
-    "device-pair-setup",
-    60_000,
-    () =>
-      pruneExpiredDevicePairSetupCompletions({ nowMs: scheduler.now() }).catch((error: unknown) => {
-        params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
-      }),
-    true,
-  );
-
-  // Plugin-state expiry belongs to Gateway maintenance, not background-run tracking.
-  schedulePeriodic(
-    "plugin-state",
-    60_000,
-    async () => {
-      // Accepted writes retain their job scope until the scheduler joins their cleanup.
-      const signal = getAsyncWorkSignal();
-      try {
-        const { sweepExpiredPluginStateEntriesInWorker } =
-          await import("../plugin-state/plugin-state-worker-client.js");
-        await sweepExpiredPluginStateEntriesInWorker({
-          assertActive: () => signal?.throwIfAborted(),
-        });
-      } catch (error) {
-        params.logHealth.error(`plugin state cleanup failed: ${formatError(error)}`);
-      }
+  startDevicePairSetupMaintenance({
+    scheduler,
+    onError: (error) => {
+      params.logHealth.error(`device pair setup cleanup failed: ${formatError(error)}`);
     },
-    true,
-  );
+  });
 
   const skillUsageCleanup = registerSkillUsageTracking();
 
@@ -352,9 +317,6 @@ export function startGatewayMaintenanceTimers(params: {
     pruneExpiredArtifactDownloads(params.clients, now);
     params.chatRunState.toolEventRecipients.pruneExpired(now);
     const resolveDedupeRunId = (key: string, entry: DedupeEntry) => {
-      if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
-        return undefined;
-      }
       const keyRunId = key.slice(key.indexOf(":") + 1);
       if (keyRunId) {
         if (params.chatAbortControllers.has(keyRunId) || params.chatQueuedTurns.has(keyRunId)) {
@@ -437,37 +399,20 @@ export function startGatewayMaintenanceTimers(params: {
       if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
         continue;
       }
-      if (entry.projectSessionTerminalPersistence) {
-        const lifecycleGeneration = entry.lifecycleGeneration?.trim();
-        const sessionKey = entry.sessionKey.trim();
-        const sessionId = entry.sessionId.trim();
-        if (entry.controlUiVisible !== false && lifecycleGeneration && sessionKey && sessionId) {
-          params.restartRecoveryCandidates.set(runId, {
-            runId,
-            lifecycleGeneration,
-            sessionKey,
-            sessionId,
-            observedAt: entry.projectSessionTerminalObservedAt,
-          });
+      if (!entry.projectSessionTerminalPersistence && entry.projectSessionActive !== false) {
+        const aborted = abortChatRunById(params, {
+          runId,
+          sessionKey: entry.sessionKey,
+          stopReason: "timeout",
+        });
+        if (aborted.aborted) {
+          continue;
         }
-        removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
-        continue;
+        // A non-abortable expired entry (signal already aborted, frozen reply
+        // op) whose owner cleanup was lost would otherwise survive every sweep:
+        // phantom active run, dead Stop button, pinned dedupe, skipped media GC.
       }
-      if (entry.projectSessionActive === false) {
-        removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
-        continue;
-      }
-      const aborted = abortChatRunById(params, {
-        runId,
-        sessionKey: entry.sessionKey,
-        stopReason: "timeout",
-      });
-      // A non-abortable expired entry (signal already aborted, frozen reply
-      // op) whose owner cleanup was lost would otherwise survive every sweep:
-      // phantom active run, dead Stop button, pinned dedupe, skipped media GC.
-      if (!aborted.aborted) {
-        removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
-      }
+      removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
     }
 
     const ABORTED_RUN_TTL_MS = 60 * 60_000;
@@ -486,15 +431,17 @@ export function startGatewayMaintenanceTimers(params: {
         continue;
       }
       if (record.abortMarker !== undefined) {
-        if (now - chatAbortMarkerTimestampMs(record.abortMarker) > ABORTED_RUN_TTL_MS) {
-          params.chatRunState.deleteAbortMarker(runId);
-          params.chatRunState.clearRun(runId);
+        if (now - chatAbortMarkerTimestampMs(record.abortMarker) <= ABORTED_RUN_TTL_MS) {
+          continue;
         }
+        params.chatRunState.deleteAbortMarker(runId);
+      } else if (now - record.lastActivityAt <= ABORTED_RUN_TTL_MS) {
         continue;
       }
-      if (now - record.lastActivityAt > ABORTED_RUN_TTL_MS) {
-        params.chatRunState.clearRun(runId);
+      while (params.chatRunState.registry.shift(runId)) {
+        // No execution or delivery owner remains to consume these registrations.
       }
+      params.chatRunState.clearRun(runId);
     }
     // Sweep stale agent run contexts (orphaned when lifecycle end/error is missed).
     sweepStaleRunContexts();
@@ -576,6 +523,7 @@ export function startGatewayMaintenanceTimers(params: {
       restartDrainSignal.removeEventListener("abort", onRestartDrain);
       periodicTasksStopPromise = Promise.allSettled([
         scheduler.stop(),
+        worktreeMaintenance.stop(),
         sessionColdStorageMaintenance.stop(),
         stopMediaCleanup(),
       ]).then((results) => {

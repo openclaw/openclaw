@@ -5,7 +5,7 @@ import {
 } from "../../plugins/runtime.js";
 import { listBundledChannelSetupPlugins } from "./bundled.js";
 import { compareChannelPlugins } from "./registry-loaded.js";
-import type { ChannelPlugin } from "./types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
 function sortChannelSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlugin[] {
@@ -41,9 +41,6 @@ export function listActiveChannelSetupPlugins(): ChannelPlugin[] {
   return sortChannelSetupPlugins((registry?.channelSetups ?? []).map((entry) => entry.plugin));
 }
 
-/**
- * Returns one setup-capable channel plugin by id.
- */
 export function getChannelSetupPlugin(id: ChannelId): ChannelPlugin | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {

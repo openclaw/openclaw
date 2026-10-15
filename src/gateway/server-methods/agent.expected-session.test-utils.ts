@@ -7,6 +7,7 @@ import {
   getAgentTestMocks,
   invokeAgent,
   mockMainSessionEntry,
+  mockSuccessfulAgentCommand,
   primeMainAgentRun,
   waitForAgentCommandCall,
 } from "./agent.test-harness.js";
@@ -143,10 +144,7 @@ describe("gateway expected-session admission", () => {
         capturedEntry = result as Record<string, unknown>;
         return result;
       });
-      mocks.agentCommand.mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: { durationMs: 100 },
-      });
+      mockSuccessfulAgentCommand();
 
       await invokeAgent(
         {

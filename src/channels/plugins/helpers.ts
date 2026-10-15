@@ -7,7 +7,7 @@ import type { ChannelSecurityDmPolicy } from "./types.core.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
 export function resolveChannelDefaultAccountId<ResolvedAccount>(params: {
-  plugin: ChannelPlugin<ResolvedAccount>;
+  plugin: ChannelPlugin<ResolvedAccount, unknown, unknown, 1 | 2>;
   cfg: OpenClawConfig;
   accountIds?: string[];
 }): string {
@@ -52,18 +52,10 @@ export function buildAccountScopedDmSecurityPolicy(params: {
   const channelConfig = (params.cfg.channels as Record<string, unknown> | undefined)?.[
     params.channelKey
   ] as { accounts?: Record<string, Record<string, unknown>> } | undefined;
-  const accountKey = resolveChannelAccountKey(
-    channelConfig?.accounts,
-    resolvedAccountId,
-    params.channelKey,
-    (id) => id,
-  );
-  const defaultAccountKey = resolveChannelAccountKey(
-    channelConfig?.accounts,
-    DEFAULT_ACCOUNT_ID,
-    params.channelKey,
-    (id) => id,
-  );
+  const resolveAccountKey = (accountId: string) =>
+    resolveChannelAccountKey(channelConfig?.accounts, accountId, params.channelKey, (id) => id);
+  const accountKey = resolveAccountKey(resolvedAccountId);
+  const defaultAccountKey = resolveAccountKey(DEFAULT_ACCOUNT_ID);
   const rootBasePath = `channels.${params.channelKey}.`;
   const accountBasePath = `channels.${params.channelKey}.accounts.${accountKey ?? resolvedAccountId}.`;
   const defaultBasePath = `channels.${params.channelKey}.accounts.${defaultAccountKey ?? DEFAULT_ACCOUNT_ID}.`;
@@ -82,20 +74,17 @@ export function buildAccountScopedDmSecurityPolicy(params: {
         : null;
   const simplePolicyField = resolveFieldName(params.policyPathSuffix, "dmPolicy");
   const simpleAllowFromField = resolveFieldName(params.allowFromPathSuffix, "allowFrom");
-  const matchesAnyField = (
-    config: Record<string, unknown> | undefined,
-    fields: Array<string | null>,
-  ) => fields.some((field) => field != null && config?.[field] !== undefined);
+  const matchesAnyField = (config: Record<string, unknown> | undefined) =>
+    [simplePolicyField, simpleAllowFromField].some(
+      (field) => field != null && config?.[field] !== undefined,
+    );
   const basePath =
     simplePolicyField || simpleAllowFromField
-      ? matchesAnyField(accountConfig, [simplePolicyField, simpleAllowFromField])
+      ? matchesAnyField(accountConfig)
         ? accountBasePath
-        : matchesAnyField(defaultAccountConfig, [simplePolicyField, simpleAllowFromField])
+        : matchesAnyField(defaultAccountConfig)
           ? defaultBasePath
-          : matchesAnyField(channelConfig as Record<string, unknown> | undefined, [
-                simplePolicyField,
-                simpleAllowFromField,
-              ])
+          : matchesAnyField(channelConfig as Record<string, unknown> | undefined)
             ? rootBasePath
             : accountConfig
               ? accountBasePath

@@ -225,6 +225,7 @@ describe("Chrome CDP diagnostic transport", () => {
     const context = createBrowserRouteContext({ getState: () => state });
     try {
       const probing = context
+        .forProfile()
         .isHttpReachable(60_000, controller.signal)
         .catch((error: unknown) => error);
       await fixture.reached.http.promise;

@@ -326,24 +326,33 @@ it can be spawned but cannot start swarms from its own top-level sessions:
 {
   tools: { swarm: { enabled: true, defaultAgentId: "worker" } },
   agents: {
+    ownership: "explicit",
+    defaults: {
+      heartbeat: { agentId: "main" },
+      systemAgent: { agentId: "main" },
+    },
     entries: {
       main: {
-        default: true,
+        workspace: "~/.openclaw/workspace",
         subagents: { allowAgents: ["worker"] },
       },
       worker: { tools: { swarm: false } },
     },
   },
+  talk: { agentId: "main" },
 }
 ```
 
-Collector approvals fail closed. A child never opens an operator approval
+Collectors deny actions that require approval. A child never opens an operator approval
 prompt. A tool action that would require approval is denied, and the child can
 report that denial in its result so the script can decide what to do next.
 
 For structured output, OpenClaw adds a synthetic `structured_output` tool to
-the child and validates its payload against the supplied JSON Schema. An
-invalid payload gets one corrective nudge. If no payload is submitted, or the
+the child and validates its payload against the supplied JSON Schema. If a
+string-valued `result` fails validation, OpenClaw decodes it once as JSON and accepts
+the decoded value only if it matches the schema. Valid string results stay unchanged;
+integer literals outside JavaScript's safe range are preserved as strings.
+An invalid payload gets one corrective nudge. If no payload is submitted, or the
 retry still does not validate, the collector completion keeps the child's raw
 text, leaves `structured` unset, and includes `schemaError`. The low-level `agents_wait`
 result exposes those fields for explicit recovery logic.
@@ -440,10 +449,13 @@ nested descendants. Collector mode changes result delivery, not cancellation
 scope. Successful cancellation prevents selected queued children from starting
 as running siblings stop. It does not cancel work from unrelated parent turns.
 
-If Stop reports incomplete descendant cancellation, inspect the remaining work
+Stop also waits for the selected children's execution and queued-launch cleanup.
+A child's task can show a terminal status while that cleanup is still settling.
+
+If Stop times out or reports incomplete descendant cancellation, inspect the remaining work
 with `subagents` using `action: "list"` and retry cancellation for
 those children. A stopped parent alone does not confirm that every child stopped,
-and a cancellation acknowledgment does not promise instantaneous runtime cleanup.
+and a failed request can leave cleanup pending.
 
 Already-accepted children remain independent when the parent completes normally,
 yields, or times out. If the parent is no longer active, cancel the child tasks
@@ -548,7 +560,7 @@ failures. A rejected launch or failed child must not discard results from other
 accepted children. Keep the returned run IDs for recovery. Do not repeat
 successful launches or automatically rerun failed work.
 
-Each `agents_wait` call accepts 1–1000 run ids. Use `required: true` to keep
+Each `agents_wait` call accepts 1–1000 run ids. Use `awaitResults: true` to keep
 collection owned until **all** authorized requested collectors settle, without
 an observer polling timeout. It is mutually exclusive with `timeoutSeconds`;
 child and agent-run deadlines, tool watchdogs, cancellation, and ownership
@@ -591,8 +603,7 @@ error. The poll remains a successful JSON result so callers can process its
 
 The call returns immediately when any requested child is already complete,
 when at least one pending child completes, when no valid pending ids remain,
-or when its timeout expires. Completed records are idempotent, so passing an
-already-completed run id returns its result again. Only the spawning session
+or when its timeout expires. Passing an already-completed run id returns the same saved result again. Only the spawning session
 or its authorized parent chain can wait on a collector.
 
 This is bounded long polling, not a busy status loop. Keep passing only the

@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getMattermostRuntime } from "../runtime.js";
-import { isWildcardBindHost } from "./callback-host.js";
+import { resolveCallbackHost } from "./callback-host.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
 import {
   isRequestBodyLimitError,
@@ -124,15 +124,7 @@ export function computeInteractionCallbackUrl(
     return `${callbackBaseUrl.replace(/\/+$/, "")}${path}`;
   }
   const port = resolveGatewayPort(cfg);
-  let host =
-    cfg?.gateway?.customBindHost && !isWildcardBindHost(cfg.gateway.customBindHost)
-      ? cfg.gateway.customBindHost.trim()
-      : "localhost";
-
-  // Bracket IPv6 literals so the URL is valid: http://[::1]:18789/...
-  if (host.includes(":") && !(host.startsWith("[") && host.endsWith("]"))) {
-    host = `[${host}]`;
-  }
+  const host = resolveCallbackHost(cfg?.gateway?.customBindHost, true);
 
   return `http://${host}:${port}${path}`;
 }
@@ -202,23 +194,6 @@ function generateInteractionToken(context: Record<string, unknown>, accountId?: 
   return createHmac("sha256", secret).update(payload).digest("hex");
 }
 
-type MattermostButton = {
-  id: string;
-  type: "button" | "select";
-  name: string;
-  style?: "default" | "primary" | "danger";
-  integration: {
-    url: string;
-    context: Record<string, unknown>;
-  };
-};
-
-type MattermostAttachment = {
-  text?: string;
-  actions?: MattermostButton[];
-  [key: string]: unknown;
-};
-
 /**
  * Sanitize a button ID so Mattermost's action router can match it.
  * Mattermost uses the action ID in the URL path `/api/v4/posts/{id}/actions/{actionId}`
@@ -239,8 +214,8 @@ export function buildButtonAttachments(params: {
     context?: Record<string, unknown>;
   }>;
   text?: string;
-}): MattermostAttachment[] {
-  const actions: MattermostButton[] = params.buttons.map((btn) => {
+}) {
+  const actions = params.buttons.map((btn) => {
     const safeId = sanitizeActionId(btn.id);
     const context: Record<string, unknown> = {
       action_id: safeId,

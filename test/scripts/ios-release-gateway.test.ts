@@ -29,6 +29,7 @@ const tarball = `https://registry.npmjs.org/openclaw/-/openclaw-${version}.tgz`;
 afterEach(() => {
   command.mockReset();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 function writeJson(file: string, value: unknown) {
@@ -73,10 +74,18 @@ function fixture(options: { annotatedTag?: boolean } = {}) {
     },
   };
   const requests: string[] = [];
-  const fetch = vi.fn(async (url: string) => {
+  const fetch = vi.fn(async (url: string, init?: RequestInit) => {
     requests.push(url);
+    const authorization = new Headers(init?.headers).get("Authorization");
     if (url === "https://registry.npmjs.org/openclaw/latest") {
+      expect(authorization).toBeNull();
       return Response.json(state.metadata);
+    }
+    if (
+      process.env.GH_TOKEN === "synthetic-ios-github-token" &&
+      authorization !== "Bearer synthetic-ios-github-token"
+    ) {
+      return Response.json({ message: "API rate limit exceeded" }, { status: 403 });
     }
     if (url.endsWith(`/tags/v${version}`)) {
       return Response.json({
@@ -97,6 +106,8 @@ function fixture(options: { annotatedTag?: boolean } = {}) {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
     const child = new ChildProcess();
+    expect(operation.env).not.toHaveProperty("GH_TOKEN");
+    expect(operation.env).not.toHaveProperty("GITHUB_TOKEN");
     child.stdout = stdout;
     child.stderr = stderr;
     operation.onReady?.(child);
@@ -162,6 +173,8 @@ describe("iOS stable Gateway package qualification", () => {
   it.each([false, true])(
     "freezes the published selection and replays its exact dependency graph (annotated tag: %s)",
     async (annotatedTag) => {
+      vi.stubEnv("GH_TOKEN", annotatedTag ? "synthetic-ios-github-token" : "");
+      vi.stubEnv("GITHUB_TOKEN", "");
       const f = fixture({ annotatedTag });
       const selected = await selectIOSReleaseGateway({
         selectionDir: f.selectionDir,
@@ -196,16 +209,29 @@ describe("iOS stable Gateway package qualification", () => {
     },
   );
 
-  it.each(["integrity", "source SHA", "prerelease"])(
+  it.each([
+    ["integrity", /Invalid string|Invalid.*format|regular stable OpenClaw release/u],
+    ["source SHA", /Invalid string|Invalid.*format|regular stable OpenClaw release/u],
+    ["prerelease", /Invalid string|Invalid.*format|regular stable OpenClaw release/u],
+    ["nonregistry tarball", /tarball|registry|qualification target/u],
+    ["lock integrity", /package lock does not match/u],
+  ] as const)(
     "rejects invalid published %s before installing a Gateway",
-    async (invalid) => {
+    async (invalid, error) => {
       const f = fixture();
       if (invalid === "integrity") {
         f.state.metadata.dist.integrity = "not-an-integrity";
       } else if (invalid === "source SHA") {
         f.state.sourceSha = "main";
-      } else {
+      } else if (invalid === "prerelease") {
         f.state.metadata.version = "2026.9.8-beta.1";
+      } else if (invalid === "nonregistry tarball") {
+        const wrongTarball = "https://example.invalid/openclaw.tgz";
+        f.state.metadata.dist.tarball = wrongTarball;
+        f.lock.packages["node_modules/openclaw"].resolved = wrongTarball;
+      } else {
+        f.lock.packages["node_modules/openclaw"].integrity =
+          `sha512-${Buffer.alloc(64, 3).toString("base64")}`;
       }
       await expect(
         prepareIOSReleaseGateway({
@@ -214,43 +240,11 @@ describe("iOS stable Gateway package qualification", () => {
           signal: f.signal,
           targetSha,
         }),
-      ).rejects.toThrow(/Invalid string|Invalid.*format|regular stable OpenClaw release/u);
+      ).rejects.toThrow(error);
       expect(f.installs).toHaveLength(0);
       expect(existsSync(path.join(f.selectionDir, "selection.json"))).toBe(false);
     },
   );
-
-  it("rejects a nonregistry tarball even when npm's lock agrees with the metadata", async () => {
-    const f = fixture();
-    const wrongTarball = "https://example.invalid/openclaw.tgz";
-    f.state.metadata.dist.tarball = wrongTarball;
-    f.lock.packages["node_modules/openclaw"].resolved = wrongTarball;
-    await expect(
-      prepareIOSReleaseGateway({
-        selectionDir: f.selectionDir,
-        installDir: f.installDir,
-        signal: f.signal,
-        targetSha,
-      }),
-    ).rejects.toThrow(/tarball|registry|qualification target/u);
-    expect(f.installs).toHaveLength(0);
-  });
-
-  it("rejects a resolved lock whose package integrity differs from the selected artifact", async () => {
-    const f = fixture();
-    f.lock.packages["node_modules/openclaw"].integrity =
-      `sha512-${Buffer.alloc(64, 3).toString("base64")}`;
-    await expect(
-      prepareIOSReleaseGateway({
-        selectionDir: f.selectionDir,
-        installDir: f.installDir,
-        signal: f.signal,
-        targetSha,
-      }),
-    ).rejects.toThrow(/package lock does not match/u);
-    expect(f.installs).toHaveLength(0);
-    expect(existsSync(path.join(f.selectionDir, "selection.json"))).toBe(false);
-  });
 
   it("refuses an incomplete saved selection without replacing it with latest", async () => {
     const f = fixture();

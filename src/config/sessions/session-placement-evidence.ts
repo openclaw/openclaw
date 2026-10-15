@@ -1,23 +1,25 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isIncognitoSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { matchesAgentDatabaseReadCandidatePath } from "../../state/openclaw-agent-db-resources.js";
-import {
-  readOpenIncognitoAgentDatabaseGeneration,
-  resolveIncognitoOpenClawAgentSqlitePath,
-  retainOpenClawAgentDatabaseReadCandidates,
-} from "../../state/openclaw-agent-db.js";
+import { retainOpenClawAgentDatabaseReadCandidates } from "../../state/openclaw-agent-db.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import {
-  readSessionIdentityEvidenceBatch,
-  type SessionIdentityEvidenceIdentity,
-  type SessionIdentityEvidenceResult,
-} from "./session-accessor.sqlite-entry-availability.js";
+import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
+import type { SessionEntrySummary } from "./session-accessor.types.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import type {
+  SessionIdentityEvidenceIdentity,
+  SessionIdentityEvidenceResult,
+} from "./session-entry-read-source.types.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
-import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import {
+  captureSessionStoreReadCandidate,
+  isSessionStoreReadCandidateCurrent,
+} from "./session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "./session-store-target-runtime.js";
 import { withSessionHistoryWorkerDatabases } from "./session-transcript-worker-runtime.js";
@@ -29,30 +31,49 @@ export type PlacementSessionIdentityProbe = {
   sessionKey: string;
 };
 
-/** Whole evidence preparation keeps native incognito and disk-backed custody distinct. */
+/** Memory evidence is read once after durable discovery, without opening or acquiring an owner. */
 export async function readPlacementSessionIdentityEvidence(
   cfg: OpenClawConfig,
   input: readonly PlacementSessionIdentityProbe[],
 ): Promise<SessionIdentityEvidenceResult[]> {
-  const capturedEnv = cloneEnvWithPlatformSemantics(process.env);
+  const selected = captureSessionActorStorageOwner({});
+  const capturedEnv = cloneEnvWithPlatformSemantics(
+    selected
+      ? { ...process.env, OPENCLAW_STATE_DIR: path.resolve(selected.path, "../../../..") }
+      : process.env,
+  );
   const env = { ...capturedEnv, OPENCLAW_STATE_DIR: resolveStateDir(capturedEnv) };
   const probes = input.map((probe) => ({ ...probe }));
   const results: SessionIdentityEvidenceResult[] = probes.map(() => ({ status: "absent" }));
   const incognito = probes.flatMap((probe, index) =>
     isIncognitoSessionKey(probe.sessionKey) ? [{ probe, index }] : [],
   );
-  const nativeProbes = incognito.map(({ probe }) => ({
-    ...probe,
-    env,
-    storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: probe.agentId, env }),
-  }));
   const readIncognito = () => {
-    const native = readSessionIdentityEvidenceBatch(nativeProbes);
-    for (const [offset, item] of incognito.entries()) {
-      results[item.index] = expectDefined(native[offset], "incognito evidence");
+    const entriesByAgent = new Map<string, SessionEntrySummary[]>();
+    for (const { probe, index } of incognito) {
+      const agentId = normalizeAgentId(probe.agentId);
+      let entries = entriesByAgent.get(agentId);
+      if (!entries) {
+        entries =
+          captureMemoryExactSessionReader({ ...probe, agentId, env })?.entries("list") ?? [];
+        entriesByAgent.set(agentId, entries);
+      }
+      const exact = entries.find(
+        ({ sessionKey }) => sessionKey === normalizeStoreSessionKey(probe.sessionKey),
+      );
+      if (exact?.entry.sessionId === probe.sessionId) {
+        results[index] = { status: "current", sessionKey: exact.sessionKey };
+        continue;
+      }
+      const matches = entries.filter(({ entry }) => entry.sessionId === probe.sessionId);
+      results[index] =
+        matches.length > 1
+          ? { status: "unknown", reason: "ambiguous" }
+          : matches[0]
+            ? { status: "current", sessionKey: matches[0].sessionKey }
+            : { status: "absent" };
     }
   };
-  const incognitoGeneration = readOpenIncognitoAgentDatabaseGeneration();
   const disk = probes.flatMap((probe, index) =>
     !isIncognitoSessionKey(probe.sessionKey) ? [{ probe, index }] : [],
   );
@@ -60,16 +81,33 @@ export async function readPlacementSessionIdentityEvidence(
     readIncognito();
     return results;
   }
-  const { candidates, ...prepared } = prepareSessionStoreTargetInventory(
-    cfg,
-    disk.map(({ probe }) => probe.agentId),
-    env,
-  );
-  const inventoryRead = prepareSessionStoreTargetInventoryRead({ ...prepared, candidates });
-  const nativeReaders = retainOpenClawAgentDatabaseReadCandidates(
-    candidates.flatMap((candidate) => [candidate, { ...candidate, path: candidate.physicalPath }]),
-    env,
-  );
+  const prepareDisk = () => {
+    const { candidates, ...prepared } = prepareSessionStoreTargetInventory(
+      cfg,
+      disk.map(({ probe }) => probe.agentId),
+      env,
+    );
+    const inventoryRead = prepareSessionStoreTargetInventoryRead({ ...prepared, candidates });
+    const nativeReaders = retainOpenClawAgentDatabaseReadCandidates(
+      candidates.flatMap((candidate) => [
+        candidate,
+        { ...candidate, path: candidate.physicalPath },
+      ]),
+      env,
+    );
+    return { candidates, prepared, inventoryRead, nativeReaders };
+  };
+  let diskPreparation: ReturnType<typeof prepareDisk>;
+  try {
+    diskPreparation = prepareDisk();
+  } catch {
+    for (const { index } of disk) {
+      results[index] = { status: "unknown", reason: "read-failed" };
+    }
+    readIncognito();
+    return results;
+  }
+  const { candidates, prepared, inventoryRead, nativeReaders } = diskPreparation;
   const continuations: Array<{
     path: string;
     owner: NonNullable<ReturnType<typeof captureCanonicalSessionReaderContinuation>>;
@@ -160,8 +198,8 @@ export async function readPlacementSessionIdentityEvidence(
                 identities: group.identities,
                 env: prepared.env,
                 continuation: continuations.find(
-                  ({ path, owner }) =>
-                    path === group.database.path &&
+                  ({ path: continuationPath, owner }) =>
+                    continuationPath === group.database.path &&
                     owner.receipt.agentId === group.database.agentId,
                 )?.owner.receipt,
               });
@@ -190,10 +228,7 @@ export async function readPlacementSessionIdentityEvidence(
     });
     inventoryRead.assertRegistryCurrent();
     for (const candidate of candidates) {
-      if (
-        captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath !==
-        candidate.physicalPath
-      ) {
+      if (!isSessionStoreReadCandidateCurrent(candidate)) {
         throw new Error("Session store alias changed during discovery; retry the read.");
       }
     }
@@ -207,14 +242,7 @@ export async function readPlacementSessionIdentityEvidence(
         }
       }
     }
-    if (incognitoGeneration !== readOpenIncognitoAgentDatabaseGeneration()) {
-      for (const { index } of incognito) {
-        results[index] = { status: "unknown", reason: "read-failed" };
-      }
-    } else {
-      // Rows can change without replacing the process-held incognito connection.
-      readIncognito();
-    }
+    readIncognito();
     return results;
   } finally {
     unsubscribe();

@@ -456,16 +456,20 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
                     # replyToPrevious targets the newest message this scenario sent.
                     reply_to = sent_ids[-1] if action.get("replyToPrevious") and sent_ids else None
                     photo = action.get("photo")
+                    photos = action.get("photos") or ([photo] if photo else [])
+                    album_ids = []
                     try:
-                        if photo:
+                        if photos:
                             results = driver_obj.send_photos(
                                 recorder.chat_id,
-                                [photo],
+                                photos,
                                 text,
                                 reply_to=reply_to,
                                 forum_topic_id=action.get("forumTopicId"),
                             )
                             result = results[0] if results else None
+                            if action.get("photos"):
+                                album_ids = [message.get("id") for message in results]
                         else:
                             result = driver_obj.send_text(
                                 recorder.chat_id,
@@ -490,7 +494,7 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
                         recorder.pump(max(0, deadline - time.time()))
                         raise
                     message_id = (result or {}).get("id")
-                    sent_ids.append(message_id)
+                    sent_ids.extend(album_ids or [message_id])
                     recorder._append(
                         "action",
                         message_id,
@@ -499,6 +503,7 @@ def run_scenario(recorder, driver_obj, sut, actions, seconds, barrier_dir=""):
                         status="completed",
                         text=text,
                         **({"photo": photo} if photo else {}),
+                        **({"photos": photos, "messageIds": album_ids} if album_ids else {}),
                         **(recorder._reply_fields(result or {}) if action.get("awaitReply")
                            else {"replyToMessageId": reply_to} if reply_to else {}),
                     )

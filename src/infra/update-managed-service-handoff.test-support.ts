@@ -13,8 +13,10 @@ import {
 import { withinTest } from "../../test/helpers/promise.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { readManagedHandoffArtifacts } from "./update-managed-service-handoff-artifacts.test-support.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
+const EXECUTOR_CLEANUP_GUARD_MS = 15_000;
 
 export function registerPreparedCoordinatorAdmissionTest(params: {
   spawnMock: Mock;
@@ -100,10 +102,10 @@ export function registerPreparedCoordinatorAdmissionTest(params: {
           throw new Error("original helper did not start");
         }
         const originalHelper = helpers[0];
-        const paramsPath = originalHelper?.child.spawnargs.at(-1);
-        if (!originalHelper || !paramsPath) {
+        if (!originalHelper) {
           throw new Error("missing original helper handle");
         }
+        const { paramsPath } = readManagedHandoffArtifacts(originalHelper.child.spawnargs);
         const prepared = JSON.parse(await fs.promises.readFile(paramsPath, "utf8")) as {
           updateLeaseDatabasePath: string;
           updateLeaseDatabaseIdentity: import("./update-managed-service-handoff-database.js").ManagedUpdateLeaseDatabaseIdentity;
@@ -171,7 +173,7 @@ export function registerPreparedCoordinatorAdmissionTest(params: {
         expect(originalStore.read(root)).toEqual(bound);
 
         await fs.promises.writeFile(releasePath, "settle original updater");
-        await waitForDead(executorPid, 15000);
+        await waitForDead(executorPid, signal);
         expect(originalStore.read(root)).toEqual(bound);
         expect(originalStore.hasUnsettledChildren(bound.lease)).toBe(false);
         latest = await start();
@@ -181,10 +183,9 @@ export function registerPreparedCoordinatorAdmissionTest(params: {
         }
         expect(helpers).toHaveLength(2);
         const replacement = helpers[1]!;
-        const replacementParamsPath = replacement.child.spawnargs.at(-1);
-        if (!replacementParamsPath) {
-          throw new Error("replacement helper did not retain its prepared store");
-        }
+        const { paramsPath: replacementParamsPath } = readManagedHandoffArtifacts(
+          replacement.child.spawnargs,
+        );
         const replacementPrepared = JSON.parse(
           await fs.promises.readFile(replacementParamsPath, "utf8"),
         ) as typeof prepared;
@@ -233,7 +234,8 @@ export function registerPreparedCoordinatorAdmissionTest(params: {
       await cleanup(() => fs.promises.writeFile(releasePath, "fixture cleanup"));
       await cleanup(async () => {
         if (executorPid) {
-          await waitForDead(executorPid, 15000);
+          // Cleanup hang guard after the owner released the updater, not a readiness race.
+          await waitForDead(executorPid, AbortSignal.timeout(EXECUTOR_CLEANUP_GUARD_MS));
         }
       });
       await cleanup(async () => {

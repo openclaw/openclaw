@@ -9,6 +9,7 @@ import { onTestFinished, type TestContext } from "vitest";
 import {
   collectNodeDiagnosticReport,
   NODE_DIAGNOSTIC_REPORT_GRACE_MS as REPORT_GRACE_MS,
+  shouldEnableNodeDiagnosticReports,
 } from "../../scripts/lib/node-diagnostic-report.mts";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
@@ -203,8 +204,7 @@ export async function runCliProcessChild(params: {
 }): Promise<CliProcessChildResult> {
   const timeoutMs = params.timeoutMs ?? CLI_PROCESS_DEADLOCK_GUARD_MS;
   const executable = params.nodeExecutable ?? process.execPath;
-  const supportsDiagnostics = process.platform !== "win32" && !process.versions.bun;
-  const reports = supportsDiagnostics ? createFixtureLifetime() : undefined;
+  const reports = shouldEnableNodeDiagnosticReports() ? createFixtureLifetime() : undefined;
   let unjoinedWork = false;
   if (reports) {
     (params.onTestFinished ?? onTestFinished)(async () => {

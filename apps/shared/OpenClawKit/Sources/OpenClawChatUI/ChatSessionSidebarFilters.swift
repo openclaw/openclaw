@@ -160,6 +160,7 @@ struct ChatSessionSidebarFilters: View {
             }
             Picker("Status", selection: self.$options.status) {
                 Text("Active").tag(OpenClawChatSidebarStatus.active)
+                Text("Snoozed").tag(OpenClawChatSidebarStatus.snoozed)
                 Text("Archived").tag(OpenClawChatSidebarStatus.archived)
                 Text("All").tag(OpenClawChatSidebarStatus.all)
             }.pickerStyle(.segmented).focused(self.$statusFocused)

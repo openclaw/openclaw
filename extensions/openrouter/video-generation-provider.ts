@@ -3,7 +3,7 @@ import {
   readGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
@@ -348,7 +348,7 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
     label: "OpenRouter",
     defaultModel: DEFAULT_MODEL,
     models: [DEFAULT_MODEL],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "openrouter", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "openrouter", ...ctx }),
     resolveModelCapabilities: resolveOpenRouterVideoModelCapabilities,
     capabilities: {
       providerOptions: {

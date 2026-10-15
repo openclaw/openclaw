@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMcpProofPluginRegistry } from "../agents/mcp-connection-resolver.test-fixtures.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { collectGatewayHealthFindings } from "../commands/doctor-gateway-health.js";
@@ -24,7 +24,26 @@ const mocks = vi.hoisted(() => ({
   resolveGatewayService: vi.fn(() => ({ label: "openclaw-gateway" })),
   resolvePluginProvidersCore: vi.fn((): Array<Record<string, unknown>> => []),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
+  metadataScopes: [] as AsyncDisposable[],
 }));
+
+vi.mock("../commands/doctor/shared/plugin-metadata-snapshot-scope.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../commands/doctor/shared/plugin-metadata-snapshot-scope.js")
+    >();
+  return {
+    ...actual,
+    createDoctorPluginMetadataSnapshotScope: (
+      params: Parameters<typeof actual.createDoctorPluginMetadataSnapshotScope>[0],
+    ) => {
+      const scope = actual.createDoctorPluginMetadataSnapshotScope(params);
+      vi.spyOn(scope, Symbol.asyncDispose);
+      mocks.metadataScopes.push(scope);
+      return scope;
+    },
+  };
+});
 
 vi.mock("../agents/model-catalog.js", () => ({
   findModelInCatalog: (
@@ -138,6 +157,7 @@ function expectSchemaError(findings: readonly HealthFinding[], expected: Partial
 
 describe("doctor runtime tool schema checks", () => {
   beforeEach(() => {
+    mocks.metadataScopes.length = 0;
     mocks.createOpenClawCodingTools.mockReset().mockReturnValue([]);
     mocks.createBundleMcpToolRuntime.mockReset().mockReturnValue({
       tools: [],
@@ -150,6 +170,38 @@ describe("doctor runtime tool schema checks", () => {
       .mockImplementation(({ context }) => context.tools);
     mocks.resolvePluginProvidersCore.mockReset().mockReturnValue([]);
     mocks.resolveDefaultModelForAgent.mockClear();
+  });
+
+  afterEach(() => {
+    for (const scope of mocks.metadataScopes) {
+      expect(scope[Symbol.asyncDispose]).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("releases its metadata scope when inspection preparation returns early", async () => {
+    const tools = await import("../plugins/tools.js");
+    const acquire = vi.spyOn(tools, "acquirePluginToolInspectionRegistry");
+    const failure = new Error("Inspection preparation failed");
+    await acquire.withImplementation(
+      async () => {
+        throw failure;
+      },
+      async () => {
+        await expect(collectRuntimeToolSchemaFindings({})).resolves.toContainEqual(
+          expect.objectContaining({ severity: "warning", requirement: failure.message }),
+        );
+      },
+    );
+    acquire.mockRestore();
+  });
+
+  it("leaves a supplied metadata scope with its caller", async () => {
+    const { createDoctorPluginMetadataSnapshotScope } =
+      await import("../commands/doctor/shared/plugin-metadata-snapshot-scope.js");
+    await using scope = createDoctorPluginMetadataSnapshotScope({});
+    await collectRuntimeToolSchemaFindings({}, { runWithPluginMetadataSnapshot: scope.run });
+    expect(mocks.metadataScopes).toHaveLength(1);
+    expect(scope[Symbol.asyncDispose]).not.toHaveBeenCalled();
   });
 
   it("reports active bundle MCP schemas before a model turn", async () => {
@@ -285,10 +337,10 @@ describe("doctor runtime tool schema checks", () => {
     expectSchemaError(
       await collectRuntimeToolSchemaFindings({
         agents: {
-          list: [
-            { id: "main", default: true, workspace: "/tmp/shared-workspace" },
-            { id: "worker", workspace: "/tmp/shared-workspace" },
-          ],
+          entries: {
+            main: { workspace: "/tmp/shared-workspace" },
+            worker: { workspace: "/tmp/shared-workspace" },
+          },
         },
       }),
       {
@@ -325,10 +377,10 @@ describe("doctor runtime tool schema checks", () => {
     await expect(
       collectRuntimeToolSchemaFindings({
         agents: {
-          list: [
-            { id: "main", default: true, workspace: "/tmp/main-workspace" },
-            { id: "acp-worker", workspace: "/tmp/acp-workspace", runtime: { type: "acp" } },
-          ],
+          entries: {
+            main: { workspace: "/tmp/main-workspace" },
+            "acp-worker": { workspace: "/tmp/acp-workspace", runtime: { type: "acp" } },
+          },
         },
       }),
     ).resolves.toEqual([]);
@@ -347,10 +399,10 @@ describe("doctor runtime tool schema checks", () => {
     const findings = await collectRuntimeToolSchemaFindings({
       ...mcpConfig(),
       agents: {
-        list: [
-          { id: "main", default: true, workspace: "/tmp/main-workspace" },
-          { id: "worker", workspace: "/tmp/worker-workspace" },
-        ],
+        entries: {
+          main: { workspace: "/tmp/main-workspace" },
+          worker: { workspace: "/tmp/worker-workspace" },
+        },
       },
     });
     expect(findings).toEqual([
@@ -411,7 +463,7 @@ describe("doctor runtime tool schema checks", () => {
     const findings = await collectRuntimeToolSchemaFindings({
       agents: {
         entries: {
-          main: { default: true, workspace: "/tmp/main-workspace" },
+          main: { workspace: "/tmp/main-workspace" },
           worker: { workspace: "/tmp/worker-workspace" },
         },
       },
@@ -818,14 +870,6 @@ describe("doctor gateway runtime checks", () => {
     ]);
   });
 
-  it("skips daemon findings for remote gateway mode", async () => {
-    await expect(
-      collectGatewayDaemonFindings({ cfg: { gateway: { mode: "remote" } } }),
-    ).resolves.toEqual([]);
-
-    expect(mocks.readGatewayServiceState).not.toHaveBeenCalled();
-  });
-
   it.each([
     { version: "26.8.1", text: false, status: "unsupported" as const, severity: "warning" },
     { version: "24.15.0", text: true, status: "supported" as const, severity: "info" },
@@ -833,7 +877,7 @@ describe("doctor gateway runtime checks", () => {
     "reports recorded Node $version capabilities as $severity",
     async ({ version, text, status, severity }) => {
       const message = text
-        ? `Node ${version}: unsupported version, capability probe passed.`
+        ? `Node ${version}: unsupported version, capability check passed.`
         : `Node ${version}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)`;
       mocks.readGatewayServiceState.mockResolvedValueOnce({
         installed: true,

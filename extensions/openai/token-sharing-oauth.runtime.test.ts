@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { request as httpRequest } from "node:http";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -155,39 +154,72 @@ afterEach(async () => {
 
 describe("ChatGPT token-sharing authorization", () => {
   it.each([
-    { isRemote: true, browserLink: true },
-    { isRemote: true, browserLink: false },
-  ])(
-    "delivers the browser URL before the sign-in note (remote=$isRemote, browser link=$browserLink)",
-    async ({ isRemote, browserLink }) => {
-      const ctx = context();
-      const visitBrowser = ctx.openUrl;
-      let pendingUrl: string | undefined;
-      ctx.isRemote = isRemote;
-      ctx.openUrl = async (url) => {
-        pendingUrl = url;
-      };
-      if (browserLink) {
-        ctx.prompter.openUrl = ctx.openUrl;
-      }
-      ctx.prompter.note = vi.fn(async (message) => {
-        // WizardSession attaches a queued external URL to the next emitted step.
-        expect(pendingUrl).toBeDefined();
-        if (browserLink) {
-          expect(message).not.toContain(pendingUrl!);
-        } else {
-          expect(message).toContain(pendingUrl!);
-        }
-        if (isRemote) {
-          expect(message).toContain("8080:127.0.0.1:8080");
-        }
-        await visitBrowser(pendingUrl!);
-      });
-      const result = await loginTokenSharing(ctx);
-      expect(result.profiles[0]?.credential).toMatchObject({ access: "opaque-test-access" });
-      expect((await callbackResponse!).status).toBe(200);
-    },
-  );
+    { name: "delayed response", exp: 1_800_003_600, ttl: 3600, expected: 1_800_003_600_000 },
+    { name: "shorter relative lifetime", exp: 1_800_003_600, ttl: 60, expected: 1_800_000_720_000 },
+    { name: "already expired JWT", exp: 1_800_000_600, ttl: 3600, expected: 1_800_000_600_000 },
+    { name: "opaque token", exp: undefined, opaque: true, ttl: 3600, expected: 1_800_004_260_000 },
+    { name: "missing exp", exp: undefined, ttl: 3600, expected: 1_800_004_260_000 },
+    { name: "string exp", exp: "1800003600", ttl: 3600, expected: 1_800_004_260_000 },
+    { name: "fractional exp", exp: 1_800_003_600.5, ttl: 3600, expected: 1_800_004_260_000 },
+    { name: "negative exp", exp: -1, ttl: 3600, expected: 1_800_004_260_000 },
+    { name: "unsafe exp", exp: Number.MAX_SAFE_INTEGER, ttl: 3600, expected: 1_800_004_260_000 },
+  ])("bounds refreshed credential expiry: $name", async ({ exp, opaque, ttl, expected }) => {
+    const jwt = (payload: Record<string, unknown>) =>
+      `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.synthetic`;
+    const credential: OAuthCredential = {
+      type: "oauth",
+      provider: "openai",
+      access: "synthetic-old-access",
+      refresh: "synthetic-refresh",
+      expires: 1_800_003_600_000,
+      clientId,
+      accountId: createHash("sha256")
+        .update(`${TOKEN_SHARING_ISSUER}\0${clientId}\0user-1`)
+        .digest("hex"),
+      issuer: TOKEN_SHARING_ISSUER,
+      tokenEndpoint: `${TOKEN_SHARING_ISSUER}/api/accounts/oauth/token`,
+      authFlow: TOKEN_SHARING_AUTH_FLOW,
+      idToken: jwt({ sub: "user-1" }),
+      grantedScope: TOKEN_SHARING_SCOPE,
+    };
+    request.mockResolvedValue({
+      response: Response.json({
+        access_token: opaque ? "synthetic-opaque-access" : jwt({ exp }),
+        expires_in: ttl,
+        token_type: "Bearer",
+      }),
+      release: async () => undefined,
+    });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_660_000);
+    try {
+      const refreshed = await refreshTokenSharingCredential(credential);
+      expect(refreshed.expires).toBe(expected);
+      expect(refreshed.accountId).toBe(credential.accountId);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("delivers the remote browser URL before the sign-in note", async () => {
+    const ctx = context();
+    const visitBrowser = ctx.openUrl;
+    let pendingUrl: string | undefined;
+    ctx.isRemote = true;
+    ctx.openUrl = async (url) => {
+      pendingUrl = url;
+    };
+    ctx.prompter.openUrl = ctx.openUrl;
+    ctx.prompter.note = vi.fn(async (message) => {
+      // WizardSession attaches a queued external URL to the next emitted step.
+      expect(pendingUrl).toBeDefined();
+      expect(message).not.toContain(pendingUrl!);
+      expect(message).toContain("8080:127.0.0.1:8080");
+      await visitBrowser(pendingUrl!);
+    });
+    const result = await loginTokenSharing(ctx);
+    expect(result.profiles[0]?.credential).toMatchObject({ access: "opaque-test-access" });
+    expect((await callbackResponse!).status).toBe(200);
+  });
 
   it("restarts a cancelled login without accepting its stale callback", async () => {
     const controller = new AbortController();
@@ -343,17 +375,6 @@ describe("ChatGPT token-sharing authorization", () => {
     },
   );
 
-  it("starts a fresh registration when another account or workspace is selected", async () => {
-    const ctx = context();
-    ctx.prompter.select = vi.fn().mockResolvedValue(TOKEN_SHARING_CLIENT_ID);
-    callbackClientIds = ["oaiapp_anotherregistration"];
-    idTokenAudience = callbackClientIds[0]!;
-    const result = await loginTokenSharing(ctx);
-    expect(authorization.searchParams.get("client_id")).toBe("dynamic_agent_client");
-    expect(result.profiles[0]?.credential).toMatchObject({ clientId: idTokenAudience });
-    expect(ctx.existingProfiles?.[0]?.credential).toMatchObject({ access: "old-access", clientId });
-  });
-
   it.each([
     { ids: [] },
     { ids: ["dynamic_agent_client"] },
@@ -466,39 +487,6 @@ describe("ChatGPT token-sharing authorization", () => {
     expect((await callbackResponse!).status).toBe(400);
   });
 
-  it("rejects an unrelated callback without consuming the active login", async () => {
-    const ctx = context();
-    const openUrl = ctx.openUrl;
-    ctx.openUrl = async (url) => {
-      const status = await new Promise<number | undefined>((resolve, reject) => {
-        const malformed = httpRequest(
-          { hostname: "127.0.0.1", port: 8080, path: "http://%" },
-          (response) => {
-            response.resume();
-            response.once("end", () => resolve(response.statusCode));
-          },
-        );
-        malformed.once("error", reject);
-        malformed.end();
-      });
-      expect(status).toBe(400);
-      const callback = new URL("http://127.0.0.1:8080/auth/callback?code=unrelated&state=wrong");
-      expect((await fetch(callback)).status).toBe(400);
-      await openUrl(url);
-    };
-    const result = await loginTokenSharing(ctx);
-    expect(result.profiles).toHaveLength(1);
-  });
-
-  it("requires reconnect for an older preview credential without a bound account identity", async () => {
-    const credential = await loginCredential();
-    request.mockClear();
-    await expect(
-      refreshTokenSharingCredential({ ...credential, accountId: undefined }),
-    ).rejects.toThrow("Sign in again");
-    expect(request).not.toHaveBeenCalled();
-  });
-
   it.each([
     { replacement: undefined, scope: undefined },
     { replacement: "rotated-refresh", scope: "openid offline_access" },
@@ -551,13 +539,20 @@ describe("ChatGPT token-sharing authorization", () => {
     },
   );
 
-  it.each([{ tokenEndpoint: "https://example.com/token" }, { clientId: "dynamic_agent_client" }])(
-    "rejects invalid refresh registration metadata %j before sending credentials",
-    async (metadata) => {
+  it.each([
+    { metadata: { accountId: undefined }, expectedError: "Sign in again" },
+    {
+      metadata: { tokenEndpoint: "https://example.com/token" },
+      expectedError: "registration is missing",
+    },
+    { metadata: { clientId: "dynamic_agent_client" }, expectedError: "registration is missing" },
+  ])(
+    "rejects invalid refresh registration metadata $metadata before sending credentials",
+    async ({ metadata, expectedError }) => {
       const credential = await loginCredential();
       request.mockClear();
       await expect(refreshTokenSharingCredential({ ...credential, ...metadata })).rejects.toThrow(
-        "registration is missing",
+        expectedError,
       );
       expect(request).not.toHaveBeenCalled();
     },

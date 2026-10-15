@@ -174,8 +174,8 @@ suite.define(() => {
         const verify = await gateway.waitForRequest("models.probe");
         expect(verify.params).toEqual({ provider: "openai", agentId: "main" });
         await currentProvider
-          .locator(".model-providers__probe-summary")
-          .getByText("1234 ms", { exact: true })
+          .locator(".model-providers__probe-target")
+          .getByText("Connected · Request round-trip: 1234 ms", { exact: true })
           .waitFor();
         await currentProvider
           .locator(".model-providers__probe-summary")
@@ -195,8 +195,8 @@ suite.define(() => {
           .getByRole("button", { name: "Test connection", exact: true })
           .waitFor();
         await currentProvider
-          .locator(".model-providers__probe-summary")
-          .getByText("1234 ms", { exact: true })
+          .locator(".model-providers__probe-target")
+          .getByText("Connected · Request round-trip: 1234 ms", { exact: true })
           .waitFor();
         await currentProvider
           .locator(".model-providers__probe-summary")
@@ -294,15 +294,8 @@ suite.define(() => {
           const dialog = page.locator("openclaw-modal-dialog");
           const alert = dialog.getByRole("alert");
           await alert.waitFor();
-          expect((await alert.textContent())?.trim()).toBe(
-            "Could not finish. Open Details to see what to do next.",
-          );
-          const details = dialog.locator("details");
-          expect(await details.getAttribute("open")).toBeNull();
-          const diagnostic = details.getByText("The model could not finish setup", { exact: true });
-          expect(await diagnostic.isVisible()).toBe(false);
-          await details.getByText("Details", { exact: true }).click();
-          await diagnostic.waitFor();
+          await alert.getByText("The model could not finish setup", { exact: true }).waitFor();
+          expect(await dialog.locator("details").count()).toBe(0);
           await dialog.getByRole("button", { name: "Close", exact: true }).click();
           await expect.poll(() => dialog.count()).toBe(0);
           await expect.poll(() => signIn.isDisabled()).toBe(outcome === "uncertain");
@@ -323,13 +316,7 @@ suite.define(() => {
           } else {
             await signIn.click();
             await alert.waitFor();
-            expect((await alert.textContent())?.trim()).toBe(
-              "Could not finish. Open Details to see what to do next.",
-            );
-            expect(await details.getAttribute("open")).toBeNull();
-            expect(await diagnostic.isVisible()).toBe(false);
-            await details.getByText("Details", { exact: true }).click();
-            await diagnostic.waitFor();
+            await alert.getByText("The model could not finish setup", { exact: true }).waitFor();
             expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(2);
           }
           if (artifactDir) {

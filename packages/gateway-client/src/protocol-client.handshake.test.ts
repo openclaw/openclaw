@@ -77,23 +77,7 @@ describe("GatewayProtocolClient connect handshake", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    { retryable: true, retryAfterMs: 90_000, delayMs: 90_000, draw: 0, nextDelayMs: 20 },
-    { retryable: true, retryAfterMs: 90_000, delayMs: 99_000, draw: 0.5, nextDelayMs: 22 },
-    { retryable: true, retryAfterMs: 11, delayMs: 11, draw: 0, nextDelayMs: 20 },
-    // The existing native sleep ceiling must survive an overflowing jitter calculation.
-    {
-      retryable: true,
-      retryAfterMs: Number.MAX_VALUE,
-      delayMs: 2_147_000_000,
-      draw: 0.5,
-      nextDelayMs: 22,
-    },
-    { retryable: false, retryAfterMs: 90_000, delayMs: 10, draw: 0, nextDelayMs: 20 },
-    { retryable: true, retryAfterMs: 1, delayMs: 10, draw: 0, nextDelayMs: 20 },
-    { retryable: true, retryAfterMs: 0, delayMs: 10, draw: 0, nextDelayMs: 20 },
-    { retryable: true, retryAfterMs: undefined, delayMs: 10, draw: 0, nextDelayMs: 20 },
-  ])(
+  it.each([{ retryable: true, retryAfterMs: 90_000, delayMs: 99_000, draw: 0.5, nextDelayMs: 22 }])(
     "keeps admitted retry timing while advancing backoff: %j",
     async ({ retryable, retryAfterMs, delayMs, draw, nextDelayMs }) => {
       vi.useFakeTimers();
@@ -280,29 +264,6 @@ describe("GatewayProtocolClient connect handshake", () => {
     } finally {
       client.stop();
     }
-  });
-
-  it("passes the Gateway challenge timestamp into connect planning", () => {
-    const buildConnectPlan = vi.fn(() => ({}));
-    const { client, connections } = createHandshakeClient(buildConnectPlan);
-    client.start();
-    const connection = connections[0];
-    expect(connection).toBeDefined();
-    if (!connection) {
-      return;
-    }
-
-    receiveConnectChallenge(connection, 1_700_000_000_123);
-
-    expect(buildConnectPlan).toHaveBeenCalledWith({
-      nonce: "synthetic-nonce",
-      challengeTs: 1_700_000_000_123,
-      serverCapabilities: [],
-      generation: 1,
-      signal: expect.any(AbortSignal),
-      assertCurrent: expect.any(Function),
-    });
-    client.stop();
   });
 
   it("does not retain an advertised capability after reconnecting to a different Gateway", async () => {

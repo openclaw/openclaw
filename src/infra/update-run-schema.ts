@@ -188,6 +188,9 @@ const UpdateRunStepSchema = z.object({
   startedAtMs: timestamp.optional(),
   endedAtMs: timestamp.optional(),
   exitCode: z.number().int().nullable().optional(),
+  termination: z.enum(["exit", "timeout", "no-output-timeout", "signal"]).optional(),
+  signal: z.string().max(32).nullable().optional(),
+  stderrTail: z.string().max(8192).optional(),
   detail: text.optional(),
   failureFacts: z.array(UpdateFailureFactSchema).max(5).optional(),
   configChange: z

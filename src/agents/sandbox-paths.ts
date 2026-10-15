@@ -322,13 +322,8 @@ function mapContainerWorkspaceFileUrl(params: {
   sandboxRoot: string;
   containerWorkdir: string;
 }): string | undefined {
-  let parsed: URL;
-  try {
-    parsed = new URL(params.fileUrl);
-  } catch {
-    return undefined;
-  }
-  if (parsed.protocol !== "file:") {
+  const parsed = URL.parse(params.fileUrl);
+  if (parsed?.protocol !== "file:") {
     return undefined;
   }
   const host = parsed.hostname.trim().toLowerCase();

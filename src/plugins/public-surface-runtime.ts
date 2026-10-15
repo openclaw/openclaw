@@ -165,7 +165,7 @@ function resolvePublicSurfaceFromBundledDir(params: {
     }
   }
   return (
-    resolveRetainedConfigDoctorPath(params) ??
+    resolveRetainedDoctorPath(params) ??
     resolveBundledPluginSourcePublicSurfacePath({
       sourceRoot: path.join(normalizedRootDir, "extensions"),
       dirName: params.dirName,
@@ -174,23 +174,34 @@ function resolvePublicSurfaceFromBundledDir(params: {
   );
 }
 
-function resolveRetainedConfigDoctorPath(params: {
+export function resolveRetainedDoctorPath(params: {
   rootDir: string;
   dirName: string;
   artifactBasename: string;
 }): string | null {
-  if (params.artifactBasename !== "config-doctor-api.js") {
+  const dirName = normalizeBundledPluginDirName(params.dirName);
+  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
+  const directory =
+    artifactBasename === "config-doctor-api.js"
+      ? "config-doctor"
+      : artifactBasename === "state-retention-api.js"
+        ? "state-retention"
+        : undefined;
+  if (!directory) {
     return null;
   }
-  // Externalizing a channel removes its runtime entry, but shipped config still needs
-  // its core-version migration before that plugin can be installed or granted capabilities.
+  // Host-retained Doctor contracts remain available after runtime externalization.
   for (const dist of ["dist", "dist-runtime"]) {
-    const candidate = path.resolve(params.rootDir, dist, "config-doctor", `${params.dirName}.js`);
+    const candidate = path.resolve(params.rootDir, dist, directory, `${dirName}.js`);
     if (pluginCacheExistsSync(candidate)) {
       return candidate;
     }
   }
-  return null;
+  return resolveBundledPluginSourcePublicSurfacePath({
+    sourceRoot: path.join(params.rootDir, "extensions"),
+    dirName,
+    artifactBasename,
+  });
 }
 
 function resolveExplicitEnvBundledPluginsDir(env: NodeJS.ProcessEnv): string | undefined {
@@ -271,5 +282,5 @@ export function resolveBundledPluginPublicSurfacePath(params: {
       return candidate;
     }
   }
-  return resolveRetainedConfigDoctorPath({ ...params, dirName, artifactBasename });
+  return resolveRetainedDoctorPath({ ...params, dirName, artifactBasename });
 }

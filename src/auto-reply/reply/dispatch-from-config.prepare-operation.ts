@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
+import { scopeCommandTranscriptId } from "../../config/sessions/command-transcript.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import {
@@ -13,7 +14,9 @@ import {
 } from "../../plugins/conversation-binding.js";
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
-import { resolveCommandAuthorization } from "../command-auth.js";
+import { resolveCommandAuthorizationAsync } from "../command-auth.js";
+import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import {
   DispatchReplyOperationAbortedError,
@@ -25,6 +28,10 @@ import {
   loadAbortRuntime,
   loadFastApproveRuntime,
 } from "./dispatch-from-config.runtime-loaders.js";
+import {
+  captureDeliveredTranscriptMirror,
+  mirrorDeliveredReplyToTranscript,
+} from "./dispatch-from-config.transcript.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
 import { extractShortModelName } from "./response-prefix-template.js";
@@ -91,13 +98,34 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
         modelFull: `${selectedModel.provider}/${selectedModel.model}`,
         thinkingLevel: modelSelection.thinkLevel ?? "off",
       };
+      const commandId = scopeCommandTranscriptId(
+        normalizeOptionalString(state.messageIdForHook),
+        state.hookState.inboundClaimContext,
+      );
+      const metadata =
+        sessionKey && commandId
+          ? {
+              sessionKey,
+              agentId: sessionAgentId,
+              expectedSessionId: sessionStoreEntry.entry?.sessionId,
+              commandText: ctx.commandText,
+              commandId,
+              text: fast.payload.text,
+              preferText: true,
+              idempotencyKey: `${fast.logKind}:${commandId}`,
+            }
+          : undefined;
       // Routed delivery owns its destination-scoped prefix. Direct dispatchers already own
       // their prefix, so seed that live context only when no cross-channel route is used.
-      const result = await state.routeReplyToOriginating(fast.payload, { responsePrefixContext });
+      const result = await state.routeReplyToOriginating(fast.payload, {
+        responsePrefixContext,
+        ...(metadata ? { mirror: false } : {}),
+      });
       if (result) {
         queuedFinal = result.ok;
         if (state.isRoutedReplyDelivered(result)) {
           routedFinalCount += 1;
+          await mirrorDeliveredReplyToTranscript({ metadata, cfg });
         }
         if (!result.ok) {
           logVerbose(
@@ -107,7 +135,22 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       } else {
         state.markInboundDedupeReplayUnsafe();
         params.replyOptions?.onModelSelected?.(modelSelection);
-        queuedFinal = dispatcher.sendFinalReply(fast.payload);
+        const captureToken = {};
+        const delivered = captureDeliveredTranscriptMirror({
+          dispatcher,
+          metadata,
+          captureToken,
+        });
+        setReplyPayloadMetadata(fast.payload, { finalDeliveryCapture: captureToken });
+        const sent = turnLedger.sendQueued("final", fast.payload);
+        queuedFinal = sent.queued;
+        if (sent.queued && sent.outcome) {
+          registerReplyDispatcherSettledTask(dispatcher, async () => {
+            if ((await sent.outcome) === "delivered") {
+              await mirrorDeliveredReplyToTranscript({ metadata: delivered(), cfg });
+            }
+          });
+        }
       }
     } else if (suppressDelivery) {
       logVerbose(
@@ -268,7 +311,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       );
       // Bound native runtimes need the current owner decision, not stale bind-time identity.
       // The resolver folds internal operator.admin authority into this owner decision.
-      const bindingAuthorization = resolveCommandAuthorization({
+      const bindingAuthorization = await resolveCommandAuthorizationAsync({
         ctx,
         cfg,
         commandAuthorized: ctx.CommandAuthorized,
@@ -287,7 +330,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
               ...state.hookState.inboundClaimEvent,
               senderIsOwner: bindingAuthorization.senderIsOwner,
             };
-            return await state.runWithDispatchLifecycleAdmission(
+            const claim = state.runWithDispatchLifecycleAdmission(
               async () =>
                 await hookRunner.runInboundClaimForPluginOutcome(
                   pluginOwnedBinding.pluginId,
@@ -298,16 +341,14 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
                   ),
                 ),
             );
+            state.trackDispatchLifecycleWork(claim);
+            return await claim;
           })()
-        : (() => {
-            const pluginLoaded =
-              getGlobalPluginRegistry()?.plugins.some(
-                (plugin) => plugin.id === pluginOwnedBinding.pluginId && plugin.status === "loaded",
-              ) ?? false;
-            return pluginLoaded
-              ? ({ status: "no_handler" } as const)
-              : ({ status: "missing_plugin" } as const);
-          })();
+        : getGlobalPluginRegistry()?.plugins.some(
+              (plugin) => plugin.id === pluginOwnedBinding.pluginId && plugin.status === "loaded",
+            )
+          ? ({ status: "no_handler" } as const)
+          : ({ status: "missing_plugin" } as const);
       if (isPreDispatchOperationAborted()) {
         return { status: "complete" as const, result: finishReplyOperationAbortedDispatch() };
       }
@@ -334,12 +375,11 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
             targetedClaimOutcome.status === "missing_plugin"
               ? "plugin-bound-fallback-missing-plugin"
               : "plugin-bound-fallback-no-handler";
-          const isUnmentionedGroupFallback =
+          const shouldSuppressUnmentionedFallback =
             (chatType === "group" || chatType === "channel") &&
             ctx.WasMentioned === false &&
-            !state.explicitCommandTurnCtx;
-          const shouldSuppressUnmentionedFallback =
-            isUnmentionedGroupFallback && ctx.GroupRequireMention !== false;
+            !state.explicitCommandTurnCtx &&
+            ctx.GroupRequireMention !== false;
           if (shouldSuppressUnmentionedFallback) {
             markIdle("plugin_binding_fallback_unmentioned");
             recordProcessed("completed", { reason: state.bindingState.pluginFallbackReason });

@@ -40,13 +40,6 @@ export async function runPluginCleanupScope<T>(values: readonly object[], run: (
   try {
     return await pluginInvocationContext.run(
       {
-        assertCurrent: (instance) => {
-          if (bindings.has(instance)) {
-            assertOpen();
-          } else {
-            parent?.assertCurrent?.(instance);
-          }
-        },
         lookup: (instance) => {
           const binding = bindings.get(instance);
           if (binding) {
@@ -108,7 +101,6 @@ export class PluginInvocationScope {
     }
   }
 
-  /** Open retained consumers are drained by a reload that reserved their instance. */
   get holdsPendingReplacement(): boolean {
     return (
       !this.closed && [...this.consumers.keys()].some((instance) => instance.replacementPending)
@@ -192,7 +184,8 @@ export function collectRegistryInvocationInstances(
 ): Set<PluginInstanceHandle> {
   const instances = new Set<PluginInstanceHandle>();
   const records = [
-    ...registry.plugins,
+    // Rollback preserves failed records for diagnostics, not executable custody.
+    ...registry.plugins.filter((record) => record.status === "loaded"),
     ...registry.decisionProviders.map(({ host }) => host.record),
     ...registry.channels.flatMap(({ borrowedRuntimeRecord }) => borrowedRuntimeRecord ?? []),
   ];

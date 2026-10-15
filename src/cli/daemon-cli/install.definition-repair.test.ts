@@ -8,6 +8,10 @@ import { maybeRepairGatewayServiceConfig } from "../../commands/doctor-gateway-s
 import { restoreDoctorGatewayService } from "../../commands/doctor-maintenance-restoration.js";
 import { createDoctorPrompter } from "../../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { buildLaunchAgentPlist } from "../../daemon/launchd-plist.js";
+import { decodeLaunchAgentPlistFixture } from "../../daemon/launchd-plist.test-support.js";
+import { resolveLaunchAgentPlistPath } from "../../daemon/launchd-service-files.js";
+import { resolveGatewaySupervisorLogPaths } from "../../daemon/restart-logs.js";
 import {
   GatewayServiceDefinitionBackupReceiptSchema,
   type GatewayServiceDefinitionBackupReceipt,
@@ -23,8 +27,10 @@ import {
 } from "../../daemon/systemd-unit.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import * as exec from "../../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { firstWrittenJsonArg } from "../test-runtime-capture.js";
+import { stubNodeRuntime } from "../update-cli/update-command-runtime-recovery.test-support.js";
 import { inspectManagedGatewayServiceBeforeUpdate } from "../update-cli/update-command-service-plan.js";
 import { runDaemonInstall } from "./install.js";
 
@@ -33,6 +39,7 @@ const native = vi.hoisted(() => ({
   source: "",
   command: vi.fn<() => Promise<GatewayServiceCommandConfig>>(),
   systemctl: vi.fn<typeof import("../../daemon/systemd-exec.js").execSystemctlUser>(),
+  launchctl: vi.fn<typeof import("../../daemon/launchd-exec.js").execLaunchctl>(),
   serviceRuntime:
     vi.fn<typeof import("../../daemon/systemd-runtime.js").readSystemdServiceRuntime>(),
   note: vi.fn<(message: string, title?: string) => void>(),
@@ -72,14 +79,30 @@ vi.mock("../../daemon/runtime-paths.js", async (original) => ({
   resolveNodeRuntimeInfo: async () => ({
     status: "supported",
     path: process.execPath,
-    version: "26.8.1",
-    sqliteVersion: "3.53.4",
+    version: process.versions.node,
+    sqliteVersion: process.versions.sqlite,
   }),
   emitNodeRuntimeWarning: async () => {},
 }));
 vi.mock("../../daemon/systemd-service-files.js", async (original) => ({
   ...(await original<typeof import("../../daemon/systemd-service-files.js")>()),
   readSystemdServiceExecStart: native.command,
+}));
+vi.mock("../../daemon/launchd-exec.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/launchd-exec.js")>()),
+  execLaunchctl: native.launchctl,
+}));
+vi.mock("../../daemon/launchd-runtime.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/launchd-runtime.js")>()),
+  readLaunchAgentRuntime: native.serviceRuntime,
+}));
+vi.mock("../../daemon/launchd-current-service.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/launchd-current-service.js")>()),
+  isCurrentProcessInsideLaunchdService: async () => false,
+}));
+vi.mock("../../daemon/launchd-system.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/launchd-system.js")>()),
+  assertNoSystemLaunchDaemonOwnership: async () => {},
 }));
 vi.mock("../../daemon/systemd-exec.js", async (original) => ({
   ...(await original<typeof import("../../daemon/systemd-exec.js")>()),
@@ -139,6 +162,7 @@ beforeEach(() => {
   originalEnv = process.env;
   originalArgv = process.argv;
   vi.clearAllMocks();
+  stubNodeRuntime();
 });
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -148,7 +172,7 @@ afterEach(() => {
 });
 
 async function fixture(
-  edit?: "ExecStartPre" | "foreign-unit" | "foreign-root" | "old-installation" | "native-policy",
+  edit?: "ExecStartPre" | "foreign-unit" | "foreign-root" | "old-installation",
   layout: "direct" | "user-prefix shim" = "direct",
 ) {
   const home = await fs.realpath(dirs.make("candidate-service-repair-"));
@@ -250,16 +274,7 @@ async function fixture(
       ? path.join(home, "foreign-unit", "gateway.service")
       : resolveSystemdUnitPath(process.env);
   await fs.mkdir(path.dirname(native.source), { recursive: true, mode: 0o700 });
-  if (edit === "native-policy") {
-    plan.environment.OPENCLAW_SERVICE_VERSION = "2026.7.1-2";
-  }
   let original = buildSystemdUnit(plan).replace("KillMode=mixed\n", "");
-  if (edit === "native-policy") {
-    original = original
-      .replace("TimeoutStartSec=30", "TimeoutStartSec=45")
-      .replace("TimeoutStopSec=330", "TimeoutStopSec=600")
-      .replace("StartLimitIntervalSec=300", "StartLimitIntervalSec=60");
-  }
   if (edit === "ExecStartPre") {
     original = original.replace("[Service]", "[Service]\nExecStartPre=/operator/private-hook");
   }
@@ -356,6 +371,7 @@ async function runStandaloneDoctor(
   mode: "direct" | "maintenance" = "direct",
   running = true,
   config: OpenClawConfig = native.config,
+  approveConfigRepair = false,
 ) {
   delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
   delete process.env.OPENCLAW_UPDATE_RUN_ID;
@@ -408,6 +424,9 @@ async function runStandaloneDoctor(
     runtime: native.runtime,
     options: { repair: true, yes: true, nonInteractive: true },
   });
+  if (approveConfigRepair) {
+    prompter.confirmRuntimeRepair = async () => true;
+  }
   await maybeRepairGatewayServiceConfig(config, "local", native.runtime, prompter, {
     writeConfig: native.writeConfig,
   });
@@ -436,15 +455,11 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-it.skipIf(process.platform === "win32").each(["user-prefix shim"] as const)(
-  "repairs a published-driver unit through the candidate installer with receipt and warning history (%s)",
-  async (layout) => {
-    const f = await fixture(undefined, layout);
-    await runDaemonInstall({ force: true, json: true }).catch((error: unknown) => {
-      if (!(error instanceof Error) || error.message !== "fixture-exit:1") {
-        throw error;
-      }
-    });
+it.skipIf(process.platform === "win32")(
+  "repairs a published-driver user-prefix shim unit through the candidate installer",
+  async () => {
+    const f = await fixture(undefined, "user-prefix shim");
+    await runDaemonInstall({ force: true, json: true });
     const result = response();
     expect(result.ok, result.error).toBe(true);
     expect(result.definitionBackup?.files).toEqual(
@@ -456,10 +471,8 @@ it.skipIf(process.platform === "win32").each(["user-prefix shim"] as const)(
     expect(changed).toContain("OPERATOR_SETTING=retained");
     const repaired = await native.command();
     expect(repaired.environment?.PATH).toBe(f.servicePath);
-    if (f.cliBinDir) {
-      expect(repaired.environment?.PATH?.split(path.delimiter)).toContain(f.cliBinDir);
-    }
     expect(await expectDefinitionBackups(f)).toEqual(result.definitionBackup);
+    expect(repaired.environment?.PATH?.split(path.delimiter)).toContain(f.cliBinDir);
     expect(result.warnings).toContainEqual(
       expect.stringContaining("Reconciled Gateway service definition: Service.KillMode."),
     );
@@ -473,61 +486,20 @@ it.skipIf(process.platform === "win32").each(["user-prefix shim"] as const)(
 );
 
 it.skipIf(process.platform === "win32")(
-  "refreshes an eligible same-version installation onto the candidate root through the updater installer",
-  async () => {
-    const f = await fixture("old-installation");
-    const previous = await native.command();
-    expect(previous.programArguments).not.toContain(path.join(native.root, "dist", "index.js"));
-    await runDaemonInstall({ force: true, json: true });
-    const result = response();
-    expect(result.ok, result.error).toBe(true);
-    expect((await native.command()).programArguments).toContain(
-      path.join(native.root, "dist", "index.js"),
-    );
-    expect(await expectDefinitionBackups(f)).toEqual(result.definitionBackup);
-    expect(native.serviceRuntime).toHaveBeenCalled();
-    expect(native.systemctl.mock.calls.filter(([, args]) => args[0] === "restart")).toHaveLength(1);
-  },
-);
-
-it.skipIf(process.platform === "win32")(
-  "leaves an old installation unchanged when its native runtime cannot be inspected",
-  async () => {
-    const f = await fixture("old-installation");
-    native.serviceRuntime.mockResolvedValue({
-      status: "unknown",
-      detail: "fixture runtime unavailable",
-    });
-    const before = await fs.readdir(path.dirname(f.source));
-    await expect(runDaemonInstall({ force: true, json: true })).rejects.toThrow("fixture-exit:1");
-    expect(response().error).toContain("unknown or foreign installation");
-    expect(await fs.readFile(f.source, "utf8")).toBe(f.original);
-    expect(await fs.readdir(path.dirname(f.source))).toEqual(before);
-    expect(
-      native.systemctl.mock.calls.some(
-        ([, args]) => args[0] === "daemon-reload" || args[0] === "restart",
-      ),
-    ).toBe(false);
-  },
-);
-
-it.skipIf(process.platform === "win32")(
-  "restores the unit and new environment file when publication runs out of space",
+  "restores the previous definition after candidate publication ENOSPC",
   async () => {
     const f = await fixture();
     const envFile = path.join(process.env.OPENCLAW_STATE_DIR!, "gateway.systemd.env");
-    {
-      const buildPlan = installPlans.buildGatewayInstallPlan;
-      vi.spyOn(installPlans, "buildGatewayInstallPlan").mockImplementation(async (...args) => {
-        const plan = await buildPlan(...args);
-        return {
-          ...plan,
-          environmentValueSources: { ...plan.environmentValueSources, OPERATOR_SETTING: "file" },
-        };
-      });
-    }
-    const writeFile = fs.writeFile.bind(fs);
     let injected = false;
+    const buildPlan = installPlans.buildGatewayInstallPlan;
+    vi.spyOn(installPlans, "buildGatewayInstallPlan").mockImplementation(async (...args) => {
+      const plan = await buildPlan(...args);
+      return {
+        ...plan,
+        environmentValueSources: { ...plan.environmentValueSources, OPERATOR_SETTING: "file" },
+      };
+    });
+    const writeFile = fs.writeFile.bind(fs);
     vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
       const [file, contents, options] = args;
       if (
@@ -545,67 +517,44 @@ it.skipIf(process.platform === "win32")(
       return writeFile(...args);
     });
     await expect(runDaemonInstall({ force: true, json: true })).rejects.toThrow("fixture-exit:1");
-    expect(injected).toBe(true);
     const result = response();
-    expect(result.ok).toBe(false);
     expect(result.error).toContain("previous definition was restored");
+    expect(result.definitionBackup).toBeUndefined();
+    expect(await fs.readFile(f.source, "utf8")).toBe(f.original);
+    const detail = expect.stringMatching(
+      /previous definition was (?:restored|left unchanged):.*ENOSPC/u,
+    );
+    expect(getUpdateRun(f.runId)?.steps).toContainEqual(
+      expect.objectContaining({
+        step: expect.stringContaining("warning:managed-service-reconciliation"),
+        detail,
+      }),
+    );
+    expect(injected).toBe(true);
+    expect(result.ok).toBe(false);
     expect(result.error).toContain("SERVICE_DEFINITION_UNKNOWN:");
     expect(result.error).not.toContain("UPDATE_NATIVE_AUTHORITY");
-    expect(result.definitionBackup).toBeUndefined();
-    expect(result.warnings).toContainEqual(
-      expect.stringMatching(/previous definition was (?:restored|left unchanged):.*ENOSPC/u),
-    );
-    expect(await fs.readFile(f.source, "utf8")).toBe(f.original);
+    expect(result.warnings).toContainEqual(detail);
     const receipt = await expectDefinitionBackups(f);
     expect(receipt.files[0]?.after).toEqual(receipt.files[0]?.before);
-    {
-      expect(receipt.files[1]).toMatchObject({ before: null, after: null });
-      await expect(fs.stat(envFile)).rejects.toMatchObject({ code: "ENOENT" });
-    }
+    expect(receipt.files[1]).toMatchObject({ before: null, after: null });
+    await expect(fs.stat(envFile)).rejects.toMatchObject({ code: "ENOENT" });
     expect(native.systemctl.mock.calls.some(([, args]) => args[0] === "restart")).toBe(false);
-    expect(getUpdateRun(f.runId)?.steps).toContainEqual(
-      expect.objectContaining({
-        step: expect.stringContaining("warning:managed-service-reconciliation"),
-        detail: expect.stringMatching(
-          /previous definition was (?:restored|left unchanged):.*ENOSPC/u,
-        ),
-      }),
-    );
-  },
-);
-
-it.skipIf(process.platform === "win32")(
-  "restores and reloads the previous definition after candidate activation fails",
-  async () => {
-    const f = await fixture();
-    const execute = native.systemctl.getMockImplementation()!;
-    native.systemctl.mockImplementation(async (...args) =>
-      args[1][0] === "restart"
-        ? { code: 1, stdout: "", stderr: "fixture activation failed", termination: "exit" }
-        : execute(...args),
-    );
-    await expect(runDaemonInstall({ force: true, json: true })).rejects.toThrow("fixture-exit:1");
-    expect(response().error).toContain("previous definition was restored");
-    expect(response().definitionBackup).toBeUndefined();
-    expect(await fs.readFile(f.source, "utf8")).toBe(f.original);
-    expect(
-      native.systemctl.mock.calls.filter(([, args]) => args[0] === "daemon-reload"),
-    ).toHaveLength(2);
-    expect(getUpdateRun(f.runId)?.steps).toContainEqual(
-      expect.objectContaining({
-        step: expect.stringContaining("warning:managed-service-reconciliation"),
-        detail: expect.stringContaining("previous definition was restored"),
-      }),
-    );
   },
 );
 
 it
   .skipIf(process.platform === "win32")
-  .each(["ExecStartPre", "foreign-unit", "foreign-root"] as const)(
+  .each(["ExecStartPre", "foreign-unit", "foreign-root", "old-installation"] as const)(
   "preserves the entire definition when candidate repair finds %s",
   async (edit) => {
     const f = await fixture(edit);
+    if (edit === "old-installation") {
+      native.serviceRuntime.mockResolvedValue({
+        status: "unknown",
+        detail: "fixture runtime unavailable",
+      });
+    }
     const before = await fs.readdir(path.dirname(f.source));
     await expect(runDaemonInstall({ force: true, json: true })).rejects.toThrow("fixture-exit:1");
     const result = response();
@@ -625,6 +574,12 @@ it
     expect(await fs.readFile(resolveSystemdUnitPath(process.env), "utf8")).toBe(f.original);
     expect(await fs.readdir(path.dirname(f.source))).toEqual(before);
     expect(native.systemctl.mock.calls.some(([, args]) => args[0] === "restart")).toBe(false);
+    if (edit === "old-installation") {
+      expect(result.error).toContain("unknown or foreign installation");
+      expect(native.systemctl.mock.calls.some(([, args]) => args[0] === "daemon-reload")).toBe(
+        false,
+      );
+    }
   },
 );
 
@@ -650,49 +605,122 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-it.skipIf(process.platform === "win32")(
-  "repairs native policy through standalone Doctor with the shared backup transaction",
-  async () => {
-    const f = await fixture("native-policy");
-    await runStandaloneDoctor();
+it.skipIf(process.platform === "win32").each([
+  { seconds: 20, throttle: 10, migrated: true },
+  { seconds: 20, throttle: 45, migrated: false },
+  { seconds: 20, throttle: 45, migrated: true, portDrift: true },
+  { seconds: 20, throttle: 45, migrated: true, updater: true },
+  { seconds: 600, throttle: 10, migrated: false },
+  { seconds: 30, throttle: 10, migrated: false },
+  { seconds: 600, throttle: 1, migrated: true },
+  { seconds: 600, throttle: 10, migrated: true, portDrift: true },
+  { seconds: 30, throttle: 10, migrated: true, portDrift: true },
+  { seconds: 20, throttle: 10, migrated: true, updater: true },
+])(
+  "migrates only the retired LaunchAgent timeout ($seconds, throttle=$throttle, portDrift=$portDrift, updater=$updater)",
+  async ({ seconds, throttle, migrated, portDrift, updater }) => {
+    await fixture();
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    vi.spyOn(exec, "runExec").mockImplementation(async (file, args, options) => {
+      if (file !== "/usr/bin/plutil" || typeof options !== "object" || !options.input) {
+        throw new Error(`Unexpected fixture subprocess: ${file}`);
+      }
+      return decodeLaunchAgentPlistFixture(options.input, args[1]);
+    });
+    native.launchctl.mockImplementation(async (args) => ({
+      code: 0,
+      stdout: args[0] === "print" ? `${args[1]} = {\n\tstate = running\n\tpid = 4242\n}\n` : "",
+      stderr: "",
+      termination: "exit",
+    }));
+    const plan = await installPlans.buildGatewayInstallPlan({
+      env: process.env,
+      port: 19137,
+      runtime: "node",
+      runtimePath: process.execPath,
+      config: native.config,
+    });
+    const source = resolveLaunchAgentPlistPath(process.env);
+    const { stdoutPath } = resolveGatewaySupervisorLogPaths(process.env);
+    const original = buildLaunchAgentPlist({
+      ...plan,
+      label: "ai.openclaw.gateway",
+      comment: "OpenClaw Gateway",
+      stdoutPath,
+      stderrPath: stdoutPath,
+    })
+      .replace(/(<key>ExitTimeOut<\/key>\s*<integer>)\d+/u, `$1${seconds}`)
+      .replace(/(<key>ThrottleInterval<\/key>\s*<integer>)\d+/u, `$1${throttle}`);
+    await fs.mkdir(path.dirname(source), { recursive: true });
+    await fs.writeFile(source, original, { mode: 0o600 });
+
+    if (updater) {
+      // Published drivers invoke the candidate installer with this existing marker.
+      await runDaemonInstall({ force: true, json: true });
+      expect(response().ok).toBe(true);
+    } else {
+      const config = portDrift
+        ? { ...native.config, gateway: { ...native.config.gateway, port: 19138 } }
+        : native.config;
+      await runStandaloneDoctor("direct", true, config, portDrift);
+    }
+
     expect(native.runtime.error).not.toHaveBeenCalled();
-    const changed = await fs.readFile(f.source, "utf8");
-    expect(changed).toMatch(/^KillMode=mixed$/mu);
-    expect(changed).toMatch(/^TimeoutStartSec=45$/mu);
-    expect(changed).toMatch(/^TimeoutStopSec=600$/mu);
-    expect(changed).toContain("OPERATOR_SETTING=retained");
-    await expectDefinitionBackups(f);
-    expect(native.systemctl.mock.calls.filter(([, args]) => args[0] === "restart")).toHaveLength(1);
-    expect(native.note.mock.calls.map(([message]) => message)).toContainEqual(
-      expect.stringContaining("Reconciled Gateway service definition:"),
+    const changed = await fs.readFile(source, "utf8");
+    if (portDrift) {
+      expect(changed).toContain("<string>19138</string>");
+    }
+    expect(changed).toMatch(
+      new RegExp(
+        `<key>ExitTimeOut</key>\\s*<integer>${seconds === 20 && throttle !== 45 ? 330 : seconds}</integer>`,
+      ),
+    );
+    if (migrated) {
+      expect(changed).toMatch(
+        new RegExp(
+          `<key>ThrottleInterval</key>\\s*<integer>${throttle === 45 ? 45 : 10}</integer>`,
+        ),
+      );
+      await expectDefinitionBackups({ source, original });
+      expect(native.launchctl.mock.calls.filter(([args]) => args[0] === "bootstrap")).toHaveLength(
+        1,
+      );
+    } else {
+      expect(changed).toBe(original);
+      expect(
+        native.launchctl.mock.calls.some(([args]) => ["bootout", "bootstrap"].includes(args[0]!)),
+      ).toBe(false);
+    }
+    const diagnostics = updater
+      ? response().warnings?.join("\n")
+      : native.note.mock.calls.map(([message]) => message).join("\n");
+    expect(diagnostics).toContain(
+      throttle === 45
+        ? "not changed because the definition is customized"
+        : updater
+          ? "Reconciled Gateway service definition: ExitTimeOut."
+          : seconds === 20
+            ? "ExitTimeOut=330"
+            : "Custom ExitTimeOut; not changed.",
     );
   },
 );
 
-it.skipIf(process.platform === "win32")(
-  "standalone Doctor preserves an already-stopped service with stale native policy",
-  async () => {
+it.skipIf(process.platform === "win32").each(["stopped service", "unapproved token"] as const)(
+  "standalone Doctor preserves native policy for a %s",
+  async (reason) => {
     const f = await fixture();
     const before = await fs.readdir(path.dirname(f.source));
-    await runStandaloneDoctor("direct", false);
-    expect(await fs.readFile(f.source, "utf8")).toBe(f.original);
-    expect(await fs.readdir(path.dirname(f.source))).toEqual(before);
-    expect(native.systemctl.mock.calls.some(([, args]) => args[0] === "restart")).toBe(false);
-  },
-);
-
-it.skipIf(process.platform === "win32")(
-  "standalone Doctor does not persist an environment token as policy-only repair",
-  async () => {
-    const f = await fixture();
-    const config: OpenClawConfig = {
-      gateway: { mode: "local", port: 19137, auth: { mode: "token" } },
-    };
-    await fs.writeFile(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
-    process.env.OPENCLAW_GATEWAY_TOKEN = "doctor-policy-environment-fixture-token";
-    await runStandaloneDoctor("direct", true, config);
+    let config: OpenClawConfig = native.config;
+    if (reason === "unapproved token") {
+      config = { gateway: { mode: "local", port: 19137, auth: { mode: "token" } } };
+      await fs.writeFile(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
+      process.env.OPENCLAW_GATEWAY_TOKEN = "doctor-policy-environment-fixture-token";
+    }
+    await runStandaloneDoctor("direct", reason === "unapproved token", config);
     expect(native.writeConfig).not.toHaveBeenCalled();
     expect(await fs.readFile(f.source, "utf8")).toBe(f.original);
+    expect(await fs.readdir(path.dirname(f.source))).toEqual(before);
     expect(native.systemctl.mock.calls.some(([, args]) => args[0] === "restart")).toBe(false);
   },
 );

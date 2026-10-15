@@ -57,12 +57,20 @@ suite.define(() => {
       };
       await state.writeConfig({
         agents: {
-          defaults: { workspace: state.workspaceDir },
+          ownership: "explicit",
+          defaults: {
+            workspace: state.workspaceDir,
+            systemAgent: { agentId: "clipper" },
+            heartbeat: { agentId: "clipper" },
+            authInheritance: { agentId: "clipper" },
+            sessionStore: { agentId: "clipper" },
+          },
           entries: {
             main: { name: "Main", workspace: state.workspaceDir },
-            clipper: { default: true, name: "Clipper", workspace: clipperWorkspace },
+            clipper: { name: "Clipper", workspace: clipperWorkspace },
           },
         },
+        talk: { agentId: "clipper" },
         gateway: {
           auth: { mode: "trusted-proxy", trustedProxy },
           controlUi: {

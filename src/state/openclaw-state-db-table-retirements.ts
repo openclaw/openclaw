@@ -352,13 +352,47 @@ function migrateRetiredSkillCuratorTablesV11(db: DatabaseSync, previousVersion: 
     // the operator sees; say so rather than silently widening the collection.
     if (archivedCount > 0) {
       stateDbLog.info(
-        `${archivedCount} previously archived workshop skills return to the active collection; the weekly collection review will judge them`,
+        `${archivedCount} previously archived workshop skills are live again; archive any you no longer want`,
       );
     }
   }
   // Lifecycle rows are legacy v2026.7.1 sweep state; proposal origin runs were never read.
   for (const table of retiredTables) {
     db.exec(`DROP TABLE IF EXISTS ${table};`);
+  }
+  return true;
+}
+
+// Same-version retirement in state schema 20. Doctor drops these only after
+// exporting pending proposal drafts, so the ordinary open path never runs this.
+const RETIRED_SKILL_WORKSHOP_PROPOSAL_TABLES = [
+  "skill_workshop_proposal_events",
+  "skill_workshop_proposal_rollbacks",
+  "skill_workshop_collection_reviews",
+  "skill_workshop_proposals",
+] as const;
+
+/** Drops the retired proposal tables, children first, inside the caller's write transaction. */
+export function dropRetiredSkillWorkshopProposalTables(db: DatabaseSync): boolean {
+  const present = RETIRED_SKILL_WORKSHOP_PROPOSAL_TABLES.filter((table) => tableExists(db, table));
+  if (present.length === 0) {
+    return false;
+  }
+  // Legacy builds left indexes naming retired columns; drop dependents before their tables.
+  const dependents = db
+    .prepare(
+      `SELECT type, name FROM sqlite_schema
+        WHERE type IN ('index', 'trigger') AND sql IS NOT NULL
+          AND tbl_name IN (${present.map(() => "?").join(", ")})`,
+    )
+    .all(...present);
+  for (const { type, name } of dependents) {
+    if ((type === "index" || type === "trigger") && typeof name === "string") {
+      db.exec(`DROP ${type.toUpperCase()} IF EXISTS ${quoteSqliteIdentifier(name)};`);
+    }
+  }
+  for (const table of present) {
+    db.exec(`DROP TABLE ${table};`);
   }
   return true;
 }

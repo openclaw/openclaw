@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ProgressCardPutResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import type { Context, Model } from "../../../llm/types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { createMockPluginRegistry } from "../../../plugins/hooks.test-helpers.js";
@@ -113,7 +114,7 @@ it.each([
     });
     const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
     const attempt = { completionCheck };
-    const prepared = prepareCatalogExecutor([], {
+    const prepared = prepareCatalogExecutor({
       activeSession: session,
       attempt,
       onAgentEvent: (event) => events.push(event),
@@ -212,6 +213,71 @@ it.each([
   },
 );
 
+it("keeps a reply that already reports the blocker as the only reply after the check", async () => {
+  const completionCheck = { unfinishedPlan: false, checked: false };
+  const plan = [
+    { step: "List files", status: "completed" as const },
+    { step: "Delete the largest file", status: "pending" as const },
+  ];
+  const progress = createProgressCardTool({
+    agentSessionKey: "agent:main:main",
+    callGateway: vi.fn().mockResolvedValue({
+      card: { sessionKey: "agent:main:main", steps: plan, revision: 1, updatedAt: 1 },
+    }),
+    onPlanSaved: (unfinished) => {
+      completionCheck.unfinishedPlan = unfinished;
+    },
+  });
+  const { session } = await createTestSession({ customTools: [progress] });
+  const prepared = prepareCatalogExecutor({ activeSession: session, attempt: { completionCheck } });
+  streams.push(prepared);
+  const answer = "Files: big.log (9 KB), notes.md (1 KB). May I delete big.log?";
+  let requests = 0;
+  streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+    requests += 1;
+    if (requests === 1) {
+      return createAssistantResultStream(
+        createAssistant(
+          model,
+          [{ type: "toolCall", id: "save", name: "progress_card", arguments: { plan } }],
+          "toolUse",
+        ),
+      );
+    }
+    if (requests === 2) {
+      return createAssistantResultStream(createAssistant(model, [{ type: "text", text: answer }]));
+    }
+    // Stand-in for the live model: it restates the blocker unless the check offers silence.
+    const check = JSON.stringify(context.messages.at(-1)?.content);
+    expect(check).toContain("latest successfully saved plan");
+    return createAssistantResultStream(
+      createAssistant(model, [
+        {
+          type: "text",
+          text: check.includes(SILENT_REPLY_TOKEN)
+            ? SILENT_REPLY_TOKEN
+            : "Deleting big.log still needs your approval.",
+        },
+      ]),
+    );
+  });
+
+  await session.prompt("List the files, then ask me before deleting the largest one.");
+  await prepared.subscription.waitForPendingEvents();
+
+  expect(requests).toBe(3);
+  const assistant = prepared.subscription.getCurrentAttemptAssistant();
+  const payloads = buildEmbeddedRunPayloads({
+    assistantTexts: prepared.subscription.assistantTexts,
+    answerSegments: prepared.subscription.answerSegments,
+    lastAssistant: assistant,
+    currentAssistant: assistant ?? null,
+    keptAnswer: prepared.subscription.getKeptAnswer(),
+    sessionKey: "agent:main:main",
+  });
+  expect(payloads.map((payload) => payload.text)).toEqual([answer]);
+});
+
 it.each([
   { name: "completed replacement", replacement: "completed", checks: 0 },
   { name: "cleared replacement", replacement: "clear", checks: 0 },
@@ -267,7 +333,7 @@ it.each([
     },
   });
   const { session } = await createTestSession({ customTools: [progress] });
-  const prepared = prepareCatalogExecutor([], {
+  const prepared = prepareCatalogExecutor({
     activeSession: session,
     attempt: {
       completionCheck,
@@ -354,7 +420,7 @@ it.each([
           createMockPluginRegistry([{ hookName: "before_agent_finalize", handler: onFinalize }]),
         )
       : undefined;
-  const prepared = prepareCatalogExecutor([], {
+  const prepared = prepareCatalogExecutor({
     activeSession: session,
     hookRunner,
     runAbortController: controller,

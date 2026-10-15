@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, expect, it, vi } from "vitest";
@@ -74,6 +75,7 @@ it("asks with the latest 200 observations in chronological order", async () => {
   const service = new LogbookService(resolveLogbookConfig({ captureEnabled: false }), {
     dataDir,
     workerModuleUrl,
+    scheduler: createTestPluginServiceScheduler(),
     runtime,
     fullConfig: {},
     logger: { info() {}, warn() {}, error() {}, debug() {} },

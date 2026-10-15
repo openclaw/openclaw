@@ -1,8 +1,10 @@
 /** Reusable turn-level fixtures for isolated cron agent regression tests. */
 import "./isolated-agent.mocks.js";
+import path from "node:path";
 import { vi } from "vitest";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import type { CliDeps } from "../cli/deps.js";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
@@ -68,17 +70,19 @@ type RunCronTurnOptions = {
 };
 
 export async function runCronTurn(home: string, options: RunCronTurnOptions = {}) {
-  const storePath =
-    options.storePath ??
-    (await writeSessionStoreEntries(home, {
+  const storePath = options.storePath ?? path.join(home, ".openclaw", "sessions", "sessions.json");
+  const cfg = makeCfg(home, storePath, options.cfgOverrides);
+  setRuntimeConfigSnapshot(cfg);
+  if (!options.storePath) {
+    await writeSessionStoreEntries(home, {
       "agent:main:main": {
         sessionId: "main-session",
         updatedAt: Date.now(),
-        lastProvider: "webchat",
-        lastTo: "",
+        delivery: { kind: "internal" },
       },
       ...options.storeEntries,
-    }));
+    });
+  }
   const deps = options.deps ?? makeDeps();
   if (options.mockTexts === null) {
     vi.mocked(runEmbeddedAgent).mockClear();
@@ -89,7 +93,7 @@ export async function runCronTurn(home: string, options: RunCronTurnOptions = {}
   const jobPayload = options.jobPayload ?? DEFAULT_AGENT_TURN_PAYLOAD;
   const res = await runCronIsolatedAgentTurn({
     deliveryAttemptFence: null,
-    cfg: makeCfg(home, storePath, options.cfgOverrides),
+    cfg,
     deps,
     job: {
       ...makeJob(jobPayload),

@@ -6,6 +6,8 @@ import { openRootFileSync } from "../../infra/boundary-file-read.js";
 export async function ensureWritableSkillDirectories(
   skillsDir: string,
   relativePath: string,
+  assertCurrent?: () => void,
+  sourceMode?: number,
 ): Promise<void> {
   if (process.platform === "win32") {
     return;
@@ -14,13 +16,16 @@ export async function ensureWritableSkillDirectories(
     await fs.promises.realpath(path.dirname(skillsDir)),
     path.basename(skillsDir),
   );
+  assertCurrent?.();
   const boundary = await root(fixedRoot);
+  assertCurrent?.();
   if (boundary.rootReal !== fixedRoot) {
     throw new Error("Skill directory root must not be a symbolic link");
   }
-  const visit = async (relativeDir: string): Promise<void> => {
+  const visit = async (relativeDir: string, initialMode?: number): Promise<void> => {
     const scopedPath = `.${path.sep}${relativeDir}`;
     const stat = await boundary.stat(scopedPath);
+    assertCurrent?.();
     if (stat.isSymbolicLink || !stat.isDirectory) {
       return;
     }
@@ -37,17 +42,21 @@ export async function ensureWritableSkillDirectories(
     }
     try {
       // Sealed release copies (including legacy sandboxes) need writable directories, not files.
-      if ((opened.stat.mode & 0o700) !== 0o700) {
-        fs.fchmodSync(opened.fd, opened.stat.mode | 0o700);
+      const writableMode = (initialMode ?? opened.stat.mode) | 0o700;
+      if (opened.stat.mode !== writableMode) {
+        assertCurrent?.();
+        fs.fchmodSync(opened.fd, writableMode);
       }
     } finally {
       fs.closeSync(opened.fd);
     }
-    for (const child of await boundary.list(scopedPath, { withFileTypes: true })) {
+    const children = await boundary.list(scopedPath, { withFileTypes: true });
+    assertCurrent?.();
+    for (const child of children) {
       if (child.isDirectory && !child.isSymbolicLink) {
         await visit(path.join(relativeDir, child.name));
       }
     }
   };
-  await visit(relativePath);
+  await visit(relativePath, sourceMode);
 }

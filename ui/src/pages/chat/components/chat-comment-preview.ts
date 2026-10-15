@@ -3,7 +3,7 @@ import { icons } from "../../../components/icons.ts";
 import { scrollState } from "../../../components/scroll-state.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import { renderAttachmentPreviewChip } from "./chat-attachment-preview-chip.ts";
+import { renderAttachmentChip } from "./chat-attachment-preview-chip.ts";
 import "../../../styles/chat/selection-annotations.css";
 
 registerChatMessageMetadataEnglish();
@@ -76,18 +76,36 @@ export function renderCommentPreviewChip(
   count: number,
   content: TemplateResult,
   onReveal?: () => void,
-  openOnClick = false,
   removal?: { onRemove: (event: Event) => void; disabled: boolean },
+  elementRef?: (element: Element | undefined) => void,
 ) {
-  return renderAttachmentPreviewChip({
-    label: t(count === 1 ? "chat.messages.annotationCount" : "chat.messages.annotationsCount", {
-      count: String(count),
-    }),
-    regionLabel: t("chat.messages.annotations"),
-    icon: icons.messageSquare,
-    content,
-    onReveal,
-    openOnClick,
-    removal: removal ? { ...removal, label: t("chat.messages.removeAnnotations") } : undefined,
-  });
+  return html`<openclaw-tooltip
+    class=${removal ? "chat-comment-preview chat-comment-preview--editable" : "chat-comment-preview"}
+    placement="top-start"
+    auto-size
+    .describe=${false}
+    .openOnClick=${true}
+    .hoverDismissDelay=${removal ? 200 : undefined}
+  >
+    ${renderAttachmentChip({
+      label: t(count === 1 ? "chat.messages.annotationCount" : "chat.messages.annotationsCount", {
+        count: String(count),
+      }),
+      icon: icons.messageSquare,
+      onReveal,
+      onClick: onReveal,
+      elementRef,
+      removal: removal ? { ...removal, label: t("chat.messages.removeAnnotations") } : undefined,
+    })}
+    <div
+      slot="content"
+      class="chat-comment-preview__scroll"
+      tabindex="0"
+      role="region"
+      aria-label=${t("chat.messages.annotations")}
+      ${scrollState()}
+    >
+      ${content}
+    </div>
+  </openclaw-tooltip>`;
 }

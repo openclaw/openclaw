@@ -2,6 +2,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { CronJob } from "../../../cron/types.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { createRequesterInitialTransferFixture } from "../registry/subagent-registry-requester-yield.test-support.js";
+import { copySubagentRunRuntimeOwner } from "../registry/subagent-run-generation.js";
 import { prepareRequesterCronAuthority } from "../requester-cron-authority.js";
 import {
   registryRuntimeMock,
@@ -71,10 +72,11 @@ describe("requester continuation automation management", () => {
     const { markRequesterTurnYieldedInRuns, settleRequesterTurnAfterSessionSpawns } =
       await import("../registry/subagent-registry-requester-yield.js");
     const sourceRunId = "admin-requester";
-    const child = makeSettledChild({
+    let child = makeSettledChild({
       runId: "run-b",
       requesterAgentId: "main",
       requesterTurnRunId: sourceRunId,
+      completion: { required: true },
       requesterSettleWake: undefined,
     });
     const runs = new Map([[child.runId, child]]);
@@ -138,6 +140,9 @@ describe("requester continuation automation management", () => {
         },
       ),
     );
+    const published = runs.get(child.runId)!;
+    child = copySubagentRunRuntimeOwner(published, { ...published });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
     releaseAgentRunDelegatedAuthority(originalAuthority);
     expect(originalCapability.active).toBe(false);
 

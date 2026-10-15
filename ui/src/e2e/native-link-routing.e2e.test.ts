@@ -269,16 +269,16 @@ describeControlUiE2e("native link routing", () => {
       ),
     ).toHaveLength(2);
 
-    await page.evaluate(async () => {
-      await customElements.whenDefined("openclaw-modal-dialog");
-      const dialog = document.createElement("openclaw-modal-dialog");
+    await page.evaluate(() => {
+      const dialog = document.createElement("dialog");
       dialog.id = "native-link-routing-modal";
-      dialog.setAttribute("label", "Link routing test");
+      dialog.setAttribute("aria-label", "Link routing test");
       const anchor = document.createElement("a");
       anchor.href = "https://example.com/modal-report";
       anchor.textContent = "modal report";
       dialog.append(anchor);
       document.body.append(dialog);
+      dialog.showModal();
     });
     const modalLink = page.getByRole("link", { name: "modal report" });
     await modalLink.click({ button: "right" });
@@ -288,10 +288,7 @@ describeControlUiE2e("native link routing", () => {
     await expect
       .poll(() =>
         page.locator("#native-link-routing-modal").evaluate((modal) => {
-          return (
-            modal.shadowRoot?.querySelector("wa-dialog")?.shadowRoot?.querySelector("dialog")
-              ?.open ?? false
-          );
+          return (modal as HTMLDialogElement).open;
         }),
       )
       .toBe(true);

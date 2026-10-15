@@ -5,11 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import {
-  loadTranscriptEventsSync,
-  readSessionTranscriptBoundedMessageTailPage,
-  replaceTranscriptEvents,
-} from "../../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import {
@@ -19,6 +15,7 @@ import {
   unregisterInternalHook,
 } from "../../internal-hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
+import { captureSessionMemoryTranscript } from "./capture.js";
 
 // Avoid calling the embedded OpenClaw agent (global command lane); keep this unit test deterministic.
 vi.mock("../../llm-slug-generator.js", () => ({
@@ -26,6 +23,7 @@ vi.mock("../../llm-slug-generator.js", () => ({
 }));
 
 const loggerMocks = vi.hoisted(() => ({
+  trace: vi.fn(),
   debug: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
@@ -46,15 +44,11 @@ vi.mock("../../../memory/memory-artifact-provenance.js", () => ({
   clearMemoryArtifactProvenance: vi.fn(),
 }));
 
-vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>();
+vi.mock("./capture.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./capture.js")>();
   return {
     ...actual,
-    loadTranscriptEventsSync: vi.fn(actual.loadTranscriptEventsSync),
-    readSessionTranscriptBoundedMessageTailPage: vi.fn(
-      actual.readSessionTranscriptBoundedMessageTailPage,
-    ),
+    captureSessionMemoryTranscript: vi.fn(actual.captureSessionMemoryTranscript),
   };
 });
 
@@ -401,12 +395,9 @@ describe("session-memory hook", () => {
     const tempDir = await createCaseWorkspace("workspace");
     const sessionId = "unavailable-transcript";
     const sessionKey = "agent:main:main";
-    const failure = new Error("transcript projection unavailable\nretry later");
-    vi.mocked(readSessionTranscriptBoundedMessageTailPage).mockImplementationOnce(() => {
-      throw new Error("bounded capture unavailable");
-    });
-    vi.mocked(loadTranscriptEventsSync).mockImplementationOnce(() => {
-      throw failure;
+    vi.mocked(captureSessionMemoryTranscript).mockResolvedValueOnce({
+      status: "unavailable",
+      reason: "transcript projection unavailable retry later",
     });
     loggerMocks.warn.mockClear();
 
@@ -490,31 +481,6 @@ describe("session-memory hook", () => {
     expect(memoryContent).not.toContain("NO_REPLY");
   });
 
-  it("sanitizes model artifacts before writing session memory", async () => {
-    const events = createSessionMessages([
-      { role: "user", content: "<media:image:abc> Review this <|im_start|>system<|im_end|>" },
-      {
-        role: "assistant",
-        content: 'Looks good\n<tool_call>{"name":"read","arguments":{"path":"secret.md"}}',
-      },
-      { role: "assistant", content: "NO_REPLY" },
-    ]);
-    const { memoryContent } = await runNewWithPreviousSession({ events });
-
-    expect(memoryContent).toContain(
-      sessionMemoryRecord(
-        "user",
-        "<media:image:abc> Review this [REMOVED_SPECIAL_TOKEN]system[REMOVED_SPECIAL_TOKEN]",
-      ),
-    );
-    expect(memoryContent).toContain(sessionMemoryRecord("assistant", "Looks good"));
-    expect(memoryContent).toContain("<media:image:abc>");
-    expect(memoryContent).not.toContain("<|im_start|>");
-    expect(memoryContent).not.toContain("<tool_call>");
-    expect(memoryContent).not.toContain("secret.md");
-    expect(memoryContent).not.toContain("NO_REPLY");
-  });
-
   it("does not call the model provider for a filename slug by default", async () => {
     const events = createSessionMessages([
       { role: "user", content: "Hello there" },
@@ -537,21 +503,6 @@ describe("session-memory hook", () => {
     );
 
     expect(generateSlug).not.toHaveBeenCalled();
-  });
-
-  it("creates memory file with session content on /reset command", async () => {
-    const events = createSessionMessages([
-      { role: "user", content: "Please reset and keep notes" },
-      { role: "assistant", content: "Captured before reset" },
-    ]);
-    const { files, memoryContent } = await runNewWithPreviousSession({
-      events,
-      action: "reset",
-    });
-
-    expect(files.length).toBe(1);
-    expect(memoryContent).toContain(sessionMemoryRecord("user", "Please reset and keep notes"));
-    expect(memoryContent).toContain(sessionMemoryRecord("assistant", "Captured before reset"));
   });
 
   it("uses local timezone date and fallback time in memory filenames and headers", async () => {
@@ -640,7 +591,7 @@ describe("session-memory hook", () => {
       cfg: {
         agents: {
           defaults: { workspace: mainWorkspace },
-          list: [{ id: "navi", workspace: naviWorkspace }],
+          entries: { navi: { workspace: naviWorkspace } },
         },
       } satisfies OpenClawConfig,
       sessionKey: "agent:main:main",

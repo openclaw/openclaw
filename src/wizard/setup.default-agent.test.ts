@@ -168,7 +168,6 @@ describe("runSetupWizard default-agent ownership", () => {
         defaults: { workspace: "/tmp/global-workspace" },
         entries: {
           ops: {
-            default: true,
             agentDir: "/tmp/ops-agent",
             workspace: "/tmp/ops-workspace",
           },

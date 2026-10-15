@@ -52,15 +52,10 @@ type OfficialExternalProviderContract =
 function getFeedEntryInstallCandidates(
   entry: OfficialExternalPluginCatalogEntry,
 ): OfficialExternalPluginCatalogInstallCandidate[] {
-  const state = normalizeOptionalString(entry.state);
-  if (state !== "available") {
-    return [];
-  }
-  const publisherTrust = normalizeOptionalString(entry.publisher?.trust);
-  if (publisherTrust !== "official") {
-    return [];
-  }
-  return getFeedEntryInstallCandidateRecords(entry);
+  return normalizeOptionalString(entry.state) === "available" &&
+    normalizeOptionalString(entry.publisher?.trust) === "official"
+    ? getFeedEntryInstallCandidateRecords(entry)
+    : [];
 }
 
 const BUNDLED_CATALOG_SOURCE_REFS = new Set(
@@ -70,16 +65,10 @@ const BUNDLED_CATALOG_SOURCE_REFS = new Set(
 function* bundledOfficialExternalPluginCatalogEntries(): Generator<OfficialExternalPluginCatalogEntry> {
   const seen = new Set<string>();
   for (const entry of BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES) {
-    const install = isRecord(entry.install) ? entry.install : undefined;
-    const candidates = install?.candidates;
     if (
-      Array.isArray(candidates) &&
-      candidates.some((candidate) => {
-        if (!isRecord(candidate)) {
-          return false;
-        }
-        return !hasKnownCatalogSourceRef(candidate, BUNDLED_CATALOG_SOURCE_REFS);
-      })
+      getFeedEntryInstallCandidateRecords(entry).some(
+        (candidate) => !hasKnownCatalogSourceRef(candidate, BUNDLED_CATALOG_SOURCE_REFS),
+      )
     ) {
       continue;
     }

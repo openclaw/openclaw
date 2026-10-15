@@ -5,13 +5,9 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+import type { UserProfileIdentity } from "../../state/user-profiles.types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { catalogStartHandler } from "./session-catalog-terminal-start.js";
-
-vi.mock("../../state/user-profiles.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../state/user-profiles.js")>()),
-  getUserProfileRole: vi.fn(() => null),
-}));
+import { sessionCatalogHandlers } from "./session-catalog.js";
 
 function provider(overrides: Partial<SessionCatalogProvider> = {}): SessionCatalogProvider {
   return {
@@ -24,18 +20,23 @@ function provider(overrides: Partial<SessionCatalogProvider> = {}): SessionCatal
 }
 
 let activeProvider: SessionCatalogProvider;
-const handler = catalogStartHandler((catalogId) =>
-  activeProvider.id === catalogId ? activeProvider : undefined,
-);
+vi.mock("./session-catalog-provider-access.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-catalog-provider-access.js")>()),
+  catalogRegistrationSnapshot: () => ({ providers: [activeProvider] }),
+}));
+const handler = sessionCatalogHandlers["sessions.catalog.startTerminal"]!;
+
+type TerminalTestClient = {
+  authenticatedUserProfile?: { profileId: string };
+  preparedSessionProfile?: UserProfileIdentity;
+  connect?: { scopes?: string[] };
+  connId?: string;
+};
 
 function startCall(
   params: unknown,
   config: Record<string, unknown> = {},
-  client?: {
-    authenticatedUserProfile?: { profileId: string };
-    connect?: { scopes?: string[] };
-    connId?: string;
-  },
+  client?: TerminalTestClient,
   contextOverrides: Record<string, unknown> = {},
 ) {
   const respond = vi.fn();
@@ -53,11 +54,7 @@ function startCall(
 async function call(
   params: unknown,
   config: Record<string, unknown> = {},
-  client?: {
-    authenticatedUserProfile?: { profileId: string };
-    connect?: { scopes?: string[] };
-    connId?: string;
-  },
+  client?: TerminalTestClient,
   contextOverrides: Record<string, unknown> = {},
 ) {
   const pending = startCall(params, config, client, contextOverrides);
@@ -164,7 +161,15 @@ describe("sessions.catalog.startTerminal", () => {
           },
         },
       },
-      { authenticatedUserProfile: { profileId: "profile-terminal-guest" }, connId: "conn-1" },
+      {
+        authenticatedUserProfile: { profileId: "profile-terminal-guest" },
+        preparedSessionProfile: {
+          profileId: "profile-terminal-guest",
+          aliases: new Set(["profile-terminal-guest"]),
+          role: null,
+        },
+        connId: "conn-1",
+      },
       { isTerminalEnabled: () => true, terminalSessions: {} },
     );
 
@@ -224,40 +229,6 @@ describe("sessions.catalog.startTerminal", () => {
       releasePlan();
       await fs.rm(cwd, { recursive: true, force: true });
     }
-  });
-
-  it("keeps the terminal recovery hint on provider errors", async () => {
-    const cwd = process.cwd();
-    const startTerminalSession = vi.fn(async () => {
-      throw new Error("provider failed to build a start plan");
-    });
-    const open = vi.fn();
-    activeProvider = provider({ startTerminalSession });
-
-    const respond = await call(
-      { catalogId: "codex", agentId: "main", cwd },
-      { gateway: { cliAgents: { enabled: true } } },
-      { connId: "conn-1", connect: { scopes: ["operator.admin"] } },
-      {
-        isTerminalEnabled: () => true,
-        terminalSessions: { open },
-        resolveTerminalLaunchPolicy: () => ({
-          ok: true,
-          plan: { agentId: "main", cwd: "/agent/workspace", shell: "/bin/zsh", args: [] },
-        }),
-      },
-    );
-
-    expect(open).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message:
-          "provider failed to build a start plan; check the selected CLI, host, and terminal configuration, then retry",
-      }),
-    );
   });
 
   it("rejects local terminal start for a named profile before provider fallback", async () => {

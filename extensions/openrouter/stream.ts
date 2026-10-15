@@ -1,4 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { normalizeOpenRouterModelFamilyId } from "openclaw/plugin-sdk/model-ref-parse";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import {
@@ -9,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { asNonArrayRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isOpenRouterDeepSeekV4ModelId, normalizeOpenRouterModelFamilyId } from "./models.js";
+import { isOpenRouterDeepSeekV4ModelId } from "./models.js";
 import {
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
@@ -46,14 +47,14 @@ function mergeOpenRouterAuthHeaders(options: Parameters<StreamFn>[2]): Parameter
   if (!apiKey) {
     return options;
   }
-  const headers = new Headers((options as { headers?: HeadersInit } | undefined)?.headers);
+  const headers = new Headers(options?.headers);
   if (!headers.has("authorization")) {
     headers.set("Authorization", `Bearer ${apiKey}`);
   }
   return {
     ...options,
     headers: Object.fromEntries(headers.entries()),
-  } as Parameters<StreamFn>[2];
+  };
 }
 
 function createOpenRouterAuthHeaderWrapper(
@@ -83,11 +84,7 @@ function isEnabledReasoningValue(value: unknown): boolean {
     if (reasoning.enabled === false) {
       return false;
     }
-    const effort = reasoning.effort;
-    if (typeof effort === "string") {
-      const normalized = effort.trim().toLowerCase();
-      return normalized !== "" && normalized !== "off" && normalized !== "none";
-    }
+    return typeof reasoning.effort !== "string" || isEnabledReasoningValue(reasoning.effort);
   }
   return true;
 }

@@ -2,6 +2,7 @@ import { StatementSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import * as sessions from "../config/sessions/session-accessor.js";
 import {
@@ -9,8 +10,10 @@ import {
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
-import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -22,7 +25,10 @@ import {
 } from "./server-methods/sessions-read-cache.test-support.js";
 import * as projectionWork from "./session-projection-work.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
-import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
+import {
+  clearStoredSessionRowTranscriptForTest,
+  observeSessionRowBackfill,
+} from "./session-row-backfill.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as records from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
@@ -40,11 +46,9 @@ function holdBackfillPublication(signal?: AbortSignal) {
   const publish = createDeferredCore();
   const settled = createDeferredCore();
   const releaseLater = createDeferredCore();
-  const successorStarted = createDeferredCore();
-  const successorPublished = createDeferredCore();
+  const accepted = createDeferredCore();
   const pending: Promise<unknown>[] = [];
   let first = true;
-  let publishingSuccessor = false;
   function wait<T>(work: Promise<T>): Promise<T> {
     if (!signal) {
       return work;
@@ -59,9 +63,7 @@ function holdBackfillPublication(signal?: AbortSignal) {
   const publishTranscriptFields = records.publishTranscriptFields;
   vi.spyOn(records, "publishTranscriptFields").mockImplementation((...args) => {
     const changed = publishTranscriptFields(...args);
-    if (publishingSuccessor) {
-      successorPublished.resolve();
-    }
+    accepted.resolve();
     return changed;
   });
   vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields").mockImplementation(
@@ -71,7 +73,6 @@ function holdBackfillPublication(signal?: AbortSignal) {
       const work = (async () => {
         if (!initial) {
           // A queued successor must not conceal the held publication's observable result.
-          successorStarted.resolve();
           await releaseLater.promise;
           return backfill(params);
         }
@@ -99,13 +100,9 @@ function holdBackfillPublication(signal?: AbortSignal) {
       publish.resolve();
       await wait(settled.promise.then(nextTurn));
     },
-    waitForSuccessor: () => wait(successorStarted.promise),
-    async publishSuccessor() {
-      await wait(successorStarted.promise);
-      publishingSuccessor = true;
+    async publishAvailable() {
       releaseLater.resolve();
-      // A completed worker read is not proof that the host accepted its publication.
-      await wait(successorPublished.promise);
+      await wait(accepted.promise);
     },
     async close() {
       publish.resolve();
@@ -116,9 +113,10 @@ function holdBackfillPublication(signal?: AbortSignal) {
   };
 }
 
-it("publishes read-only transcript previews without acquiring stored row facts again", async () => {
+it("publishes legacy transcript previews without acquiring stored row facts again", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:preview-only-backfill",
@@ -131,7 +129,6 @@ it("publishes read-only transcript previews without acquiring stored row facts a
       touchSessionEntry: false,
       updateMode: "none",
     });
-    const stored = structuredClone(sessions.loadSessionEntry(scope));
     const reads = vi.fn();
     const readDatabases = history.withSessionHistoryWorkerDatabases;
     vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
@@ -149,6 +146,7 @@ it("publishes read-only transcript previews without acquiring stored row facts a
           ),
         ),
     );
+    clearStoredSessionRowTranscriptForTest(scope);
     const backfill = holdBackfillPublication();
     const releaseForeground = retainSessionListForegroundWork();
     let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
@@ -157,7 +155,9 @@ it("publishes read-only transcript previews without acquiring stored row facts a
       await projection.ensureMaterialized();
       releaseForeground();
       await backfill.prepared;
+      await sessions.patchSessionEntryCore(scope, () => ({ displayName: "Renamed while reading" }));
       await projection.ensureMaterialized();
+      const stored = structuredClone(sessions.loadSessionEntry(scope));
       expect(projection.dirtyRowCount).toBe(0);
       expect(reads).toHaveBeenCalled();
       const before = projection.snapshot(query, { includeLastMessage: true }).row;
@@ -206,89 +206,172 @@ it("publishes read-only transcript previews without acquiring stored row facts a
   });
 });
 
-it.for(["notice cleared", "selection changed"] as const)(
-  "rejects a held fallback after same-session metadata changes: %s",
-  (change, { signal, onTestFinished }) => {
-    const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:held-fallback",
-        sessionId: "held-fallback",
-      };
-      const query = { agentId: scope.agentId, key: scope.sessionKey };
-      const entry: InternalSessionEntry = {
-        sessionId: scope.sessionId,
-        updatedAt: 1,
-        status: "done",
-        lastRunId: "terminal-run",
-        providerOverride: "unit-test",
-        modelOverride: "selected",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "unit-test/selected",
-          activeModel: "unit-test/fallback",
-        },
-      };
-      sessions.replaceSessionEntrySync(scope, entry);
+it("retains transcript previews across metadata edits and consumes committed appends without reads", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:metadata-preview",
+      sessionId: "metadata-preview",
+    };
+    const query = { agentId: scope.agentId, key: scope.sessionKey };
+    sessions.replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await sessions.persistSessionTranscriptTurn(scope, {
+      config: cfg,
+      messages: [{ message: { role: "user", content: "Original preview" } }],
+      touchSessionEntry: false,
+      updateMode: "none",
+    });
+    const initial = observeSessionRowBackfill([scope.sessionKey]);
+    const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      await initial;
+      backfill.mockClear();
+      for (let edit = 0; edit < 10; edit++) {
+        await sessions.patchSessionEntryCore(scope, () => ({
+          displayName: `Renamed ${edit}`,
+          pinnedAt: edit % 2 === 0 ? edit + 1 : undefined,
+          sidebarRoot: edit % 2 === 0 ? true : undefined,
+          updatedAt: edit + 2,
+        }));
+        await projection.ensureMaterialized();
+        // Let the background owner reach its next admission boundary after each edit.
+        await nextTurn();
+        expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
+          displayName: `Renamed ${edit}`,
+          sidebarRoot: edit % 2 === 0,
+          lastMessagePreview: "Original preview",
+        });
+      }
+      expect(backfill.mock.calls.length).toBe(0);
+      const appended = observeSessionRowBackfill([scope.sessionKey]);
       await sessions.persistSessionTranscriptTurn(scope, {
+        config: cfg,
+        messages: [{ message: { role: "assistant", content: "Appended preview" } }],
+        touchSessionEntry: false,
+      });
+      await appended;
+      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
+        "Appended preview",
+      );
+      await sessions.patchSessionEntryCore(scope, () => ({ displayName: "After append" }));
+      await projection.ensureMaterialized();
+      await nextTurn();
+      expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
+        displayName: "After append",
+        lastMessagePreview: "Appended preview",
+      });
+      expect(backfill).not.toHaveBeenCalled();
+    } finally {
+      projection.dispose();
+    }
+  });
+});
+
+it("reuses an unknown preview until a committed transcript watermark changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:preview-notifications",
+      sessionId: "preview-notifications",
+    };
+    const query = { agentId: scope.agentId, key: scope.sessionKey };
+    sessions.replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await sessions.persistSessionTranscriptTurn(scope, {
+      config: cfg,
+      messages: [{ message: { role: "user", content: "Original preview" } }],
+      touchSessionEntry: false,
+      updateMode: "none",
+    });
+    clearStoredSessionRowTranscriptForTest(scope);
+    const initial = observeSessionRowBackfill([scope.sessionKey]);
+    const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      await initial;
+      expect(projection.capture(query)?.retainedDatabaseFacts?.transcriptPreview).toBeUndefined();
+      expect(backfill).toHaveBeenCalledTimes(1);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+      emitSessionTranscriptUpdate({ target: scope });
+      emitSessionTranscriptUpdate({
+        target: scope,
+        message: { role: "user", content: "Original preview" },
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await projection.ensureMaterialized();
+      await nextTurn();
+      expect(backfill).toHaveBeenCalledTimes(1);
+      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
+        "Original preview",
+      );
+
+      const refreshed = observeSessionRowBackfill([scope.sessionKey], projection);
+      await sessions.persistSessionTranscriptTurn(scope, {
+        config: cfg,
         messages: [
-          {
-            message: {
-              role: "assistant",
-              content: "Finished",
-              provider: "unit-test",
-              model: "fallback",
-              stopReason: "stop",
-              __openclaw: { runId: "terminal-run" },
-            },
-          },
+          { message: { role: "assistant", content: "Updated preview" } },
+          { message: { role: "assistant", content: "Hidden append", display: false } },
         ],
         touchSessionEntry: false,
-        updateMode: "none",
       });
-      const backfill = holdBackfillPublication(signal);
-      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-      try {
-        expect(await backfill.prepared).toEqual({
-          lastMessagePreview: "Finished",
-          fallbackModel: { provider: "unit-test", model: "fallback" },
-        });
-        const before = projection.describe(query)!;
-        sessions.replaceSessionEntrySync(scope, {
-          ...entry,
-          updatedAt: 2,
-          ...(change === "notice cleared"
-            ? { fallbackNotice: undefined }
-            : { modelOverride: "replacement" }),
-        });
-        await projection.ensureMaterialized();
-        expect(projection.describe(query)?.generation).toBe(before.generation);
-        expect(projection.snapshot(query).row?.activeModel).toBeUndefined();
-        await backfill.publish();
-        await backfill.waitForSuccessor();
-        expect(
-          projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
-        ).toBeUndefined();
-        expect(projection.describe(query)?.fallbackModel).toBeUndefined();
-        await backfill.publishSuccessor();
-        await projection.ensureMaterialized();
-        expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
-          lastMessagePreview: "Finished",
-          model: change === "selection changed" ? "replacement" : "selected",
-          activeModel: undefined,
-          activeModelProvider: undefined,
-        });
-        expect(projection.describe(query)?.fallbackModel).toBeUndefined();
-      } finally {
-        projection.dispose();
-        await backfill.close();
-      }
+      await vi.advanceTimersByTimeAsync(1_000);
+      await refreshed;
+      expect(backfill).toHaveBeenCalledTimes(2);
+      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
+        "Updated preview",
+      );
+    } finally {
+      projection.dispose();
+      vi.useRealTimers();
+    }
+  });
+});
+
+it("keeps a committed append preview when an older background read finishes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:preview-receipt",
+      sessionId: "preview-receipt",
+    };
+    const query = { agentId: scope.agentId, key: scope.sessionKey };
+    sessions.replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await sessions.persistSessionTranscriptTurn(scope, {
+      config: cfg,
+      messages: [{ message: { role: "user", content: "Older preview" } }],
+      touchSessionEntry: false,
+      updateMode: "none",
     });
-    onTestFinished(() => run);
-    return run;
-  },
-);
+    clearStoredSessionRowTranscriptForTest(scope);
+    const backfill = holdBackfillPublication();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      expect((await backfill.prepared).lastMessagePreview).toBe("Older preview");
+      await sessions.persistSessionTranscriptTurn(scope, {
+        config: cfg,
+        messages: [{ message: { role: "assistant", content: "Committed preview" } }],
+        touchSessionEntry: false,
+      });
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
+        "Committed preview",
+      );
+      await backfill.publish();
+      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
+        "Committed preview",
+      );
+    } finally {
+      projection.dispose();
+      await backfill.close();
+    }
+  });
+});
 
 it("keeps pending Worker metadata, membership, and summary facts across optional publication", ({
   signal,
@@ -297,10 +380,11 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
   const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = {
       agents: {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
         defaults: { utilityModel: "unit-test/small" },
       },
     };
+    setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:backfill-facts",
@@ -324,6 +408,7 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
       updateMode: "none",
     });
     const watermark = sessions.readSessionTranscriptWatermark(scope);
+    clearStoredSessionRowTranscriptForTest(scope);
     const backfill = holdBackfillPublication(signal);
     const captured = createDeferredCore();
     const release = createDeferredCore();
@@ -369,6 +454,7 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
         updatedAt: 2,
         label: "Intermediate label",
       });
+      sessionChanges.emit({ ...scope, factsInvalidated: true });
       reading = listSessions({ client, context, request });
       await Promise.race([
         captured.promise,
@@ -405,7 +491,6 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
           key: scope.sessionKey,
           label: "Current label",
           sharingRole: "viewer",
-          lastMessagePreview: undefined,
           activitySummary: expect.objectContaining({
             text: "Current summary",
             updatedAt: 3,
@@ -413,12 +498,17 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
           }),
         }),
       ]);
-      expect(projection.describe(query)?.membership.has(viewer.id)).toBe(false);
+      // The metadata reload also carries the completed durable backfill, even while
+      // its original optional publication is held.
+      expect(result.sessions[0]?.lastMessagePreview).toBe("Read-only preview");
       expect(projection.dirtyRowCount).toBe(0);
-      await backfill.publishSuccessor();
-      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
-        "Read-only preview",
-      );
+      await backfill.publishAvailable();
+      expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
+        label: "Current label",
+        lastMessagePreview: "Read-only preview",
+        activitySummary: { text: "Current summary", updatedAt: 3, state: "current" },
+      });
+      expect(projection.describe(query)?.membership.has(viewer.id)).toBe(false);
       expect(reads).toBe(2);
     } finally {
       release.resolve();
@@ -431,111 +521,74 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
   return run;
 });
 
-it.each(["before transcript work", "before preview publication"] as const)(
-  "gives an in-flight Gateway request priority %s and resumes read-only previews afterward",
-  async (phase) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      resetGatewayWorkAdmission();
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:foreground-backfill",
-        sessionId: "foreground-backfill",
-      };
-      const query = { agentId: scope.agentId, key: scope.sessionKey };
-      sessions.replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      await sessions.persistSessionTranscriptTurn(scope, {
-        messages: [{ message: { role: "user", content: "Preview the legacy session" } }],
-        touchSessionEntry: false,
-        updateMode: "none",
-      });
-      const entered = createDeferredCore();
-      const response = createDeferredCore();
-      const previewPrepared = createDeferredCore();
-      const previewPublication = createDeferredCore();
-      const backgroundWaiting = createDeferredCore();
-      const yieldBackground = projectionWork.yieldSessionListBackgroundWork;
-      let previewReleased = false;
-      vi.spyOn(projectionWork, "yieldSessionListBackgroundWork").mockImplementation(() => {
-        const pending = yieldBackground();
-        if (phase === "before transcript work" || previewReleased) {
-          backgroundWaiting.resolve();
-        }
-        return pending;
-      });
-      const before = sessions.loadSessionEntry(scope);
-      if (phase === "before preview publication") {
-        const readDatabase = history.withSessionHistoryWorkerDatabase;
-        vi.spyOn(history, "withSessionHistoryWorkerDatabase").mockImplementation(
-          (options, consume, lane) =>
-            readDatabase(
-              options,
-              (owner) =>
-                consume({
-                  ...owner,
-                  async readRowBackfill(input) {
-                    const fields = await owner.readRowBackfill(input);
-                    previewPrepared.resolve();
-                    await previewPublication.promise;
-                    return fields;
-                  },
-                }),
-              lane,
-            ),
-        );
-      }
-      const request = () =>
-        handleGatewayRequest({
-          req: { type: "req", id: "foreground-read", method: "health", params: {} },
-          context: requestContext(cfg),
-          client: identifiedClient("owner@example.com"),
-          isWebchatConnect: () => false,
-          respond: vi.fn(),
-          extraHandlers: {
-            health: async ({ respond }) => {
-              entered.resolve();
-              await response.promise;
-              respond(true, {});
-            },
-          },
-        });
-      let foreground: Promise<void> | undefined;
-      if (phase === "before transcript work") {
-        foreground = request();
-        await entered.promise;
-      }
-      const backfilled = observeSessionRowBackfill([scope.sessionKey]);
-      const projection = await createSessionRowProjection({ cfg });
-      // Observe the row at completion, before a later retry can conceal a premature signal.
-      const observedPreview = backfilled.then(
-        () => projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
-      );
-      try {
-        if (phase === "before preview publication") {
-          await previewPrepared.promise;
-          foreground = request();
-          await entered.promise;
-          previewReleased = true;
-          previewPublication.resolve();
-        }
-        await backgroundWaiting.promise;
-        expect(sessions.loadSessionEntry(scope)).toEqual(before);
-        expect(
-          projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
-        ).toBeUndefined();
-        response.resolve();
-        await foreground;
-        expect(await observedPreview).toBe("Preview the legacy session");
-        expect(
-          projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
-        ).toBe("Preview the legacy session");
-        expect(sessions.loadSessionEntry(scope)).toEqual(before);
-      } finally {
-        previewPublication.resolve();
-        response.resolve();
-        await foreground;
-        projection.dispose();
-      }
+it("gives an in-flight Gateway request priority before starting legacy preview backfill", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    resetGatewayWorkAdmission();
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:foreground-backfill",
+      sessionId: "foreground-backfill",
+    };
+    const query = { agentId: scope.agentId, key: scope.sessionKey };
+    sessions.replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await sessions.persistSessionTranscriptTurn(scope, {
+      messages: [{ message: { role: "user", content: "Preview the legacy session" } }],
+      touchSessionEntry: false,
+      updateMode: "none",
     });
-  },
-);
+    clearStoredSessionRowTranscriptForTest(scope);
+    const entered = createDeferredCore();
+    const response = createDeferredCore();
+    const backgroundWaiting = createDeferredCore();
+    const yieldBackground = projectionWork.yieldSessionListBackgroundWork;
+    vi.spyOn(projectionWork, "yieldSessionListBackgroundWork").mockImplementation(() => {
+      const pending = yieldBackground();
+      backgroundWaiting.resolve();
+      return pending;
+    });
+    const before = sessions.loadSessionEntry(scope);
+    const request = () =>
+      handleGatewayRequest({
+        req: { type: "req", id: "foreground-read", method: "health", params: {} },
+        context: requestContext(cfg),
+        client: identifiedClient("owner@example.com"),
+        isWebchatConnect: () => false,
+        respond: vi.fn(),
+        extraHandlers: {
+          health: async ({ respond }) => {
+            entered.resolve();
+            await response.promise;
+            respond(true, {});
+          },
+        },
+      });
+    const foreground = request();
+    await entered.promise;
+    const backfilled = observeSessionRowBackfill([scope.sessionKey]);
+    const projection = await createSessionRowProjection({ cfg });
+    // Observe the row at completion, before a later retry can conceal a premature signal.
+    const observedPreview = backfilled.then(
+      () => projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
+    );
+    try {
+      await backgroundWaiting.promise;
+      expect(sessions.loadSessionEntry(scope)).toEqual(before);
+      expect(
+        projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
+      ).toBeUndefined();
+      response.resolve();
+      await foreground;
+      expect(await observedPreview).toBe("Preview the legacy session");
+      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
+        "Preview the legacy session",
+      );
+      expect(sessions.loadSessionEntry(scope)).toEqual(before);
+    } finally {
+      response.resolve();
+      await foreground;
+      projection.dispose();
+    }
+  });
+});

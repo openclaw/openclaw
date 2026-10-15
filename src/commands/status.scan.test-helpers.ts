@@ -64,7 +64,10 @@ function createStatusOsSummaryModuleMock(): StatusOsSummaryModuleMock {
   };
 }
 
-type StatusScanDepsRuntimeModuleMock = {
+type StatusScanDepsRuntimeModuleMock = Pick<
+  typeof import("./status.scan.deps.runtime.js"),
+  "getMemoryProvider" | "isMemoryProviderNative"
+> & {
   getTailnetHostname: UnknownMock;
   getMemorySearchManager: StatusScanSharedMocks["getMemorySearchManager"];
 };
@@ -74,7 +77,13 @@ function createStatusScanDepsRuntimeModuleMock(
 ): StatusScanDepsRuntimeModuleMock {
   return {
     getTailnetHostname: vi.fn(),
+    getMemoryProvider: vi.fn<StatusScanDepsRuntimeModuleMock["getMemoryProvider"]>(async () => ({
+      provider: null,
+    })),
     getMemorySearchManager: mocks.getMemorySearchManager,
+    isMemoryProviderNative: vi.fn<StatusScanDepsRuntimeModuleMock["isMemoryProviderNative"]>(
+      () => false,
+    ),
   };
 }
 

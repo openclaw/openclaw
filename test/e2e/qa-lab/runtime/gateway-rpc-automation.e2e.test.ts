@@ -189,7 +189,7 @@ describe("Gateway run cancellation and automation RPCs", () => {
                 },
               },
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           models: {
             mode: "replace",

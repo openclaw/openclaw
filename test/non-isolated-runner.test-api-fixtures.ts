@@ -39,8 +39,8 @@ const capturedRegistryApi = Reflect.get(globalThis, registryKey);
 const replacement = await import(${sourcePath("agents/bash-process-registry.ts?lifetime-replacement")});
 const replacementApi = Reflect.get(globalThis, registryKey);
 expect(replacementApi).not.toBe(capturedRegistryApi);
-const nativeCron = await import(${sourcePath("cron/service/active-run-cancellation.ts")});
 const native = createRequire(import.meta.url)("./native-cron.cjs");
+const nativeCron = await import(${sourcePath("cron/service/active-run-cancellation.ts")});
 expect(Reflect.get(globalThis, Symbol.for("openclaw.activeCronTaskRunTestApi"))).toBe(native.api);
 expect(nativeCron.registerActiveCronTaskRun).toBe(native.register);
 const { resetDiagnosticRunActivityForTest, getDiagnosticSessionActivitySnapshot } = await import(${sourcePath("logging/diagnostic-run-activity.ts")});
@@ -101,8 +101,32 @@ ${generation === "producer" ? 'await import("./foreign/extensions/google/vertex-
 `;
   }
   files["native-cron.cjs"] = `
-const cron = require(${sourcePath("cron/service/active-run-cancellation.ts")});
-module.exports = { register: cron.registerActiveCronTaskRun, api: globalThis[Symbol.for("openclaw.activeCronTaskRunTestApi")] };
+const { existsSync } = require("node:fs");
+const { registerHooks } = require("node:module");
+const { pathToFileURL } = require("node:url");
+const sourceRoot = pathToFileURL(${JSON.stringify(`${repoRoot}${path.sep}`)}).href;
+const sourcePaths = require(${JSON.stringify(path.join(repoRoot, "tsconfig.json"))}).compilerOptions.paths;
+// Keep Node's native cache identity; the hook only resolves this synchronous source load.
+const hooks = registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (context.parentURL?.startsWith(sourceRoot)) {
+      // Workspace packages are source aliases in this fixture, not built dependencies.
+      const source = sourcePaths[specifier]?.[0];
+      if (source) return nextResolve(new URL(source, sourceRoot).href, context);
+    }
+    if (context.parentURL?.startsWith(sourceRoot) && specifier.startsWith(".") && specifier.endsWith(".js")) {
+      const source = new URL(specifier.slice(0, -3) + ".ts", context.parentURL);
+      if (existsSync(source)) return nextResolve(source.href, context);
+    }
+    return nextResolve(specifier, context);
+  },
+});
+try {
+  const cron = require(${sourcePath("cron/service/active-run-cancellation.ts")});
+  module.exports = { register: cron.registerActiveCronTaskRun, api: globalThis[Symbol.for("openclaw.activeCronTaskRunTestApi")] };
+} finally {
+  hooks.deregister();
+}
 `;
   files["foreign/extensions/google/vertex-adc.ts"] = `
 for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.google.vertexAdcTestApi"), "openclaw.staleAuthOrderTestApi"]) {
@@ -130,15 +154,15 @@ vi.mock(${sourcePath("agents/workspace-legacy-state.ts")}, async () => ({
 vi.mock(${sourcePath("cron/service/active-run-cancellation.ts")}, async () => ({
   ...await vi.importActual(${sourcePath("cron/service/active-run-cancellation.ts")}),
 }));
+const native = createRequire(import.meta.url)("./native-cron.cjs");
 const nativeCron = await import(${sourcePath("cron/service/active-run-cancellation.ts")});
 // The second import replaces native metadata with a manual-mock placeholder;
 // the execution record must still identify the retained native generation.
 await import(${sourcePath("cron/service/active-run-cancellation.ts")});
-const native = createRequire(import.meta.url)("./native-cron.cjs");
 const workspace = await import(${sourcePath("agents/workspace-legacy-state.ts")});
 const { resetLegacyWorkspaceStateCheckForTest } = await import(${sourcePath("agents/workspace-legacy-state.test-support.ts")});
 function verifyPartialMock() {
-  expect(workspace.LEGACY_WORKSPACE_STATE_DIRNAME).toBe(".openclaw");
+  expect(workspace.LEGACY_WORKSPACE_ATTESTATION_DIRNAME).toBe("workspace-attestations");
   expect(vi.isMockFunction(workspace.prepareLegacyWorkspaceStateReset)).toBe(true);
   expect(() => resetLegacyWorkspaceStateCheckForTest()).not.toThrow();
   expect(nativeCron.registerActiveCronTaskRun).toBe(native.register);
@@ -164,10 +188,10 @@ it("loads a fresh real source after the partial mock retires", () => {
   files["09-j-test-api-mock-only.test.ts"] = `
 /* @vitest-environment jsdom */
 import { expect, it, vi } from "vitest";
-vi.mock(${sourcePath("agents/workspace-legacy-state.ts")}, () => ({ LEGACY_WORKSPACE_STATE_DIRNAME: "mock-only" }));
+vi.mock(${sourcePath("agents/workspace-legacy-state.ts")}, () => ({ LEGACY_WORKSPACE_ATTESTATION_DIRNAME: "mock-only" }));
 const workspace = await import(${sourcePath("agents/workspace-legacy-state.ts")});
 it("does not execute the source behind a mock-only import", () => {
-  expect(workspace.LEGACY_WORKSPACE_STATE_DIRNAME).toBe("mock-only");
+  expect(workspace.LEGACY_WORKSPACE_ATTESTATION_DIRNAME).toBe("mock-only");
   const key = Symbol.for("openclaw.workspaceLegacyStateTestApi");
   expect(Object.hasOwn(globalThis, key)).toBe(false);
   Reflect.set(globalThis, key, "foreign");

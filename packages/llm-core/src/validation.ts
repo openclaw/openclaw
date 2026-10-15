@@ -1,4 +1,5 @@
 import { parseLocalSchemaRefPointer } from "@openclaw/normalization-core/json-schema";
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
 import { Pointer } from "typebox/schema";
@@ -101,17 +102,6 @@ function isValidatorSchema(value: unknown): value is Tool["parameters"] {
   return isObjectBackedRecord(value);
 }
 
-const JSON_NUMBER_TOKEN_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/iu;
-
-function parseJsonNumberString(value: string): number | undefined {
-  const trimmed = value.trim();
-  if (!trimmed || !JSON_NUMBER_TOKEN_RE.test(trimmed)) {
-    return undefined;
-  }
-  const parsed = Number(trimmed);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
 function getSubSchemaValidator(
   schema: JsonSchemaObject,
   root?: JsonSchemaObject,
@@ -134,7 +124,7 @@ function coercePrimitiveByType(value: unknown, type: string): unknown {
         return 0;
       }
       if (typeof value === "string") {
-        const parsed = parseJsonNumberString(value);
+        const parsed = parseStrictFiniteNumber(value);
         if (parsed !== undefined && (type === "number" || Number.isSafeInteger(parsed))) {
           return parsed;
         }
@@ -240,19 +230,10 @@ function coerceWithUnionSchema(
   root: JsonSchemaObject | undefined,
   refs: ReadonlySet<JsonSchemaObject> | undefined,
 ): unknown {
-  // When value is null, check if any union member accepts null directly
-  // (type: "null") before falling through to coercion.  Without this check,
-  // anyOf [{type: "string"}, {type: "null"}] coerces null → "" via the
-  // string branch and never reaches the null branch.
-  if (value === null) {
-    for (const schema of schemas) {
-      const types = getSchemaTypes(schema, root);
-      if (types.includes("null")) {
-        const validator = getSubSchemaValidator(schema, root);
-        if (!validator || validator.Check(value)) {
-          return value;
-        }
-      }
+  // Preserve accepted values before trying a conversion to another union branch.
+  for (const schema of schemas) {
+    if (getSubSchemaValidator(schema, root)?.Check(value)) {
+      return value;
     }
   }
   for (const schema of schemas) {
@@ -301,12 +282,10 @@ function coerceWithJsonSchema(
     }
   }
 
-  if (Array.isArray(schema.anyOf)) {
-    nextValue = coerceWithUnionSchema(nextValue, schema.anyOf, root, refs);
-  }
-
-  if (Array.isArray(schema.oneOf)) {
-    nextValue = coerceWithUnionSchema(nextValue, schema.oneOf, root, refs);
+  for (const keyword of ["anyOf", "oneOf"] as const) {
+    if (Array.isArray(schema[keyword])) {
+      nextValue = coerceWithUnionSchema(nextValue, schema[keyword], root, refs);
+    }
   }
 
   const schemaTypes = getSchemaTypes(schema, root);

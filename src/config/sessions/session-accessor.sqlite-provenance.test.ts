@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -47,11 +47,13 @@ function createFixture() {
   return { scope, database, entry, transcriptScope: { ...scope, sessionId: entry.sessionId } };
 }
 
-function trackTranscriptProbe(database: ReturnType<typeof openOpenClawAgentDatabase>) {
-  return trackSqliteStatementExecutions(database.db, ["transcript"], (sql) =>
-    /^select "seq" from "transcript_events" where "session_id" = \? limit \?$/i.test(sql)
-      ? "transcript"
-      : null,
+function trackEntryReadProbes(database: ReturnType<typeof openOpenClawAgentDatabase>) {
+  return trackSqliteStatementExecutions(database.db, ["transcript", "window"], (sql) =>
+    /^select .+ from "session_windows" where "session_id" = \?$/i.test(sql)
+      ? "window"
+      : /^select "seq" from "transcript_events" where "session_id" = \? limit \?$/i.test(sql)
+        ? "transcript"
+        : null,
   );
 }
 
@@ -92,7 +94,7 @@ describe("SQLite session provenance writes", () => {
         }
       }, scope);
 
-      const tracker = trackTranscriptProbe(database);
+      const tracker = trackEntryReadProbes(database);
       let boundTextBytes = 0;
       const prepareStatement = database.db.prepare.bind(database.db);
       database.db.prepare = new Proxy(prepareStatement, {
@@ -119,6 +121,7 @@ describe("SQLite session provenance writes", () => {
             ? { sessionId: entry.sessionId, updatedAt: 20, skillsSnapshot: entry.skillsSnapshot }
             : entry,
         );
+        expect(tracker.counts.window).toBe(1);
         expect(boundTextBytes).toBeGreaterThan(0);
         expect(boundTextBytes).toBeLessThanOrEqual(Buffer.byteLength(retainedPrompt) * 1.5 + 4096);
         const stored = database.db
@@ -158,7 +161,8 @@ describe("SQLite session provenance writes", () => {
     "resolves provenance in the original %s transaction order",
     (order) => {
       const { scope, database, entry, transcriptScope } = createFixture();
-      const tracker = trackTranscriptProbe(database);
+      const tracker = trackEntryReadProbes(database);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(10);
       const append = () =>
         appendTranscriptEventInTransaction(database, transcriptScope, {
           type: "session",
@@ -178,14 +182,37 @@ describe("SQLite session provenance writes", () => {
         expect(tracker.counts.transcript).toBe(order === "transcript-first" ? 1 : 0);
         expect(
           database.db
-            .prepare("SELECT session_entry_provenance FROM session_windows WHERE session_id = ?")
+            .prepare(
+              "SELECT session_entry_provenance, transcript_observed_at FROM session_windows WHERE session_id = ?",
+            )
             .get(entry.sessionId),
         ).toEqual({
           session_entry_provenance: order === "transcript-first" ? 0 : 1,
+          transcript_observed_at: order === "transcript-first" ? 10 : 20,
         });
       } finally {
+        clock.mockRestore();
         tracker.restore();
       }
+    },
+  );
+
+  it.each(["transcript_observed_at", "transcript_updated_at"] as const)(
+    "refuses unrepresentable stored %s before writing metadata",
+    (column) => {
+      const { scope, database, entry } = createFixture();
+      replaceSessionEntrySync(scope, entry);
+      database.db
+        .prepare(`UPDATE session_windows SET ${column} = ? WHERE session_id = ?`)
+        .run(9_007_199_254_740_993n, entry.sessionId);
+      expect(() => replaceSessionEntrySync(scope, { ...entry, label: "must not persist" })).toThrow(
+        /too large|safe integer|out of range/i,
+      );
+      expect(
+        database.db
+          .prepare("SELECT label FROM session_nodes WHERE session_key = ?")
+          .get(scope.sessionKey),
+      ).toEqual({ label: null });
     },
   );
 });

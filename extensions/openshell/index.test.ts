@@ -1,5 +1,5 @@
 import type {
-  OpenClawPluginService,
+  OpenClawPluginApi,
   PluginRuntimeLifecycleRegistration,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
@@ -110,7 +110,7 @@ describe("OpenShell plugin registration lifecycle", () => {
 
   it("does not register runtime hooks or services in discovery mode", () => {
     const original = readBackend();
-    const services: OpenClawPluginService[] = [];
+    const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
     const lifecycles: PluginRuntimeLifecycleRegistration[] = [];
     plugin.register(
       createTestPluginApi({

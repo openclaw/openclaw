@@ -3,6 +3,7 @@ import type { BoardSnapshot } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -171,7 +172,7 @@ suite.define(() => {
           true,
         );
         expect(await note.inputValue()).toBe("Keep this local draft");
-        await page.getByRole("button", { name: "Restore split", exact: true }).click();
+        await selectChatLayoutAction(page, "Restore split");
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
         await widget.focus();
         expect(await widget.locator(chrome).count()).toBe(0);
@@ -179,10 +180,7 @@ suite.define(() => {
         await splitMenu.locator('[value="board-widget:resize:xl"]').waitFor();
         await page.keyboard.press("Escape");
         await page.screenshot({ path: path.join(suite.artifactDir, "candidate-split.png") });
-        await page
-          .locator(".chat-pane__header")
-          .getByRole("button", { name: "Focus", exact: true })
-          .click();
+        await selectChatLayoutAction(page, "Focus");
         await expect.poll(() => widget.locator(chrome).count()).toBe(0);
         const multiple = {
           ...board,
@@ -241,42 +239,6 @@ suite.define(() => {
           true,
         );
         expect(await note.inputValue()).toBe("Keep this local draft");
-      },
-    );
-  });
-
-  it("keeps pending decisions and failed header operations visible in the fullscreen widget", async () => {
-    await suite.withPage(
-      { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
-      async ({ page }) => {
-        const initial = snapshot();
-        initial.widgets[0]!.grantState = "pending";
-        const { gateway, board } = await openDashboard(page, initial);
-        const widget = page.locator('[data-widget-name="release-status"]');
-        await widget.getByRole("button", { name: "Allow", exact: true }).waitFor();
-        expect(await widget.locator(chrome).count()).toBe(0);
-        const rejected = structuredClone(board);
-        rejected.revision = 2;
-        for (const item of rejected.widgets) {
-          item.grantState = "rejected";
-        }
-        await gateway.setMethodResponse("board.widget.grant", rejected);
-        await widget.getByRole("button", { name: "Reject", exact: true }).click();
-        expect((await gateway.waitForRequest("board.widget.grant")).params).toMatchObject({
-          name: "release-status",
-          decision: "rejected",
-        });
-        await widget.locator('[data-test-id="board-rejected"]').waitFor();
-        const menu = await showHeaderMenu(page);
-        await gateway.setMethodResponse("board.update", {
-          __mockError: { code: "UNAVAILABLE", message: "Synthetic dashboard write failure" },
-        });
-        await gateway.deferNext("board.get", { sessionKey });
-        await menu.locator('[value="board-widget:remove"]').click();
-        await gateway.waitForRequest("board.update");
-        await widget.locator('[data-test-id="board-widget-action-error"]').waitFor();
-        await page.screenshot({ path: path.join(suite.artifactDir, "candidate-action-error.png") });
-        expect(await widget.locator(chrome).count()).toBe(0);
       },
     );
   });

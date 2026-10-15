@@ -11,12 +11,8 @@ import {
 
 export type { PreparedLegacySessionSurfaces };
 
-export function isSurfaceGroupKey(key: string): boolean {
-  return key.includes(":group:") || key.includes(":channel:");
-}
-
 export function isLegacyDefaultMainAliasKey(key: string, mainKey: string): boolean {
-  const lower = normalizeLowercaseStringOrEmpty(key.trim());
+  const lower = normalizeLowercaseStringOrEmpty(key);
   const canonicalMainKey = normalizeMainKey(mainKey);
   return (
     lower === `agent:${DEFAULT_AGENT_ID}:${DEFAULT_MAIN_KEY}` ||

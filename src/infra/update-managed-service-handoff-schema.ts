@@ -53,6 +53,7 @@ const cancellableUpdateAction = z.strictObject({
 });
 const updateAction = cancellableUpdateAction.extend({
   mutationProtocol: cancellationProtocol.optional(),
+  custody: z.enum(["reserved", "bound"]).optional(),
 });
 const actionSchema = z.discriminatedUnion("kind", [
   updateAction,

@@ -83,11 +83,13 @@ for provider examples and precedence.
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Overrides `agents.defaults.reasoningDefault` for this agent when no per-message or session reasoning override is set.
 - `fastModeDefault`: optional per-agent default for fast mode (`"auto" | true | false`). Overrides `agents.defaults.fastModeDefault` for this agent when no per-message or session fast-mode override is set.
 - `models`: optional per-agent model settings keyed by full `provider/model` ids. Use `models["provider/model"].params` for model-specific request settings and `models["provider/model"].agentRuntime` for runtime exceptions. `models["provider/model"].codeMode` accepts `true` or `false` and takes precedence over the agent's `tools.codeMode` activation, the shared model override, and the global default. Omit it to inherit; it does not affect Codex native Code Mode.
+- `nativeRuntimeConsent`: optional list of harness IDs, such as `["muse"]`, remembered during setup. Applies only to this agent; it has no global or defaults inheritance. An administrator selecting a remembered harness or creating a chat with it automatically uses Full access with the optional sandbox disabled. This promotion uses the same permission-change lifecycle as explicit settings changes and refuses changes during an active run. Non-admin clients cannot use remembered consent to raise a chat's permissions; their existing restrictions still apply. Mandatory sandbox and workspace boundaries still reject the runtime. Each turn checks the current list, current session identity, Full access, sandbox off, and absence of tool allowlists, disabled tools, or swarm collection. The current live configuration is checked again immediately before native dispatch, so removing consent also blocks queued or prepared work that relied on it. Remove an ID in Settings under **Remembered native runtime permissions** to revoke it for every chat relying on remembered consent. Explicit **Continue for this chat** consent remains unchanged. The field is additive and requires no migration.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - Local workspace-relative `identity.avatar` image files are limited to 2 MB. `http(s)` URLs and `data:` URIs are not checked against the local file-size limit.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of configured agent ids for explicit `sessions_spawn.agentId` targets (`["*"]` = any configured target; default: same agent only). Include the requester id when self-targeted `agentId` calls should be allowed. Stale entries whose agent config was deleted are rejected by `sessions_spawn` and omitted from `agents_list`; run `openclaw doctor --fix` to clean them up, or add a minimal `agents.entries.*` entry if that target should remain spawnable while inheriting defaults.
+- `tools.agentToAgent.send`: optional outgoing target agent IDs or `*` patterns for `sessions_send`. Omit to keep global policy and visibility checks; `[]` denies ordinary cross-agent sends. Matches permit send-only access under narrow visibility without granting history, search, list, status, or session controls. Global agent-to-agent policy and sandbox clamps still apply; same-agent and requester-owned child rules are unchanged. See [send-only configuration](/gateway/config-tools/sessions-and-subagents#per-agent-send-only-access).
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 - `subagents.requireAgentId`: when true, block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection; default: false).
 - `subagents.maxConcurrent`: max concurrent child-agent runs per immediate spawning/controller session. Default: `8`; independent sessions have independent budgets. Codex-native subagents use Codex's separate scheduler and limits.
@@ -129,14 +131,14 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 - `session` (optional; route bindings only): `{ dmScope, groupScope }` overrides session routing for matched peers
 - `acp` (optional; only for `type: "acp"`): `{ mode, label, cwd, backend }`
 
-**Deterministic match order:**
+**Fixed match order:**
 
 1. `match.peer`
 2. `match.guildId`
 3. `match.teamId`
 4. `match.accountId` (exact, no peer/guild/team)
 5. `match.accountId: "*"` (channel-wide)
-6. Sole-agent fallback (only when exactly one agent is configured; explicit multi-agent fleets without a matching binding fail closed)
+6. Sole-agent fallback (only when exactly one agent is configured; explicit multi-agent fleets without a matching binding reject the request)
 
 Within each tier, the first matching `bindings` entry wins.
 

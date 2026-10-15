@@ -15,6 +15,7 @@ import type { AgentDatabaseFileExecutionIdentity } from "./openclaw-agent-execut
 type AgentDatabaseExecutionCloseState = {
   database: OpenClawAgentDatabase | undefined;
   identity: AgentDatabaseFileExecutionIdentity | undefined;
+  releasePreparations: readonly (() => void)[];
   closeDomain: () => void;
   releaseBorrow: (() => void) | undefined;
 };
@@ -59,6 +60,7 @@ export function createAgentDatabaseExecutionCloser(
 function closeAgentDatabaseExecution({
   database,
   identity,
+  releasePreparations,
   closeDomain,
   releaseBorrow,
   releaseSharedBorrow,
@@ -68,6 +70,7 @@ function closeAgentDatabaseExecution({
   let checkpoint: SqliteWalCheckpointSnapshot | undefined;
   const errors: unknown[] = [];
   for (const cleanup of [
+    ...releasePreparations,
     closeDomain,
     () => {
       if (!database) {

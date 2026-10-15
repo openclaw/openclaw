@@ -86,6 +86,23 @@ function makeAssistantMessage(
 }
 
 describe("createAssistantVisibleStreamText", () => {
+  it("withholds a split runtime-context header until ordinary text diverges", () => {
+    const privateStream = createAssistantVisibleStreamText();
+
+    expect(privateStream.append("OpenClaw runtime cont")).toEqual({ text: "", delta: "" });
+    expect(privateStream.append("ext:\nprivate\nEnd OpenClaw runtime context.\nVisible")).toEqual({
+      text: "Visible",
+      delta: "Visible",
+    });
+
+    const ordinaryStream = createAssistantVisibleStreamText();
+    expect(ordinaryStream.append("OpenClaw runtime cont")).toEqual({ text: "", delta: "" });
+    expect(ordinaryStream.append("rol is useful")).toEqual({
+      text: "OpenClaw runtime control is useful",
+      delta: "OpenClaw runtime control is useful",
+    });
+  });
+
   it("keeps interleaved streams independent when one is replaced", () => {
     const first = createAssistantVisibleStreamText();
     const second = createAssistantVisibleStreamText();
@@ -97,6 +114,14 @@ describe("createAssistantVisibleStreamText", () => {
     expect(first.replace("Reset")).toEqual({ text: "Reset", delta: null });
     expect(second.append("\n\nBravo is here")).toEqual({ text: "Bravo is here", delta: "" });
     expect(first.append("!")).toEqual({ text: "Reset!", delta: "!" });
+  });
+
+  it("holds an incomplete GLM tool-call prefix and releases literal prose", () => {
+    const stream = createAssistantVisibleStreamText();
+    expect(stream.replace("Visible\n<tool_call>exec").text).toBe("Visible");
+    expect(
+      stream.replace("Use <tool_call>exec<arg_key> literally. Example: `</arg_key>`.").text,
+    ).toBe("Use <tool_call>exec<arg_key> literally. Example: `</arg_key>`.");
   });
 });
 
@@ -387,6 +412,13 @@ describe("extractAssistantThinking", () => {
 });
 
 describe("stripDowngradedToolCallText", () => {
+  it("withholds a partial runtime-context header from cumulative snapshots", () => {
+    expect(sanitizeAssistantVisibleStreamText("OpenClaw runtime cont")).toBe("");
+    expect(sanitizeAssistantVisibleStreamText("OpenClaw runtime control is useful")).toBe(
+      "OpenClaw runtime control is useful",
+    );
+  });
+
   it.each([
     { input: "Hello [Historical context: example]  \n", expected: "Hello   \n" },
     {

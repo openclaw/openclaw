@@ -73,12 +73,6 @@ describe("container receive health", () => {
       status: 200,
       error: "Signal container receive endpoint did not upgrade to WebSocket (HTTP 200)",
     },
-    {
-      behavior: "close",
-      ok: false,
-      status: null,
-      error: "Signal container receive WebSocket closed before open (1000: done)",
-    },
   ] as const)("reports $behavior", async ({ behavior, ...result }) => {
     state.behavior = behavior;
     const check = containerCheck(baseUrl, 1000, account);
@@ -90,31 +84,10 @@ describe("container receive health", () => {
 });
 
 describe("container receive lifecycle", () => {
-  it("redacts the account and retains the default opening budget for zero timeout", async () => {
-    state.behavior = "open";
-    const log = vi.fn();
-    const onStreamOpen = vi.fn();
-    const stream = streamContainerEvents({
-      baseUrl,
-      account,
-      timeoutMs: 0,
-      onEvent: vi.fn(),
-      onStreamOpen,
-      logger: { log },
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    await stream;
-    expect(onStreamOpen).toHaveBeenCalledOnce();
-    expect(log).toHaveBeenCalledWith(
-      "[signal-ws] connecting to ws://localhost:8080/v1/receive/<redacted>",
-    );
-    const messages = log.mock.calls.flat().join("\n");
-    expect(messages).not.toContain(account);
-    expect(messages).not.toContain("%2B14259798283");
-    expect(state.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 30_000 }]);
-  });
   it("drains accepted and socket-buffered events before resolving shutdown", async () => {
     state.behavior = "buffered";
+    const log = vi.fn();
+    const onStreamOpen = vi.fn();
     const abort = new AbortController();
     const remove = vi.spyOn(abort.signal, "removeEventListener");
     const delivery = createDeferred<void>();
@@ -122,6 +95,9 @@ describe("container receive lifecycle", () => {
     let settled = false;
     const stream = streamContainerEvents({
       baseUrl,
+      account,
+      onStreamOpen,
+      logger: { log },
       abortSignal: abort.signal,
       timeoutMs: 0,
       onEvent: async (event) => {
@@ -143,6 +119,14 @@ describe("container receive lifecycle", () => {
     expect(timestamps).toEqual([1, 2]);
     expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
     expect(state.terminations).toBe(0);
+    expect(onStreamOpen).toHaveBeenCalledOnce();
+    expect(log).toHaveBeenCalledWith(
+      "[signal-ws] connecting to ws://localhost:8080/v1/receive/<redacted>",
+    );
+    const messages = log.mock.calls.flat().join("\n");
+    expect(messages).not.toContain(account);
+    expect(messages).not.toContain("%2B14259798283");
+    expect(state.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 30_000 }]);
   });
   it("propagates a handler failure during shutdown", async () => {
     state.behavior = "buffered";

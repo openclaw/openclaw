@@ -8,6 +8,7 @@ import {
   hasUnresolvedProviderAuthEndpoint,
   resolveProviderIdForAuth,
 } from "../provider-auth-aliases.js";
+import { authProfileSourceExists } from "./file-state.js";
 import {
   coerceLegacyFlatCredential,
   parseLegacyCredentialEntry,
@@ -89,8 +90,11 @@ function resolveAuthProfileOwnerPath(agentDir?: string, env?: NodeJS.ProcessEnv)
   return agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath(env);
 }
 
-export function hasLegacyAuthProfileCredentialSource(agentDir?: string): boolean {
-  return listLegacyAuthProfileSources({ agentDir }).some(isCredentialSource);
+export function hasLegacyAuthProfileCredentialSource(
+  agentDir?: string,
+  env?: NodeJS.ProcessEnv,
+): boolean {
+  return listLegacyAuthProfileSources({ agentDir, env }).some(isCredentialSource);
 }
 
 /**
@@ -181,24 +185,20 @@ export class AuthProfileMigrationRequiredError extends Error {
       | AuthProfileMigrationRequiredError,
     previous?: AuthProfileMigrationRequiredError,
   ) {
-    const ownerId =
+    const source =
       params instanceof AuthProfileMigrationRequiredError
-        ? params.ownerId
-        : shortenHomePath(
-            params.databasePath ?? resolveAuthProfileOwnerPath(params.agentDir, params.env),
-          );
+        ? params
+        : {
+            ownerId: shortenHomePath(
+              params.databasePath ?? resolveAuthProfileOwnerPath(params.agentDir, params.env),
+            ),
+            sourceKinds: params.sources.map((candidate) => candidate.kind),
+            affectedProviders: readLegacyAuthProfileProviders(params.sources),
+          };
+    const { ownerId, affectedProviders: providers } = source;
     const sourceKinds = [
-      ...new Set([
-        ...(previous?.sourceKinds ?? []),
-        ...(params instanceof AuthProfileMigrationRequiredError
-          ? params.sourceKinds
-          : params.sources.map((source) => source.kind)),
-      ]),
+      ...new Set([...(previous?.sourceKinds ?? []), ...source.sourceKinds]),
     ].toSorted();
-    const providers =
-      params instanceof AuthProfileMigrationRequiredError
-        ? params.affectedProviders
-        : readLegacyAuthProfileProviders(params.sources);
     const affectedProviders =
       providers && previous?.affectedProviders !== null
         ? [...new Set([...(previous?.affectedProviders ?? []), ...providers])].toSorted()
@@ -338,16 +338,13 @@ export function assertAuthProfileMigrationCandidates(params: {
     params.config,
     params.deferScopedRefusals,
   );
-  // Older shipped processes and restores can recreate these three fixed files
-  // after startup, so this credential boundary deliberately rechecks their names.
+  // External restores invalidate the owner's source facts through directory observation.
   const sources = params.candidates.filter(
-    (source) => isCredentialSource(source) && fs.existsSync(source.path),
+    (source) => isCredentialSource(source) && authProfileSourceExists(source.path),
   );
   if (sources.length === 0) {
     return;
   }
-  // The store read only happens once a retired file actually exists, so the
-  // healthy majority keeps the plain name check on this hot path.
   if (params.hasCredentials()) {
     warnLegacyAuthProfileSourcesIgnored({ databasePath: params.databasePath, sources });
     return;

@@ -2,17 +2,23 @@ import path from "node:path";
 import { constants } from "node:sqlite";
 import { expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import {
   appendTranscriptMessage,
   appendTranscriptMessages,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { projectForwardedMessages } from "./chat-display-projection.history.js";
+import {
+  prepareForwardedMessageCronJobNameResolver,
+  projectForwardedMessages,
+} from "./chat-display-projection.history.js";
+import { SerializedJsonArray } from "./serialized-json.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
 import {
   readSessionHistorySnapshotAsync,
@@ -23,6 +29,7 @@ import { projectSessionMessagePayload } from "./session-transcript-message.js";
 it("batches automation names across history reads after rename and deletion without a source session", async () => {
   const jobCount = 32;
   await withOpenClawTestState({ label: "cron-attribution" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const job: CronJob = {
       id: "daily-report",
       name: "Daily report",
@@ -94,14 +101,15 @@ it("batches automation names across history reads after rename and deletion with
       effectiveMaxChars: 100_000,
     };
     const database = openOpenClawStateDatabase({ env: state.env });
+    const db = requireNativeSqliteDatabase(database.db);
     // Host-boundary counts exclude the history worker's independent connection.
     const measure = async <T>(operation: string, read: () => T | Promise<T>): Promise<T> => {
-      const counter = trackSqliteStatementExecutions(database.db, ["names"], (sql) =>
+      const counter = trackSqliteStatementExecutions(db, ["names"], (sql) =>
         /\bfrom\s+"?cron_jobs"?\b/iu.test(sql) ? "names" : null,
       );
       try {
         const result = await read();
-        expect(counter.counts.names, operation).toBe(operation.startsWith("no-id-") ? 0 : 1);
+        expect(counter.counts.names, operation).toBe(0);
         return result;
       } finally {
         counter.restore();
@@ -162,16 +170,15 @@ it("batches automation names across history reads after rename and deletion with
           label: name ? (index % jobCount === 0 ? name : `${name} ${index}`) : "Automation",
         },
       }));
-      expect(
-        (await measure(`${name}-rpc`, () => readChatHistoryPage(pageParams))).messages,
-      ).toMatchObject(expected);
-      expect(
-        (
-          await measure(`${name}-anchor`, () =>
-            readChatHistoryPage({ ...pageParams, messageId: "forwarded-result" }),
-          )
-        ).messages,
-      ).toMatchObject(expected);
+      for (const messageId of [undefined, "forwarded-result"]) {
+        const page = await measure(`${name}-${messageId ? "anchor" : "rpc"}`, () =>
+          readChatHistoryPage({ ...pageParams, messageId, encodeResponse: true }),
+        );
+        expect(page.encodedResponse?.messages).toBeInstanceOf(Uint8Array);
+        expect(new SerializedJsonArray(page.encodedResponse!.messages).materialize()).toMatchObject(
+          expected,
+        );
+      }
       for (const limit of [messages.length + 10, undefined]) {
         const snapshot = await measure(`${name}-http-${limit}`, () =>
           readSessionHistorySnapshotAsync({
@@ -191,7 +198,10 @@ it("batches automation names across history reads after rename and deletion with
           const appended = await measure(`${name}-sse`, async () =>
             (
               await currentSse.prepareInlineMessage({
-                message: { role: "user", content: `Next message after ${name}.` },
+                message:
+                  name === "Renamed report"
+                    ? { role: "assistant", content: "NO_REPLY" }
+                    : { role: "user", content: `Next message after ${name}.` },
               })
             )(),
           );
@@ -212,14 +222,18 @@ it("batches automation names across history reads after rename and deletion with
       }
       expect(
         (
-          await measure(`${name}-live`, () =>
-            projectSessionMessagePayload({ message, sessionKey: scope.sessionKey }),
+          await measure(`${name}-live`, async () =>
+            projectSessionMessagePayload({
+              message,
+              sessionKey: scope.sessionKey,
+              resolveCronJobName: await prepareForwardedMessageCronJobNameResolver([message]),
+            }),
           )
         ).payload?.message,
       ).toMatchObject(firstExpected);
     }
     let deniedNameReads = 0;
-    database.db.setAuthorizer((action, table, column) => {
+    db.setAuthorizer((action, table, column) => {
       if (action === constants.SQLITE_READ && table === "cron_jobs" && column === "name") {
         deniedNameReads++;
         return constants.SQLITE_DENY;
@@ -228,15 +242,15 @@ it("batches automation names across history reads after rename and deletion with
     });
     try {
       expect(() => projectSessionMessagePayload({ message, sessionKey: scope.sessionKey })).toThrow(
-        /prohibited|not authorized|access/iu,
+        /prepared/iu,
       );
-      expect(deniedNameReads).toBe(1);
-      database.db.setAuthorizer(() => constants.SQLITE_DENY);
+      expect(deniedNameReads).toBe(0);
+      db.setAuthorizer(() => constants.SQLITE_DENY);
       expect(projectForwardedMessages([])).toEqual([]);
       const ordinary = [{ role: "user", content: "No automation." }];
       expect(projectForwardedMessages(ordinary)).toBe(ordinary);
     } finally {
-      database.db.setAuthorizer(null);
+      db.setAuthorizer(null);
     }
   });
 });

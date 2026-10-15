@@ -27,7 +27,7 @@ it("pages and searches archived sessions without materializing excluded candidat
     const cfg = {
       agents: {
         defaults: { model: { primary: "anthropic/claude-sonnet-4-5" } },
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       },
     };
     setRuntimeConfigSnapshot(cfg);
@@ -81,7 +81,7 @@ it("pages and searches archived sessions without materializing excluded candidat
 
 it("resolves a cold archived key through the registered handler", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const key = "agent:main:archived-exact";
     replaceSessionEntrySync(
@@ -115,7 +115,7 @@ it("resolves a cold archived key through the registered handler", async () => {
 it("keeps archived visibility and membership current without warming hidden rows", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       gateway: {
         roles: {
           default: "reader",
@@ -178,7 +178,11 @@ it("hides cold archived cross-agent swarm children from a global parent", async 
     { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
     async () => {
       const cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, work: {} },
+        },
         gateway: {
           roles: {
             default: "reader",

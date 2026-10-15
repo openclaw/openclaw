@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { formatCliCommand } from "../cli/command-format.js";
-import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
+import {
+  isPrimarySessionTranscriptFileName,
+  resolveTrajectoryPath,
+  resolveTrajectoryPointerPath,
+} from "../config/sessions/artifacts.js";
 import {
   isLegacySessionRecordOwnedByTarget,
   readLegacySessionStoreEntries,
@@ -17,12 +21,54 @@ import {
   readMigrationArtifactIdentity,
   type MigrationArtifactIdentity,
 } from "./session-sqlite-migration-artifact.js";
+import { canonicalMigrationFilePath } from "./session-sqlite-migration-manifest.js";
 import {
+  type TranscriptFileFingerprint,
   readLegacyPrimaryTranscriptIdentity,
   readOnlySqliteDbStats,
   readOnlySqliteValidationSnapshot,
 } from "./session-sqlite-migration-readers.js";
 import { verifyCanonicalSessionTranscriptSources } from "./session-sqlite-transcript-verification.js";
+import {
+  databaseFileIdentityKey,
+  readDatabaseIdentityBirthtime,
+} from "./sqlite-worker-identity.js";
+
+/** Capture originals before deferral; settlement may only archive these verified identities. */
+export function captureDeferredPluginSessionSources(params: {
+  storePath: string;
+  indexIdentity?: MigrationArtifactIdentity;
+  records: readonly { transcriptPath?: string; sourceFingerprint?: TranscriptFileFingerprint }[];
+  unreferencedJsonlFiles: readonly string[];
+  referencedPaths?: ReadonlySet<string>;
+}): Array<{ path: string; identity: MigrationArtifactIdentity }> {
+  const sources = new Map<string, MigrationArtifactIdentity>(
+    params.indexIdentity ? [[path.resolve(params.storePath), params.indexIdentity]] : [],
+  );
+  for (const file of params.unreferencedJsonlFiles) {
+    if (!params.referencedPaths?.has(canonicalMigrationFilePath(file))) {
+      sources.set(path.resolve(file), readMigrationArtifactIdentity(file));
+    }
+  }
+  for (const record of params.records) {
+    if (!record.transcriptPath || !record.sourceFingerprint) {
+      continue;
+    }
+    sources.set(
+      path.resolve(record.transcriptPath),
+      readMigrationArtifactIdentity(record.transcriptPath, 1n, record.sourceFingerprint),
+    );
+    for (const file of [
+      resolveTrajectoryPath(record.transcriptPath),
+      resolveTrajectoryPointerPath(record.transcriptPath),
+    ]) {
+      if (file && fs.existsSync(file)) {
+        sources.set(path.resolve(file), readMigrationArtifactIdentity(file));
+      }
+    }
+  }
+  return [...sources].map(([sourcePath, identity]) => ({ path: sourcePath, identity }));
+}
 
 /** A replaced database cannot inherit completed-import authority from an old inode. */
 export async function verifyDeferredSessionDatabase(params: {
@@ -151,14 +197,20 @@ export function preservesRecordedIndexValue(
   );
 }
 
-export function databaseIdentity(sqlitePath: string): string {
+export function databaseIdentity(
+  sqlitePath: string,
+  kind: "receipt" | "physical" = "receipt",
+): string {
   const file = fs.lstatSync(sqlitePath, { bigint: true, throwIfNoEntry: false });
   if (!file?.isFile()) {
     throw new Error(
       `The imported session database is missing or no longer a regular file: ${sqlitePath}. Run ${formatCliCommand("openclaw doctor --session-sqlite recover --session-sqlite-all-agents")} against the same state/config before retrying repair.`,
     );
   }
-  return `${file.dev}:${file.ino}`;
+  // Device numbers can change after a VM reboot; durable receipts bind file creation instead.
+  return kind === "physical"
+    ? databaseFileIdentityKey(file)
+    : `inode:${file.ino}:birthtime:${readDatabaseIdentityBirthtime(file)}`;
 }
 
 export function sameSourceContent(

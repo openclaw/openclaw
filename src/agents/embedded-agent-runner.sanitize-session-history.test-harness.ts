@@ -36,28 +36,27 @@ export function makeInMemorySessionManager(
   entries: SessionEntry[],
   activeBranchEntries: SessionEntry[] = entries,
 ): SessionManager {
-  const appendCustomEntry = vi.fn((customType: string, data: unknown) => {
-    const entry = { type: "custom", customType, data };
-    entries.push(entry);
-    if (activeBranchEntries !== entries) {
-      activeBranchEntries.push(entry);
-    }
-  });
   return {
+    getSessionTarget: () => undefined,
     getEntries: vi.fn(() => entries),
     getBranch: vi.fn(() => activeBranchEntries),
-    appendCustomEntry,
-    appendCustomEntryAsync: async (customType: string, data: unknown) =>
-      appendCustomEntry(customType, data),
+    appendCustomEntryAsync: vi.fn(async (customType: string, data: unknown) => {
+      const entry = { type: "custom", customType, data };
+      entries.push(entry);
+      if (activeBranchEntries !== entries) {
+        activeBranchEntries.push(entry);
+      }
+      return `custom-entry-${entries.length}`;
+    }),
   } as unknown as SessionManager;
 }
 
 export function makeMockSessionManager(): SessionManager {
   return {
+    getSessionTarget: () => undefined,
     getEntries: vi.fn().mockReturnValue([]),
     getBranch: vi.fn().mockReturnValue([]),
-    appendCustomEntry: vi.fn(),
-    appendCustomEntryAsync: vi.fn(async () => {}),
+    appendCustomEntryAsync: vi.fn(async () => "custom-entry"),
   } as unknown as SessionManager;
 }
 
@@ -80,7 +79,7 @@ export async function createSanitizeSessionHistoryProviderRuntimeMock(
     // Default to no provider plugin participation; individual tests opt in to
     // hooks so ownership boundaries stay explicit.
     resolveProviderRuntimePlugin: vi.fn(() => undefined),
-    sanitizeProviderReplayHistoryWithPlugin: vi.fn(() => undefined),
+    sanitizeProviderReplayHistoryWithPluginAsync: vi.fn(() => undefined),
     validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
     ...extra,
   };

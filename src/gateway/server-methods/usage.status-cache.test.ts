@@ -8,13 +8,12 @@ import {
 } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 
 const mocks = vi.hoisted(() => ({
-  ensureAuthProfileStore: vi.fn(),
+  ensureAuthProfileStoreAsync: vi.fn(),
   listProviderUsagePluginDescriptors: vi.fn(),
   loadProviderUsageSummary: vi.fn(),
 }));
@@ -25,7 +24,7 @@ vi.mock("../../agents/auth-profiles.js", async () => {
   );
   return {
     ...actual,
-    ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+    ensureAuthProfileStoreAsync: mocks.ensureAuthProfileStoreAsync,
     externalCliDiscoveryForConfigStatus: vi.fn(() => undefined),
   };
 });
@@ -49,7 +48,7 @@ import {
 import { getProviderUsageRuntimeSnapshot } from "./provider-usage-runtime.js";
 import { usageHandlers } from "./usage.js";
 
-const config: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+const config: OpenClawConfig = { agents: { entries: { main: {} } } };
 const refreshingCapableClient = { connect: { caps: ["usage-refreshing"] } };
 const providerDescriptor = { provider: "openai", displayName: "OpenAI" };
 const visibleProvider = { providers: [{ provider: "openai" }] };
@@ -113,7 +112,7 @@ describe("usage.status provider usage cache", () => {
     vi.spyOn(Date, "now").mockImplementation(() => now);
     vi.clearAllMocks();
     clearModelAuthStatusUsageCache();
-    mocks.ensureAuthProfileStore.mockImplementation(() => store);
+    mocks.ensureAuthProfileStoreAsync.mockImplementation(() => store);
     mocks.listProviderUsagePluginDescriptors.mockReturnValue([providerDescriptor]);
     mocks.loadProviderUsageSummary.mockImplementation(async () => ({
       updatedAt: now,
@@ -136,31 +135,10 @@ describe("usage.status provider usage cache", () => {
     vi.restoreAllMocks();
   });
 
-  it("hands the exact runtime config to the background refresh", async () => {
-    mocks.loadProviderUsageSummary.mockImplementation(async (options) => ({
-      updatedAt: now,
-      providers:
-        options.config === config
-          ? [
-              {
-                ...providerDescriptor,
-                windows: [{ label: "5h", usedPercent: 25 }],
-                accountEmail: "configured@example.com",
-              },
-            ]
-          : [],
-    }));
-    await expect(settledStatus()).resolves.toMatchObject({ refreshing: true });
-    await expect(runCapableUsageStatus()).resolves.toMatchObject({
-      providers: [{ accountEmail: "configured@example.com" }],
-    });
-  });
-
   it("returns a cold marker only to capable clients and retains invalidated refresh work", async () => {
     const scope = new AsyncWorkScope();
     const heldRefresh = createDeferredCore<UsageSummary>();
     const original: UsageSummary = { updatedAt: now, providers: [] };
-    let legacy: Promise<unknown> | undefined;
     let draining: Promise<void> | undefined;
     mocks.loadProviderUsageSummary.mockImplementationOnce(() => heldRefresh.promise);
     try {
@@ -169,14 +147,9 @@ describe("usage.status provider usage cache", () => {
         providers: [],
         refreshing: true,
       });
-      // The blocking reader must not own the detached capable-client refresh.
-      const legacyResponded = vi.fn();
-      legacy = runUsageStatus();
-      void legacy.then(legacyResponded, legacyResponded);
       clearModelAuthStatusUsageCache();
       const current = (await runUsageStatus()) as UsageSummary;
       expect(current.providers[0]?.windows[0]?.usedPercent).toBe(20);
-      expect(legacyResponded).not.toHaveBeenCalled();
 
       let drained = false;
       draining = scope.drain().then(() => {
@@ -185,14 +158,13 @@ describe("usage.status provider usage cache", () => {
       await Promise.resolve();
       expect(drained).toBe(false);
       heldRefresh.resolve(original);
-      await expect(legacy).resolves.toEqual(original);
       await draining;
       expect(drained).toBe(true);
       await expect(runUsageStatus()).resolves.toEqual(current);
       expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
     } finally {
       heldRefresh.resolve(original);
-      await Promise.allSettled([legacy, mocks.loadProviderUsageSummary.mock.results[0]?.value]);
+      await Promise.allSettled([mocks.loadProviderUsageSummary.mock.results[0]?.value]);
       await (draining ?? scope.drain());
     }
   });
@@ -244,19 +216,6 @@ describe("usage.status provider usage cache", () => {
     });
   });
 
-  it("rebuilds prepared usage facts once for each config and plugin generation", async () => {
-    await runUsageStatus();
-    await runUsageStatus();
-    const nextConfig = { ...config };
-    await runUsageStatus({ runtimeConfig: nextConfig });
-    await runUsageStatus({ runtimeConfig: nextConfig });
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    await runUsageStatus({ runtimeConfig: nextConfig });
-    await runUsageStatus({ runtimeConfig: nextConfig });
-    expect(mocks.listProviderUsagePluginDescriptors).toHaveBeenCalledTimes(3);
-    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(3);
-  });
-
   it.each([false, true])("serves stale usage while refreshing (timeout: %s)", async (timeout) => {
     const first = (await runUsageStatus()) as UsageSummary;
     now = 61_000;
@@ -288,7 +247,7 @@ describe("usage.status provider usage cache", () => {
   it("shares the credential-bound snapshot and invalidates it on rotation", async () => {
     await runUsageStatus();
     const usage = readProviderUsageStaleWhileRevalidate({
-      ...getProviderUsageRuntimeSnapshot({ config }),
+      ...(await getProviderUsageRuntimeSnapshot({ config })),
       now,
     });
     expect(usage.get("openai")?.windows[0]?.usedPercent).toBe(10);

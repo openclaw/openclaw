@@ -3,11 +3,16 @@ import path from "node:path";
 import { resolveDefaultAgentWorkspaceDir as resolveCoreDefaultAgentWorkspaceDir } from "../../../../src/agents/workspace-default-path.js";
 import { resolveStateDirFromHome } from "../../../../src/config/state-dir.js";
 import { resolveRequiredHomeDir, resolveUserPath } from "../../../../src/infra/home-dir.js";
-export { tryResolveLegacyDataOwner } from "../../../../src/agents/agent-roster.js";
+export {
+  listAgentEntries,
+  tryResolveLegacyDataOwner,
+  tryResolveRawLegacyDefaultAgentId,
+} from "../../../../src/agents/agent-roster.js";
 export {
   resolveCanonicalRootMemoryFile,
   shouldSkipRootMemoryAuxiliaryPath,
 } from "../../../../src/memory/root-memory-files.js";
+export { isCronRunSessionKey } from "../../../../src/sessions/session-key-utils.js";
 export { resolveUserPath };
 
 /** Keep effective-home expansion at the memory-host boundary, before state selection. */

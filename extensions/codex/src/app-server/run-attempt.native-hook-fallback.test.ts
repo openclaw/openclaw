@@ -4,6 +4,7 @@ import * as agentHarnessRuntime from "openclaw/plugin-sdk/agent-harness-runtime"
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
@@ -41,10 +42,13 @@ import {
 } from "./session-binding.test-helpers.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 import * as threadLifecyclePreflight from "./thread-lifecycle-preflight.js";
-import { startOrResumeThread } from "./thread-lifecycle.js";
+import { startOrResumeThread } from "./thread-lifecycle-run.js";
 import { createLeasedCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
 
-function participantHostCapabilities(assertNativeSubagentSpawnAllowed: () => void) {
+function participantHostCapabilities(
+  assertNativeSubagentSpawnAllowed: () => void,
+  modelPolicyRequired = false,
+) {
   const bindModelExecution = () => ({
     signal: new AbortController().signal,
     assertCurrent: () => {},
@@ -54,7 +58,7 @@ function participantHostCapabilities(assertNativeSubagentSpawnAllowed: () => voi
     bindModelExecution,
     retainSourceAuthority: () => ({
       ...bindModelExecution(),
-      modelPolicyRequired: false,
+      modelPolicyRequired,
       bindModelExecution,
     }),
     assertNativeSubagentSpawnAllowed,
@@ -65,12 +69,8 @@ describe("Codex participant native admission", () => {
   setupRunAttemptTestHooks({ sessionOwner: null });
   it.each([
     { hooks: "optional", lifecycle: "fresh", participants: "solo", policy: "normal" },
-    { hooks: "disabled", lifecycle: "fresh", participants: "solo", policy: "normal" },
-    { hooks: "disabled", lifecycle: "resumed", participants: "solo", policy: "normal" },
-    { hooks: "managed-only", lifecycle: "fresh", participants: "solo", policy: "normal" },
     { hooks: "managed-only", lifecycle: "resumed", participants: "solo", policy: "normal" },
     { hooks: "disabled", lifecycle: "fresh", participants: "multiple", policy: "normal" },
-    { hooks: "managed-only", lifecycle: "fresh", participants: "multiple", policy: "normal" },
     { hooks: "disabled", lifecycle: "fresh", participants: "multiple", policy: "token-sharing" },
   ] as const)(
     "handles $participants participants with $hooks native admission on a $lifecycle $policy thread",
@@ -152,6 +152,7 @@ describe("Codex participant native admission", () => {
           nativeHookRelay: hooks === "disabled" ? { enabled: false } : undefined,
         },
       });
+      using _ = { [Symbol.dispose]: connection.releaseBindingAuthority };
       try {
         const runtime = await prepareCodexAttemptRuntime(connection);
         const tools = await prepareCodexAttemptTools(runtime);
@@ -186,7 +187,10 @@ describe("Codex participant native admission", () => {
               ]) {
                 spawnFailure = new Error(message);
                 await expect(
-                  resources.buildNativeHookRelayFinalConfigPatch({ action: "start" }),
+                  resources.buildNativeHookRelayFinalConfigPatch(
+                    { action: "start" },
+                    harness.client,
+                  ),
                 ).rejects.toBe(spawnFailure);
               }
               spawnFailure = ambiguity;
@@ -206,12 +210,7 @@ describe("Codex participant native admission", () => {
             resources.state.thread = binding;
             expect(preflight).toHaveBeenCalledWith(
               expect.objectContaining({
-                nativeModelAdmission:
-                  policy === "token-sharing"
-                    ? undefined
-                    : hooks === "disabled"
-                      ? "disabled"
-                      : "optional",
+                nativeModelAdmission: policy === "token-sharing" ? undefined : "optional",
               }),
             );
             const admission = await preflight.mock.results[0]?.value;
@@ -306,11 +305,117 @@ describe("Codex participant native admission", () => {
 
 describe("Codex native hook Gateway fallback", () => {
   setupRunAttemptTestHooks();
+  it.each(["managed-only", "disabled"] as const)(
+    "waits for workspace preparation before starting a supported %s native turn",
+    async (hooks) => {
+      const params = createParams(
+        path.join(tempDir, `workspace-${hooks}.jsonl`),
+        path.join(tempDir, `workspace-${hooks}`),
+      );
+      const ready = createDeferred<void>();
+      const waiting = createDeferred<void>();
+      let prepared = false;
+      const waitUntilReady = vi.fn(async () => {
+        waiting.resolve();
+        await ready.promise;
+        prepared = true;
+      });
+      params.hostCapabilities = createCodexTestHostCapabilities({
+        ...participantHostCapabilities(() => {}),
+        workspaceReadiness: { toolNames: ["exec", "read"], waitUntilReady },
+      });
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "configRequirements/read") {
+          return { requirements: { allowManagedHooksOnly: hooks === "managed-only" } };
+        }
+        if (method === "account/read") {
+          return { account: { type: "apiKey" } };
+        }
+        if (method === "thread/start" || method === "turn/start") {
+          expect(prepared, `${method} requires the complete workspace without native hooks`).toBe(
+            true,
+          );
+        }
+        return undefined;
+      });
+      ownCodexInferenceClient(harness.client);
+      const preflight = vi.spyOn(threadLifecyclePreflight, "prepareCodexThreadLifecyclePreflight");
+      const abort = new AbortController();
+      params.abortSignal = abort.signal;
+      const run = runCodexAppServerAttempt(params, {
+        bindingStore: createCodexTestBindingStore(),
+        nativeHookRelay: hooks === "disabled" ? { enabled: false } : undefined,
+      });
+      try {
+        await Promise.race([
+          waiting.promise,
+          run.waitForTurnAccepted().then(() => {
+            throw new Error("Native turn started before workspace preparation");
+          }),
+        ]);
+        expect(harness.requests.some(({ method }) => method === "thread/start")).toBe(false);
+        expect(preflight).toHaveBeenCalledWith(
+          expect.objectContaining({ nativeHookRelayRequired: false }),
+        );
+        ready.resolve();
+        await run.waitForTurnAccepted();
+        expect(waitUntilReady).toHaveBeenCalled();
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+        await run;
+      } finally {
+        ready.resolve();
+        abort.abort("test cleanup");
+        await run.catch(() => undefined);
+        harness.close();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "keeps required model admission fail closed under managed-only hooks (relay disabled: %s)",
+    async (disabled) => {
+      const params = createParams(
+        path.join(tempDir, `workspace-required-${disabled}.jsonl`),
+        path.join(tempDir, `workspace-required-${disabled}`),
+      );
+      const waitUntilReady = vi.fn(async () => {});
+      params.hostCapabilities = createCodexTestHostCapabilities({
+        ...participantHostCapabilities(() => {}, true),
+        workspaceReadiness: { toolNames: ["exec", "read"], waitUntilReady },
+      });
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "configRequirements/read") {
+          return { requirements: { allowManagedHooksOnly: true } };
+        }
+        if (method === "account/read") {
+          return { account: { type: "apiKey" } };
+        }
+        return undefined;
+      });
+      ownCodexInferenceClient(harness.client);
+      try {
+        await expect(
+          runCodexAppServerAttempt(params, {
+            bindingStore: createCodexTestBindingStore(),
+            nativeHookRelay: disabled ? { enabled: false } : undefined,
+          }),
+        ).rejects.toThrow(/managed-only hooks.*OpenClaw native hook relay/i);
+        expect(waitUntilReady).not.toHaveBeenCalled();
+        expect(
+          harness.requests.filter(({ method }) =>
+            ["thread/start", "thread/resume", "turn/start"].includes(method),
+          ),
+        ).toEqual([]);
+      } finally {
+        harness.close();
+      }
+    },
+  );
+
   it("publishes cross-profile steering from effective delegation policy and installed admission", async () => {
     const registered = vi.spyOn(agentHarnessRuntime, "setActiveEmbeddedRun");
     for (const { hooks, policy, supportsSteering } of [
       { hooks: "disabled", policy: "normal", supportsSteering: false },
-      { hooks: "managed-only", policy: "normal", supportsSteering: false },
       { hooks: "optional", policy: "normal", supportsSteering: true },
       { hooks: "disabled", policy: "token-sharing", supportsSteering: true },
       { hooks: "disabled", policy: "report-only", supportsSteering: true },
@@ -339,7 +444,7 @@ describe("Codex native hook Gateway fallback", () => {
       }
       const harness = createStartedThreadHarness(async (method) => {
         if (method === "configRequirements/read") {
-          return { requirements: { allowManagedHooksOnly: hooks === "managed-only" } };
+          return { requirements: { allowManagedHooksOnly: false } };
         }
         if (method === "account/read") {
           return { account: { type: "apiKey" } };
@@ -483,6 +588,7 @@ describe("Codex native hook Gateway fallback", () => {
     );
     const params = createParams(sessionFile, workspaceDir);
     params.config = { tools: { loopDetection: { enabled: true } } };
+    setRuntimeConfigSnapshot(params.config);
     const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
     const abort = new AbortController();
     params.abortSignal = abort.signal;

@@ -24,6 +24,8 @@ export function createCommandMaintenanceFollowup(params: {
   model: string;
   thinkLevel: FollowupRun["run"]["thinkLevel"];
   auth?: Pick<FollowupRun["run"], "authProfileId" | "authProfileIdSource">;
+  /** The command's trusted source owner status; it selects only the flush memory audience. */
+  senderIsOwner: boolean | undefined;
 }): FollowupRun {
   const { prepared, sessionEntry } = params;
   return createSessionMaintenanceFollowup({
@@ -42,6 +44,7 @@ export function createCommandMaintenanceFollowup(params: {
       thinkLevel: params.thinkLevel,
       verboseLevel: params.embeddedSessionState.resolvedVerboseLevel ?? "off",
       timeoutMs: prepared.timeoutMs,
+      senderIsOwner: params.senderIsOwner,
     },
     sessionEntry,
     cfg: prepared.cfg,
@@ -70,7 +73,6 @@ export async function prepareCommandForegroundRun(
   params: CommandPreflight & {
     ingress: AgentCommandAdmissionIngress;
     suppressVisibleSessionEffects: boolean;
-    preserveUserFacingSessionModelState: boolean;
   },
 ) {
   const budget = createCommandBudget(
@@ -84,8 +86,7 @@ export async function prepareCommandForegroundRun(
     entry =
       params.opts.modelRun === true ||
       params.opts.promptMode === "none" ||
-      params.suppressVisibleSessionEffects ||
-      params.preserveUserFacingSessionModelState
+      params.suppressVisibleSessionEffects
         ? params.sessionEntry
         : await runCommandPreflightMaintenance({
             ...params,
@@ -155,6 +156,7 @@ async function runCommandPreflightMaintenance(
     provider: modelSelection.provider,
     model: modelSelection.model,
     thinkLevel: modelSelection.effectiveTurnThinkLevel,
+    senderIsOwner: opts.senderIsOwner,
     auth: {
       authProfileId: modelSelection.sessionEntryForAttempt?.authProfileOverride,
       authProfileIdSource: resolveCollapsedSessionAuthPinSource(

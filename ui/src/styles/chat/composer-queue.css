@@ -88,12 +88,12 @@
 
 .chat-queue__item {
   --chat-queue-row-surface: var(--composer-attached-surface, var(--chat-composer-surface));
+  --chat-queue-leading-columns: var(--chat-stack-icon-size) var(--chat-queue-avatar-size, 20px);
 
   position: relative;
   display: grid;
-  grid-template-columns: var(--chat-stack-icon-size) var(
-      --chat-queue-avatar-size,
-      20px
+  grid-template-columns: var(--chat-queue-leading-columns) var(
+      --chat-queue-image-column,
     ) [copy] minmax(0, 1fr) [actions] auto;
   align-items: center;
   column-gap: 8px;
@@ -112,21 +112,11 @@
 }
 
 .chat-queue__item--no-avatar {
-  grid-template-columns: var(--chat-stack-icon-size) [copy] minmax(0, 1fr) [actions] auto;
+  --chat-queue-leading-columns: var(--chat-stack-icon-size);
 }
 
 .chat-queue__item--with-images {
-  grid-template-columns: var(--chat-stack-icon-size) var(
-      --chat-queue-avatar-size,
-      20px
-    ) [images] 24px [copy] minmax(0, 1fr) [actions] auto;
-}
-
-.chat-queue__item--no-avatar.chat-queue__item--with-images {
-  grid-template-columns: var(--chat-stack-icon-size) [images] 24px [copy] minmax(
-      0,
-      1fr
-    ) [actions] auto;
+  --chat-queue-image-column: [images] 24px;
 }
 
 .chat-queue__images {
@@ -207,10 +197,7 @@
   justify-content: center;
 }
 
-.chat-queue__grip-state--active {
-  display: none;
-}
-
+.chat-queue__grip-state--active,
 .chat-queue__item:hover .chat-queue__grip:not(:disabled) .chat-queue__grip-state--idle,
 .chat-queue__grip:is(:focus-visible, :active) .chat-queue__grip-state--idle {
   display: none;
@@ -251,7 +238,10 @@
   grid-column: 1;
 }
 
-.chat-queue__leading svg {
+.chat-queue__leading svg,
+.chat-queue__remove svg,
+.chat-queue__edit-submit svg,
+.chat-queue__edit-cancel svg {
   width: 14px;
   height: 14px;
   fill: none;
@@ -350,7 +340,6 @@
   outline-offset: 1px;
 }
 
-/* Wraps onto its own flex line below the row (see renderChatQueueItem). */
 .chat-queue__error,
 .chat-queue__mentions {
   display: flex;
@@ -463,18 +452,6 @@
 .chat-queue__edit-cancel:hover:not(:disabled) {
   color: var(--text);
   background: color-mix(in srgb, var(--text) 10%, transparent);
-}
-
-.chat-queue__remove svg,
-.chat-queue__edit-submit svg,
-.chat-queue__edit-cancel svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.75px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .chat-queue__more svg {

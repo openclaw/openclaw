@@ -1,9 +1,11 @@
 // Exercises CLI routing receipts at the exact post-admission dispatch boundary.
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureExecutionDecisionWorkSink } from "../../audit/execution-decision-work.js";
 import type { ExecutionDecisionWork } from "../../audit/execution-decision-work.types.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import {
   createAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
@@ -11,6 +13,7 @@ import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
+import { persistAuthProfileBatch } from "../auth-profiles/upsert-with-lock.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
@@ -19,6 +22,9 @@ import {
   createTestMcpLoopbackServer,
   createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
+import { prepareDiscoveredContextTokenCache } from "../context-cache-projection.js";
+import { replaceDiscoveredContextTokenCache } from "../context-cache.js";
+import { resetContextWindowCacheForTest } from "../context.test-support.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
@@ -123,6 +129,48 @@ describe("CLI model-routing receipt authority", () => {
     await fixture.cleanup();
   });
 
+  it.each(["native", "selected", "automatic"] as const)(
+    "keeps scheduled CLI credentials under their recorded owner (%s)",
+    async (kind) => {
+      const agentDir = path.join(fixture.session.dir, "credential-owner");
+      const profileId = "test-cli:current";
+      await persistAuthProfileBatch({
+        agentDir,
+        profiles: [
+          {
+            profileId,
+            credential: { type: "api_key", provider: "test-cli", key: "synthetic-cron-key" },
+          },
+        ],
+      });
+      const prepareExecution = vi.fn(async () => undefined);
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            ...buildDefaultTestCliBackend(),
+            authEpochMode: "profile-only",
+            autoSelectAuthProfile: kind === "automatic",
+            prepareExecution,
+          },
+        ],
+      });
+      const prepared = fixture.prepare({
+        agentDir,
+        trigger: "cron",
+        nativeAuthOnly: true,
+        ...(kind === "selected" ? { authProfileId: profileId } : {}),
+      });
+      if (kind === "native") {
+        expect((await prepared).effectiveAuthProfileId).toBeUndefined();
+        expect(prepareExecution).toHaveBeenCalledOnce();
+      } else {
+        await expect(prepared).rejects.toThrow("Automation has no recorded inference account");
+        expect(prepareExecution).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("checks the logical model before CLI preparation and retains a current model guard through dispatch", async () => {
     const config = { agents: { defaults: { model: "fixture/allowed" } } };
     let policy = prepareOperatorModelPolicy({ cfg: config, policy: {}, manifestPlugins: [] });
@@ -219,5 +267,71 @@ describe("CLI model-routing receipt authority", () => {
     });
     expect.soft(decisionWork).toEqual([]);
     expect.soft(dispatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("CLI context-window ownership", () => {
+  let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
+
+  beforeEach(() => {
+    resetContextWindowCacheForTest();
+    setCliRunnerPrepareTestDeps({
+      isWorkspaceBootstrapPending: async () => false,
+      resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
+      resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
+      prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
+      loadManifestModelCatalog: () => [],
+    });
+    fixture = createCliRunnerPrepareFixture(prepareCliRunContext);
+  });
+
+  afterEach(async () => {
+    resetCliRunnerPrepareTestDeps();
+    cliBackendsTesting.resetDepsForTest();
+    resetContextWindowCacheForTest();
+    await fixture.cleanup();
+  });
+
+  it("keeps test-cli stable when another provider loads the same model", async () => {
+    const provider = "test-cli";
+    const model = "large-model";
+    const catalogProvider = "api-provider";
+    const prepareExecution = vi.fn<NonNullable<CliBackendPlugin["prepareExecution"]>>(
+      async () => undefined,
+    );
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          ...buildDefaultTestCliBackend(),
+          id: provider,
+          modelProvider: catalogProvider,
+          prepareExecution,
+        },
+      ],
+    });
+    const prepare = () => fixture.prepare({ provider, model });
+    const cold = await prepare();
+    expect(cold.contextWindowInfo?.tokens).toBe(200_000);
+
+    // Discovery publishes both provider-qualified and bare keys. The latter cannot
+    // supply a different runtime's native budget on the next turn.
+    const catalogModels = [{ provider: catalogProvider, id: model, contextWindow: 1_000_000 }];
+    replaceDiscoveredContextTokenCache(
+      await prepareDiscoveredContextTokenCache({ modelCatalog: { entries: catalogModels } }),
+    );
+    const resumed = await prepare();
+    expect(resumed.contextWindowInfo?.tokens).toBe(200_000);
+
+    // A provider-owned large window remains usable even without a manifest row.
+    catalogModels.push({ provider, id: model, contextWindow: 1_000_000 });
+    replaceDiscoveredContextTokenCache(
+      await prepareDiscoveredContextTokenCache({ modelCatalog: { entries: catalogModels } }),
+    );
+    const owned = await prepare();
+    expect(owned.contextWindowInfo?.tokens).toBe(1_000_000);
+    expect(prepareExecution.mock.calls.map(([context]) => context.contextTokenBudget)).toEqual([
+      200_000, 200_000, 1_000_000,
+    ]);
   });
 });

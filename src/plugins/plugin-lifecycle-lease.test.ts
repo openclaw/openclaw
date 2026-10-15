@@ -1,8 +1,11 @@
+import { AsyncResource } from "node:async_hooks";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createPluginLifecycleLeaseTestClock } from "../gateway/config-reload.test-support.js";
@@ -17,6 +20,7 @@ import {
   getProcessPluginCache,
   resetPluginCache,
   retirePluginCache,
+  runOutsidePluginCache,
   waitForPluginCacheRetirement,
 } from "./plugin-cache.js";
 import { PluginInstance } from "./plugin-instance.js";
@@ -24,6 +28,7 @@ import {
   hasPluginLifecycleLeaseDemand,
   runOutsidePluginLifecycleLease,
   withPluginLifecycleLease,
+  withPluginArtifactCleanupLease,
   type PluginLifecycleLeaseContext,
 } from "./plugin-lifecycle-lease.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
@@ -157,61 +162,105 @@ function runLeaseChild(
 }
 
 describe("plugin lifecycle lease", () => {
-  it("clears process demand after a waiter aborts or acquires and its holder releases", async ({
-    signal,
-  }) => {
-    await withOpenClawTestState({ label: "plugin-lifecycle-demand" }, async (state) => {
-      vi.useFakeTimers();
-      const clock = createPluginLifecycleLeaseTestClock();
-      const entered = createDeferred();
-      const release = createDeferred();
-      const cancelled = new AbortController();
-      const operations: Promise<unknown>[] = [];
+  it("releases retired cache facts while native resources retain the expired lease", async () => {
+    class CacheFacts {
+      readonly owner = "lifecycle-operation";
+    }
+    await withOpenClawTestState({ label: "plugin-lifecycle-cache-retention" }, async (state) => {
+      const retained: Array<{ resource: AsyncResource; lease: PluginLifecycleLeaseContext }> = [];
       try {
-        expect(hasPluginLifecycleLeaseDemand()).toBe(false);
-        const holder = withPluginLifecycleLease({ env: state.env, signal }, async () => {
-          await withPluginLifecycleLease({}, async () => {
-            expect(hasPluginLifecycleLeaseDemand()).toBe(false);
-          });
-          entered.resolve();
-          await release.promise;
-        });
-        operations.push(holder);
-        await Promise.race([entered.promise, holder]);
-        expect(hasPluginLifecycleLeaseDemand()).toBe(false);
-
-        const aborted = withPluginLifecycleLease(
-          { env: state.env, signal: cancelled.signal },
-          async () => {
-            throw new Error("aborted waiter acquired");
-          },
-        );
-        operations.push(aborted);
-        expect(hasPluginLifecycleLeaseDemand()).toBe(true);
-        cancelled.abort(new Error("test cancellation"));
-        await expect(aborted).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
-        expect(hasPluginLifecycleLeaseDemand()).toBe(false);
-
-        const acquired = vi.fn(async () => {
-          expect(hasPluginLifecycleLeaseDemand()).toBe(false);
-        });
-        const waiter = withPluginLifecycleLease({ env: state.env, signal }, acquired);
-        operations.push(waiter);
-        expect(hasPluginLifecycleLeaseDemand()).toBe(true);
-        release.resolve();
-        await holder;
-        expect(hasPluginLifecycleLeaseDemand()).toBe(false);
-        await clock.waitFor(waiter);
-        expect(acquired).toHaveBeenCalledOnce();
-        expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+        for (let index = 0; index < 4; index++) {
+          retained.push(
+            await withPluginLifecycleLease({ env: state.env }, async (lease) => {
+              Object.assign(getPluginCache(), { facts: new CacheFacts() });
+              // A service drops caller cache scope but still inherits the lifecycle lease.
+              const resource = runOutsidePluginCache(
+                () => new AsyncResource("retained-plugin-lease", { requireManualDestroy: true }),
+              );
+              return { resource, lease };
+            }),
+          );
+        }
+        await nextTurn();
+        expect(queryObjects(CacheFacts)).toBe(0);
+        for (const { resource, lease } of retained) {
+          await expect(
+            writePersistedInstalledPluginIndexInstallRecordsWithLease(
+              { demo: { source: "npm", spec: "demo@1.0.0" } },
+              { env: state.env, candidates: [], lease },
+            ),
+          ).rejects.toBeInstanceOf(OpenClawStateLeaseError);
+          await expect(
+            resource.runInAsyncScope(() => withPluginLifecycleLease({}, async () => "stale")),
+          ).rejects.toBeInstanceOf(OpenClawStateLeaseError);
+        }
+        expect(await readPersistedInstalledPluginIndex({ env: state.env })).toBeNull();
       } finally {
-        cancelled.abort();
-        release.resolve();
-        await clock.waitFor(Promise.allSettled(operations));
-        vi.useRealTimers();
+        for (const { resource } of retained) {
+          resource.emitDestroy();
+        }
       }
     });
   });
+
+  it.for(["runtime", "cleanup"] as const)(
+    "clears process demand after a %s waiter aborts or acquires and its holder releases",
+    async (kind, { signal }) => {
+      await withOpenClawTestState({ label: "plugin-lifecycle-demand" }, async (state) => {
+        vi.useFakeTimers();
+        const clock = createPluginLifecycleLeaseTestClock();
+        const withWaiterLease =
+          kind === "runtime" ? withPluginLifecycleLease : withPluginArtifactCleanupLease;
+        const entered = createDeferred();
+        const release = createDeferred();
+        const cancelled = new AbortController();
+        const operations: Promise<unknown>[] = [];
+        try {
+          expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+          const holder = withPluginLifecycleLease({ env: state.env, signal }, async () => {
+            await withPluginLifecycleLease({}, async () => {
+              expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+            });
+            entered.resolve();
+            await release.promise;
+          });
+          operations.push(holder);
+          await Promise.race([entered.promise, holder]);
+          expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+
+          const aborted = withWaiterLease(
+            { env: state.env, signal: cancelled.signal },
+            async () => {
+              throw new Error("aborted waiter acquired");
+            },
+          );
+          operations.push(aborted);
+          expect(hasPluginLifecycleLeaseDemand()).toBe(true);
+          cancelled.abort(new Error("test cancellation"));
+          await expect(aborted).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+          expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+
+          const acquired = vi.fn(async () => {
+            expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+          });
+          const waiter = withWaiterLease({ env: state.env, signal }, acquired);
+          operations.push(waiter);
+          expect(hasPluginLifecycleLeaseDemand()).toBe(true);
+          release.resolve();
+          await holder;
+          expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+          await clock.waitFor(waiter);
+          expect(acquired).toHaveBeenCalledOnce();
+          expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+        } finally {
+          cancelled.abort();
+          release.resolve();
+          await clock.waitFor(Promise.allSettled(operations));
+          vi.useRealTimers();
+        }
+      });
+    },
+  );
 
   it.each([
     [false, false],
@@ -570,7 +619,7 @@ if (process.versions.bun) {
             loadInstalledPluginIndexInstallRecords,
           } from ${JSON.stringify(recordsModuleUrl)};
           import { readPersistedInstalledPluginIndex } from ${JSON.stringify(indexModuleUrl)};
-          import { writePersistedInstalledPluginIndexWithLeaseSync } from ${JSON.stringify(writeModuleUrl)};
+          import { writePersistedInstalledPluginIndex } from ${JSON.stringify(writeModuleUrl)};
           const [pluginId, stateDir, goMarker, releaseAlphaMarker] = process.argv.slice(2);
           process.env.OPENCLAW_STATE_DIR = stateDir;
           const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -598,7 +647,7 @@ if (process.versions.bun) {
             );
             process.stdout.write("held\\n");
           }
-          const operation = withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 5_000 }, async (lease) => {
+          const operation = withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 5_000 }, async () => {
             process.stdout.write("acquired\\n");
             if (pluginId === "alpha") {
               await waitForMarker(releaseAlphaMarker);
@@ -606,7 +655,7 @@ if (process.versions.bun) {
             const records = await loadInstalledPluginIndexInstallRecords();
             process.stdout.write("records:" + Object.keys(records).sort().join(",") + "\\n");
             // Reuse prepared fixture metadata; discovery can block the heartbeat during this race.
-            writePersistedInstalledPluginIndexWithLeaseSync({
+            await writePersistedInstalledPluginIndex({
               ...index,
               installRecords: {
                 ...records,
@@ -617,7 +666,7 @@ if (process.versions.bun) {
                   installPath: "/tmp/" + pluginId,
                 },
               },
-            }, { env, lease });
+            }, { env });
             process.stdout.write("written\\n");
           });
           process.stdout.write("attempted\\n");

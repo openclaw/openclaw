@@ -4,7 +4,7 @@ import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareContextWindowCaches } from "../agents/context-cache-projection.js";
 import { getContextWindowCaches, replaceContextWindowCaches } from "../agents/context-cache.js";
-import { resetContextWindowCacheForTest } from "../agents/context-runtime-state.js";
+import { resetContextWindowCacheForTest } from "../agents/context.test-support.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { initializeManagedWorktreeTestRepository } from "../agents/worktrees/service.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -106,7 +106,7 @@ describe("Gateway context cache remote proof", () => {
       ]);
 
       const contextModule = await import("../agents/context.js");
-      contextModule.resetContextWindowCacheForTest();
+      resetContextWindowCacheForTest();
 
       const heartbeatGaps: number[] = [];
       let lastHeartbeatAt = performance.now();
@@ -212,9 +212,10 @@ describe("Gateway context cache remote proof", () => {
             windows: caches.contextWindowCache.size,
           };
         })(),
-        sharedBare: contextModule.lookupContextTokens("shared-model", {
+        sharedBare: contextModule.resolveContextTokensForModel({
+          model: "shared-model",
           allowAsyncLoad: false,
-          skipRuntimeConfigLoad: true,
+          cfg: {},
         }),
         providerA: contextModule.resolveContextTokensForModel({
           cfg: warmConfig,

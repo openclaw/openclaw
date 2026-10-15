@@ -44,8 +44,17 @@ export function useBrowserDashboardTestHarness(
       return {
         isAvailable: async () => true,
         request: fixture.readBoard,
+        subscribeSessionChanges() {
+          throw new Error("Unexpected session change subscription");
+        },
         async readSessionFacts() {
           throw new Error("Unexpected session facts request");
+        },
+        async withSessionFacts() {
+          throw new Error("Unexpected selected session facts request");
+        },
+        async openPluginPanel() {
+          throw new Error("Unexpected plugin panel request");
         },
       };
     },

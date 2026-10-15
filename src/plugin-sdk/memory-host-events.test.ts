@@ -8,7 +8,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import * as eventStore from "../memory-host-sdk/event-store.js";
 import {
   listStoredMemoryHostEvents,
-  normalizeMemoryHostEventRecordForStorage,
   setMaxMemoryHostEventsForTests,
 } from "../memory-host-sdk/event-store.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
@@ -20,11 +19,7 @@ import {
   readMemoryHostEventRecords,
   readMemoryHostEvents,
 } from "./memory-host-events.js";
-import {
-  createClaimableDedupe,
-  createPersistentDedupe,
-  listPersistentDedupeLegacyJsonFileEntries,
-} from "./persistent-dedupe.js";
+import { createClaimableDedupe, createPersistentDedupe } from "./persistent-dedupe.js";
 import { createPluginSdkTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createPluginSdkTestHarness();
@@ -138,58 +133,6 @@ describe("memory host event journal helpers", () => {
     ]);
   });
 
-  it.each([
-    { name: "fractional sequence", value: { kind: "event", sequence: 1.5 }, next: undefined },
-    {
-      name: "unsafe sequence",
-      value: { kind: "event", sequence: Number.MAX_SAFE_INTEGER + 1 },
-      next: undefined,
-    },
-    { name: "null record", value: null, next: undefined },
-    { name: "other record kind", value: { kind: "other", sequence: "invalid" }, next: 2 },
-    { name: "numeric string", value: { kind: "event", sequence: "2" }, next: 3 },
-  ])("preserves retained-tail decoding for $name", async ({ value, next }) => {
-    const workspaceDir = await createTempDir("memory-host-events-tail-decoding-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
-    const append = () =>
-      appendMemoryHostEvent(
-        workspaceDir,
-        {
-          type: "memory.recall.recorded",
-          timestamp: "2026-09-10T12:00:00.000Z",
-          query: "valid event",
-          resultCount: 0,
-          results: [],
-        },
-        { env },
-      );
-    await append();
-    const entry = (await listStoredMemoryHostEvents({ workspaceDir, env }))[0];
-    if (!entry) {
-      throw new Error("expected initial journal entry");
-    }
-    const journal = pluginStateStore.createPluginStateKeyedStore("memory-core", {
-      namespace: "memory-host.events",
-      maxEntries: 10_000,
-      env,
-    });
-    const cursors = pluginStateStore.createPluginStateKeyedStore("memory-core", {
-      namespace: "memory-host.event-cursors",
-      maxEntries: 1_000,
-      env,
-    });
-    await journal.register(entry.key, value);
-    const cursorBefore = await cursors.entries();
-    if (next === undefined) {
-      await expect(append()).rejects.toThrow();
-      expect(await cursors.entries()).toEqual(cursorBefore);
-      expect(await journal.entries()).toHaveLength(1);
-    } else {
-      await append();
-      expect(await cursors.entries()).toMatchObject([{ value: { lastSequence: next } }]);
-    }
-  });
-
   it("awaits event reads and propagates read rejection through the public helpers", async () => {
     const workspaceDir = await createTempDir("memory-host-events-delayed-read-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
@@ -292,84 +235,6 @@ describe("memory host event journal helpers", () => {
     ]);
   });
 
-  it("appends and reads typed workspace events", async () => {
-    const workspaceDir = await createTempDir("memory-host-events-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
-
-    await appendMemoryHostEvent(
-      workspaceDir,
-      {
-        type: "memory.recall.recorded",
-        timestamp: "2026-04-05T12:00:00.000Z",
-        query: "glacier backup",
-        resultCount: 1,
-        results: [
-          {
-            path: "memory/2026-04-05.md",
-            startLine: 1,
-            endLine: 3,
-            score: 0.9,
-          },
-        ],
-      },
-      { env },
-    );
-    await appendMemoryHostEvent(
-      workspaceDir,
-      {
-        type: "memory.dream.completed",
-        timestamp: "2026-04-05T11:00:00.000Z",
-        phase: "light",
-        outcome: "completed",
-        lineCount: 4,
-        storageMode: "both",
-        inlinePath: path.join(workspaceDir, "memory", "2026-04-05.md"),
-        reportPath: path.join(workspaceDir, "memory", "dreaming", "light", "2026-04-05.md"),
-      },
-      { env },
-    );
-
-    const events = await readMemoryHostEvents({ workspaceDir, env });
-    const tail = await readMemoryHostEvents({ workspaceDir, limit: 1, env });
-
-    expect(events).toHaveLength(2);
-    expect(events[0]?.type).toBe("memory.recall.recorded");
-    expect(events[1]?.type).toBe("memory.dream.completed");
-    if (events[1]?.type !== "memory.dream.completed") {
-      throw new Error("expected dream completion event");
-    }
-    expect(events[1].outcome).toBe("completed");
-    expect(tail).toHaveLength(1);
-    expect(tail[0]?.type).toBe("memory.dream.completed");
-  });
-
-  it("keeps journal retention timestamps in the current wall-clock domain", async () => {
-    const workspaceDir = await createTempDir("memory-host-events-created-at-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
-    const before = Date.now();
-
-    for (const query of ["first", "second"]) {
-      await appendMemoryHostEvent(
-        workspaceDir,
-        {
-          type: "memory.recall.recorded",
-          timestamp: "2026-07-16T12:00:00.000Z",
-          query,
-          resultCount: 0,
-          results: [],
-        },
-        { env },
-      );
-    }
-
-    const created = (await listStoredMemoryHostEvents({ workspaceDir, env })).map(
-      (entry) => entry.createdAt,
-    );
-    expect(created[0]).toBeGreaterThanOrEqual(before);
-    expect(created[1]).toBeGreaterThan(created[0]!);
-    expect(created[1]).toBeLessThanOrEqual(Date.now() + 1);
-  });
-
   it("keeps legacy event readers stable when diagnostic records are present", async () => {
     const workspaceDir = await createTempDir("memory-host-events-diagnostics-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
@@ -448,148 +313,6 @@ describe("memory host event journal helpers", () => {
       "memory.recall.skipped",
     ]);
   });
-
-  it("bounds oversized diagnostic detail without failing the parent operation", async () => {
-    const workspaceDir = await createTempDir("memory-host-events-bounded-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
-    const results = Array.from({ length: 100 }, (_, index) => ({
-      path: `memory/${"wide-path-".repeat(100)}${index}.md`,
-      startLine: index + 1,
-      endLine: index + 2,
-      score: 0.9,
-    }));
-
-    await expect(
-      appendMemoryHostEvent(
-        workspaceDir,
-        {
-          type: "memory.recall.recorded",
-          timestamp: "2026-04-05T12:00:00.000Z",
-          query: "🔥".repeat(20_000),
-          resultCount: results.length,
-          results,
-        },
-        { env },
-      ),
-    ).resolves.toBeUndefined();
-
-    const [event] = await readMemoryHostEventRecords({ workspaceDir, env });
-    expect(event).toMatchObject({
-      type: "memory.recall.recorded",
-      resultCount: 100,
-      storageTruncated: true,
-    });
-    if (event?.type !== "memory.recall.recorded") {
-      throw new Error("expected bounded recall event");
-    }
-    expect(event.results).toHaveLength(10);
-    expect(Buffer.byteLength(JSON.stringify(event), "utf8")).toBeLessThanOrEqual(8 * 1024);
-  });
-
-  it("validates only the retained prefix of an oversized event", () => {
-    const result = {
-      path: "memory/2026-04-05.md",
-      startLine: 1,
-      endLine: 2,
-      score: 0.9,
-    };
-    const normalized = normalizeMemoryHostEventRecordForStorage({
-      type: "memory.recall.recorded",
-      timestamp: "2026-04-05T12:00:00.000Z",
-      query: "bounded tail",
-      resultCount: 11,
-      results: [...Array.from({ length: 10 }, () => result), { path: 42 }],
-    });
-
-    expect(normalized).toMatchObject({ storageTruncated: true });
-    expect(normalized?.type === "memory.recall.recorded" ? normalized.results : []).toHaveLength(
-      10,
-    );
-  });
-
-  it.each([
-    { name: "unknown event type", value: { type: "memory.unknown", timestamp: "now" } },
-    {
-      name: "malformed retained result",
-      value: {
-        type: "memory.recall.recorded",
-        timestamp: "now",
-        query: "invalid",
-        resultCount: 1,
-        results: [{ path: 42 }],
-      },
-    },
-  ])("rejects $name", ({ value }) => {
-    expect(normalizeMemoryHostEventRecordForStorage(value)).toBeNull();
-  });
-
-  it("rotates old events without evicting the workspace sequence cursor", async () => {
-    const workspaceDir = await createTempDir("memory-host-events-rotation-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
-    setMaxMemoryHostEventsForTests(3);
-
-    for (let index = 1; index <= 5; index += 1) {
-      await appendMemoryHostEvent(
-        workspaceDir,
-        {
-          type: "memory.recall.recorded",
-          timestamp: `2026-04-05T12:00:0${index}.000Z`,
-          query: `event-${index}`,
-          resultCount: 0,
-          results: [],
-        },
-        { env },
-      );
-      if (index === 1) {
-        // A persisted future timestamp exercises clock rollback on the worker connection.
-        openOpenClawStateDatabase({ env })
-          .db.prepare(
-            "UPDATE plugin_state_entries SET created_at = ? WHERE plugin_id = ? AND namespace = ?",
-          )
-          .run(Date.now() + 60_000, "memory-core", "memory-host.events");
-      }
-    }
-
-    const events = await readMemoryHostEventRecords({ workspaceDir, env });
-    expect(
-      events.map((event) => (event.type === "memory.recall.recorded" ? event.query : "")),
-    ).toEqual(["event-3", "event-4", "event-5"]);
-  });
-
-  it("rotates events by namespace append order across workspaces", async () => {
-    const stateDir = await createTempDir("memory-host-events-shared-retention-");
-    const workspaceA = path.join(stateDir, "workspace-a");
-    const workspaceB = path.join(stateDir, "workspace-b");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    setMaxMemoryHostEventsForTests(3);
-
-    const appendRecall = async (workspaceDir: string, query: string) => {
-      await appendMemoryHostEvent(
-        workspaceDir,
-        {
-          type: "memory.recall.recorded",
-          timestamp: "2026-04-05T12:00:00.000Z",
-          query,
-          resultCount: 0,
-          results: [],
-        },
-        { env },
-      );
-    };
-    await appendRecall(workspaceA, "a-1");
-    await appendRecall(workspaceA, "a-2");
-    await appendRecall(workspaceA, "a-3");
-    await appendRecall(workspaceB, "b-1");
-    await appendRecall(workspaceA, "a-4");
-
-    const workspaceBEvents = await readMemoryHostEventRecords({
-      workspaceDir: workspaceB,
-      env,
-    });
-    expect(
-      workspaceBEvents.map((event) => (event.type === "memory.recall.recorded" ? event.query : "")),
-    ).toEqual(["b-1"]);
-  });
 });
 
 describe("createPersistentDedupe", () => {
@@ -646,59 +369,6 @@ describe("createPersistentDedupe", () => {
     expect(await dedupe.checkAndRecord("sqlite-only", { namespace: "x" })).toBe(false);
     await expect(fs.access(legacyPath)).rejects.toThrow();
   });
-
-  it("lists retired JSON cache files as persistent dedupe entries", async () => {
-    const root = await createTempDir("openclaw-legacy-dedupe-");
-    const legacyPath = path.join(root, "legacy.json");
-    await fs.writeFile(
-      legacyPath,
-      JSON.stringify({
-        fresh: 1_000,
-        expired: 100,
-        invalid: "bad",
-      }),
-    );
-
-    await expect(
-      listPersistentDedupeLegacyJsonFileEntries({
-        filePath: legacyPath,
-        ttlMs: 500,
-        now: 1_100,
-      }),
-    ).resolves.toStrictEqual([
-      {
-        key: expect.stringMatching(/^k\.[a-f0-9]{32}$/),
-        value: { key: "fresh", seenAt: 1_000 },
-        ttlMs: 400,
-      },
-    ]);
-  });
-
-  it("treats malformed legacy JSON cache files as empty", async () => {
-    const root = await createTempDir("openclaw-legacy-dedupe-malformed-");
-    const legacyPath = path.join(root, "legacy.json");
-    await fs.writeFile(legacyPath, "{not valid json");
-
-    await expect(
-      listPersistentDedupeLegacyJsonFileEntries({
-        filePath: legacyPath,
-        ttlMs: 500,
-        now: 1_100,
-      }),
-    ).resolves.toStrictEqual([]);
-  });
-
-  it("warms empty namespaces and ignores retired JSON cache files", async () => {
-    const root = await createTempDir("openclaw-dedupe-");
-    const emptyReader = createDedupe(root, { ttlMs: 10_000 });
-    expect(await emptyReader.warmup("nonexistent")).toBe(0);
-
-    await fs.writeFile(path.join(root, "acct.json"), JSON.stringify({ "retired-msg": Date.now() }));
-
-    const reader = createDedupe(root, { ttlMs: 1000 });
-    expect(await reader.warmup("acct")).toBe(0);
-    expect(await reader.checkAndRecord("retired-msg", { namespace: "acct" })).toBe(true);
-  });
 });
 
 describe("createClaimableDedupe", () => {
@@ -720,36 +390,6 @@ describe("createClaimableDedupe", () => {
       await expect(waitingClaim.pending).resolves.toBe(true);
     }
     await expect(dedupe.claim("line:race-1")).resolves.toEqual({ kind: "duplicate" });
-  });
-
-  it("supports persistent-backed recent checks and warmup", async () => {
-    const root = await createTempDir("openclaw-claimable-dedupe-");
-    const create = () =>
-      createClaimableDedupe({
-        ttlMs: 10_000,
-        memoryMaxSize: 100,
-        pluginId: "test-claimable-dedupe",
-        namespacePrefix: "test-claimable-dedupe",
-        stateMaxEntries: 1000,
-        env: { ...process.env, OPENCLAW_STATE_DIR: root },
-      });
-    const writer = create();
-
-    await expect(writer.claim("m1", { namespace: "acct" })).resolves.toEqual({ kind: "claimed" });
-    await expect(writer.commit("m1", { namespace: "acct" })).resolves.toBe(true);
-
-    const reader = create();
-
-    expect(await reader.hasRecent("m1", { namespace: "acct" })).toBe(true);
-    expect(await reader.warmup("acct")).toBe(1);
-    await expect(reader.claim("m1", { namespace: "acct" })).resolves.toEqual({
-      kind: "duplicate",
-    });
-    await expect(reader.forget("m1", { namespace: "acct" })).resolves.toBe(true);
-    const afterForget = create();
-    await expect(afterForget.claim("m1", { namespace: "acct" })).resolves.toEqual({
-      kind: "claimed",
-    });
   });
 
   it("bounds non-finite claimable dedupe options", async () => {

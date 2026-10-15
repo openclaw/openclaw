@@ -20,13 +20,14 @@ const setCanonicalUserProfileDisplayName = vi.hoisted(() => vi.fn());
 const setUserProfileRole = vi.hoisted(() => vi.fn());
 const invalidateOperatorRolePolicy = vi.hoisted(() => vi.fn());
 const ensureProfileIdForEmail = vi.hoisted(() => vi.fn());
-const getUserProfileListItem = vi.hoisted(() => vi.fn());
+let disclosedProfile: unknown;
 const prepareUserProfileRoleAuthority = vi.hoisted(() => vi.fn());
 const readResidentUserProfileRevision = vi.hoisted(() =>
   vi.fn<typeof import("../../state/user-profile-list.js").readResidentUserProfileRevision>(),
 );
 
 vi.mock("../../state/user-profile-email.js", () => ({ ensureProfileIdForEmail }));
+// mock-isolation: Exercise RPC admission independently of the shared-state worker.
 vi.mock("../../state/user-channel-identity-operations.js", () => ({
   prepareUserProfileRoleAuthority,
 }));
@@ -52,12 +53,12 @@ vi.mock("../../state/user-profile-writes.js", () => ({
   },
 }));
 
+// mock-isolation: Profile disclosure comes from the mocked authority reader above.
 vi.mock("../../state/user-profiles.js", async () => {
   const { UserProfileNotFoundError } = await vi.importActual<
     typeof import("../../state/user-profiles-schema.js")
   >("../../state/user-profiles-schema.js");
   return {
-    getUserProfileListItem,
     listProfiles,
     UserProfileNotFoundError,
   };
@@ -128,10 +129,10 @@ describe("users gateway methods", () => {
 
   beforeEach(() => {
     ensureProfileIdForEmail.mockReset();
-    getUserProfileListItem.mockReset();
     prepareUserProfileRoleAuthority.mockReset();
     prepareUserProfileRoleAuthority.mockImplementation(async (profileId: string) => ({
       profileId,
+      listItem: disclosedProfile,
       isCurrent: () => true,
     }));
     linkEmail.mockReset();
@@ -141,11 +142,11 @@ describe("users gateway methods", () => {
     setCanonicalUserProfileDisplayName.mockReset();
     setUserProfileRole.mockReset();
     invalidateOperatorRolePolicy.mockReset();
-    getUserProfileListItem.mockReturnValue(profile);
+    disclosedProfile = profile;
     readResidentUserProfileRevision.mockReset().mockReturnValue(residentProfile);
   });
 
-  it.each([
+  const malformedRequests = [
     { method: "users.list", params: {} },
     { method: "users.self", params: {} },
     { method: "users.prefs.get", params: { keys: ["ui.theme"] } },
@@ -163,69 +164,86 @@ describe("users gateway methods", () => {
       method: "users.setAvatar",
       params: { profileId: "profile-1", mime: "image/png", avatarBase64: "AQ==" },
     },
-  ])("rejects malformed $method before reaching user state", async ({ method, params }) => {
-    const invalid = { ...params, unexpected: true };
-    const original = structuredClone(invalid);
-    const unreadableState = new Proxy(
-      {},
-      {
-        get() {
-          throw new Error("invalid users request reached owner state");
-        },
-      },
-    );
-
-    const respond = await runUsersHandler(method, invalid, unreadableState, unreadableState);
-
-    expect(respond.mock.calls).toEqual([
-      [
-        false,
-        undefined,
+  ].map(({ method, params }) => ({
+    method,
+    params: { ...params, unexpected: true },
+    schema: true,
+    message: `invalid ${method} params: at root: unexpected property 'unexpected'`,
+  }));
+  it.each<{
+    method: string;
+    params: object;
+    schema?: boolean;
+    message?: string | RegExp;
+    readsConfig?: boolean;
+  }>([
+    ...malformedRequests,
+    { method: "users.setRole", params: { profileId: profile.id, role: "   " } },
+    {
+      method: "users.linkEmail",
+      params: { email: "   ", targetProfileId: profile.id },
+      message: "email must not be empty",
+    },
+    {
+      method: "users.setAvatar",
+      params: { profileId: profile.id, mime: "image/png", avatarBase64: "not base64" },
+    },
+    {
+      method: "users.setRole",
+      params: { profileId: profile.id, role: "maintainer" },
+      readsConfig: true,
+      message: /gateway\.roles\.definitions/,
+    },
+  ])(
+    "rejects invalid $method params before state effects: $params",
+    async ({ method, params, schema, message, readsConfig }) => {
+      const original = structuredClone(params);
+      const unreadableState = new Proxy(
+        {},
         {
-          code: "INVALID_REQUEST",
-          message: `invalid ${method} params: at root: unexpected property 'unexpected'`,
+          get() {
+            throw new Error("invalid users request reached owner state");
+          },
         },
-      ],
-    ]);
-    expect(invalid).toEqual(original);
-    for (const effect of [
-      ensureProfileIdForEmail,
-      prepareUserProfileRoleAuthority,
-      getUserProfileListItem,
-      linkEmail,
-      mergeProfiles,
-      readResidentUserProfileRevision,
-      listProfiles,
-      setCanonicalUserProfileAvatar,
-      setCanonicalUserProfileDisplayName,
-      setUserProfileRole,
-      invalidateOperatorRolePolicy,
-    ]) {
-      expect(effect).not.toHaveBeenCalled();
-    }
-  });
-
-  it("lists profiles through the read method", async () => {
-    listProfiles.mockResolvedValue([{ id: "profile-1" }]);
-
-    expect(await runUsersHandler("users.list", {})).toHaveBeenCalledWith(true, {
-      profiles: [{ id: "profile-1" }],
-    });
-  });
-
-  it("creates and returns the caller's profile idempotently", async () => {
-    ensureProfileIdForEmail.mockResolvedValue(profile.id);
-    getUserProfileListItem.mockReturnValue(profile);
-
-    const first = await runUsersHandler("users.self", {}, selfClient);
-    const second = await runUsersHandler("users.self", {}, selfClient);
-
-    expect(first).toHaveBeenCalledWith(true, { profile });
-    expect(second).toHaveBeenCalledWith(true, { profile });
-    expect(validateUsersSelfResult(first.mock.calls[0]?.[1])).toBe(true);
-    expect(getUserProfileListItem).toHaveBeenNthCalledWith(1, profile.id);
-    expect(getUserProfileListItem).toHaveBeenNthCalledWith(2, profile.id);
-  });
+      );
+      const getRuntimeConfig = vi.fn(() => ({
+        gateway: { roles: { definitions: { guest: {} } } },
+      }));
+      const respond = await runUsersHandler(
+        method,
+        params,
+        unreadableState,
+        schema ? unreadableState : { getRuntimeConfig },
+      );
+      const error = {
+        code: "INVALID_REQUEST",
+        ...(message
+          ? { message: message instanceof RegExp ? expect.stringMatching(message) : message }
+          : {}),
+      };
+      expect(respond.mock.calls).toEqual([
+        [false, undefined, schema ? error : expect.objectContaining(error)],
+      ]);
+      expect(params).toEqual(original);
+      if (!readsConfig) {
+        expect(getRuntimeConfig).not.toHaveBeenCalled();
+      }
+      for (const effect of [
+        ensureProfileIdForEmail,
+        prepareUserProfileRoleAuthority,
+        linkEmail,
+        mergeProfiles,
+        readResidentUserProfileRevision,
+        listProfiles,
+        setCanonicalUserProfileAvatar,
+        setCanonicalUserProfileDisplayName,
+        setUserProfileRole,
+        invalidateOperatorRolePolicy,
+      ]) {
+        expect(effect).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   function connectedProfileClient(kind: string) {
     return {
@@ -242,16 +260,27 @@ describe("users gateway methods", () => {
     };
   }
 
-  it.each(["provider", "owner"])(
-    "uses the connect-time %s profile without recreating an email alias",
+  it.each(["email", "proxy", "provider", "owner"])(
+    "resolves users.self idempotently from the %s identity",
     async (kind) => {
-      const providerClient = connectedProfileClient(kind);
-      getUserProfileListItem.mockReturnValue({ ...profile, emails: [] });
-
-      const respond = await runUsersHandler("users.self", {}, providerClient);
-
-      expect(respond).toHaveBeenCalledWith(true, { profile: { ...profile, emails: [] } });
-      expect(ensureProfileIdForEmail).not.toHaveBeenCalled();
+      const legacy = kind === "email" || kind === "proxy";
+      const email = kind === "email" ? "ada@example.com" : "ada@github";
+      const client = legacy
+        ? { ...selfClient, authenticatedUserId: email }
+        : connectedProfileClient(kind);
+      const expected = legacy ? profile : { ...profile, emails: [] };
+      ensureProfileIdForEmail.mockResolvedValue(profile.id);
+      disclosedProfile = expected;
+      for (let call = 1; call <= 2; call++) {
+        const respond = await runUsersHandler("users.self", {}, client);
+        expect(respond).toHaveBeenCalledWith(true, { profile: expected });
+        expect(validateUsersSelfResult(respond.mock.calls[0]?.[1])).toBe(true);
+      }
+      if (legacy) {
+        expect(ensureProfileIdForEmail).toHaveBeenCalledWith(email, {}, expect.any(Function));
+      } else {
+        expect(ensureProfileIdForEmail).not.toHaveBeenCalled();
+      }
     },
   );
 
@@ -277,13 +306,13 @@ describe("users gateway methods", () => {
         }),
     );
     providerClient.authenticatedGitHubIdentitySync = authenticatedGitHubIdentitySync;
-    getUserProfileListItem.mockReturnValue(profile);
+    disclosedProfile = profile;
 
     const pending = runUsersHandler("users.self", {}, providerClient);
     await Promise.resolve();
 
     expect(authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
-    expect(getUserProfileListItem).not.toHaveBeenCalled();
+    expect(prepareUserProfileRoleAuthority).not.toHaveBeenCalled();
     finishSync?.();
     const respond = await pending;
     expect(respond).toHaveBeenCalledWith(true, { profile });
@@ -308,7 +337,7 @@ describe("users gateway methods", () => {
         return { profileId: profile.id, updatedAt: profile.updatedAt };
       });
     providerClient.authenticatedGitHubIdentitySync = authenticatedGitHubIdentitySync;
-    getUserProfileListItem.mockReturnValue(profile);
+    disclosedProfile = profile;
 
     expect(await runUsersHandler("users.self", {}, providerClient)).toHaveBeenCalledWith(
       false,
@@ -325,50 +354,30 @@ describe("users gateway methods", () => {
     expect(authenticatedGitHubIdentitySync).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps generic proxy identities on the legacy profile fallback", async () => {
-    const proxyClient = {
-      authenticatedUserId: "ada@github",
-      connect: { scopes: ["operator.write"] },
-    };
-    ensureProfileIdForEmail.mockResolvedValue(profile.id);
-    getUserProfileListItem.mockReturnValue(profile);
-
-    const respond = await runUsersHandler("users.self", {}, proxyClient);
-
-    expect(respond).toHaveBeenCalledWith(true, { profile });
-    expect(ensureProfileIdForEmail).toHaveBeenCalledWith("ada@github", {}, expect.any(Function));
-  });
-
-  it("does not recreate a failed Tailscale provider snapshot as an email alias", async () => {
-    const tailscaleClient = {
-      authenticatedUserId: "ada@github",
-      authenticatedUserIsTailscaleProvider: true,
-      connect: { scopes: ["operator.write"] },
-    };
-
-    const respond = await runUsersHandler("users.self", {}, tailscaleClient);
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
-    );
-    expect(ensureProfileIdForEmail).not.toHaveBeenCalled();
-  });
-
-  it("rejects users.self without an authenticated user", async () => {
-    expect(
-      await runUsersHandler("users.self", {}, { connect: { scopes: ["operator.write"] } }),
-    ).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "FORBIDDEN",
-        message: "users.self requires an authenticated user",
-      }),
-    );
-    expect(ensureProfileIdForEmail).not.toHaveBeenCalled();
-  });
+  it.each([
+    {
+      client: {
+        ...selfClient,
+        authenticatedUserId: "ada@github",
+        authenticatedUserIsTailscaleProvider: true,
+      },
+      error: { code: "UNAVAILABLE", retryable: true },
+    },
+    {
+      client: { connect: { scopes: ["operator.write"] } },
+      error: { code: "FORBIDDEN", message: "users.self requires an authenticated user" },
+    },
+  ])(
+    "rejects unresolved users.self with $error.code without creating an alias",
+    async ({ client, error }) => {
+      expect(await runUsersHandler("users.self", {}, client)).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining(error),
+      );
+      expect(ensureProfileIdForEmail).not.toHaveBeenCalled();
+    },
+  );
 
   it("validates and routes email links", async () => {
     linkEmail.mockReturnValue({
@@ -501,30 +510,6 @@ describe("users gateway methods", () => {
     },
   );
 
-  it("returns protocol-complete display name mutations", async () => {
-    setCanonicalUserProfileDisplayName.mockResolvedValue({ profile, display });
-    const refreshConnectedUserProfile = vi.fn();
-
-    const respond = await runUsersHandler(
-      "users.setDisplayName",
-      {
-        profileId: "profile-1",
-        displayName: "Ada",
-      },
-      adminClient,
-      { refreshConnectedUserProfile },
-    );
-
-    expect(validateUsersSetDisplayNameResult(respond.mock.calls[0]?.[1])).toBe(true);
-    expect(refreshConnectedUserProfile).toHaveBeenCalledWith({
-      id: profile.id,
-      displayName: profile.displayName,
-      avatarRevision: "1",
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    });
-  });
-
   it("refreshes from the current catalog when an older name write returns late", async () => {
     const entered = createDeferred();
     const release = createDeferred();
@@ -556,7 +541,9 @@ describe("users gateway methods", () => {
       release.resolve();
       await pending;
     }
-    expect(await pending).toHaveBeenCalledExactlyOnceWith(true, { profile: firstProfile });
+    const respond = await pending;
+    expect(respond).toHaveBeenCalledExactlyOnceWith(true, { profile: firstProfile });
+    expect(validateUsersSetDisplayNameResult(respond.mock.calls[0]?.[1])).toBe(true);
     expect(refreshConnectedUserProfile).toHaveBeenCalledExactlyOnceWith({
       id: profile.id,
       displayName: "Later name",
@@ -566,259 +553,158 @@ describe("users gateway methods", () => {
     });
   });
 
-  it("assigns a configured profile role and invalidates its cached policy", async () => {
-    const assignedProfile = { ...profile, role: "guest", updatedAt: 2 };
-    const disconnectClientsForUserProfile = vi.fn();
-    setUserProfileRole.mockReturnValue(assignedProfile);
-
-    const respond = await runUsersHandler(
-      "users.setRole",
-      { profileId: profile.id, role: "guest" },
-      adminClient,
-      {
-        getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }),
-        disconnectClientsForUserProfile,
-      },
-    );
-
-    expect(respond).toHaveBeenCalledWith(true, { profile: assignedProfile });
-    expect(validateUsersSetRoleResult(respond.mock.calls[0]?.[1])).toBe(true);
-    expect(setUserProfileRole).toHaveBeenCalledWith(profile.id, "guest", {
-      assertCurrent: expect.any(Function),
-      onCommitted: expect.any(Function),
-    });
-    expect(invalidateOperatorRolePolicy).toHaveBeenCalledWith(profile.id);
-    expect(invalidateOperatorRolePolicy.mock.invocationCallOrder[0]).toBeLessThan(
-      respond.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(disconnectClientsForUserProfile).toHaveBeenCalledWith(profile.id);
-    expect(disconnectClientsForUserProfile.mock.invocationCallOrder[0]).toBeLessThan(
-      respond.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-  });
-
-  it("clears profile roles even when role definitions have been removed", async () => {
-    setUserProfileRole.mockReturnValue(profile);
-
-    const respond = await runUsersHandler(
-      "users.setRole",
-      { profileId: profile.id, role: null },
-      adminClient,
-      { getRuntimeConfig: () => ({}) },
-    );
-
-    expect(respond).toHaveBeenCalledWith(true, { profile });
-    expect(setUserProfileRole).toHaveBeenCalledWith(profile.id, null, {
-      assertCurrent: expect.any(Function),
-      onCommitted: expect.any(Function),
-    });
-    expect(invalidateOperatorRolePolicy).toHaveBeenCalledWith(profile.id);
-  });
-
-  it("rejects undefined profile roles before changing storage or cached policy", async () => {
-    const respond = await runUsersHandler(
-      "users.setRole",
-      { profileId: profile.id, role: "maintainer" },
-      adminClient,
-      { getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }) },
-    );
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("gateway.roles.definitions"),
-      }),
-    );
-    expect(setUserProfileRole).not.toHaveBeenCalled();
-    expect(invalidateOperatorRolePolicy).not.toHaveBeenCalled();
-  });
-
-  it("rejects malformed profile role assignments before reading configuration", async () => {
-    const getRuntimeConfig = vi.fn();
-
-    const respond = await runUsersHandler(
-      "users.setRole",
-      { profileId: profile.id, role: "   " },
-      adminClient,
-      { getRuntimeConfig },
-    );
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-    expect(getRuntimeConfig).not.toHaveBeenCalled();
-    expect(setUserProfileRole).not.toHaveBeenCalled();
-  });
-
-  it("returns protocol-complete avatar mutations", async () => {
-    const firstProfile = {
-      ...profile,
-      avatarMime: "image/png" as const,
-      hasAvatar: true,
-      updatedAt: 2,
-    };
-    const secondProfile = { ...firstProfile };
-    setCanonicalUserProfileAvatar
-      .mockResolvedValueOnce({
-        ok: true,
-        value: {
-          profile: firstProfile,
-          display: { ...display, avatarRevision: "first-content-hash-png", hasAvatar: true },
+  it.each(["guest", null])(
+    "sets role %s and invalidates policy before responding",
+    async (role) => {
+      const assignedProfile = role ? { ...profile, role, updatedAt: 2 } : profile;
+      const disconnectClientsForUserProfile = vi.fn();
+      setUserProfileRole.mockReturnValue(assignedProfile);
+      const respond = await runUsersHandler(
+        "users.setRole",
+        { profileId: profile.id, role },
+        adminClient,
+        {
+          getRuntimeConfig: () =>
+            role ? { gateway: { roles: { definitions: { guest: {} } } } } : {},
+          ...(role ? { disconnectClientsForUserProfile } : {}),
         },
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        value: {
-          profile: secondProfile,
-          display: { ...display, avatarRevision: "second-content-hash-png", hasAvatar: true },
-        },
+      );
+      expect(respond).toHaveBeenCalledWith(true, { profile: assignedProfile });
+      expect(validateUsersSetRoleResult(respond.mock.calls[0]?.[1])).toBe(true);
+      expect(setUserProfileRole).toHaveBeenCalledWith(profile.id, role, {
+        assertCurrent: expect.any(Function),
+        onCommitted: expect.any(Function),
       });
-    readResidentUserProfileRevision
-      .mockReturnValueOnce({
-        ...residentProfile,
-        avatar_mime: "image/png",
-        avatar_sha256: "first-content-hash",
-        has_avatar: 1,
-        updated_at: firstProfile.updatedAt,
-      })
-      .mockReturnValueOnce({
-        ...residentProfile,
-        avatar_mime: "image/png",
-        avatar_sha256: "second-content-hash",
-        has_avatar: 1,
-        updated_at: secondProfile.updatedAt,
-      });
+      for (const publish of [
+        invalidateOperatorRolePolicy,
+        ...(role ? [disconnectClientsForUserProfile] : []),
+      ]) {
+        expect(publish).toHaveBeenCalledWith(profile.id);
+        expect(publish.mock.invocationCallOrder[0]).toBeLessThan(
+          respond.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+        );
+      }
+    },
+  );
+
+  it("returns content-based avatar revisions even for edits with identical timestamps", async () => {
+    const edited = { ...profile, avatarMime: "image/png" as const, hasAvatar: true, updatedAt: 2 };
     const refreshConnectedUserProfile = vi.fn();
-
-    const firstRespond = await runUsersHandler(
-      "users.setAvatar",
-      {
-        profileId: "profile-1",
-        mime: "image/png",
-        avatarBase64: "AQ==",
-      },
-      adminClient,
-      { refreshConnectedUserProfile },
-    );
-    const secondRespond = await runUsersHandler(
-      "users.setAvatar",
-      {
-        profileId: profile.id,
-        mime: "image/png",
-        avatarBase64: "Ag==",
-      },
-      adminClient,
-      { refreshConnectedUserProfile },
-    );
-
-    expect(validateUsersSetAvatarResult(firstRespond.mock.calls[0]?.[1])).toBe(true);
-    expect(validateUsersSetAvatarResult(secondRespond.mock.calls[0]?.[1])).toBe(true);
-    expect(firstRespond).toHaveBeenCalledWith(true, {
-      profile: firstProfile,
-      avatarRevision: "first-content-hash-png",
-    });
-    expect(secondRespond).toHaveBeenCalledWith(true, {
-      profile: secondProfile,
-      avatarRevision: "second-content-hash-png",
-    });
-    expect(firstProfile.updatedAt).toBe(secondProfile.updatedAt);
-    expect(refreshConnectedUserProfile).toHaveBeenNthCalledWith(1, {
-      id: firstProfile.id,
-      displayName: firstProfile.displayName,
-      avatarRevision: "first-content-hash-png",
-      hasAvatar: true,
-      updatedAt: firstProfile.updatedAt,
-    });
-    expect(refreshConnectedUserProfile).toHaveBeenNthCalledWith(2, {
-      id: secondProfile.id,
-      displayName: secondProfile.displayName,
-      avatarRevision: "second-content-hash-png",
-      hasAvatar: true,
-      updatedAt: secondProfile.updatedAt,
-    });
-    expect(refreshConnectedUserProfile.mock.invocationCallOrder[0]).toBeLessThan(
-      firstRespond.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(refreshConnectedUserProfile.mock.invocationCallOrder[1]).toBeLessThan(
-      secondRespond.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
+    for (const [index, hash] of ["first-content-hash", "second-content-hash"].entries()) {
+      const avatarRevision = `${hash}-png`;
+      setCanonicalUserProfileAvatar.mockResolvedValueOnce({
+        ok: true,
+        value: { profile: edited, display: { ...display, avatarRevision, hasAvatar: true } },
+      });
+      readResidentUserProfileRevision.mockReturnValueOnce({
+        ...residentProfile,
+        avatar_mime: "image/png",
+        avatar_sha256: hash,
+        has_avatar: 1,
+        updated_at: edited.updatedAt,
+      });
+      const respond = await runUsersHandler(
+        "users.setAvatar",
+        { profileId: profile.id, mime: "image/png", avatarBase64: index === 0 ? "AQ==" : "Ag==" },
+        adminClient,
+        { refreshConnectedUserProfile },
+      );
+      expect(validateUsersSetAvatarResult(respond.mock.calls[0]?.[1])).toBe(true);
+      expect(respond).toHaveBeenCalledWith(true, { profile: edited, avatarRevision });
+      expect(refreshConnectedUserProfile).toHaveBeenNthCalledWith(index + 1, {
+        id: edited.id,
+        displayName: edited.displayName,
+        avatarRevision,
+        hasAvatar: true,
+        updatedAt: edited.updatedAt,
+      });
+      expect(refreshConnectedUserProfile.mock.invocationCallOrder[index]).toBeLessThan(
+        respond.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+    }
   });
 
-  it("rejects blank email aliases as invalid requests", async () => {
-    expect(
-      await runUsersHandler("users.linkEmail", {
-        email: "   ",
-        targetProfileId: "profile-1",
-      }),
-    ).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST", message: "email must not be empty" }),
-    );
-    expect(linkEmail).not.toHaveBeenCalled();
-  });
-
-  it("rejects malformed avatar payloads before storage", async () => {
-    expect(
-      await runUsersHandler("users.setAvatar", {
-        profileId: "profile-1",
-        mime: "image/png",
-        avatarBase64: "not base64",
-      }),
-    ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "INVALID_REQUEST" }));
-    expect(setCanonicalUserProfileAvatar).not.toHaveBeenCalled();
-  });
-
-  it("returns avatar constraint failures as invalid requests", async () => {
-    setCanonicalUserProfileAvatar.mockResolvedValue({
-      ok: false,
-      error: { code: "avatar_too_large" },
-    });
-
-    expect(
-      await runUsersHandler(
+  it.each(["constraint", "acquisition", "foreign"])(
+    "rejects avatar writes after %s failure",
+    async (kind) => {
+      ensureProfileIdForEmail.mockResolvedValue(profile.id);
+      if (kind === "acquisition") {
+        ensureProfileIdForEmail.mockRejectedValueOnce(new Error("profile worker unavailable"));
+      }
+      setCanonicalUserProfileAvatar.mockResolvedValue({
+        ok: false,
+        error: { code: "avatar_too_large" },
+      });
+      const respond = await runUsersHandler(
         "users.setAvatar",
         {
-          profileId: "profile-1",
+          profileId: kind === "foreign" ? "profile-2" : profile.id,
           mime: "image/png",
           avatarBase64: "AQ==",
         },
-        adminClient,
-      ),
-    ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "INVALID_REQUEST" }));
-  });
+        kind === "constraint" ? adminClient : selfClient,
+      );
+      const error =
+        kind === "constraint"
+          ? { code: "INVALID_REQUEST" }
+          : kind === "acquisition"
+            ? { code: "UNAVAILABLE", message: "profile worker unavailable" }
+            : {
+                code: "FORBIDDEN",
+                message: "profile edits require the owning user or operator.admin",
+              };
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining(error),
+      );
+      if (kind !== "constraint") {
+        expect(setCanonicalUserProfileAvatar).not.toHaveBeenCalled();
+      }
+    },
+  );
 
-  it("allows an identified write caller to edit its own profile", async () => {
-    ensureProfileIdForEmail.mockResolvedValue(profile.id);
-    setCanonicalUserProfileDisplayName.mockResolvedValue({ profile, display });
-    setCanonicalUserProfileAvatar.mockResolvedValue({ ok: true, value: { profile, display } });
-
-    const displayName = await runUsersHandler(
-      "users.setDisplayName",
-      { profileId: "profile-1", displayName: "Ada Lovelace" },
-      selfClient,
-    );
-    const avatar = await runUsersHandler(
-      "users.setAvatar",
-      { profileId: "profile-1", mime: "image/png", avatarBase64: "AQ==" },
-      selfClient,
-    );
-
-    expect(displayName).toHaveBeenCalledWith(true, { profile });
-    expect(avatar).toHaveBeenCalledWith(true, {
-      profile,
-      avatarRevision: String(profile.updatedAt),
-    });
-    expect(ensureProfileIdForEmail).toHaveBeenCalledWith(
-      "ada@example.com",
-      {},
-      expect.any(Function),
-    );
-  });
+  it.each(["email", "provider", "owner", "merged"])(
+    "allows profile edits through the %s identity",
+    async (kind) => {
+      const legacy = kind === "email" || kind === "merged";
+      const client = legacy ? selfClient : connectedProfileClient(kind);
+      const target = kind === "merged" ? "merged-profile-1" : profile.id;
+      ensureProfileIdForEmail.mockResolvedValue(profile.id);
+      prepareUserProfileRoleAuthority.mockResolvedValue({
+        profileId: profile.id,
+        isCurrent: () => true,
+      });
+      setCanonicalUserProfileDisplayName.mockResolvedValue({ profile, display });
+      setCanonicalUserProfileAvatar.mockResolvedValue({ ok: true, value: { profile, display } });
+      expect(
+        await runUsersHandler(
+          "users.setDisplayName",
+          { profileId: target, displayName: "Ada Lovelace" },
+          client,
+        ),
+      ).toHaveBeenCalledWith(true, { profile });
+      if (kind === "email") {
+        expect(
+          await runUsersHandler(
+            "users.setAvatar",
+            { profileId: target, mime: "image/png", avatarBase64: "AQ==" },
+            client,
+          ),
+        ).toHaveBeenCalledWith(true, { profile, avatarRevision: String(profile.updatedAt) });
+      }
+      if (legacy) {
+        expect(ensureProfileIdForEmail).toHaveBeenCalledWith(
+          "ada@example.com",
+          {},
+          expect.any(Function),
+        );
+        expect(prepareUserProfileRoleAuthority).toHaveBeenCalledWith(target);
+      } else {
+        expect(ensureProfileIdForEmail).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each([
     "unchanged",
@@ -889,23 +775,6 @@ describe("users gateway methods", () => {
     }
   });
 
-  it("reports rejected profile acquisition without applying an avatar mutation", async () => {
-    ensureProfileIdForEmail.mockRejectedValueOnce(new Error("profile worker unavailable"));
-
-    const respond = await runUsersHandler(
-      "users.setAvatar",
-      { profileId: profile.id, mime: "image/png", avatarBase64: "AQ==" },
-      selfClient,
-    );
-
-    expect(respond).toHaveBeenCalledExactlyOnceWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE", message: "profile worker unavailable" }),
-    );
-    expect(setCanonicalUserProfileAvatar).not.toHaveBeenCalled();
-  });
-
   it.each(
     ["users.setDisplayName", "users.setAvatar"].flatMap((method) =>
       ["active", "disconnect", "profile replacement", "role revocation", "rejection"].map(
@@ -923,6 +792,7 @@ describe("users gateway methods", () => {
     let authorityCurrent = true;
     prepareUserProfileRoleAuthority.mockImplementation(async (profileId: string) => ({
       profileId,
+      listItem: disclosedProfile,
       isCurrent: () => authorityCurrent,
     }));
     const avatar = method === "users.setAvatar";
@@ -982,60 +852,5 @@ describe("users gateway methods", () => {
       );
       expect(refreshConnectedUserProfile).not.toHaveBeenCalled();
     }
-  });
-
-  it.each(["provider", "owner"])(
-    "authorizes %s profile edits from the connect-time profile id",
-    async (kind) => {
-      const providerClient = connectedProfileClient(kind);
-      setCanonicalUserProfileDisplayName.mockResolvedValue({ profile, display });
-
-      expect(
-        await runUsersHandler(
-          "users.setDisplayName",
-          { profileId: profile.id, displayName: "Ada Lovelace" },
-          providerClient,
-        ),
-      ).toHaveBeenCalledWith(true, { profile });
-      expect(ensureProfileIdForEmail).not.toHaveBeenCalled();
-    },
-  );
-
-  it("denies an identified write caller changing another profile's avatar", async () => {
-    ensureProfileIdForEmail.mockResolvedValue(profile.id);
-
-    expect(
-      await runUsersHandler(
-        "users.setAvatar",
-        { profileId: "profile-2", mime: "image/png", avatarBase64: "AQ==" },
-        selfClient,
-      ),
-    ).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "FORBIDDEN",
-        message: "profile edits require the owning user or operator.admin",
-      }),
-    );
-    expect(setCanonicalUserProfileAvatar).not.toHaveBeenCalled();
-  });
-
-  it("allows an owner to edit through a tombstoned durable profile id", async () => {
-    ensureProfileIdForEmail.mockResolvedValue(profile.id);
-    prepareUserProfileRoleAuthority.mockResolvedValue({
-      profileId: profile.id,
-      isCurrent: () => true,
-    });
-    setCanonicalUserProfileDisplayName.mockResolvedValue({ profile, display });
-
-    expect(
-      await runUsersHandler(
-        "users.setDisplayName",
-        { profileId: "merged-profile-1", displayName: "Ada Lovelace" },
-        selfClient,
-      ),
-    ).toHaveBeenCalledWith(true, { profile });
-    expect(prepareUserProfileRoleAuthority).toHaveBeenCalledWith("merged-profile-1");
   });
 });

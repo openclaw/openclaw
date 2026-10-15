@@ -109,8 +109,8 @@ describe("closed session browser route", () => {
       vi.useRealTimers();
     }
   });
-  it.each(["/cookies", "/tabs/open"])("does not forward %s", async (path) => {
-    await rejectedRequest({ method: "POST", path, body: {} }, "unavailable");
+  it("does not forward tab administration", async () => {
+    await rejectedRequest({ method: "POST", path: "/tabs/open", body: {} }, "unavailable");
     expect(mocked.access).not.toHaveBeenCalled();
     expect(mocked.dispatch).not.toHaveBeenCalled();
   });

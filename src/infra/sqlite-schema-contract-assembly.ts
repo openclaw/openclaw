@@ -36,6 +36,7 @@ export type SqliteSchemaRow = {
 };
 
 export type SqliteTableListRow = {
+  schema: string;
   name: string;
   strict: number;
   wr: number;
@@ -97,11 +98,11 @@ export function createSqliteIndexContract(
   schemaSql: string | null,
   rows: SqliteIndexTermRow[],
 ): SqliteIndexContract {
-  const terms = rows.map(({ cid, coll, desc, key, name, seqno }) => ({
+  const terms = rows.map<SqliteIndexTermContract>(({ cid, coll, desc, key, name, seqno }) => ({
     coll,
     desc,
     key,
-    kind: sqliteIndexTermKind(cid),
+    kind: cid === -2 ? "expression" : cid === -1 ? "rowid" : "column",
     name,
     seqno,
   }));
@@ -113,10 +114,6 @@ export function createSqliteIndexContract(
     terms,
     unique: index.unique,
   };
-}
-
-function sqliteIndexTermKind(cid: number): SqliteIndexTermContract["kind"] {
-  return cid === -2 ? "expression" : cid === -1 ? "rowid" : "column";
 }
 
 export function parseSqliteTableDefinition(

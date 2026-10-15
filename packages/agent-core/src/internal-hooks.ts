@@ -1,19 +1,23 @@
 import type {
   AgentLoopConfig,
+  AfterToolOutcomeContext,
   AgentMessage,
   AgentToolResult,
   AgentToolUpdateCallback,
-  InternalBeforeToolBatchContext,
   InternalBeforeToolBatchResult,
   ToolLoopWarning,
+  ToolLoopIntervention,
+  ToolLoopRecoveryState,
+  ToolResultContentSource,
 } from "./types.js";
 
-export type InternalBeforeToolBatchHook = (
-  context: InternalBeforeToolBatchContext,
-  signal?: AbortSignal,
-) => Promise<InternalBeforeToolBatchResult | undefined>;
+export type InternalBeforeToolBatchHook = NonNullable<AgentLoopConfig["beforeToolBatch"]>;
 
 const beforeToolBatchByAgent = new WeakMap<object, InternalBeforeToolBatchHook>();
+
+export type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
+
+const toolTurnCompletionByAgent = new WeakMap<object, InternalToolTurnCompletionHook>();
 
 type InternalReadyToolCall = { toolCallId: string; args: unknown };
 
@@ -23,9 +27,14 @@ export type InternalToolBatchLifecycle = {
    * before their implementations start, argument-validation rejections when the
    * launch reaches them. May throw before launch.
    */
-  commitReadyCalls: (calls: readonly InternalReadyToolCall[]) => void;
+  commitReadyCalls?: (calls: readonly InternalReadyToolCall[]) => void;
   /** Release admission state for admitted calls, prepared or rejected, that will not launch. */
-  releaseSkippedCalls: (toolCallIds: readonly string[]) => void;
+  releaseSkippedCalls?: (toolCallIds: readonly string[]) => void;
+  /** Observe settled outcomes in assistant order, before warning text changes their identity. */
+  observeOutcome?: (
+    outcome: Pick<AfterToolOutcomeContext, "toolCall" | "args" | "result" | "isError">,
+    state: ToolLoopRecoveryState,
+  ) => ToolLoopIntervention | undefined;
 };
 
 const toolBatchLifecycleByResult = new WeakMap<
@@ -42,6 +51,7 @@ const syncSteeringGetterByCallback = new WeakMap<
 
 export type InternalSteeringQueueObserver = {
   peek: () => readonly AgentMessage[];
+  drainContext?: () => AgentMessage[];
   reserve: (messages: readonly AgentMessage[]) => () => void;
   subscribe: (listener: () => void) => () => void;
 };
@@ -78,6 +88,7 @@ const toolExecutionPreparerByTool = new WeakMap<object, InternalToolExecutionPre
 type InternalToolResultAcknowledgement = () => void;
 const toolResultAcknowledgementByValue = new WeakMap<object, InternalToolResultAcknowledgement>();
 const toolResultProvenanceByValue = new WeakMap<object, object>();
+const toolResultContentSourceByValue = new WeakMap<object, ToolResultContentSource>();
 
 /** Install OpenClaw-owned loop control without adding a plugin-facing Agent option. */
 export function setInternalBeforeToolBatch(
@@ -93,6 +104,23 @@ export function setInternalBeforeToolBatch(
 
 export function getInternalBeforeToolBatch(agent: object): InternalBeforeToolBatchHook | undefined {
   return beforeToolBatchByAgent.get(agent);
+}
+
+export function setInternalToolTurnCompletion(
+  agent: object,
+  hook: InternalToolTurnCompletionHook | undefined,
+): void {
+  if (hook) {
+    toolTurnCompletionByAgent.set(agent, hook);
+  } else {
+    toolTurnCompletionByAgent.delete(agent);
+  }
+}
+
+export function getInternalToolTurnCompletion(
+  agent: object,
+): InternalToolTurnCompletionHook | undefined {
+  return toolTurnCompletionByAgent.get(agent);
 }
 
 /** Attach scheduler lifecycle ownership without widening the public admission result. */
@@ -186,6 +214,26 @@ export function getInternalToolResultProvenance(value: object): object | undefin
   return toolResultProvenanceByValue.get(value);
 }
 
+/**
+ * Mark one result or thrown error as carrying content from a nested call whose
+ * tool declares a result content source. Dispatchers such as Tool Search and
+ * Code Mode use this because their own static declaration cannot describe each
+ * call; finalization combines it with the executed tool's declaration.
+ */
+export function attachInternalToolResultContentSource<T extends object>(
+  value: T,
+  source: ToolResultContentSource,
+): T {
+  toolResultContentSourceByValue.set(value, source);
+  return value;
+}
+
+export function getInternalToolResultContentSource(
+  value: object,
+): ToolResultContentSource | undefined {
+  return toolResultContentSourceByValue.get(value);
+}
+
 /** Carry private commit ownership through result transforms and message construction. */
 export function copyInternalToolResultState<T extends object>(source: object, target: T): T {
   const acknowledge = toolResultAcknowledgementByValue.get(source);
@@ -195,6 +243,10 @@ export function copyInternalToolResultState<T extends object>(source: object, ta
   const provenance = toolResultProvenanceByValue.get(source);
   if (provenance) {
     toolResultProvenanceByValue.set(target, provenance);
+  }
+  const contentSource = toolResultContentSourceByValue.get(source);
+  if (contentSource) {
+    toolResultContentSourceByValue.set(target, contentSource);
   }
   return target;
 }

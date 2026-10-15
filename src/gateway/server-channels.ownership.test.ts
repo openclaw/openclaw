@@ -81,7 +81,7 @@ describe("channel ownership startup", () => {
 
   it("blocks an unowned account without retrying while its bound sibling stays online", async () => {
     await start({
-      agents: { ownership: "explicit", list: [{ id: "main" }, { id: "patricia" }] },
+      agents: { ownership: "explicit", entries: { main: {}, patricia: {} } },
       channels: {
         discord: {
           enabled: true,

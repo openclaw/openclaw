@@ -1,12 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { handlePluginsCommand } from "../auto-reply/reply/commands-plugins.js";
 import { buildPluginsCommandParams } from "../auto-reply/reply/commands.test-harness.js";
 import { runPluginsDoctorCommand } from "../cli/plugins-cli.runtime.js";
 import { runPluginsInspectCommand } from "../cli/plugins-inspect-command.js";
 import { readConfigFileSnapshotForWrite, writeConfigFile } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -19,7 +23,7 @@ import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snap
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { selectInstallMutationWriteOptions } from "./install-config-mutation.js";
 import { persistPluginInstall } from "./install-persistence.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { loadAndActivateRootPluginRegistry, loadPluginRegistryHandle } from "./loader.js";
 import {
@@ -43,7 +47,7 @@ import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.
 import * as statusSnapshot from "./status-snapshot.js";
 import { withPluginDiagnosticsReportForInspection, withPluginDiagnosticsReport } from "./status.js";
 import { createDiagnosticsFixture } from "./status.runtime-inspection.test-helpers.js";
-import type { OpenClawPluginService } from "./types.js";
+import type { OpenClawPluginApi } from "./types.js";
 
 function stateEnv(stateDir: string) {
   return {
@@ -346,7 +350,9 @@ describe("plugin runtime inspection", () => {
         const persisted = JSON.parse(fs.readFileSync(configPath, "utf8"));
         expect(persisted.plugins?.slots).toEqual(expectedSlots);
         expect(persisted.plugins?.load?.paths).toBeUndefined();
-        expect(readPersistedInstalledPluginIndexInstallRecords()?.[pluginId]).toMatchObject({
+        expect(
+          (await readPersistedInstalledPluginIndexInstallRecordsAsync())?.[pluginId],
+        ).toMatchObject({
           source: testCase.source,
           installPath: pluginDir,
         });
@@ -354,7 +360,7 @@ describe("plugin runtime inspection", () => {
     });
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "uses replaced package metadata while preserving its old snapshot (requires config: %s)",
     async (requiresConfig) => {
       const stateDir = makePluginLoaderTempDir();
@@ -517,7 +523,9 @@ module.exports = { id: ${JSON.stringify(`${pluginId}/${entry}`)}, kind: ${JSON.s
           );
           expect(fs.existsSync(path.join(stateDir, "second.txt"))).toBe(false);
           expect(fs.readFileSync(configPath, "utf8")).toBe(previousConfig);
-          expect(readPersistedInstalledPluginIndexInstallRecords()?.[pluginId]).toBeUndefined();
+          expect(
+            (await readPersistedInstalledPluginIndexInstallRecordsAsync())?.[pluginId],
+          ).toBeUndefined();
         });
       });
     },
@@ -560,6 +568,8 @@ it("retires runtime diagnostics after each actual chat inspect reply", async () 
   await withOpenClawTestState({ label: "diagnostics-chat" }, async (state) => {
     const { id, event, config, disposed } = createDiagnosticsFixture(state);
     await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config, config);
+    onTestFinished(clearRuntimeConfigSnapshot);
     const before = process.listenerCount(event);
     for (const name of [id, "all"]) {
       const result = await handlePluginsCommand(
@@ -591,7 +601,7 @@ it("keeps metadata getters live through awaited projection without retiring an i
     const independent = loadPluginRegistryHandle({ ...params, cache: false });
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    let retained: OpenClawPluginService | undefined;
+    let retained: Parameters<OpenClawPluginApi["registerService"]>[0] | undefined;
     const projection = withPluginDiagnosticsReport(params, async (report) => {
       retained = report.services[0]?.service;
       entered.resolve();

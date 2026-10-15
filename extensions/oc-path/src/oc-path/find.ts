@@ -38,9 +38,6 @@ import type { OcAst, OcMatch } from "./universal.js";
 import { resolveOcPath } from "./universal.js";
 import { resolveYamlPositionalSegment } from "./yaml/resolve.js";
 
-// ---------- Public types ---------------------------------------------------
-
-/** A find result: a concrete (wildcard-free) path plus its match info. */
 interface OcPathMatch {
   readonly path: OcPath;
   readonly match: OcMatch;
@@ -53,8 +50,6 @@ interface SlotSub {
 }
 
 type OnMatch = (subs: readonly SlotSub[]) => void;
-
-// ---------- Public verb ----------------------------------------------------
 
 export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[] {
   const subs = patternSubs(pattern);
@@ -79,7 +74,7 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
   switch (ast.kind) {
     case "jsonc":
       if (ast.root !== null) {
-        walkJsonc(ast.root, subs, 0, [], onMatch);
+        jsoncOps.walk(ast.root, subs, 0, [], onMatch);
       }
       break;
     case "jsonl":
@@ -90,7 +85,7 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
       break;
     case "yaml":
       if (ast.doc.contents !== null) {
-        walkYaml(ast.doc.contents, subs, 0, [], onMatch);
+        yamlOps.walk(ast.doc.contents, subs, 0, [], onMatch);
       }
       break;
   }
@@ -104,8 +99,6 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
   }
   return out;
 }
-
-// ---------- Pattern unpacking ---------------------------------------------
 
 function patternSubs(pattern: OcPath): readonly SlotSub[] {
   const out: SlotSub[] = [];
@@ -123,28 +116,18 @@ function patternSubs(pattern: OcPath): readonly SlotSub[] {
 }
 
 function repackSlotSubs(pattern: OcPath, slotSubs: readonly SlotSub[]): OcPath {
-  const sectionSubs: string[] = [];
-  const itemSubs: string[] = [];
-  const fieldSubs: string[] = [];
-  for (const s of slotSubs) {
-    if (s.slot === "section") {
-      sectionSubs.push(s.value);
-    } else if (s.slot === "item") {
-      itemSubs.push(s.value);
-    } else {
-      fieldSubs.push(s.value);
-    }
+  const values: Record<Slot, string[]> = { section: [], item: [], field: [] };
+  for (const { slot, value } of slotSubs) {
+    values[slot].push(value);
   }
   return {
     file: pattern.file,
-    ...(sectionSubs.length > 0 ? { section: sectionSubs.join(".") } : {}),
-    ...(itemSubs.length > 0 ? { item: itemSubs.join(".") } : {}),
-    ...(fieldSubs.length > 0 ? { field: fieldSubs.join(".") } : {}),
+    ...(values.section.length > 0 ? { section: values.section.join(".") } : {}),
+    ...(values.item.length > 0 ? { item: values.item.join(".") } : {}),
+    ...(values.field.length > 0 ? { field: values.field.join(".") } : {}),
     ...(pattern.session !== undefined ? { session: pattern.session } : {}),
   };
 }
-
-// ---------- Shared dispatch ----------------------------------------------
 
 // Per-kind ops the dispatcher uses to drive recursion. Each kind's
 // walker fills these in; the dispatcher handles every segment shape.
@@ -239,23 +222,6 @@ function dispatchSeg<T, Child>(
   ops.walk(m.child, subs, i + 1, [...walked, { slot: cur.slot, value: m.keySub }], onMatch);
 }
 
-// ---------- JSONC walker ---------------------------------------------------
-
-function walkJsonc(
-  node: JsoncValue,
-  subs: readonly SlotSub[],
-  i: number,
-  walked: readonly SlotSub[],
-  onMatch: OnMatch,
-): void {
-  checkDepth(walked);
-  if (i >= subs.length) {
-    onMatch(walked);
-    return;
-  }
-  dispatchSeg(node, jsoncOps, subs, i, walked, onMatch);
-}
-
 const jsoncOps: WalkOps<JsoncValue> = {
   *enumerate(node, matches) {
     if (node.kind === "object") {
@@ -305,13 +271,18 @@ const jsoncOps: WalkOps<JsoncValue> = {
   },
   *predicate(node, pred) {
     yield* jsoncOps.enumerate(node, (child) =>
-      evaluatePredicate(jsoncChildFieldText(child, pred.key), pred),
+      evaluatePredicate(jsoncChildFieldText(child, pred.key, "null"), pred),
     );
   },
-  walk: walkJsonc,
+  walk(node, subs, i, walked, onMatch) {
+    checkDepth(walked);
+    if (i >= subs.length) {
+      onMatch(walked);
+      return;
+    }
+    dispatchSeg(node, jsoncOps, subs, i, walked, onMatch);
+  },
 };
-
-// ---------- JSONL walker ---------------------------------------------------
 
 // First slot is a line address; subsequent slots descend into its JSONC value.
 function walkJsonl(
@@ -351,10 +322,12 @@ const jsonlOps: WalkOps<JsonlAst, JsonlLine> = {
     return jsonlOps.lookup(ast, seg);
   },
   *predicate(ast, pred) {
+    // JSONL line predicates treat null as absent; JSONC child predicates stringify it.
     yield* jsonlOps.enumerate(
       ast,
       (line) =>
-        line.kind === "value" && evaluatePredicate(topLevelLeafText(line.value, pred.key), pred),
+        line.kind === "value" &&
+        evaluatePredicate(jsoncChildFieldText(line.value, pred.key, null), pred),
     );
   },
   // Union alternatives revisit the file; consumed line slots descend into JSONC.
@@ -370,44 +343,9 @@ const jsonlOps: WalkOps<JsonlAst, JsonlLine> = {
     if (child.kind !== "value") {
       return;
     }
-    walkJsonc(child.value, subs, i, walked, onMatch);
+    jsoncOps.walk(child.value, subs, i, walked, onMatch);
   },
 };
-
-function topLevelLeafText(value: JsoncValue, key: string): string | null {
-  if (value.kind !== "object") {
-    return null;
-  }
-  const entry = value.entries.find((e) => e.key === key);
-  if (entry === undefined) {
-    return null;
-  }
-  const v = entry.value;
-  if (v.kind === "string") {
-    return v.value;
-  }
-  if (v.kind === "number" || v.kind === "boolean") {
-    return String(v.value);
-  }
-  return null;
-}
-
-// ---------- YAML walker ----------------------------------------------------
-
-function walkYaml(
-  node: Node,
-  subs: readonly SlotSub[],
-  i: number,
-  walked: readonly SlotSub[],
-  onMatch: OnMatch,
-): void {
-  checkDepth(walked);
-  if (i >= subs.length) {
-    onMatch(walked);
-    return;
-  }
-  dispatchSeg(node, yamlOps, subs, i, walked, onMatch);
-}
 
 const yamlOps: WalkOps<Node> = {
   *enumerate(node, matches) {
@@ -460,7 +398,14 @@ const yamlOps: WalkOps<Node> = {
       evaluatePredicate(yamlChildFieldText(child, pred.key), pred),
     );
   },
-  walk: walkYaml,
+  walk(node, subs, i, walked, onMatch) {
+    checkDepth(walked);
+    if (i >= subs.length) {
+      onMatch(walked);
+      return;
+    }
+    dispatchSeg(node, yamlOps, subs, i, walked, onMatch);
+  },
 };
 
 function yamlChildFieldText(node: Node, key: string): string | null {
@@ -499,8 +444,6 @@ function yamlScalarToText(value: unknown): string | null {
   }
   return JSON.stringify(scalar) ?? null;
 }
-
-// ---------- Markdown walker -----------------------------------------------
 
 type MdLevel =
   | { readonly kind: "root"; readonly ast: MdAst }
@@ -639,7 +582,6 @@ const mdOps: WalkOps<MdLevel> = {
       return block === undefined ? null : { keySub: key, child: { kind: "block", block } };
     }
     if (level.kind === "block") {
-      // Ordinal `#N` short-circuits slug lookup.
       if (isOrdinalSeg(key)) {
         const n = parseOrdinalSeg(key);
         if (n === null || n < 0 || n >= level.block.items.length) {
@@ -698,7 +640,11 @@ function mdItemMatchesPredicate(item: AstItem, pred: PredicateSpec): boolean {
   return evaluatePredicate(item.kv.value, pred);
 }
 
-function jsoncChildFieldText(node: JsoncValue, key: string): string | null {
+function jsoncChildFieldText(
+  node: JsoncValue,
+  key: string,
+  nullText: "null" | null,
+): string | null {
   if (node.kind !== "object") {
     return null;
   }
@@ -714,7 +660,7 @@ function jsoncChildFieldText(node: JsoncValue, key: string): string | null {
     return String(v.value);
   }
   if (v.kind === "null") {
-    return "null";
+    return nullText;
   }
   return null;
 }

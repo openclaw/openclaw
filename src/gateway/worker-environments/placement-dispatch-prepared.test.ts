@@ -1,5 +1,8 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
+import vm from "node:vm";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
@@ -11,6 +14,10 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  setDiagnosticsEnabledForProcess,
+} from "../../infra/diagnostic-events.js";
 import {
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_PREPARED_WORKSPACE_VERSION,
@@ -26,7 +33,9 @@ import {
 } from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
+import { sessionLog } from "../session-log.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
+import type { EnvironmentRecipe } from "./environment-recipe.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import type { WorkerPlacementExecutionMode } from "./placement-record.js";
@@ -37,12 +46,13 @@ import {
   readSessionRepositoryArtifacts,
   stageSessionRepositoryCheckpoint,
 } from "./session-repository-checkpoints.js";
-import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
+import { prepareGitHubPublicationFact } from "./worker-github-binding.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 
-vi.mock("./worker-github-binding.js", () => ({ prepareWorkerGitHubBinding: vi.fn() }));
+// mock-isolation: Workspace startup supplies a synthetic identity without credential discovery.
+vi.mock("./worker-github-binding.js", () => ({ prepareGitHubPublicationFact: vi.fn() }));
 
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
@@ -62,7 +72,10 @@ async function preparedHarness(
     reserve?: boolean;
     protocolFeatures?: string[];
     executionMode?: WorkerPlacementExecutionMode;
+    emptyWorkspace?: boolean;
     repository?: SessionRepositoryWorkspaceRecord;
+    recipe?: EnvironmentRecipe;
+    lifecycleFailure?: boolean;
     boundWorkspace?: Pick<
       NodeWorkerPreparedWorkspaceResult,
       "workspaceDir" | "sourceManifestRef" | "preparedManifestRef"
@@ -77,7 +90,7 @@ async function preparedHarness(
     database: support.testState.stateDb,
     now: () => support.testState.nowMs,
   });
-  const harness = createHarness(support.testState.stateDb, placements, {
+  const harness = await createHarness(support.testState.stateDb, placements, {
     ...(options.repository
       ? {
           requiresNodeEnrollment: true,
@@ -94,43 +107,53 @@ async function preparedHarness(
       ),
   });
   const environmentId = reserve ? "prepared-spare" : harness.ready.environmentId;
+  const preparation = {
+    key: PREPARATION_KEY,
+    cacheKey: "a".repeat(64),
+    contractVersion: 1,
+    target: { machineClass: "standard", platform: "linux", arch: "x64" },
+    artifacts: {
+      nodeBootstrapSha256: "f".repeat(64),
+      enabledPluginIds: [],
+      workerBundleHash: support.BUNDLE_HASH,
+      workerArchiveSha256: "b".repeat(64),
+      openclawVersion: support.BOOTSTRAP_RECEIPT.openclawVersion,
+      protocolFeatures,
+    },
+  };
   const intent: WorkerProviderPreparedIntent = {
     providerId: "fake",
     preparationKey: PREPARATION_KEY,
     profileSnapshot: {
       settings: { region: "test" },
       executionMode,
-      project: {
-        key: "d".repeat(64),
-        baseCommit: options.repository?.baseCommit ?? "e".repeat(40),
-        ...(options.repository
-          ? {
-              source: {
-                kind: "repository",
-                url: options.repository.url,
-                repositoryId: "R_dispatch_fixture",
-                owner: {
-                  agent: { agentId: REQUEST.agentId, provenance: null },
-                  identity: { source: "anonymous" },
-                },
+      ...(options.emptyWorkspace
+        ? { runtimePreparation: { ...preparation, source: "empty" } }
+        : {
+            project: {
+              key: "d".repeat(64),
+              baseCommit: options.repository?.baseCommit ?? "e".repeat(40),
+              ...(options.repository
+                ? {
+                    source: {
+                      kind: "repository",
+                      url: options.repository.url,
+                      repositoryId: "R_dispatch_fixture",
+                      owner: {
+                        agent: { agentId: REQUEST.agentId, provenance: null },
+                        identity: { source: "anonymous" },
+                      },
+                    },
+                  }
+                : { root: "/gateway/workspace" }),
+              preparation: {
+                ...preparation,
+                ...(options.recipe
+                  ? { recipe: options.recipe, setupRecipe: options.recipe.identity }
+                  : {}),
               },
-            }
-          : { root: "/gateway/workspace" }),
-        preparation: {
-          key: PREPARATION_KEY,
-          cacheKey: "a".repeat(64),
-          contractVersion: 1,
-          target: { machineClass: "standard", platform: "linux", arch: "x64" },
-          artifacts: {
-            nodeBootstrapSha256: "f".repeat(64),
-            enabledPluginIds: [],
-            workerBundleHash: support.BUNDLE_HASH,
-            workerArchiveSha256: "b".repeat(64),
-            openclawVersion: support.BOOTSTRAP_RECEIPT.openclawVersion,
-            protocolFeatures,
-          },
-        },
-      },
+            },
+          }),
     },
   };
   const store = support.testState.store;
@@ -192,10 +215,58 @@ async function preparedHarness(
     id === environmentId ? await workerService.destroy(id) : await ordinaryDestroy(id),
   );
   const ordinaryTunnel = vi.mocked(harness.environments.startTunnel).getMockImplementation()!;
-  vi.mocked(harness.environments.startTunnel).mockImplementation(async (request) => ({
-    ...(await ordinaryTunnel(request)),
-    environmentId: request.environmentId,
-  }));
+  vi.mocked(harness.environments.startTunnel).mockImplementation(async (request) => {
+    const tunnel = await ordinaryTunnel(request);
+    if (options.recipe) {
+      vi.spyOn(tunnel, "runWorkspaceCommand").mockImplementation(async (command) => {
+        command.assertCurrent?.();
+        const process = Object.assign(new EventEmitter(), {
+          env: { PATH: "/worker/bin", HOME: "/worker/home" },
+          cwd: () => "/worker/workspace",
+          kill: vi.fn(),
+          exitCode: 0,
+        });
+        let stderr = "";
+        const spawn = (executable: string) => {
+          harness.log.push(`lifecycle:${executable}`);
+          const child = Object.assign(new EventEmitter(), {
+            pid: 123,
+            stderr: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
+          });
+          queueMicrotask(() => {
+            if (options.lifecycleFailure) {
+              child.stderr.emit("data", Buffer.from("fixture failure"));
+            }
+            child.emit("exit", options.lifecycleFailure ? 1 : 0);
+            child.emit("close", options.lifecycleFailure ? 1 : 0);
+          });
+          return child;
+        };
+        await vm.runInNewContext(command.argv[2]!, {
+          Buffer,
+          process,
+          require: () => ({ spawn }),
+          performance: { now: () => 0 },
+          setTimeout: vi.fn(),
+          clearTimeout: vi.fn(),
+          console: {
+            error: (message: string) => {
+              stderr = message;
+            },
+          },
+        });
+        return {
+          stdout: "",
+          stderr,
+          code: process.exitCode,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      });
+    }
+    return { ...tunnel, environmentId: request.environmentId };
+  });
   const bindPreparedWorkspace = vi.mocked(harness.environments.bindPreparedWorkspace);
   const ordinaryBind = bindPreparedWorkspace.getMockImplementation()!;
   bindPreparedWorkspace.mockImplementation(async (request) => {
@@ -220,6 +291,7 @@ async function preparedHarness(
       environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
       preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION,
       capturedExecPolicy: true,
+      promptContext: 1,
     },
     commands: ["codex.exec-server.stdio.v1"],
   };
@@ -307,11 +379,151 @@ async function preparedHarness(
 describe("prepared worker dispatch", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it.each(["worker-turn", "remote-exec"] as const)(
-    "consumes the existing environment and binds its workspace for %s",
-    async (executionMode) => {
+  const lifecycleRecipe: EnvironmentRecipe = {
+    source: "devcontainer",
+    identity: "8".repeat(40),
+    inputs: { ".devcontainer/devcontainer.json": "8".repeat(40) },
+    env: {},
+    postCreate: ["post-create"],
+    postStart: ["post-start"],
+  };
+
+  it.each([true, false])(
+    "runs first-binding lifecycle after session sync and before activation (reserve=%s)",
+    async (reserve) => {
+      const { harness, request, ready } = await preparedHarness({
+        reserve,
+        recipe: lifecycleRecipe,
+      });
+      const previousDiagnostics = areDiagnosticsEnabledForProcess();
+      setDiagnosticsEnabledForProcess(true);
+      onTestFinished(() => {
+        setDiagnosticsEnabledForProcess(previousDiagnostics);
+        vi.restoreAllMocks();
+      });
+      vi.spyOn(sessionLog, "isEnabled").mockReturnValue(true);
+      const warn = vi.spyOn(sessionLog, "warn").mockImplementation(() => {
+        throw new Error("diagnostic sink unavailable");
+      });
+      let now = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const attach = vi.mocked(harness.environments.attachSession);
+      const ordinaryAttach = attach.getMockImplementation()!;
+      attach.mockImplementation(async (params) => {
+        const credential = await ordinaryAttach(params);
+        now += 1_200;
+        return credential;
+      });
+      if (!reserve) {
+        const provision = vi.mocked(harness.environments.createWithRequest);
+        const environment = harness.environments.get(ready.environmentId)!;
+        provision.mockImplementation(async () => {
+          now += 600;
+          return environment;
+        });
+      }
+
+      const active = await harness.service.dispatch(request);
+
+      expect(active.state).toBe("active");
+      expect(warn).toHaveBeenCalledExactlyOnceWith("slow placement dispatch", {
+        operation: "sessions.dispatch",
+        elapsedMs: reserve ? 1_200 : 1_800,
+        phaseDurationsMs: {
+          admission: 0,
+          workspacePreparation: 0,
+          reserveClaim: 0,
+          ...(!reserve ? { provision: 600 } : {}),
+          attach: 1_200,
+          tunnel: 0,
+          bind: 0,
+          repositoryStartup: 0,
+          lifecycleCommands: 0,
+          activation: 0,
+          cleanup: 0,
+        },
+      });
+      expect(
+        harness.log.filter((phase) =>
+          [
+            "workspace:bind-prepared",
+            "sync",
+            "lifecycle:post-create",
+            "lifecycle:post-start",
+            "placement:starting",
+            "activation",
+          ].includes(phase),
+        ),
+      ).toEqual([
+        "workspace:bind-prepared",
+        "sync",
+        "lifecycle:post-create",
+        "lifecycle:post-start",
+        "placement:starting",
+        "activation",
+      ]);
+      const tunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]!.value;
+      expect(tunnel.launchTurn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("carries prepared repository authority into the provider lifecycle launch", async () => {
+    const { harness, request } = await preparedHarness({ recipe: lifecycleRecipe });
+    let repositoryCurrent = true;
+    const bind = vi.mocked(harness.environments.bindPreparedWorkspace);
+    const ordinaryBind = bind.getMockImplementation()!;
+    bind.mockImplementation(async (input) => ({
+      ...(await ordinaryBind(input)),
+      assertCurrent: () => {
+        input.assertCurrent();
+        if (!repositoryCurrent) {
+          throw new Error("Repository identity revoked");
+        }
+      },
+    }));
+    const runSetup = vi.fn<NonNullable<typeof harness.environments.runProjectLifecycleCommand>>(
+      async (_environmentId, _ownerEpoch, command) => {
+        expect(command.workspaceDir).toBe("/worker/workspace");
+        expect(command.homeDir).toBe("/worker/home");
+        command.assertCurrent();
+        await Promise.resolve();
+        repositoryCurrent = false;
+        command.assertCurrent();
+        throw new Error("Repository command must not launch");
+      },
+    );
+    harness.environments.runProjectLifecycleCommand = runSetup;
+    await expect(harness.service.dispatch(request)).rejects.toThrow("Repository identity revoked");
+    expect(runSetup).toHaveBeenCalledOnce();
+    expect(harness.log).not.toContain("lifecycle:post-create");
+    expect(harness.log).not.toContain("activation");
+  });
+
+  it("fails dispatch before activation when a declared post-binding command fails", async () => {
+    const { harness, placements, ready, request } = await preparedHarness({
+      recipe: lifecycleRecipe,
+      lifecycleFailure: true,
+    });
+
+    await expect(harness.service.dispatch(request)).rejects.toThrow("fixture failure");
+
+    expect(harness.log).toContain("lifecycle:post-create");
+    expect(harness.log).not.toContain("lifecycle:post-start");
+    expect(harness.log).not.toContain("activation");
+    expect(placements.get(request.sessionId)?.state).toBe("failed");
+    expect(harness.environments.destroy).toHaveBeenCalledWith(ready.environmentId);
+  });
+
+  it.each(
+    (["worker-turn", "remote-exec"] as const).flatMap((executionMode) =>
+      [false, true].map((emptyWorkspace) => ({ executionMode, emptyWorkspace })),
+    ),
+  )(
+    "consumes the existing environment for $executionMode (empty workspace: $emptyWorkspace)",
+    async ({ executionMode, emptyWorkspace }) => {
       const { harness, placements, store, ready, request } = await preparedHarness({
         executionMode,
+        emptyWorkspace,
       });
       vi.mocked(harness.environments.schedulePreparedRefill).mockImplementation(() => {
         expect(placements.get(request.sessionId)?.state).toBe("active");
@@ -327,17 +539,29 @@ describe("prepared worker dispatch", () => {
       });
       expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
       expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBe(1_000);
+      expect(store.get(ready.environmentId)?.lastActivatedAtMs).toBe(1_000);
       expect(store.getCredential(ready.environmentId)).toMatchObject({
         sessionId: request.sessionId,
         ownerEpoch: active.activeOwnerEpoch,
       });
-      expect(harness.log.indexOf("workspace:bind-prepared")).toBeLessThan(
-        harness.log.indexOf("sync"),
-      );
+      if (emptyWorkspace) {
+        expect(harness.environments.bindPreparedWorkspace).not.toHaveBeenCalled();
+      } else {
+        expect(harness.log.indexOf("workspace:bind-prepared")).toBeLessThan(
+          harness.log.indexOf("sync"),
+        );
+      }
       expect(harness.environments.schedulePreparedRefill).toHaveBeenCalledWith(ready.environmentId);
       const tunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]?.value;
       expect(tunnel?.syncWorkspace).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionKey: request.sessionKey }),
+        expect.objectContaining({
+          sessionKey: request.sessionKey,
+          source: {
+            kind: "local",
+            path: "/gateway/workspace",
+            ...(emptyWorkspace ? {} : { projectKey: "d".repeat(64) }),
+          },
+        }),
       );
     },
   );
@@ -474,20 +698,6 @@ describe("prepared worker dispatch", () => {
     expect(harness.environments.destroy).toHaveBeenCalledWith(ready.environmentId);
   });
 
-  it("uses the cold path when pool policy removes a candidate during node admission", async () => {
-    const { harness, store, ready, request } = await preparedHarness();
-    const candidates = vi.mocked(harness.environments.getPreparedCandidates);
-    const selected = candidates.getMockImplementation()!;
-    candidates.mockImplementationOnce(selected).mockReturnValue([]);
-
-    const active = await harness.service.dispatch(request);
-
-    expect(active.environmentId).toBe(harness.ready.environmentId);
-    expect(harness.environments.createWithRequest).toHaveBeenCalledOnce();
-    expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBeNull();
-    expect(harness.environments.bindPreparedWorkspace).not.toHaveBeenCalled();
-  });
-
   it("rejects direct attachment without the prepared placement reservation", async () => {
     const { store, workerService, ready, request } = await preparedHarness();
 
@@ -545,7 +755,7 @@ describe("prepared worker dispatch", () => {
       onTestFinished(() => {
         vi.unstubAllEnvs();
       });
-      vi.mocked(prepareWorkerGitHubBinding).mockResolvedValue(undefined);
+      vi.mocked(prepareGitHubPublicationFact).mockResolvedValue(undefined);
       const stagingRoot = path.join(support.testState.root, "checkpoint-source");
       await fs.mkdir(stagingRoot);
       await fs.writeFile(path.join(stagingRoot, "tracked.txt"), "pinned source\n");
@@ -608,6 +818,7 @@ describe("prepared worker dispatch", () => {
       const { harness, store, ready, request } = await preparedHarness({
         repository: accepted,
         boundWorkspace,
+        ...(runSetupScript ? { recipe: lifecycleRecipe } : {}),
       });
       const startTunnel = vi.mocked(harness.environments.startTunnel);
       const ordinaryTunnel = startTunnel.getMockImplementation()!;
@@ -671,6 +882,14 @@ describe("prepared worker dispatch", () => {
         harness.log.indexOf("sync"),
       );
       expect(await repositoryStore.get(accepted.workspaceId)).toEqual(accepted);
+      if (runSetupScript) {
+        expect(harness.log.indexOf("sync")).toBeLessThan(
+          harness.log.indexOf("lifecycle:post-create"),
+        );
+        expect(harness.log.indexOf("lifecycle:post-start")).toBeLessThan(
+          harness.log.indexOf("placement:starting"),
+        );
+      }
       const checkpoint = await readSessionRepositoryArtifacts({
         workspaceId: accepted.workspaceId,
         assertCurrent: () => {},

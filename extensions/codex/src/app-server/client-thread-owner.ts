@@ -1,9 +1,10 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { CodexServiceTier } from "./protocol.js";
+import type { CodexServiceTier, JsonObject } from "./protocol.js";
 
 export type ThreadOwnerToken = {
   invalidated: boolean;
   invalidate: () => void;
+  releaseAfterProtection?: () => Promise<void>;
 };
 
 export type ThreadReleaseTransition = {
@@ -19,6 +20,8 @@ export type ThreadReleaseTransition = {
  * share one refreshable section recording what was last delivered to the thread.
  */
 export type CodexEphemeralThreadPolicy = {
+  autoCompactTokenLimit?: number;
+  autoCompactTokenLimitScope?: string;
   developerInstructions?: string;
   refreshableInstructions?: string;
   /**
@@ -35,7 +38,11 @@ export type RetainedLiveThread = {
   ephemeralPolicy?: CodexEphemeralThreadPolicy;
   serviceTier?: CodexServiceTier | null;
   expiresAt: number;
-  release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
+  release: (
+    threadId: string,
+    assertCurrent?: () => void,
+    withCurrent?: (write: () => void) => Promise<void>,
+  ) => Promise<void>;
 };
 
 export type CodexAppServerLiveThreadOwnership = {
@@ -44,7 +51,7 @@ export type CodexAppServerLiveThreadOwnership = {
   ephemeralPolicy?: CodexEphemeralThreadPolicy;
   serviceTier?: CodexServiceTier | null;
   /** Releases this active claim or the exact idle record it published. */
-  release: (threadId: string, assertCurrent?: () => void) => Promise<void>;
+  release: RetainedLiveThread["release"];
   /** Forgets this local owner after native shutdown, without unsubscribing a successor. */
   forget: () => void;
 };
@@ -68,6 +75,7 @@ export function createThreadOwnerToken(
         return;
       }
       owner.invalidated = true;
+      owner.releaseAfterProtection = undefined;
       try {
         onInvalidated?.();
       } catch (error) {
@@ -172,16 +180,54 @@ export function revertRetainedThreadInstructions(
   }
 }
 
-export function createCodexEphemeralThreadPolicy({
-  developerInstructions,
-  refreshableInstructions,
-}: Pick<
-  CodexEphemeralThreadPolicy,
-  "developerInstructions" | "refreshableInstructions"
->): CodexEphemeralThreadPolicy {
+export function createCodexEphemeralThreadPolicy(
+  {
+    developerInstructions,
+    refreshableInstructions,
+    config,
+  }: Pick<CodexEphemeralThreadPolicy, "developerInstructions" | "refreshableInstructions"> & {
+    config?: {
+      model_auto_compact_token_limit?: unknown;
+      model_auto_compact_token_limit_scope?: unknown;
+    };
+  },
+  nativeConfig?: JsonObject,
+): CodexEphemeralThreadPolicy {
+  const limit =
+    config?.model_auto_compact_token_limit ?? nativeConfig?.model_auto_compact_token_limit;
+  const scope =
+    config?.model_auto_compact_token_limit_scope ??
+    nativeConfig?.model_auto_compact_token_limit_scope ??
+    "total";
   return {
+    ...(typeof limit === "number" ? { autoCompactTokenLimit: limit } : {}),
+    ...(typeof scope === "string" ? { autoCompactTokenLimitScope: scope } : {}),
     developerInstructions,
     refreshableInstructions,
     nativeRefreshableInstructions: refreshableInstructions,
   };
+}
+
+/** Final process settlement releases only the exact deferred physical claim. */
+export function releaseThreadProtection(runtime: ThreadOwnershipState, threadId: string): boolean {
+  const count = runtime.protectedThreads.get(threadId) ?? 0;
+  if (count > 1) {
+    runtime.protectedThreads.set(threadId, count - 1);
+    return false;
+  }
+  runtime.protectedThreads.delete(threadId);
+  const claimed = runtime.claimedThreads.get(threadId);
+  const release = claimed?.releaseAfterProtection;
+  if (claimed) {
+    claimed.releaseAfterProtection = undefined;
+  }
+  if (release) {
+    void release().catch((error: unknown) => {
+      embeddedAgentLog.warn("codex protected thread release failed", {
+        threadId,
+        reason: formatErrorMessage(error),
+      });
+    });
+  }
+  return true;
 }

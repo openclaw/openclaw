@@ -38,13 +38,8 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         // no-op
     }
 
-    private struct CanvasResponse {
-        let mime: String
-        let data: Data
-    }
-
-    private func response(for url: URL) -> CanvasResponse {
-        guard let scheme = url.scheme, CanvasScheme.allSchemes.contains(scheme) else {
+    private func response(for url: URL) -> (mime: String, data: Data) {
+        guard url.scheme == CanvasScheme.scheme else {
             return self.html("Invalid scheme.")
         }
         guard let session = url.host, !session.isEmpty else {
@@ -82,7 +77,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
             let servedPath = resolvedFile.path
             canvasLogger.debug(
                 "served \(session, privacy: .public)/\(path, privacy: .public) -> \(servedPath, privacy: .public)")
-            return CanvasResponse(mime: mime, data: data)
+            return (mime, data)
         } catch {
             let failedPath = resolvedFile.path
             let errorText = error.localizedDescription
@@ -113,7 +108,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         return fileURL.path == rootURL.path || fileURL.path.hasPrefix(rootPath)
     }
 
-    private func html(_ body: String, title: String = "Canvas") -> CanvasResponse {
+    private func html(_ body: String, title: String = "Canvas") -> (mime: String, data: Data) {
         let html = """
         <!doctype html>
         <html>
@@ -150,7 +145,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
           </body>
         </html>
         """
-        return CanvasResponse(mime: "text/html", data: Data(html.utf8))
+        return ("text/html", Data(html.utf8))
     }
 
     private func textEncodingName(forMimeType mimeType: String) -> String? {
@@ -167,8 +162,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
 #if DEBUG
 extension CanvasSchemeHandler {
     func _testResponse(for url: URL) -> (mime: String, data: Data) {
-        let response = self.response(for: url)
-        return (response.mime, response.data)
+        self.response(for: url)
     }
 
     func _testTextEncodingName(for mimeType: String) -> String? {

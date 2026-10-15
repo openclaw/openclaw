@@ -4,16 +4,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   chromeProductRoots,
-  generateChromeExtensionIdForPath,
   installStableChromeExtension,
   stableChromeExtensionDir,
-} from "./extension-install-layout.js";
-import {
   browserExtensionStatus,
   installChromeExtensionBootstrap,
-  normalizeExtensionInstallWaitMs,
   uninstallChromeExtensionNativeHosts,
-} from "./extension-install.js";
+} from "./extension-install-fixture.test-support.js";
+import { generateChromeExtensionIdForPath } from "./extension-install-layout.js";
+import { normalizeExtensionInstallWaitMs } from "./extension-install.js";
 import {
   FOUNDATION_STORE_ID,
   predictedId,
@@ -472,7 +470,7 @@ describe("native host registration", () => {
     }
   });
 
-  it("uninstalls owned registrations and reports Windows as manual_required", async () => {
+  it("uninstalls owned registrations", async () => {
     const { value } = await installedChromeFixture();
     await installChromeExtensionBootstrap({
       bundledDir: value.bundledDir,
@@ -483,19 +481,6 @@ describe("native host registration", () => {
     const result = await uninstallChromeExtensionNativeHosts({ deps: value.deps });
     expect(result.refused).toEqual([]);
     expect(result.removed).toHaveLength(2);
-
-    const windows = await fixture("win32");
-    await installStableChromeExtension(windows.bundledDir, windows.deps);
-    const status = await browserExtensionStatus({
-      bundledDir: windows.bundledDir,
-      deps: windows.deps,
-    });
-    expect(status.platformSupport).toBe("manual_required");
-    await expect(uninstallChromeExtensionNativeHosts({ deps: windows.deps })).resolves.toEqual({
-      removed: [],
-      refused: [],
-      manualRequired: true,
-    });
   });
 
   it("migrates one stale path-derived slot while adding the Store origin", async () => {

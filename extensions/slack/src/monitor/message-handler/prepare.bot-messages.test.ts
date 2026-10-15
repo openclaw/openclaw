@@ -1,9 +1,13 @@
 import type { App } from "@slack/bolt";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { prepareSlackMessage } from "./prepare.js";
-import { createInboundSlackTestContext, createSlackTestAccount } from "./prepare.test-helpers.js";
+import {
+  createInboundSlackTestContext,
+  createSlackSessionStoreFixture,
+  createSlackTestAccount,
+} from "./prepare.test-helpers.js";
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>()),
@@ -57,54 +61,112 @@ describe("Slack bot-message admission", () => {
     expect(prepared?.ctxPayload.BodyForAgent).toContain("Readiness probe failed");
   });
 
-  it("drops bot room messages when no owner is present (#59284)", async () => {
-    const test = fixture({ allowBots: true });
-    test.members.mockResolvedValue({ members: ["UOTHER"], response_metadata: {} });
-    expect(await test.prepare()).toBeNull();
-    expect(test.members).toHaveBeenCalledWith({ token: "token", channel: "C123", limit: 999 });
-  });
-
-  it("allows bot room messages by default when an owner is present", async () => {
-    const test = fixture();
-    expect((await test.prepare())?.ctxPayload.RawBody).toBe("Readiness probe failed");
-    expect(test.members).toHaveBeenCalledTimes(1);
-  });
-
-  it("honors a room allowBots false override before checking owner presence", async () => {
-    const test = fixture({ allowBots: true });
-    test.ctx.channelsConfig = { C123: { allowBots: false } };
-    test.ctx.channelsConfigKeys = ["C123"];
-    expect(await test.prepare()).toBeNull();
-    expect(test.members).not.toHaveBeenCalled();
-  });
-
-  it("ignores its own bot id without a user id", async () => {
-    const test = fixture();
-    test.message.bot_id = "B1";
-    expect(await test.prepare()).toBeNull();
-    expect(test.members).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])(
-    "requires an explicit bot mention for mentions mode: %s",
-    async (mentioned) => {
-      const test = fixture({ allowBots: "mentions" });
-      test.ctx.channelsConfig = { C123: { users: ["B_OTHER"] } };
-      test.ctx.channelsConfigKeys = ["C123"];
-      test.message.text = mentioned ? "hey <@B1> status failed" : "status failed";
-      const prepared = await test.prepare();
-      if (mentioned) {
-        expect(prepared?.ctxPayload.RawBody).toContain("status failed");
+  it.each(["absent", "lookup failure"] as const)(
+    "requires owner presence when no room users are configured: %s (#59284)",
+    async (owner) => {
+      const test = fixture({ allowBots: true });
+      if (owner === "lookup failure") {
+        test.members.mockRejectedValue(new Error("missing_scope"));
       } else {
-        expect(prepared).toBeNull();
+        test.members.mockResolvedValue({
+          members: ["UOTHER"],
+          response_metadata: {},
+        });
       }
-      expect(test.members).not.toHaveBeenCalled();
+      const prepared = await test.prepare();
+      expect(prepared).toBeNull();
+      expect(test.members).toHaveBeenCalledExactlyOnceWith({
+        token: "token",
+        channel: "C123",
+        limit: 999,
+      });
     },
   );
 
-  it("fails closed when owner presence lookup fails (#59284)", async () => {
-    const test = fixture({ allowBots: true });
-    test.members.mockRejectedValue(new Error("missing_scope"));
-    expect(await test.prepare()).toBeNull();
+  it.each(["room override", "self", "unmentioned"] as const)(
+    "applies bot admission before owner lookup: %s",
+    async (mode) => {
+      const test = fixture({
+        allowBots: mode === "room override" ? true : mode === "self" ? undefined : "mentions",
+      });
+      if (mode !== "self") {
+        test.ctx.channelsConfig = {
+          C123: mode === "room override" ? { allowBots: false } : { users: ["B_OTHER"] },
+        };
+        test.ctx.channelsConfigKeys = ["C123"];
+      }
+      test.message.bot_id = mode === "self" ? "B1" : "B_OTHER";
+      test.message.text = "status failed";
+      const prepared = await test.prepare();
+      expect(prepared).toBeNull();
+      expect(test.members).not.toHaveBeenCalled();
+    },
+  );
+});
+
+const store = createSlackSessionStoreFixture("slack-rejection-record-");
+afterEach(() => vi.restoreAllMocks());
+function rejectionFixture() {
+  const ctx = createInboundSlackTestContext({
+    cfg: {
+      session: { store: store.makeTmpStorePath().storePath },
+      channels: { slack: { enabled: true } },
+    },
   });
+  ctx.resolveUserName = async () => ({ name: "Synthetic sender" });
+  ctx.resolveChannelName = async () => ({ name: "synthetic-room", type: "channel" });
+  const info = vi.spyOn(ctx.logger, "info").mockImplementation(() => undefined);
+  const message: SlackMessageEvent = {
+    type: "message",
+    channel: "D123",
+    channel_type: "im",
+    user: "U1",
+    ts: "1.000",
+    text: "private message content must not enter rejection records",
+  };
+  const prepare = () =>
+    prepareSlackMessage({
+      ctx,
+      account: createSlackTestAccount(),
+      message,
+      opts: { source: "message" },
+    });
+  const expectRejection = (reason: string) =>
+    expect(info).toHaveBeenCalledExactlyOnceWith(
+      {
+        provider: "slack",
+        accountId: "default",
+        teamId: "T1",
+        channelId: "D123",
+        messageTs: "1.000",
+        source: "message",
+        reason,
+      },
+      "Slack inbound event rejected during preparation",
+    );
+  return { ctx, info, message, prepare, expectRejection };
+}
+
+describe("Slack preparation rejection records", () => {
+  it.each(["missing-user", "dm-disabled", "dm-unauthorized", "channel-not-allowed"] as const)(
+    "records only routing facts for %s",
+    async (reason) => {
+      const test = rejectionFixture();
+      if (reason === "missing-user") {
+        test.message.user = undefined;
+      }
+      if (reason === "dm-disabled") {
+        test.ctx.dmPolicy = "disabled";
+      }
+      if (reason === "channel-not-allowed") {
+        test.ctx.dmEnabled = false;
+      }
+      if (reason === "dm-unauthorized") {
+        test.ctx.dmPolicy = "allowlist";
+        test.ctx.allowFrom = ["U_ALLOWED"];
+      }
+      expect(await test.prepare()).toBeNull();
+      test.expectRejection(reason);
+    },
+  );
 });

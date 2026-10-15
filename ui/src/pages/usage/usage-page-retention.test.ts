@@ -5,6 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as downloads from "../../lib/download.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { selectUsageExport } from "./export-menu.test-support.ts";
 import {
   cacheSnapshot,
   cleanupUsagePageTest,
@@ -52,9 +53,7 @@ describe("UsagePage detail requests", () => {
     const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
     const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
     await preloadUsage(page);
-    page
-      .querySelector(".usage-export-menu")!
-      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "json" } } }));
+    await selectUsageExport(page.querySelector(".usage-export-menu")!, "json");
     await waitForFast(() => expect(download).toHaveBeenCalledOnce());
     expect(download.mock.calls[0]![1]).toContain("exported-context");
     const collectionControl = new WeakRef({ unowned: true });
@@ -99,22 +98,32 @@ describe("UsagePage detail requests", () => {
   });
 
   it("releases a loaded overview when its Gateway identity is replaced", async () => {
-    const result = {
-      ...cacheSnapshot("fresh").result,
-      sessions: [{ key: "agent:main:overview-lifetime", usage: null }],
+    class OverviewPayload {
+      key = "agent:main:overview-lifetime";
+      usage = null;
+    }
+    let payload: WeakRef<OverviewPayload> | undefined;
+    const snapshot = cacheSnapshot("fresh");
+    const request = async (method: string) => {
+      if (method === "sessions.usage") {
+        const report = new OverviewPayload();
+        payload = new WeakRef(report);
+        return { ...snapshot.result, sessions: [report] };
+      }
+      return { providers: [] };
     };
-    const request = async (method: string) =>
-      method === "sessions.usage" ? result : { providers: [] };
     const page = await createPage({ request } as unknown as GatewayBrowserClient);
     await page.loadUsage();
-    expect(page).toHaveProperty("usageSnapshot.result", result);
+    expect(payload).toBeDefined();
     page.context = contextWithClient({
       request: async () => ({}),
     } as unknown as GatewayBrowserClient);
     page.requestUpdate();
     await page.updateComplete;
-    // Check the display owner's strong reference, independent of GC scheduling.
-    expect(page).toHaveProperty("usageSnapshot", null);
+    const collectionControl = new WeakRef({ unowned: true });
+    await collectGarbageForTest();
+    expect(collectionControl.deref()).toBeUndefined();
+    expect(payload!.deref()).toBeUndefined();
     expect(page.isConnected).toBe(true);
   });
 });

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach } from "vitest";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -29,6 +30,18 @@ export async function prepareGatewayCliFixture(
   return { stateDir, configPath };
 }
 
+// Establish SQLite coordination files before asserting persistent RPC non-mutation.
+export function prepareSharedStateReadArtifacts(stateDir: string): void {
+  const database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+    readOnly: true,
+  });
+  try {
+    database.prepare("PRAGMA schema_version").get();
+  } finally {
+    database.close();
+  }
+}
+
 export async function snapshotDirectoryContents(root: string): Promise<Record<string, string>> {
   const snapshot: Record<string, string> = {};
   const visit = async (directory: string): Promise<void> => {
@@ -41,6 +54,9 @@ export async function snapshotDirectoryContents(root: string): Promise<Record<st
         await visit(absolutePath);
       } else if (stat.isSymbolicLink()) {
         snapshot[relativePath] = `symlink:${await fs.readlink(absolutePath)}`;
+      } else if (name === "openclaw.sqlite-shm") {
+        // Read-only SQLite connections may update SHM read marks, but not its size or presence.
+        snapshot[relativePath] = `file:sqlite-shared-memory:${stat.size}`;
       } else {
         snapshot[relativePath] = `file:${createHash("sha256")
           .update(await fs.readFile(absolutePath))
@@ -93,6 +109,7 @@ export async function prepareUnreachableGatewayCliFixture(params: {
       env: stateEnv,
     });
     closeOpenClawStateDatabaseForTest();
+    prepareSharedStateReadArtifacts(stateDir);
   }
   return { root, stateDir, configPath };
 }

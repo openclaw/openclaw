@@ -1,6 +1,8 @@
+import { Type } from "typebox";
 import { resolveExecCommandHighlighting } from "../config/exec-command-highlighting.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
+import { captureExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   getInstallationTarget,
@@ -12,7 +14,7 @@ import { resolveAgentConfig } from "./agent-scope.js";
 import { bindAgentToolAvailability } from "./agent-tool-availability.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
-import { execCompletionSchema, execSchema } from "./bash-tools.schemas.js";
+import { createExecSchema, execSchema as execExecutionSchema } from "./bash-tools.schemas.js";
 import { createExecToolExecutionTimeoutResolver } from "./exec-tool-timeout.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -35,16 +37,21 @@ export function createLazyExecTool(
 ): AnyAgentTool {
   // Native tool callbacks can arrive outside the scope that constructed this lazy tool.
   const installationTarget = getInstallationTarget();
+  const requestOwners = captureExecRequestOwners({
+    runId: defaults?.runId,
+    sessionId: defaults?.sessionId,
+  });
   const processToolAvailabilityRef = defaults?.processToolAvailabilityRef ?? {};
+  const execSchema = createExecSchema(defaults);
+  const execCompletionSchema = Type.Omit(execSchema, ["yieldMs", "background"]);
   let loadedTool: LoadedExecTool | undefined;
   let loadingTool: Promise<LoadedExecTool> | undefined;
   const loadTool = () => {
-    if (loadedTool) {
-      return Promise.resolve(loadedTool);
-    }
     loadingTool ??= bashToolsModuleLoader.load().then(({ createExecTool }) => {
       loadedTool = withInstallationTarget(installationTarget, () =>
-        createExecTool({ ...defaults, processToolAvailabilityRef }),
+        createExecTool(
+          withExecRequestOwners({ ...defaults, processToolAvailabilityRef }, requestOwners),
+        ),
       );
       return loadedTool;
     });
@@ -90,6 +97,7 @@ export function createLazyExecTool(
       prepare: (_tool, callableTools) => {
         processToolAvailabilityRef.value = callableTools.has("process");
       },
+      executionSchema: presentation?.parameters ? undefined : () => execExecutionSchema,
     },
   );
 }

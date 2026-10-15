@@ -4,8 +4,7 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { runBestEffortCleanup } from "../infra/non-fatal-cleanup.js";
-import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import {
   WorkerTaskError,
   WorkerTaskPool,
@@ -16,6 +15,7 @@ import {
   type LegacyPluginSdkResourceHost,
 } from "../plugins/legacy-sdk-resource-host.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   codeModeFailureCode,
   CodeModeHeadlessAbortError,
@@ -31,14 +31,17 @@ import type {
   CodeModeWorkerResult,
 } from "./code-mode-executor-types.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
+import { codeModeNodeInitialization, prepareCodeModeNodeCatalog } from "./code-mode-node-input.js";
 import { CodeModeNodeProgress } from "./code-mode-node-progress.js";
 import {
   CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+  type CodeModeNodeInput,
   type CodeModeWorkerBoundary,
   type CodeModeWorkerThreadResult,
 } from "./code-mode-worker-types.js";
 
 type NodePool = {
+  id: string;
   tasks: WorkerTaskPool<NodeWorkerInput, CodeModeWorkerThreadResult<undefined>>;
   url: string;
   memoryLimitBytes: number;
@@ -46,7 +49,28 @@ type NodePool = {
 };
 type NodePoolLifetime = { scheduler: GatewaySchedulerScope; pools: Set<NodePool> };
 type NodeInput = CodeModeExecutorStartInput | CodeModeExecutorResumeInput;
-type NodeWorkerInput = NodeInput & { progress: SharedArrayBuffer; inlineHost: boolean };
+type NodeWorkerInput = CodeModeNodeInput;
+function prepareInput(input: NodeInput) {
+  if (input.kind === "resume") {
+    return input;
+  }
+  const {
+    [codeModeNodeInitialization]: initialization,
+    catalog,
+    namespaces,
+    apiFiles,
+    swarmEnabled,
+    ...execution
+  } = input;
+  return {
+    ...execution,
+    initialization:
+      initialization ??
+      prepareCodeModeNodeCatalog({ catalog, namespaces, apiFiles, swarmEnabled })[
+        codeModeNodeInitialization
+      ],
+  };
+}
 const retiringPools = new Set<NodePool>();
 const idlePools = new Map<NodePool, GatewayScheduledJob>();
 const poolLifetimes = new WeakMap<LegacyPluginSdkResourceHost, NodePoolLifetime>();
@@ -127,7 +151,7 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
   for (;;) {
     signal.throwIfAborted();
     lifetime?.scheduler.signal.throwIfAborted();
-    workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.codeModeNode);
+    workerUrl = resolveRuntimeProcessEntrypointUrl("codeModeNode");
     const retiring = new Set([
       ...[...retiringPools].filter(
         (owner) => owner.lifetime === lifetime || owner.lifetime?.scheduler.signal.aborted,
@@ -154,12 +178,13 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
     }
   }
   const owner: NodePool = {
+    id: `code-mode-node:${++nextPoolId}`,
     lifetime,
     url: workerUrl.href,
     memoryLimitBytes,
     tasks: new WorkerTaskPool({
       workerUrl,
-      maxWorkers: 1,
+      workerClass: "singleton",
       idleTimeoutMs: 0,
       restartOnError: false,
       sharedCompute: true,
@@ -181,23 +206,27 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
 }
 
 async function releasePool(owner: NodePool): Promise<void> {
+  const { lifetime } = owner;
   if (
     idlePools.size >= MAX_IDLE_POOLS ||
-    !owner.lifetime ||
-    owner.lifetime.scheduler.signal.aborted ||
+    !lifetime ||
+    lifetime.scheduler.signal.aborted ||
     owner.tasks.isClosed ||
-    owner.url !== resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.codeModeNode).href
+    owner.url !== resolveRuntimeProcessEntrypointUrl("codeModeNode").href
   ) {
     await closePool(owner);
     return;
   }
   idlePools.set(
     owner,
-    owner.lifetime.scheduler.schedule({
-      id: `code-mode-worker-idle:${++nextPoolId}`,
-      delayMs: 5 * 60_000,
-      run: () => closePool(owner),
-    }),
+    // Warm-worker retirement belongs to the host, never the completed turn's transcript context.
+    runInDetachedAsyncContext(() =>
+      lifetime.scheduler.schedule({
+        id: `code-mode-worker-idle:${++nextPoolId}`,
+        delayMs: 5 * 60_000,
+        run: () => closePool(owner),
+      }),
+    ),
   );
   if (idlePools.size === 1) {
     memoryPressure.subscribe(retireIdlePools);
@@ -257,6 +286,7 @@ async function run(
   startedAt = performance.now(),
 ): Promise<CodeModeWorkerResult> {
   const inlineHost = options.inlineHost;
+  inlineHost?.onWorkerAssigned?.(pool.id);
   const progress = new CodeModeNodeProgress(input.config.maxOutputBytes);
   const deadline = new AbortController();
   const signal = options.signal
@@ -277,7 +307,7 @@ async function run(
           throw new CodeModeHeadlessTimeoutError();
         }
         return {
-          ...input,
+          ...prepareInput(input),
           progress: progress.buffer,
           inlineHost: Boolean(inlineHost),
           config: { ...input.config, timeoutMs: admittedTimeoutMs },
@@ -285,10 +315,20 @@ async function run(
       },
       {
         timeoutMs: Math.min(options.timeoutMs, input.config.timeoutMs) - preparationMs,
+        hostTimeout: "owner",
         signal,
+        onNotification: (value) => {
+          if (isRecord(value) && value.status === "failure") {
+            inlineHost?.onFailure?.(
+              value.error,
+              value.failurePhase === "bridge" ? "bridge" : "guest",
+              pool.id,
+            );
+          }
+        },
         inputBytes: input.kind === "exec" ? input.source.length * 2 : 0,
         onInputConsumed: () => {
-          if (input.kind === "exec") {
+          if (input.kind === "exec" && progress.deadline > 0) {
             timer = setTimeout(
               () => deadline.abort(new CodeModeHeadlessTimeoutError()),
               Math.max(0, progress.deadline - performance.timeOrigin - performance.now()),
@@ -331,12 +371,11 @@ async function run(
       retained = true;
       return { ...result, continuation: continuation(pool) };
     }
-    if (result.status === "completed") {
-      await releasePool(pool);
-      retained = true;
-    }
+    await releasePool(pool);
+    retained = true;
     return result;
   } catch (error) {
+    inlineHost?.onFailure?.(error, "host", pool.id);
     const reason = signal.aborted ? signal.reason : error;
     if (
       reason instanceof CodeModeHeadlessTimeoutError ||
@@ -354,6 +393,24 @@ async function run(
     }
     if (options.signal?.aborted || reason instanceof CodeModeHeadlessAbortError) {
       return failure("code mode execution aborted", "aborted");
+    }
+    if (
+      error instanceof WorkerTaskError &&
+      isRecord(error.cause) &&
+      (error.cause.code === "ERR_WORKER_OUT_OF_MEMORY" ||
+        error.cause.code === "ERR_CODE_MODE_GC_THRASH")
+    ) {
+      if (progress.networkContentObserved) {
+        inlineHost?.onNetworkContent?.();
+      }
+      return {
+        ...failure(
+          `${error.cause.code === "ERR_CODE_MODE_GC_THRASH" ? "Code Mode worker stopped after sustained garbage collection near its JavaScript heap limit" : `Code Mode worker exhausted its ${Math.floor(pool.memoryLimitBytes / (1024 * 1024))} MiB JavaScript heap`}. Paginate or narrow tool results and avoid retaining large arrays. Inspect any completed actions before retrying.`,
+          "runtime_unavailable",
+        ),
+        output: progress.output(),
+        ...(progress.networkContentObserved ? { networkContentObserved: true } : {}),
+      };
     }
     return failure(
       error,

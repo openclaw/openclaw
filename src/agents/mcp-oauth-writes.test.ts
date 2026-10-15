@@ -10,6 +10,7 @@ import {
   consumeOAuthState,
   deleteMcpOAuthPendingAuthorization,
   deleteMcpOAuthPendingAuthorizationsByPrefix,
+  mutateMcpOAuthStore,
   readMcpOAuthPendingAuthorization,
   readMcpOAuthStore,
   writeMcpOAuthPendingAuthorization,
@@ -105,5 +106,44 @@ it("persists SDK callbacks and pending state across close without parent SQL or 
         wait.mockRestore();
       }
     }
+  });
+});
+
+it("preserves transaction and commit authority when publishing credential writes", async () => {
+  await withOpenClawTestState({ label: "mcp-oauth-write-authority" }, async () => {
+    const identity = operatorMcpOAuthIdentity("write-authority", "https://mcp.example.test/rpc");
+    await withMcpOAuthTestLease(identity.storeKey, async (lease, context) => {
+      const options = { storeKey: identity.storeKey, lease, context };
+      const mutation = {
+        kind: "tokens" as const,
+        tokens: { access_token: "fixture-access", token_type: "Bearer" },
+        tokenExpiresAt: undefined,
+      };
+      const beforeCommit = vi.fn();
+      await expect(
+        mutateMcpOAuthStore(options, mutation, {
+          assertCurrent() {},
+          beforeTransaction() {
+            throw new Error("fixture transaction authority retired");
+          },
+          beforeCommit,
+        }),
+      ).rejects.toThrow("fixture transaction authority retired");
+      expect(beforeCommit).not.toHaveBeenCalled();
+      expect((await readMcpOAuthStore(identity.storeKey, context)).tokens).toBeUndefined();
+
+      let prepared = false;
+      await mutateMcpOAuthStore(options, mutation, {
+        assertCurrent() {},
+        beforeTransaction() {
+          prepared = true;
+        },
+        beforeCommit() {
+          expect(prepared).toBe(true);
+        },
+      });
+      expect(prepared).toBe(true);
+      expect((await readMcpOAuthStore(identity.storeKey, context)).tokens).toEqual(mutation.tokens);
+    });
   });
 });

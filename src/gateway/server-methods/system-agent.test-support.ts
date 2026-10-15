@@ -53,7 +53,10 @@ export function makeRespond() {
 }
 
 export function makeContext(sessions: Map<string, SystemAgentChatSession>): GatewayRequestContext {
-  return { systemAgentSessions: sessions } as unknown as GatewayRequestContext;
+  return {
+    systemAgentSessions: sessions,
+    getRuntimeConfig: () => verifiedConfig,
+  } as unknown as GatewayRequestContext;
 }
 
 let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
@@ -161,9 +164,9 @@ export function useSystemAgentGatewayTestFixture() {
     setupInferenceMocks.resolvePersistentApplyInference.mockResolvedValue(
       requireVerifiedInferenceFixture().configuredRoute,
     );
-    transcriptStoreMocks.appendTranscriptTurn.mockReset();
-    transcriptStoreMocks.appendTranscriptReset.mockReset();
-    transcriptStoreMocks.readTranscriptTail.mockReset().mockReturnValue([]);
+    transcriptStoreMocks.appendTurn.mockReset();
+    transcriptStoreMocks.appendReset.mockReset();
+    transcriptStoreMocks.readTranscriptTailAsync.mockReset().mockResolvedValue([]);
     greetingMocks.acknowledgeSystemAgentGreetingDelivery.mockReset();
     greetingMocks.loadSystemAgentGreetingFacts.mockReset().mockReturnValue({
       updateAvailable: null,

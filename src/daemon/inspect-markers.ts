@@ -2,7 +2,10 @@
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
+import {
+  getCommandPositionalsWithRootOptions,
+  getRootOptionAwareCommandPath,
+} from "../infra/cli-root-options.js";
 import { isEnvAssignmentToken, resolveCarrierCommandArgv } from "../infra/command-carriers.js";
 import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
 import {
@@ -25,7 +28,9 @@ export const EXTRA_MARKERS = ["openclaw", "clawdbot"] as const;
 
 export type Marker = (typeof EXTRA_MARKERS)[number];
 
-export function hasGatewaySubcommandArg(programArguments: string[]): boolean {
+export function classifyGatewayCommand(
+  programArguments: string[],
+): "run" | "maintenance" | "unknown" {
   let args =
     resolveCarrierCommandArgv(programArguments, 0, { includeExec: true }) ?? programArguments;
   if (POSIX_SHELL_WRAPPERS.has(path.posix.basename(args[0] ?? "").toLowerCase())) {
@@ -34,7 +39,7 @@ export function hasGatewaySubcommandArg(programArguments: string[]): boolean {
     });
     const inner = command ? splitShellArgs(command) : null;
     if (!inner) {
-      return false;
+      return "unknown";
     }
     while (inner.length > 0 && isEnvAssignmentToken(inner[0]!)) {
       inner.shift();
@@ -44,10 +49,29 @@ export function hasGatewaySubcommandArg(programArguments: string[]): boolean {
   args = resolveCarrierCommandArgv(args, 0, { includeExec: true }) ?? args;
   const { position } = resolveRuntimeScriptPosition(args);
   if (typeof position !== "number" && position.kind !== "not-runtime") {
-    return false;
+    return "unknown";
   }
   const entryIndex = typeof position === "number" ? position : 0;
-  return getRootOptionAwareCommandPath(["node", ...args.slice(entryIndex)], 1)[0] === "gateway";
+  const argv = ["node", ...args.slice(entryIndex)];
+  if (getRootOptionAwareCommandPath(argv, 1)[0] !== "gateway") {
+    return "unknown";
+  }
+  const subcommand = getCommandPositionalsWithRootOptions(argv, {
+    commandPath: ["gateway"],
+    maxPositionals: 1,
+    mode: "command-path",
+  })?.[0];
+  // Unknown option roles and wrapper identities stay conservative: their values
+  // may look like OpenClaw commands without following its CLI contract.
+  if (subcommand === undefined || subcommand === "run") {
+    return "run";
+  }
+  const identity = classifyOpenClawArgv(args, { command: "gateway" });
+  return identity.kind === "openclaw" && identity.entryIndex === entryIndex ? "maintenance" : "run";
+}
+
+export function hasGatewaySubcommandArg(programArguments: string[]): boolean {
+  return classifyGatewayCommand(programArguments) === "run";
 }
 
 export function detectMarkerLineWithGateway(contents: string): Marker | null {
@@ -137,7 +161,7 @@ export function detectWindowsServiceExecutionMarker(args: string[], cwd?: string
 export function detectLauncherGatewayMarker(contents: string): Marker | null {
   const environment: Record<string, string> = {};
   for (const line of contents.split(/\r?\n/)) {
-    const command = normalizeLowercaseStringOrEmpty(line.trim());
+    const command = normalizeLowercaseStringOrEmpty(line);
     if (command.startsWith("set ")) {
       const assignment = parseCmdSetAssignment(line.trimStart().slice(4), true);
       if (assignment) {

@@ -17,6 +17,7 @@ import {
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../../routing/session-key.js";
+import { readDelegatedToolPolicy, type DelegatedToolPolicy } from "../../delegated-tool-policy.js";
 import {
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
@@ -45,6 +46,8 @@ type PersistedSubagentToolPolicyEnvelope = {
   completionOwnerSessionKey?: string;
   inheritedToolAllow: string[];
   inheritedToolDeny: string[];
+  inheritedToolPolicySource?: "sender";
+  delegatedToolPolicy?: DelegatedToolPolicy;
 };
 
 function normalizeSubagentRole(value: unknown): SubagentSessionRole | undefined {
@@ -67,16 +70,6 @@ function shouldInspectStoredSubagentEnvelope(sessionKey: string): boolean {
 
 function isDashboardSessionKey(sessionKey: string): boolean {
   return parseAgentSessionKey(sessionKey)?.rest.startsWith("dashboard:") === true;
-}
-
-function canInspectStoredSubagentEnvelope(
-  sessionKey: string,
-  store?: SessionCapabilityStore,
-): boolean {
-  return (
-    shouldInspectStoredSubagentEnvelope(sessionKey) ||
-    (Boolean(store) && isDashboardSessionKey(sessionKey))
-  );
 }
 
 function isSameAgentSessionStore(leftSessionKey: string, rightSessionKey: string): boolean {
@@ -122,11 +115,8 @@ export function resolveSubagentCapabilityStore(
   },
 ): SessionCapabilityStore | undefined {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
-  if (!normalizedSessionKey) {
+  if (!normalizedSessionKey || opts?.store) {
     return opts?.store;
-  }
-  if (opts?.store) {
-    return opts.store;
   }
   // Dashboard key shape permits only a store lookup. Callers still require a
   // persisted spawn envelope before granting subagent authority.
@@ -284,12 +274,17 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
     store?: SessionCapabilityStore;
     agentId?: string;
   },
+  visited = new Set<string>(),
 ): PersistedSubagentToolPolicyEnvelope | undefined {
   const stored = resolveStoredSubagentToolPolicy(sessionKey, opts);
   if (!stored) {
     return undefined;
   }
   const { sessionKey: normalizedSessionKey, store, entry } = stored;
+  if (visited.has(normalizedSessionKey) || visited.size >= 32) {
+    return undefined;
+  }
+  visited.add(normalizedSessionKey);
   const spawnedBy = normalizeOptionalString(entry?.spawnedBy);
   const hasSpawnDepth =
     typeof entry?.spawnDepth === "number" &&
@@ -307,12 +302,34 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
     return undefined;
   }
   const completionOwnerSessionKey = normalizeOptionalString(entry.completionOwnerSessionKey);
+  let delegatedToolPolicy = readDelegatedToolPolicy(entry.delegatedToolPolicy);
+  if (delegatedToolPolicy) {
+    const targetAgentId = delegatedToolPolicy.targetAgentId;
+    const direct = spawnedBy === delegatedToolPolicy.requesterSessionKey;
+    const parent =
+      !direct && isSameAgentSessionStore(normalizedSessionKey, spawnedBy)
+        ? resolvePersistedSubagentToolPolicyEnvelope(spawnedBy, { ...opts, store }, visited)
+        : undefined;
+    if (
+      parseAgentSessionKey(normalizedSessionKey)?.agentId !== targetAgentId ||
+      (!direct &&
+        (parent?.delegatedToolPolicy?.requesterSessionKey !==
+          delegatedToolPolicy.requesterSessionKey ||
+          parent?.delegatedToolPolicy?.targetAgentId !== targetAgentId))
+    ) {
+      delegatedToolPolicy = undefined;
+    }
+  }
   return {
     sessionKey: normalizedSessionKey,
     spawnedBy,
     ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
     inheritedToolAllow: normalizeInheritedToolAllowlist(entry.inheritedToolAllow),
     inheritedToolDeny: normalizeInheritedToolDenylist(entry.inheritedToolDeny),
+    delegatedToolPolicy,
+    ...(entry.inheritedToolPolicySource === "sender"
+      ? { inheritedToolPolicySource: "sender" as const }
+      : {}),
   };
 }
 
@@ -330,26 +347,24 @@ export function resolveStoredSubagentCapabilities(
   if (!normalizedSessionKey) {
     return resolveSubagentCapabilities({ depth: 0, maxSpawnDepth });
   }
-  if (!shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
-    const depth = getSubagentDepthFromSessionStore(normalizedSessionKey, {
+  let depthStore = opts?.store;
+  if (shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
+    depthStore = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
+    const entry = resolveSessionCapabilityEntry({
+      sessionKey: normalizedSessionKey,
       cfg: opts?.cfg,
-      store: opts?.store,
-      agentId: opts?.agentId,
+      store: depthStore,
     });
-    return resolveSubagentCapabilities({ depth, maxSpawnDepth });
+    // Explicit records may be partial. Lazy lookups retain their memo while
+    // the depth helper follows the parent chain.
+    if (
+      opts?.cfg &&
+      !isSessionCapabilityLookup(depthStore) &&
+      typeof entry?.spawnDepth !== "number"
+    ) {
+      depthStore = undefined;
+    }
   }
-  const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
-  const entry = resolveSessionCapabilityEntry({
-    sessionKey: normalizedSessionKey,
-    cfg: opts?.cfg,
-    store,
-  });
-  const depthStore =
-    opts?.cfg && !isSessionCapabilityLookup(store) && typeof entry?.spawnDepth !== "number"
-      ? undefined
-      : store;
-  // Explicit records may be partial. Lazy lookups already read canonical entries
-  // and must retain their memo while the depth helper follows the parent chain.
   const depth = getSubagentDepthFromSessionStore(normalizedSessionKey, {
     cfg: opts?.cfg,
     store: depthStore,
@@ -368,7 +383,8 @@ function resolveStoredSubagentToolPolicy(
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
   if (
     !normalizedSessionKey ||
-    !canInspectStoredSubagentEnvelope(normalizedSessionKey, opts?.store)
+    (!shouldInspectStoredSubagentEnvelope(normalizedSessionKey) &&
+      !(opts?.store && isDashboardSessionKey(normalizedSessionKey)))
   ) {
     return undefined;
   }

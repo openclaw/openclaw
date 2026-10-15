@@ -7,13 +7,18 @@ import {
   type ApplySessionModelSelectionResult,
 } from "../model-picker/apply-session-model-selection.js";
 
+export { prepareAuthProfileProvider } from "../agents/auth-profiles/store-runtime.js";
 export { resolveChannelModelOverride } from "../channels/model-overrides.js";
 export { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 export { resolvePersistedSessionRuntimeId } from "../agents/session-runtime-compat.js";
 export { resolveSessionModelRef } from "../agents/session-model-ref.js";
 export const applySessionModelSelection: (
   params: ApplySessionModelSelectionParams,
-) => Promise<ApplySessionModelSelectionResult> = applySessionModelSelectionInternal;
+) => Promise<ApplySessionModelSelectionResult> = (params) =>
+  applySessionModelSelectionInternal({
+    ...params,
+    ...(params.validateAuthProfileSelection ? { nativeCommitValidation: true } : {}),
+  });
 export type {
   ApplySessionModelSelectionParams,
   ApplySessionModelSelectionResult,

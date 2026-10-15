@@ -1,6 +1,7 @@
 import { finalizeEvent, getPublicKey, verifyEvent, type Event } from "nostr-tools";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("nostr-tools", async (importOriginal) => {
@@ -35,6 +36,125 @@ function abortReasonAsError(signal: AbortSignal | undefined): Error {
 }
 
 describe("Buzz bus lifecycle", () => {
+  it.each([
+    { mode: "one-shot", stopped: false },
+    { mode: "one-shot", stopped: true },
+    { mode: "text", stopped: false },
+    { mode: "text", stopped: true },
+    { mode: "typing", stopped: false },
+    { mode: "typing", stopped: true },
+  ] as const)(
+    "prepares $mode before relay handoff (stopped=$stopped)",
+    async ({ mode, stopped }) => {
+      relayMocks.auth.mockResolvedValue("ok");
+      const bus = mode === "one-shot" ? undefined : await startTestBus();
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const handedOff = createDeferred<void>();
+      const acknowledgment = createDeferred<string>();
+      const failure = new Error("Buzz message authority ended");
+      const authority = fetchRuntime.captureEffectAuthority();
+      const capture = vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
+        ...authority,
+        async initiate(effect) {
+          preparing.resolve();
+          await prepared.promise;
+          if (stopped && mode === "one-shot") {
+            throw failure;
+          }
+          return authority.initiate(effect);
+        },
+      });
+      let handoffs = 0;
+      relayMocks.publish.mockImplementation((event) => {
+        if (event.kind !== 9) {
+          return Promise.resolve("");
+        }
+        handoffs++;
+        handedOff.resolve();
+        return acknowledgment.promise;
+      });
+      relayMocks.send.mockImplementation(() => {
+        handoffs++;
+        handedOff.resolve();
+        return acknowledgment.promise.then(() => {});
+      });
+      const sending = (
+        bus
+          ? mode === "typing"
+            ? bus.sendTyping({ channelId: CHANNEL_ID })
+            : bus.sendText({ channelId: CHANNEL_ID, text: "prepared" })
+          : sendTestTextOneShot({ text: "prepared" })
+      ).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          preparing.promise,
+          handedOff.promise.then(() => {
+            throw new Error("relay call bypassed preparation");
+          }),
+        ]);
+        expect(handoffs).toBe(0);
+        if (stopped) {
+          await bus?.close();
+        }
+        prepared.resolve();
+        if (!stopped) {
+          await handedOff.promise;
+          acknowledgment.resolve("");
+        }
+        const result = await sending;
+        if (stopped) {
+          expect(result).toEqual({
+            error:
+              mode === "one-shot"
+                ? failure
+                : expect.objectContaining({ message: "Buzz bus closed" }),
+          });
+        } else {
+          expect(result).toEqual({ value: mode === "typing" ? undefined : expect.any(String) });
+        }
+        expect(handoffs).toBe(stopped ? 0 : 1);
+      } finally {
+        prepared.resolve();
+        acknowledgment.resolve("");
+        await sending;
+        capture.mockRestore();
+        await bus?.close();
+      }
+    },
+  );
+
+  it("joins the active presence publish before bus close settles", async () => {
+    vi.useFakeTimers();
+    relayMocks.auth.mockResolvedValue("ok");
+    const publication = createDeferred<string>();
+    relayMocks.publish.mockImplementation((event) =>
+      event.kind === 20_001 ? publication.promise : Promise.resolve(""),
+    );
+    const bus = await startTestBus();
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(relayMocks.publish).toHaveBeenCalledOnce();
+      let closed = false;
+      const closing = bus.close().then(() => {
+        closed = true;
+      });
+      await Promise.resolve();
+      expect(closed).toBe(false);
+      publication.resolve("");
+      await closing;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(relayMocks.publish).toHaveBeenCalledOnce();
+    } finally {
+      publication.resolve("");
+      await bus.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("closes the relay and aborts NIP-11 discovery when authentication fails", async () => {
     let fetchSignal: AbortSignal | undefined;
     vi.stubGlobal(

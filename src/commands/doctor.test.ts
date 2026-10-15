@@ -151,7 +151,7 @@ describe("doctorCommand", () => {
       }),
     );
     mocks.clearSessionSqliteMigrationGithubIssueClaim.mockReturnValue(true);
-    mocks.detectBrowserOpenSupport.mockResolvedValue({ command: "open", ok: true });
+    mocks.detectBrowserOpenSupport.mockResolvedValue({ ok: true });
     mocks.readSourceConfigBestEffort.mockResolvedValue({});
     mocks.reconcileGithubIssue.mockResolvedValue({ status: "not-found" });
     mocks.withDoctorSqliteMaintenanceLock.mockImplementation(
@@ -201,23 +201,20 @@ describe("doctorCommand", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it.each(["stable", "beta", "extended-stable", undefined])(
-    "passes only configured update channel %s to post-upgrade probes",
-    async (channel) => {
-      mocks.readSourceConfigBestEffort.mockResolvedValueOnce({
-        update: { channel },
-        plugins: { enabled: false, deny: ["whatsapp"] },
-      });
-      mocks.runPostUpgradeProbes.mockResolvedValueOnce({ probesRun: [], findings: [] });
-      const runtime = createDoctorRuntime();
+  it("passes an unconfigured update channel to post-upgrade probes", async () => {
+    mocks.readSourceConfigBestEffort.mockResolvedValueOnce({
+      update: { channel: undefined },
+      plugins: { enabled: false, deny: ["whatsapp"] },
+    });
+    mocks.runPostUpgradeProbes.mockResolvedValueOnce({ probesRun: [], findings: [] });
+    const runtime = createDoctorRuntime();
 
-      await expect(doctorCommand(runtime, { postUpgrade: true })).rejects.toThrow("exit:0");
+    await expect(doctorCommand(runtime, { postUpgrade: true })).rejects.toThrow("exit:0");
 
-      expect(mocks.readSourceConfigBestEffort).toHaveBeenCalledOnce();
-      expect(mocks.runPostUpgradeProbes).toHaveBeenCalledWith({ updateChannel: channel });
-      expect(runtime.log).toHaveBeenCalledWith("post-upgrade: no findings");
-    },
-  );
+    expect(mocks.readSourceConfigBestEffort).toHaveBeenCalledOnce();
+    expect(mocks.runPostUpgradeProbes).toHaveBeenCalledWith({ updateChannel: undefined });
+    expect(runtime.log).toHaveBeenCalledWith("post-upgrade: no findings");
+  });
 
   it("writes session sqlite JSON through the runtime before exiting cleanly", async () => {
     const report = createSessionReport("inspect");

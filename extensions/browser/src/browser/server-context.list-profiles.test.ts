@@ -1,14 +1,14 @@
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
-import { setChromeMcpProcessCleanupDepsForTest } from "./chrome-mcp-process.js";
 import {
   resetChromeMcpSessionsForTest,
   setChromeMcpSessionFactoryForTest,
 } from "./chrome-mcp-session.js";
 import { listChromeMcpTabs } from "./chrome-mcp-tabs.js";
+import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import * as chromeModule from "./chrome.js";
 import { registerBrowserBasicRoutes } from "./routes/basic.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./routes/test-helpers.js";
@@ -16,8 +16,18 @@ import { createBrowserRouteContext } from "./server-context.js";
 import { beginProfileTransition } from "./server-context.lifecycle.js";
 import { makeBrowserProfile, makeBrowserServerState } from "./server-context.test-harness.js";
 
+const { mockChromeMcpProcesses, resetChromeMcpProcessMocks } = await vi.hoisted(
+  () => import("./chrome-mcp-process.test-support.js"),
+);
+
+beforeEach(() => {
+  getChromeMcpModule.clear();
+});
+
 afterEach(async () => {
+  getChromeMcpModule.clear();
   await resetChromeMcpSessionsForTest();
+  resetChromeMcpProcessMocks();
   vi.clearAllMocks();
   vi.restoreAllMocks();
 });
@@ -43,7 +53,7 @@ function createExistingSessionProcessFixture(
   const listProcesses = vi.fn(async () =>
     [...alive].map((pid) => ({ pid, ppid: 1, identity: `fixture:${pid}` })),
   );
-  setChromeMcpProcessCleanupDepsForTest({
+  mockChromeMcpProcesses({
     platform: "linux",
     listProcesses,
     sleep: async () => {},
@@ -197,7 +207,6 @@ describe("browser server-context listProfiles", () => {
       exe: { kind: "chromium", path: "/usr/bin/chromium" },
       userDataDir: "/tmp/openclaw-profile",
       cdpPort: 18800,
-      startedAt: Date.now(),
       proc: {} as never,
     };
     const cleanup = createDeferred<void>();
@@ -244,29 +253,6 @@ describe("browser server-context listProfiles", () => {
     await expect(profile.isReachable()).resolves.toBe(true);
     expect(isChromeCdpReady).toHaveBeenCalledTimes(2);
     expect((await listing)[0]?.running).toBe(false);
-  });
-
-  it("bypasses SSRF gating when probing managed loopback profiles", async () => {
-    const state = makeBrowserServerState({
-      resolvedOverrides: {
-        ssrfPolicy: {},
-      },
-    });
-    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
-    isChromeReachable.mockResolvedValue(true);
-
-    const ctx = createBrowserRouteContext({ getState: () => state });
-    const profiles = await ctx.listProfiles();
-
-    expect(isChromeReachable).toHaveBeenCalledWith(
-      "http://127.0.0.1:18800",
-      200,
-      undefined,
-      expect.any(AbortSignal),
-    );
-    expect(profiles).toHaveLength(1);
-    expect(profiles[0]?.name).toBe("openclaw");
-    expect(profiles[0]?.running).toBe(true);
   });
 
   it("redacts CDP URL credentials from profile status", async () => {

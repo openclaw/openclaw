@@ -138,6 +138,8 @@ export function createChannelIngressDrain<
   const deferredLaneOccupancy = options.deferredLaneOccupancy ?? "hold";
   const activeByClaim = new Map<string, ActiveHandlerState<TPayload, TMetadata>>();
   const laneOwnerByKey = new Map<string, ActiveHandlerState<TPayload, TMetadata>>();
+  const laneKeyFor = (record: ChannelIngressQueueRecord<TPayload, TMetadata>) =>
+    resolveLaneKey(record, options.deriveLaneKey, options.reconcileStoredLaneKey);
   let disposed = false;
 
   const log = (message: string) => {
@@ -223,7 +225,11 @@ export function createChannelIngressDrain<
             markLeaseReclaimed(state);
           }
         })
-        .catch(() => undefined);
+        .catch((err: unknown) => {
+          log(
+            `ingress drain: claim refresh failed for event ${state.claim.id}; holding claim: ${formatError(err)}`,
+          );
+        });
     }, intervalMs);
     state.claimRefreshTimer.unref?.();
   };
@@ -323,11 +329,42 @@ export function createChannelIngressDrain<
       .catch(() => undefined);
   };
 
+  // A release between separate reads can hide a lane's head from both collections.
+  const readUnsettled = async () =>
+    queue.listUnsettled
+      ? await queue.listUnsettled({ orderBy })
+      : {
+          pending: await queue.listPending({ limit: "all", orderBy }),
+          claims: await queue.listClaims(),
+        };
+
   const createLifecycle = (
     state: ActiveHandlerState<TPayload, TMetadata>,
   ): ChannelIngressDispatchLifecycle => {
     return {
       abortSignal: state.abortController.signal,
+      readLaneBacklog: async () => {
+        const { pending, claims } = await readUnsettled();
+        const waiting = [
+          ...pending.filter(
+            (row) => resolveIngressRetryDelayMs(row, options.retryPolicy, now()) <= 0,
+          ),
+          ...claims.filter((claim) => {
+            const active = activeByClaim.get(activeClaimKey(claim));
+            return (
+              !active ||
+              (isPreAdoptionState(active) && (active.phase !== "deferred" || active.occupiesLane))
+            );
+          }),
+        ];
+        return waiting
+          .filter((row) => row.id !== state.claim.id && laneKeyFor(row) === state.laneKey)
+          .toSorted(
+            (left, right) =>
+              (orderBy === "received" ? left.receivedAt - right.receivedAt : 0) ||
+              Buffer.compare(Buffer.from(left.id), Buffer.from(right.id)),
+          );
+      },
       onAdopted: async () => {
         // Lost adoption is loud: guillotine/supersede already tombstoned/failed the claim.
         if (state.guillotined) {
@@ -452,6 +489,20 @@ export function createChannelIngressDrain<
           : runOutsideGatewayRootWorkAdmission(() =>
               options.dispatchClaimedEvent(claim, lifecycle),
             ));
+        if (result?.kind === "transferred") {
+          // The downstream owner atomically tombstoned this exact claim. Do not
+          // complete it again or turn a shutdown race into a replayable failure.
+          clearStallTimer(state);
+          await state.settleOnce(async () => {});
+          return;
+        }
+        if (result?.kind === "pending") {
+          clearStallTimer(state);
+          await state.settleOnce(async () => {
+            await releaseClaim(claim, { recordAttempt: false });
+          });
+          return;
+        }
         // dispose() leaves claims for recovery. Session abort mid-flight
         // (skipped/void) also leaves the claim; a terminal completed/failed
         // result still settles even if abort raced the return.
@@ -557,13 +608,7 @@ export function createChannelIngressDrain<
 
     await recoverStaleClaims();
 
-    // A release between separate reads can hide a lane's head from both collections.
-    const { pending, claims } = queue.listUnsettled
-      ? await queue.listUnsettled({ orderBy })
-      : {
-          pending: await queue.listPending({ limit: "all", orderBy }),
-          claims: await queue.listClaims(),
-        };
+    const { pending, claims } = await readUnsettled();
     const activeLaneKeys = new Set(laneOwnerByKey.keys());
     const claimedLaneKeys = new Set(
       claims
@@ -576,9 +621,7 @@ export function createChannelIngressDrain<
             !state.superseded
           );
         })
-        .map((claim) =>
-          resolveLaneKey(claim, options.deriveLaneKey, options.reconcileStoredLaneKey),
-        ),
+        .map(laneKeyFor),
     );
     const retryDelayedLaneKeys = new Set<string>();
     const pendingLaneKeys = new Set<string>();
@@ -586,7 +629,7 @@ export function createChannelIngressDrain<
     // listPending and claimNext share order, so the first row per lane is its head.
     // Delayed tails leave this snapshot so a sibling cannot make them start early.
     for (const [index, event] of pending.entries()) {
-      const laneKey = resolveLaneKey(event, options.deriveLaneKey, options.reconcileStoredLaneKey);
+      const laneKey = laneKeyFor(event);
       if (resolveIngressRetryDelayMs(event, options.retryPolicy, now()) > 0) {
         retryDelayed[index] = 1;
         if (!pendingLaneKeys.has(laneKey)) {
@@ -609,7 +652,7 @@ export function createChannelIngressDrain<
       if (shouldStop()) {
         break;
       }
-      const laneKey = resolveLaneKey(event, options.deriveLaneKey, options.reconcileStoredLaneKey);
+      const laneKey = laneKeyFor(event);
       if (await supersedeActiveIfNeeded(event, laneKey)) {
         blockedLaneKeys.delete(laneKey);
       }
@@ -630,11 +673,7 @@ export function createChannelIngressDrain<
         if (retryDelayed[index] === 1) {
           continue;
         }
-        const laneKey = resolveLaneKey(
-          event,
-          options.deriveLaneKey,
-          options.reconcileStoredLaneKey,
-        );
+        const laneKey = laneKeyFor(event);
         if (!blockedLaneKeys.has(laneKey)) {
           candidateWindow.set(event.id, laneKey);
         }
@@ -674,11 +713,7 @@ export function createChannelIngressDrain<
         await queue.release(claimed, { recordAttempt: false });
         break;
       }
-      const laneKey = resolveLaneKey(
-        claimed,
-        options.deriveLaneKey,
-        options.reconcileStoredLaneKey,
-      );
+      const laneKey = laneKeyFor(claimed);
       const existing = laneOwnerByKey.get(laneKey);
       if (existing && existing.phase !== "settled") {
         if (await supersedeActiveIfNeeded(claimed, laneKey)) {

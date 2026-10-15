@@ -67,4 +67,18 @@ describe("runAbortableTimeout", () => {
     await expect(pending).resolves.toBe("ok");
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it("times out at once, without a negative-timer warning, when the deadline has passed", async () => {
+    const warnings: string[] = [];
+    const onWarning = (warning: Error) => warnings.push(warning.name);
+    process.on("warning", onWarning);
+    try {
+      await expect(
+        runAbortableTimeout(() => new Promise<never>(() => {}), 30, "Compaction", -1_000),
+      ).rejects.toThrow("Compaction timed out");
+    } finally {
+      process.off("warning", onWarning);
+    }
+    expect(warnings).not.toContain("TimeoutNegativeWarning");
+  });
 });

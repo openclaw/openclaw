@@ -7,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   MCP_ENV_REFERENCE_RE,
-  mcpValueHasEnvReferences,
   normalizeHermesEnvReferenceName,
   resolveMcpEnvReferences,
 } from "./config-env.js";
@@ -23,12 +22,7 @@ type OpenClawModelApi =
   | "openai-responses"
   | "openai-chatgpt-responses";
 
-type HermesModelConfig = {
-  id: string;
-  contextWindow?: number;
-  maxTokens?: number;
-  supportsVision?: boolean;
-};
+type HermesModelConfig = ReturnType<typeof readModelMetadata> & { id: string };
 
 export type HermesProviderConfig = {
   id: string;
@@ -265,7 +259,7 @@ export function resolveHermesEndpointApiKeyEnv(baseUrl: string): string | undefi
     : undefined;
 }
 
-function readModelMetadata(raw: Record<string, unknown>): Omit<HermesModelConfig, "id"> {
+function readModelMetadata(raw: Record<string, unknown>) {
   const contextWindow =
     readPositiveNumber(raw.context_length) ??
     readPositiveNumber(raw.contextLength) ??
@@ -403,32 +397,17 @@ export function readProviderHeaders(
       continue;
     }
     const value = String(rawValue);
-    const envName = readEnvReference(value);
-    const hasReference = mcpValueHasEnvReferences(value);
     if (!includeSecrets) {
       blocked = true;
       continue;
     }
     sensitive = true;
-    if (envName) {
-      const resolved = env[envName];
-      if (resolved === undefined) {
-        unresolved = true;
-        continue;
-      }
-      headers[name] = resolved;
+    const resolved = resolveMcpEnvReferences(value, env);
+    if (resolved.unresolved || typeof resolved.value !== "string") {
+      unresolved = true;
       continue;
     }
-    if (hasReference) {
-      const resolved = resolveMcpEnvReferences(value, env);
-      if (resolved.unresolved || typeof resolved.value !== "string") {
-        unresolved = true;
-        continue;
-      }
-      headers[name] = resolved.value;
-      continue;
-    }
-    headers[name] = value;
+    headers[name] = resolved.value;
   }
   return {
     blocked,

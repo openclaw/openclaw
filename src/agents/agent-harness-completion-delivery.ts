@@ -5,10 +5,13 @@ import {
   hasRestartRecoveryTerminalRun,
 } from "../config/sessions/restart-recovery-state.js";
 import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
+import { readSessionSubmittedInput } from "../config/sessions/session-accessor.js";
 import {
-  loadExactSessionEntry,
-  readSessionSubmittedInput,
-} from "../config/sessions/session-accessor.js";
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+  type SessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
+import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import {
   getAgentRunContext,
@@ -17,10 +20,11 @@ import {
 } from "../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { rethrowIncognitoSessionError } from "../state/incognito-session-error.js";
 import {
   getOwedHarnessCompletionTask,
   hasHarnessCompletionFinalReceipt,
-  readAdmittedHarnessCompletionInput,
+  readAdmittedHarnessCompletionInputAsync,
 } from "./agent-harness-completion-recovery.js";
 
 const log = createSubsystemLogger("agents/harness-completion-recovery");
@@ -30,9 +34,12 @@ function sameRequester(claim: HarnessCompletionRecovery, entry: SessionEntry): b
 }
 
 type CompletionTarget = { agentId: string; sessionKey: string; storePath: string };
-function readCurrent(target: CompletionTarget): SessionEntry | undefined {
-  const loaded = loadExactSessionEntry({ ...target, readConsistency: "latest" });
-  return loaded?.sessionKey === target.sessionKey ? loaded.entry : undefined;
+async function readCurrent(target: CompletionTarget): Promise<SessionEntry | undefined> {
+  const loaded = await readSessionEntriesFromStoreInWorker({
+    ...target,
+    sessionKeys: [target.sessionKey],
+  });
+  return loaded.entries.find(({ sessionKey }) => sessionKey === target.sessionKey)?.entry;
 }
 
 /** Only current process owners can hold admission before its input is committed. */
@@ -62,14 +69,111 @@ function hasLiveCompletionOwner(claim: HarnessCompletionRecovery, runId: string)
   );
 }
 
+function classifyCompletionClaim(
+  params: CompletionTarget & { sourceRunId: string; taskRunId?: string },
+  entry: SessionEntry,
+  claim: HarnessCompletionRecovery,
+): "delivered" | "blocked" | undefined {
+  if (
+    claim.sourceRunId !== params.sourceRunId ||
+    (params.taskRunId !== undefined && claim.taskRunId !== params.taskRunId) ||
+    claim.requesterAgentId !== params.agentId ||
+    claim.requesterSessionKey !== params.sessionKey ||
+    !sameRequester(claim, entry)
+  ) {
+    return "blocked";
+  }
+  const receipt = getRestartRecoveryTerminalDeliveryEvidence(entry, params.sourceRunId);
+  if (
+    isDeepStrictEqual(receipt?.harnessCompletion, claim) &&
+    receipt !== undefined &&
+    hasHarnessCompletionFinalReceipt(receipt)
+  ) {
+    return "delivered";
+  }
+  if (
+    !getOwedHarnessCompletionTask(claim, entry) ||
+    entry.mainRestartRecovery?.tombstone ||
+    entry.restartRecoveryDeliverySourceRunId !== claim.sourceRunId ||
+    entry.restartRecoveryHarnessCompletion?.taskId !== claim.taskId
+  ) {
+    return "blocked";
+  }
+  return undefined;
+}
+
 /** Reconcile before any steer/direct path, including when a restored native parent has no live owner. */
-export function reconcileHarnessCompletionDelivery(
+export async function reconcileHarnessCompletionDelivery(
   params: CompletionTarget & {
     sourceRunId: string;
     taskRunId?: string;
   },
+): Promise<"unowned" | "pending" | "delivered" | "blocked"> {
+  const memory = captureSessionActorStorageOwner(params, { assertCurrent() {}, authorize() {} });
+  if (memory) {
+    return (
+      (await withSessionActorStorage(
+        params,
+        {
+          lifetime: { assertCurrent() {}, assertReadable() {} },
+          authority: memory.authority,
+        },
+        (binding) => reconcileMemoryHarnessCompletionDelivery(params, binding),
+      )) ?? "unowned"
+    );
+  }
+  return reconcileCurrentHarnessCompletionDelivery(params);
+}
+
+function reconcileMemoryHarnessCompletionDelivery(
+  params: CompletionTarget & { sourceRunId: string; taskRunId?: string },
+  binding: SessionActorStorageBinding,
 ): "unowned" | "pending" | "delivered" | "blocked" {
-  const entry = readCurrent(params);
+  try {
+    const snapshot = binding.actor.storage!.readCurrent(
+      {
+        type: "session.completion.read",
+        input: { sourceRunId: params.sourceRunId, mode: "committed" },
+      },
+      binding.authority,
+    );
+    const entry = snapshot.entry;
+    if (!entry) {
+      return "unowned";
+    }
+    const receipt = getRestartRecoveryTerminalDeliveryEvidence(entry, params.sourceRunId);
+    const claim =
+      entry.restartRecoveryHarnessCompletion?.sourceRunId === params.sourceRunId
+        ? entry.restartRecoveryHarnessCompletion
+        : receipt?.harnessCompletion;
+    if (!claim) {
+      return entry.restartRecoveryDeliverySourceRunId === params.sourceRunId ||
+        hasRestartRecoveryTerminalRun(entry, params.sourceRunId) ||
+        snapshot.hasSubmittedInput
+        ? "blocked"
+        : "unowned";
+    }
+    const classified = classifyCompletionClaim(params, entry, claim);
+    if (classified) {
+      return classified;
+    }
+    const runId = entry.restartRecoveryDeliveryRunId;
+    return (runId && hasLiveCompletionOwner(claim, runId)) || snapshot.validInput
+      ? "pending"
+      : "blocked";
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
+    log.warn(
+      `Could not inspect harness completion custody for ${params.sessionKey}: ${String(error)}`,
+    );
+    return "blocked";
+  }
+}
+
+async function reconcileCurrentHarnessCompletionDelivery(
+  params: CompletionTarget & { sourceRunId: string; taskRunId?: string },
+): Promise<"unowned" | "pending" | "delivered" | "blocked"> {
+  const entry = await readCurrent(params);
   if (!entry) {
     // No saved claim means this reconciler owns nothing; normal admission still
     // applies its existing requester lifecycle checks.
@@ -83,41 +187,31 @@ export function reconcileHarnessCompletionDelivery(
   if (!claim) {
     // Missing metadata is not fresh admission authority. An older writer or
     // bounded receipt eviction can leave the original consumed input intact.
-    return entry.restartRecoveryDeliverySourceRunId === params.sourceRunId ||
-      hasRestartRecoveryTerminalRun(entry, params.sourceRunId) ||
-      readSessionSubmittedInput(
-        { ...params, sessionId: entry.sessionId },
-        `${params.sourceRunId}:user`,
-      )
+    if (
+      entry.restartRecoveryDeliverySourceRunId === params.sourceRunId ||
+      hasRestartRecoveryTerminalRun(entry, params.sourceRunId)
+    ) {
+      return "blocked";
+    }
+    const submitted = await readSessionSubmittedInput(
+      { ...params, sessionId: entry.sessionId },
+      `${params.sourceRunId}:user`,
+    );
+    const current = await readCurrent(params);
+    return !current ||
+      current.sessionId !== entry.sessionId ||
+      current.lifecycleRevision !== entry.lifecycleRevision ||
+      current.restartRecoveryDeliverySourceRunId === params.sourceRunId ||
+      current.restartRecoveryHarnessCompletion?.sourceRunId === params.sourceRunId ||
+      hasRestartRecoveryTerminalRun(current, params.sourceRunId) ||
+      getRestartRecoveryTerminalDeliveryEvidence(current, params.sourceRunId)?.harnessCompletion ||
+      submitted
       ? "blocked"
       : "unowned";
   }
-  if (
-    claim.sourceRunId !== params.sourceRunId ||
-    (params.taskRunId !== undefined && claim.taskRunId !== params.taskRunId) ||
-    claim.requesterAgentId !== params.agentId ||
-    claim.requesterSessionKey !== params.sessionKey ||
-    !sameRequester(claim, entry)
-  ) {
-    return "blocked";
-  }
-  if (
-    isDeepStrictEqual(receipt?.harnessCompletion, claim) &&
-    receipt !== undefined &&
-    hasHarnessCompletionFinalReceipt(receipt)
-  ) {
-    return "delivered";
-  }
-  if (!getOwedHarnessCompletionTask(claim, entry)) {
-    return "blocked";
-  }
-  if (
-    entry.status !== "running" ||
-    entry.mainRestartRecovery?.tombstone ||
-    entry.restartRecoveryDeliverySourceRunId !== claim.sourceRunId ||
-    entry.restartRecoveryHarnessCompletion?.taskId !== claim.taskId
-  ) {
-    return "blocked";
+  const classified = classifyCompletionClaim(params, entry, claim);
+  if (classified) {
+    return classified;
   }
   const operationalRunId = entry.restartRecoveryDeliveryRunId;
   // A retired scoped resolver can throw. It owns no live custody and must not
@@ -128,15 +222,15 @@ export function reconcileHarnessCompletionDelivery(
     }
     // Cold custody is pending only while its exact admitted input remains executable.
     // Missing/rejected input retains the durable task, not an uncharged process retry.
-    return readAdmittedHarnessCompletionInput({
+    const validInput = await readAdmittedHarnessCompletionInputAsync({
       claim,
       entry,
       storePath: params.storePath,
       operationalRunId,
-    })
-      ? "pending"
-      : "blocked";
+    });
+    return validInput ? "pending" : "blocked";
   } catch (error) {
+    rethrowIncognitoSessionError(error);
     log.warn(
       `Could not inspect harness completion custody for ${params.sessionKey}: ${String(error)}`,
     );

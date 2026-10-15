@@ -10,7 +10,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadSessionEntryAsync } from "../session-entry-load.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
 
@@ -197,7 +197,7 @@ describe("late abort real Gateway proof", () => {
                 [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
               },
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
           gateway: { auth: { mode: "token", token: "pr132123-proof-token" } },
@@ -240,7 +240,7 @@ describe("late abort real Gateway proof", () => {
           { timeoutMs: 5_000 },
         );
         expect(waiting.status).toBe("timeout");
-        const loaded = loadSessionEntry(sessionKey);
+        const loaded = await loadSessionEntryAsync(sessionKey);
         if (!loaded.entry?.sessionId) {
           throw new Error("proof session did not persist its transcript identity");
         }

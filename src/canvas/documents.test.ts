@@ -21,10 +21,7 @@ function createHtmlDocument(
   html: string,
   options: Pick<Parameters<typeof createCanvasDocument>[0], "id" | "title" | "cspSandbox"> = {},
 ) {
-  return createCanvasDocument(
-    { kind: "html_bundle", entrypoint: { type: "html", value: html }, ...options },
-    { stateDir },
-  );
+  return createCanvasDocument({ html, ...options }, { stateDir });
 }
 
 describe("canvas documents", () => {
@@ -88,25 +85,6 @@ describe("canvas documents", () => {
     });
   });
 
-  it("builds entry urls for materialized path documents under managed storage", async () => {
-    const stateDir = tempDirs.make("openclaw-canvas-documents-");
-    const workspaceDir = tempDirs.make("openclaw-canvas-documents-workspace-");
-    await mkdir(path.join(workspaceDir, "player"), { recursive: true });
-    await writeFile(path.join(workspaceDir, "player/index.html"), "<div>ok</div>", "utf8");
-
-    const document = await createCanvasDocument(
-      {
-        kind: "html_bundle",
-        entrypoint: { type: "path", value: "player/index.html" },
-      },
-      { stateDir, workspaceDir },
-    );
-
-    expect(document.entryUrl).toContain("/__openclaw__/canvas/documents/");
-    expect(document.localEntrypoint).toBe("index.html");
-    expect(resolveCanvasDocumentDir(stateDir, document.id)).toContain(stateDir);
-  });
-
   it("materializes inline html bundles as index documents", async () => {
     const stateDir = tempDirs.make("openclaw-canvas-documents-");
     const document = await createHtmlDocument(
@@ -153,66 +131,6 @@ describe("canvas documents", () => {
     );
     expect(indexHtml).toContain("second");
     expect(indexHtml).not.toContain("first");
-  });
-
-  it("copies declared assets into managed storage", async () => {
-    const stateDir = tempDirs.make("openclaw-canvas-documents-");
-    const workspaceDir = tempDirs.make("openclaw-canvas-documents-workspace-");
-    await mkdir(path.join(workspaceDir, "collection.media"), { recursive: true });
-    await writeFile(path.join(workspaceDir, "collection.media/audio.mp3"), "audio", "utf8");
-
-    const document = await createCanvasDocument(
-      {
-        kind: "html_bundle",
-        entrypoint: { type: "html", value: "<audio></audio>" },
-        assets: [
-          {
-            logicalPath: "collection.media/audio.mp3",
-            sourcePath: "collection.media/audio.mp3",
-            contentType: "audio/mpeg",
-          },
-        ],
-      },
-      { stateDir, workspaceDir },
-    );
-
-    expect(document.assets).toEqual([
-      { logicalPath: "collection.media/audio.mp3", contentType: "audio/mpeg" },
-    ]);
-    await expect(
-      readFile(
-        path.join(resolveCanvasDocumentDir(stateDir, document.id), "collection.media/audio.mp3"),
-        "utf8",
-      ),
-    ).resolves.toBe("audio");
-  });
-
-  it("wraps local and remote PDF documents in index viewer pages", async () => {
-    const stateDir = tempDirs.make("openclaw-canvas-documents-");
-    const workspaceDir = tempDirs.make("openclaw-canvas-documents-workspace-");
-    await writeFile(path.join(workspaceDir, "demo.pdf"), "%PDF-1.4", "utf8");
-    const localDocument = await createCanvasDocument(
-      { kind: "document", entrypoint: { type: "path", value: "demo.pdf" } },
-      { stateDir, workspaceDir },
-    );
-    const remoteDocument = await createCanvasDocument(
-      {
-        kind: "document",
-        entrypoint: { type: "url", value: "https://example.com/demo.pdf" },
-      },
-      { stateDir },
-    );
-
-    const localHtml = await readFile(
-      path.join(resolveCanvasDocumentDir(stateDir, localDocument.id), "index.html"),
-      "utf8",
-    );
-    const remoteHtml = await readFile(
-      path.join(resolveCanvasDocumentDir(stateDir, remoteDocument.id), "index.html"),
-      "utf8",
-    );
-    expect(localHtml).toContain('data="demo.pdf"');
-    expect(remoteHtml).toContain('data="https://example.com/demo.pdf"');
   });
 
   it("rejects traversal and malformed encoded hosted paths", async () => {

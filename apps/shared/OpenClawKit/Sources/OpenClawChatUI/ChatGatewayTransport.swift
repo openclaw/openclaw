@@ -12,6 +12,10 @@ public protocol OpenClawChatGatewayTransport: OpenClawChatTransport {
 }
 
 extension OpenClawChatGatewayTransport {
+    public var supportsSlashCommandCatalog: Bool {
+        true
+    }
+
     public func reactionsRouteLease(
         routeID: UUID,
         access: OpenClawChatReactionAccess,
@@ -160,6 +164,24 @@ extension OpenClawChatGatewayTransport {
             entryId: entryId)
         let data = try await self.requestChatSessionAction(request)
         return try JSONDecoder().decode(OpenClawChatRewindResponse.self, from: data)
+    }
+
+    public func forkSession(parentKey: String) async throws -> String {
+        try await self.forkSession(parentKey: parentKey, fromLastCompleted: false)
+    }
+
+    public func forkSession(parentKey: String, fromLastCompleted: Bool) async throws -> String {
+        try await self.forkSession(parentKey: parentKey, fromLastCompleted: fromLastCompleted, agentID: nil)
+    }
+
+    public func forkSession(parentKey: String, fromLastCompleted: Bool, agentID: String?) async throws -> String {
+        let target = self.sessionTarget(for: parentKey, overrideAgentID: agentID)
+        let request = OpenClawChatGatewayRequests.forkSession(
+            parentSessionKey: target.sessionKey,
+            agentID: target.agentID,
+            fromLastCompleted: fromLastCompleted)
+        let data = try await self.requestChatSessionAction(request)
+        return try JSONDecoder().decode(OpenClawChatCreateSessionResponse.self, from: data).key
     }
 
     public func forkSessionAtMessage(

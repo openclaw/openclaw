@@ -8,6 +8,7 @@ import {
 } from "../lib/session-method-access.ts";
 import type { CloudWorkerStopAction } from "./cloud-worker-stop.ts";
 import type { SessionMenuActionKind } from "./session-menu.ts";
+import { sessionPlacementActionReason } from "./session-placement-action.ts";
 
 type SessionMenuAccessRow = Pick<
   GatewaySessionRow,
@@ -21,6 +22,8 @@ export function sessionMenuReasons(params: {
   session: SessionMenuAccessRow;
   batchRows?: readonly SessionMenuAccessRow[] | null;
   cloudWorkerStopAction?: CloudWorkerStopAction | null;
+  placementRow?: GatewaySessionRow;
+  requiredProfile?: string;
 }): Partial<Record<SessionMenuActionKind, string>> {
   const { snapshot, session, batchRows = null, cloudWorkerStopAction } = params;
   const reason = (request: SessionMethodAccessRequest) => {
@@ -39,9 +42,12 @@ export function sessionMenuReasons(params: {
       session,
     });
   const renameReason = patchReason({ label: null }, true);
-  const pinReason = patchReason({ pinned: true }, true);
+  const promotionReason = !session.sessionId?.trim()
+    ? "Session lifecycle action requires a durable session identity."
+    : patchReason({ sidebarRoot: true }, true);
   const iconReason = patchReason({ icon: null });
   const colorReason = patchReason({ color: null });
+  const communicationReason = patchReason({ communication: null });
   const batchSession = batchRows ? sessionAccessRowForBatch(batchRows) : session;
   const batchPatchReason = (patch: Record<string, unknown>, sessionScope = false) => {
     if (!batchRows) {
@@ -86,17 +92,22 @@ export function sessionMenuReasons(params: {
         params: { parentSessionKey: session.key, fork: true },
       });
   const cloudWorkerStopReason = cloudWorkerStopAction ? reason(cloudWorkerStopAction) : undefined;
+  const placementReason = params.placementRow
+    ? sessionPlacementActionReason(snapshot, params.placementRow, params.requiredProfile)
+    : undefined;
   return {
-    ...(pinReason ? { "toggle-pin": pinReason } : {}),
+    ...(placementReason ? { "move-session": placementReason } : {}),
     ...(snoozeReason ? { snooze: snoozeReason, wake: snoozeReason } : {}),
     ...(renameReason ? { rename: renameReason } : {}),
     ...(iconReason ? { "set-icon": iconReason } : {}),
     ...(colorReason ? { "set-color": colorReason } : {}),
+    ...(communicationReason ? { "set-communication": communicationReason } : {}),
     ...(session.pinnable === false ? { "toggle-pin": t("sessionsView.pinRootSessionsOnly") } : {}),
     ...(unreadReason ? { "toggle-unread": unreadReason } : {}),
     ...(involvementReason ? { "toggle-involving-me": involvementReason } : {}),
     ...(categoryReason ? { "move-to-group": categoryReason } : {}),
-    ...(archiveReason ? { "toggle-archived": archiveReason } : {}),
+    ...(archiveReason ? { "toggle-archived": archiveReason, "archive-tree": archiveReason } : {}),
+    ...(promotionReason ? { "move-to-top-level": promotionReason } : {}),
     ...(groupReason || categoryReason ? { "new-group": groupReason ?? categoryReason } : {}),
     ...(forkReason ? { fork: forkReason } : {}),
     ...(cloudWorkerStopReason ? { "stop-cloud-worker": cloudWorkerStopReason } : {}),

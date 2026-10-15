@@ -2,6 +2,9 @@
 
 import { html, LitElement, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ApplicationContext } from "../../app/context.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import {
   renderSidebarRegion,
@@ -9,7 +12,7 @@ import {
   sidebarRegionCallbacks,
 } from "./chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import "./components/chat-sidebar-region.runtime.ts";
+import "./components/chat-sidebar-region.runtime.tsx";
 import {
   closeSlot,
   openSlot,
@@ -63,7 +66,6 @@ class NativeCloseLayoutFixture extends LitElement {
     return renderSidebarRegion({
       presentationId: "sidebar-layout-fixture",
       availableWidth: 1_400,
-      availableSlots: ["detail", "workspace"],
       callbacks: {
         ...callbacks(),
         closeSlot: (slot) => {
@@ -72,11 +74,17 @@ class NativeCloseLayoutFixture extends LitElement {
       },
       layout: this.layout,
       narrow: false,
-      panelActions: {},
-      panelTemplates: {
-        detail: html`<textarea aria-label="Side panel input"></textarea>`,
-        workspace: html`<div>Workspace</div>`,
-      },
+      panelDefinitions: sidebarPanelDefinitions().map((definition) =>
+        Object.assign(definition, {
+          available: definition.slot === "detail" || definition.slot === "workspace",
+          content:
+            definition.slot === "detail"
+              ? html`<textarea aria-label="Side panel input"></textarea>`
+              : definition.slot === "workspace"
+                ? html`<div>Workspace</div>`
+                : null,
+        }),
+      ),
       primary: html`<main>Conversation</main>`,
       requestUpdate: () => this.requestUpdate(),
     });
@@ -95,12 +103,18 @@ async function renderLayout(
     renderSidebarRegion({
       presentationId,
       availableWidth: narrow ? 620 : 1_400,
-      availableSlots: ["detail", "terminal", "workspace"],
       callbacks: callbacks(),
       layout,
       narrow,
-      panelActions: {},
-      panelTemplates: { detail: html`<aside data-detail>Details<input type="checkbox" /></aside>` },
+      panelDefinitions: sidebarPanelDefinitions().map((definition) =>
+        Object.assign(definition, {
+          available: ["detail", "terminal", "workspace"].includes(definition.slot),
+          content:
+            definition.slot === "detail"
+              ? html`<aside data-detail>Details<input type="checkbox" /></aside>`
+              : null,
+        }),
+      ),
       primary: html`<main data-primary>Primary<textarea></textarea></main>`,
       requestUpdate,
     }),
@@ -117,6 +131,32 @@ afterEach(() => {
 });
 
 describe("chat pane sidebar layout", () => {
+  it("keeps the parent layout writable after a panel context replacement", async () => {
+    // SAFETY: the region transports application context; this fixture's panel reads no capabilities.
+    const container = createApplicationContextProvider({} as ApplicationContext);
+    containers.push(container);
+    document.body.append(container);
+    const layout = openSlot({ columns: [] }, "detail");
+    await renderLayout(container, layout);
+    const region = container.querySelector("openclaw-chat-sidebar-region")!;
+    const primary = container.querySelector("[data-primary]");
+    const detail = container.querySelector("[data-detail]");
+
+    // SAFETY: a new context identity exercises the bridge's supported root replacement.
+    container.setContext({} as ApplicationContext);
+    await region.updateComplete;
+    expect(container.querySelector("[data-detail]")).not.toBe(detail);
+
+    await renderLayout(container, promoteSidebarPanel(layout, "detail"));
+    expect(container.querySelector("[data-primary]")).toBe(primary);
+    expect(
+      container
+        .querySelector("[data-detail]")
+        ?.closest("[data-region]")
+        ?.getAttribute("data-region"),
+    ).toBe("main");
+  });
+
   it("keeps tab targets within split and retained conversation presentations", async () => {
     const layout = openSlot({ columns: [] }, "detail");
     const presentations = [
@@ -136,10 +176,10 @@ describe("chat pane sidebar layout", () => {
       const primary = container.querySelector("[data-primary]")!;
       for (const next of [layout, promoteSidebarPanel(layout, "detail"), layout]) {
         await renderLayout(container, next, false, presentationId);
-        const tab = container.querySelector("wa-tab[active]")!;
+        const tab = container.querySelector(".tabstrip-tab[active]")!;
         const targetId = tab.getAttribute("aria-controls")!;
         const target = document.getElementById(targetId);
-        const chatSelected = tab.getAttribute("panel") === "conversation";
+        const chatSelected = tab.getAttribute("data-tab-value") === "conversation";
         expect(target).toBe((chatSelected ? primary : detail).closest("[data-region]"));
         expect(target?.getAttribute("role")).toBe("region");
         expect(target?.getAttribute("aria-label")).toBe(chatSelected ? "Chat" : "Review");
@@ -172,7 +212,7 @@ describe("chat pane sidebar layout", () => {
     await region.updateComplete;
 
     expect(sidebarActivePanel(parent.layout)?.slot).toBe("workspace");
-    const nextTab = parent.querySelector<HTMLElement>('wa-tab[panel="workspace"]')!;
+    const nextTab = parent.querySelector<HTMLElement>('.tabstrip-tab[data-tab-value="workspace"]')!;
     expect(nextTab).not.toBeNull();
     expect(document.activeElement).toBe(nextTab);
   });
@@ -227,12 +267,15 @@ describe("chat pane sidebar layout", () => {
       renderSidebarRegion({
         presentationId: "sidebar-layout-fixture",
         availableWidth: 0,
-        availableSlots: ["detail"],
         callbacks: callbacks(),
         layout: openSlot({ columns: [] }, "detail"),
         narrow: false,
-        panelActions: {},
-        panelTemplates: { detail: html`<aside>Details</aside>` },
+        panelDefinitions: sidebarPanelDefinitions().map((definition) =>
+          Object.assign(definition, {
+            available: definition.slot === "detail",
+            content: definition.slot === "detail" ? html`<aside>Details</aside>` : null,
+          }),
+        ),
         primary: html`<main>Primary</main>`,
         requestUpdate,
       }),

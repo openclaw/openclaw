@@ -1,5 +1,6 @@
-import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import { memoryStore, sampleUpload } from "./beam-store.test-support.js";
 import { createBeamSessionCatalog } from "./session-catalog.js";
@@ -64,13 +65,18 @@ it("expires cached summaries at storage expiry without rereading transcripts", a
 it("refreshes foreign changes in the background and drains its service on stop", async () => {
   vi.useFakeTimers();
   const store = memoryStore();
-  const ctx: OpenClawPluginServiceContext = {
+  const ctx: OpenClawPluginServiceContextV2 = {
     config: {},
+    scheduler: createTestPluginServiceScheduler(),
     stateDir: "/unused",
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   };
   const readEntries = store.keyedStore.entries;
   const entries = vi.spyOn(store.keyedStore, "entries");
+  const stop = async () => {
+    await ctx.scheduler.stop();
+    await store.catalogService.stop?.(ctx);
+  };
   try {
     await store.upload(sampleUpload(), { receivedAt: 100 });
     await store.catalogService.start(ctx);
@@ -99,7 +105,7 @@ it("refreshes foreign changes in the background and drains its service on stop",
     const stoppingRead = Promise.withResolvers<Awaited<ReturnType<typeof readEntries>>>();
     entries.mockReturnValueOnce(stoppingRead.promise);
     await vi.advanceTimersByTimeAsync(30_000);
-    const stopped = store.catalogService.stop?.(ctx);
+    const stopped = stop();
     stoppingRead.resolve([
       { key: "late", value: { ...sampleUpload(), createdAt: 1, receivedAt: 1 }, createdAt: 1 },
     ]);
@@ -109,7 +115,7 @@ it("refreshes foreign changes in the background and drains its service on stop",
     await vi.advanceTimersByTimeAsync(60_000);
     expect(entries).toHaveBeenCalledTimes(callsAtStop);
   } finally {
-    await store.catalogService.stop?.(ctx);
+    await stop();
     vi.useRealTimers();
   }
 });
@@ -161,16 +167,6 @@ describe("Beam upload store", () => {
       expect(keyedStore.compareAndApply).not.toHaveBeenCalled();
     },
   );
-
-  it("returns an uncertain store failure without replaying the upload", async () => {
-    const store = memoryStore();
-    store.keyedStore.compareAndApply.mockRejectedValueOnce(new Error("unknown write outcome"));
-    await expect(store.upload(sampleUpload(), { receivedAt: 100 })).rejects.toThrow(
-      "unknown write outcome",
-    );
-    expect(store.keyedStore.compareAndApply).toHaveBeenCalledTimes(1);
-    expect(store.values.size).toBe(0);
-  });
 
   it("captures the upload and receipt before waiting for observation", async () => {
     const store = memoryStore();

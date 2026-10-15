@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { getToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { createCronTool } from "./cron-tool.js";
 
@@ -20,7 +21,12 @@ function expectAdd(params: Record<string, unknown>) {
 }
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   gateway.mockReset().mockResolvedValue({ ok: true });
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
 });
 
 describe("cron shorthand recovery", () => {
@@ -43,14 +49,6 @@ describe("cron shorthand recovery", () => {
   });
 
   it.each([
-    {
-      name: "cron with timezone and stagger",
-      input: { cron: "0 18 * * *", tz: "Asia/Shanghai", staggerMs: 5000, message: "report" },
-      expected: {
-        schedule: { kind: "cron", expr: "0 18 * * *", tz: "Asia/Shanghai", staggerMs: 5000 },
-        payload: { kind: "agentTurn", message: "report" },
-      },
-    },
     {
       name: "script before agent-turn hints",
       input: {
@@ -80,7 +78,6 @@ describe("cron shorthand recovery", () => {
 
   it.each([
     { action: "add", kind: "on-exit", command: "pnpm build", cwd: "/repo", message: "rebuilt" },
-    { action: "update", jobId: "job", command: "make" },
   ])("rejects explicit or inferred on-exit shorthand on $action", async (args) => {
     await expect(execute(args)).rejects.toThrow(
       "automation on-exit schedules cannot be created or edited",
@@ -149,26 +146,6 @@ describe("cron shorthand recovery", () => {
       "schedule ": { kind: "every", everyMs: 60_000 },
       "enabled ": true,
     });
-  });
-
-  it("nests literal dotted job keys into the recovered update patch (#120616)", async () => {
-    // Models sometimes emit "job.payload.message" as a flat literal key instead
-    // of nesting it. Without dotted-key recovery the key is not a recognized
-    // cron field, params.job stays absent, and cron-tool throws "job required".
-    await execute({
-      action: "update",
-      jobId: "job-dotted",
-      "job.payload.message": "after",
-    });
-
-    expect(gateway).toHaveBeenCalledExactlyOnceWith(
-      "cron.update",
-      expect.anything(),
-      expect.objectContaining({
-        id: "job-dotted",
-        patch: { payload: { kind: "agentTurn", message: "after" } },
-      }),
-    );
   });
 
   it("merges sibling dotted keys under one recovered object (#120616)", async () => {

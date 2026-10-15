@@ -117,25 +117,32 @@ describe("handleEmbeddedAttemptPromptError", () => {
     );
   });
 
-  it("marks yield state before fallible recovery begins", async () => {
-    const recoveryError = new Error("settle failed");
-    let marked = false;
-    hoisted.isSessionsYieldAbortError.mockReturnValue(true);
-    hoisted.waitForEmbeddedAbortSettle.mockImplementationOnce(async () => {
-      expect(marked).toBe(true);
-      throw recoveryError;
-    });
+  it.each(["steering release", "yield settlement"] as const)(
+    "marks yield state before fallible %s",
+    async (phase) => {
+      const recoveryError = new Error("recovery failed");
+      let marked = false;
+      hoisted.isSessionsYieldAbortError.mockReturnValue(true);
+      const recovery =
+        phase === "steering release"
+          ? hoisted.releaseLeasedSteering
+          : hoisted.waitForEmbeddedAbortSettle;
+      recovery.mockImplementationOnce(async () => {
+        expect(marked).toBe(true);
+        throw recoveryError;
+      });
 
-    await expect(
-      handleEmbeddedAttemptPromptError(
-        createInput({
-          error: new Error("yield handoff"),
-          markYieldAborted: () => {
-            marked = true;
-          },
-          yieldDetected: true,
-        }),
-      ),
-    ).rejects.toBe(recoveryError);
-  });
+      await expect(
+        handleEmbeddedAttemptPromptError(
+          createInput({
+            error: new Error("yield handoff"),
+            markYieldAborted: () => {
+              marked = true;
+            },
+            yieldDetected: true,
+          }),
+        ),
+      ).rejects.toBe(recoveryError);
+    },
+  );
 });

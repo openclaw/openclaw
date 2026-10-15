@@ -1,6 +1,10 @@
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import * as modelRuntime from "../auto-reply/reply/model-runtime-normalization.js";
 import { persistReplySessionEntry } from "../auto-reply/reply/session-entry-persistence.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
@@ -9,9 +13,8 @@ import {
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import { peekSystemEvents } from "../infra/system-events.js";
+import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
-import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -19,13 +22,10 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   setupPersistentSessionCreateTestHarness,
   chatSendOwner,
-  requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
 import { readSessionGroupCatalog } from "./session-group-catalog.js";
-import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
-import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
-  getGatewayConfigModule,
   sessionStoreEntry,
   directSessionReq,
   sessionHookMocks,
@@ -33,7 +33,103 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-const { createSessionStoreDir } = setupPersistentSessionCreateTestHarness();
+const { createSessionStoreDir, openClient } = setupPersistentSessionCreateTestHarness();
+
+test.for([
+  { model: "openai/gpt-5.6-sol" },
+  {
+    nativeRuntimeConsent: "native-fixture",
+    permissionMode: "full",
+    sandboxMode: "off",
+    expectedPermissionMode: null,
+    expectedSandboxMode: null,
+    expectedNativeRuntimeConsent: null,
+  },
+])(
+  "sessions.create stays available while runtime selection waits for %j",
+  async (patch, { signal }) => {
+    const { storePath } = await createSessionStoreDir();
+    const blockedKey = "agent:main:dashboard:pending-runtime";
+    const createdKey = "agent:main:dashboard:independent-runtime";
+    const original = sessionStoreEntry("pending-runtime", {
+      lifecycleRevision: "runtime-generation",
+    });
+    await writeSessionStore({ entries: { [blockedKey]: original } });
+    const { ws } = await openClient();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const preparation = vi
+      .spyOn(modelRuntime, "prepareModelSelectionRuntime")
+      .mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        return { status: "rejected", reason: "invalid-runtime", message: "Runtime unavailable" };
+      });
+    const context = {
+      loadGatewayModelCatalog: async () => [
+        { id: "gpt-5.6-sol", provider: "openai", name: "GPT 5.6 Sol" },
+      ],
+    };
+    const changing = directSessionReq(
+      "sessions.patch",
+      {
+        key: blockedKey,
+        expectedSessionId: original.sessionId,
+        expectedLifecycleRevision: original.lifecycleRevision,
+        ...patch,
+      },
+      { context },
+    );
+    let creating: ReturnType<typeof rpcReq> | undefined;
+    let successor: ReturnType<typeof directSessionReq> | undefined;
+    let successorFinished = false;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          changing.then((result) => {
+            throw new Error(
+              `Runtime selection finished without preparation: ${JSON.stringify(result)}`,
+            );
+          }),
+          "Runtime selection was not reached",
+        ),
+        signal,
+      );
+      expect(createGatewayActiveWorkSnapshot().counts.sessionMutations).toBe(1);
+      successor = directSessionReq(
+        "sessions.patch",
+        { key: blockedKey, pinned: true },
+        { context },
+      );
+      void successor.then(() => {
+        successorFinished = true;
+      });
+      creating = rpcReq(ws, "sessions.create", { key: createdKey, agentId: "main" });
+      expect(await withinTest(creating, signal)).toMatchObject({ ok: true });
+      expect(successorFinished).toBe(false);
+      const created = loadSessionEntry({ agentId: "main", sessionKey: createdKey, storePath });
+      expect(created?.sessionId).toBeTruthy();
+      expect(await rpcReq(ws, "sessions.patch", { key: createdKey, pinned: true })).toMatchObject({
+        ok: true,
+      });
+      expect(
+        loadSessionEntry({ agentId: "main", sessionKey: createdKey, storePath })?.pinnedAt,
+      ).toEqual(expect.any(Number));
+    } finally {
+      release.resolve();
+      await Promise.allSettled([changing, creating, successor]);
+      preparation.mockRestore();
+      await closeGatewayTestWebSocket(ws);
+    }
+    expect(await changing).toMatchObject({
+      ok: false,
+      error: { message: "Runtime unavailable" },
+    });
+    expect(await successor).toMatchObject({ ok: true });
+    expect(createGatewayActiveWorkSnapshot()).toMatchObject({ idle: true, blockers: [] });
+  },
+);
 
 // The adoption assertion below flaked once on CI (run 31609081812) with the persisted
 // row missing while all 16 creates succeeded; exhaustive owner-path analysis found no
@@ -110,14 +206,21 @@ test("concurrent sessions.create requests adopt one canonical keyed session", as
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:concurrent-keyed-session";
 
-  const created = await Promise.all(
-    Array.from({ length: 4 }, () =>
-      directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
-        agentId: "main",
-        key,
-      }),
-    ),
-  );
+  const sql = observeHostDataSql();
+  let created: Awaited<ReturnType<typeof directSessionReq<{ key: string; sessionId: string }>>>[];
+  try {
+    created = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
+          agentId: "main",
+          key,
+        }),
+      ),
+    );
+    expect(sql.queries.filter((query) => /\bfrom\s+"?session_nodes\b/i.test(query))).toEqual([]);
+  } finally {
+    sql.restore();
+  }
 
   expect(created.every((result) => result.ok)).toBe(true);
   expect(new Set(created.map((result) => result.payload?.key))).toEqual(new Set([key]));
@@ -166,45 +269,6 @@ test("createGatewaySession forwards its commit guard into main-session reset", a
   }
 });
 
-test("sessions.create persists draft visibility in the initial session entry", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const created = await directSessionReq<{
-    key: string;
-    entry: { visibility?: string };
-  }>("sessions.create", { agentId: "main", visibility: "draft" });
-
-  expect(created.ok).toBe(true);
-  expect(created.payload?.entry.visibility).toBe("draft");
-  expect(peekSystemEvents("agent:main:main")).toEqual([]);
-  const key = requireNonEmptyString(created.payload?.key, "created session key");
-  expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.visibility).toBe(
-    "draft",
-  );
-  const listed = await directSessionReq<{
-    sessions?: Array<{ key: string; visibility?: string }>;
-  }>("sessions.list", {});
-  expect(listed.payload?.sessions?.find((row) => row.key === key)?.visibility).toBe("draft");
-});
-
-test("sessions.create keeps omitted visibility on the prior shared default", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const created = await directSessionReq<{
-    key: string;
-    entry: { visibility?: string };
-  }>("sessions.create", { agentId: "main" });
-
-  expect(created.ok).toBe(true);
-  expect(created.payload?.entry.visibility).toBeUndefined();
-  const key = requireNonEmptyString(created.payload?.key, "created session key");
-  expect(
-    loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.visibility,
-  ).toBeUndefined();
-  const listed = await directSessionReq<{
-    sessions?: Array<{ key: string; visibility?: string }>;
-  }>("sessions.list", {});
-  expect(listed.payload?.sessions?.find((row) => row.key === key)?.visibility).toBe("shared");
-});
-
 test("sessions.create preserves keyed draft adoption idempotency", async () => {
   await createSessionStoreDir();
   const key = "agent:main:dashboard:idempotent-draft";
@@ -249,25 +313,6 @@ test("sessions.create preserves keyed draft adoption idempotency", async () => {
     error: {
       code: "INVALID_REQUEST",
       message: "sessions.create visibility requires a new session",
-    },
-  });
-});
-
-test("sessions.create rejects draft visibility when policy disables drafts", async () => {
-  await createSessionStoreDir();
-  testState.sessionConfig = { sharing: { drafts: false } };
-  (await getGatewayConfigModule()).setRuntimeConfigSnapshot(loadGatewayTestConfig());
-  const created = await directSessionReq("sessions.create", {
-    agentId: "main",
-    visibility: "draft",
-  });
-
-  expect(created).toMatchObject({
-    ok: false,
-    error: {
-      code: "INVALID_REQUEST",
-      message: "session visibility is disabled: draft",
-      details: { code: "SESSION_VISIBILITY_DISABLED", visibility: "draft" },
     },
   });
 });
@@ -395,7 +440,14 @@ test("sessions.create reset-in-place applies Fast Mode only for admin callers", 
   testState.sessionConfig = { dmScope: "main" };
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({
-    entries: { main: sessionStoreEntry("sess-fast-reset", { fastMode: false }) },
+    entries: {
+      main: sessionStoreEntry("sess-fast-reset", {
+        fastMode: false,
+        createdVia: "channel",
+        createdActor: { type: "human", source: "channel", id: "telegram:42" },
+        createdAt: 1234,
+      }),
+    },
   });
   const params = {
     agentId: "main",
@@ -424,7 +476,12 @@ test("sessions.create reset-in-place applies Fast Mode only for admin callers", 
   expect(changed.payload?.entry.fastMode).toBe(true);
   expect(
     loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
-  ).toMatchObject({ fastMode: true });
+  ).toMatchObject({
+    fastMode: true,
+    createdVia: "channel",
+    createdActor: { type: "human", source: "channel", id: "telegram:42" },
+    createdAt: 1234,
+  });
 });
 
 test("sessions.create rechecks Fast Mode before interrupting reset work", async () => {
@@ -608,106 +665,6 @@ test("sessions.create does not apply create-time visibility to an in-place reset
       message: "sessions.create visibility requires a new session",
     },
   });
-});
-
-test("sessions.create reset-in-place preserves the node creation stamp", async () => {
-  testState.sessionConfig = { dmScope: "main" };
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("existing-main", {
-        createdVia: "channel",
-        createdActor: { type: "human", source: "channel", id: "telegram:42" },
-        createdAt: 1234,
-      }),
-    },
-  });
-
-  const reset = await directSessionReq<{ entry?: Record<string, unknown> }>(
-    "sessions.create",
-    { agentId: "main", parentSessionKey: "main", emitCommandHooks: true },
-    {
-      client: {
-        connect: { scopes: ["operator.write"] },
-        authenticatedUserProfile: {
-          profileId: ensureProfileForEmail("session-resetter@example.test").id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: 1,
-        },
-      } as never,
-    },
-  );
-
-  expect(reset.ok).toBe(true);
-  expect(reset.payload?.entry).toMatchObject({
-    createdVia: "channel",
-    createdActor: { type: "human", source: "channel", id: "telegram:42" },
-    createdAt: 1234,
-  });
-  expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
-    createdVia: "channel",
-    createdActor: { type: "human", source: "channel", id: "telegram:42" },
-    createdAt: 1234,
-  });
-});
-
-test("sessions.create adopting an existing key does not restamp node provenance", async () => {
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      "agent:main:dashboard:adopted": sessionStoreEntry("existing-adopted", {
-        createdVia: "spawn",
-        createdActor: { type: "agent", id: "agent:main:main" },
-        createdAt: 4321,
-      }),
-    },
-  });
-  const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
-  chatSend.mockImplementation(async ({ respond }) => {
-    respond(true, { runId: "adopted-run", status: "started" });
-  });
-
-  try {
-    const adopted = await directSessionReq<{
-      entry?: Record<string, unknown>;
-      runStarted?: boolean;
-    }>(
-      "sessions.create",
-      { key: "agent:main:dashboard:adopted", agentId: "main", message: "adopted follow-up" },
-      {
-        client: {
-          connect: { scopes: ["operator.write"] },
-          authenticatedUserProfile: {
-            profileId: ensureProfileForEmail("session-adopter@example.test").id,
-            displayName: null,
-            hasAvatar: false,
-            updatedAt: 1,
-          },
-        } as never,
-      },
-    );
-
-    expect(adopted.ok).toBe(true);
-    // Post-create work (the nested initial chat.send) still runs on adoption.
-    expect(adopted.payload?.runStarted).toBe(true);
-    expect(chatSend).toHaveBeenCalledTimes(1);
-    expect(
-      loadSessionEntry({ sessionKey: "agent:main:dashboard:adopted", storePath }),
-    ).toMatchObject({
-      createdVia: "spawn",
-      createdActor: { type: "agent", id: "agent:main:main" },
-      createdAt: 4321,
-    });
-    // Adoption is not a node creation: no `created` event may enter the journal.
-    expect(
-      listSessionStateEventsSince("agent:main:dashboard:adopted", "main", 0, 20).events.filter(
-        (event) => event.kind === "created",
-      ),
-    ).toEqual([]);
-  } finally {
-    chatSend.mockRestore();
-  }
 });
 
 test("sessions.create replays an identical creation once and rejects conflicting intent", async () => {

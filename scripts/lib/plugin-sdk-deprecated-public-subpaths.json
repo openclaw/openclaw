@@ -1,7 +1,4 @@
 [
   "agent-media-payload",
-  "command-auth",
-  "discord",
-  "inbound-reply-dispatch",
-  "telegram-account"
+  "inbound-reply-dispatch"
 ]

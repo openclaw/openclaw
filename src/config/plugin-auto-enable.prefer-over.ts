@@ -1,7 +1,5 @@
 // Resolves plugin auto-enable preference ordering across candidate plugins.
-import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { findChatChannelMeta } from "../channels/chat-meta.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -11,7 +9,11 @@ import {
   pluginCacheRealpathSync,
   readPluginCacheJsonFile,
 } from "../plugins/plugin-cache-files.js";
-import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
+import {
+  parseExternalPluginCatalogEntries,
+  resolveExternalPluginCatalogPaths,
+} from "../plugins/plugin-catalog-source.js";
+import { isRecord, resolveUserPath } from "../utils.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -19,56 +21,8 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 const MAX_EXTERNAL_CATALOG_BYTES = 16 * 1024 * 1024;
 const log = createSubsystemLogger("config/plugin-catalog");
 
-type ExternalCatalogChannelEntry = {
-  id: string;
-  preferOver: string[];
-};
-
-const ENV_CATALOG_PATHS = ["OPENCLAW_PLUGIN_CATALOG_PATHS", "OPENCLAW_MPM_CATALOG_PATHS"];
-
-function resolveExternalCatalogPaths(env: NodeJS.ProcessEnv): string[] {
-  for (const key of ENV_CATALOG_PATHS) {
-    const raw = normalizeOptionalString(env[key]);
-    if (raw) {
-      return normalizeStringEntries(
-        raw.split(/[;,]/g).flatMap((chunk) => chunk.split(path.delimiter)),
-      );
-    }
-  }
-  const configDir = resolveConfigDir(env);
-  return [
-    path.join(configDir, "mpm", "plugins.json"),
-    path.join(configDir, "mpm", "catalog.json"),
-    path.join(configDir, "plugins", "catalog.json"),
-  ];
-}
-
-function parseExternalCatalogChannelEntries(raw: unknown): ExternalCatalogChannelEntry[] {
-  const list = Array.isArray(raw)
-    ? raw
-    : isRecord(raw)
-      ? (raw.entries ?? raw.packages ?? raw.plugins)
-      : undefined;
-  const channels: ExternalCatalogChannelEntry[] = [];
-  for (const entry of Array.isArray(list) ? list : []) {
-    if (!isRecord(entry) || !isRecord(entry.openclaw) || !isRecord(entry.openclaw.channel)) {
-      continue;
-    }
-    const channel = entry.openclaw.channel;
-    const id = normalizeOptionalString(channel.id) ?? "";
-    if (!id) {
-      continue;
-    }
-    const preferOver = Array.isArray(channel.preferOver)
-      ? channel.preferOver.filter((value): value is string => typeof value === "string")
-      : [];
-    channels.push({ id, preferOver });
-  }
-  return channels;
-}
-
 function resolveExternalCatalogPreferOver(channelId: string, env: NodeJS.ProcessEnv): string[] {
-  for (const rawPath of resolveExternalCatalogPaths(env)) {
+  for (const rawPath of resolveExternalPluginCatalogPaths({ env })) {
     const resolved = resolveUserPath(rawPath, env);
     if (!pluginCacheExistsSync(resolved)) {
       continue;
@@ -87,11 +41,14 @@ function resolveExternalCatalogPreferOver(channelId: string, env: NodeJS.Process
       if (!payload.ok) {
         throw payload.error;
       }
-      const channel = parseExternalCatalogChannelEntries(payload.value).find(
-        (entry) => entry.id === channelId,
-      );
-      if (channel) {
-        return channel.preferOver;
+      for (const entry of parseExternalPluginCatalogEntries(payload.value)) {
+        const channel = isRecord(entry.openclaw) ? entry.openclaw.channel : undefined;
+        if (!isRecord(channel) || normalizeOptionalString(channel.id) !== channelId) {
+          continue;
+        }
+        return Array.isArray(channel.preferOver)
+          ? channel.preferOver.filter((value): value is string => typeof value === "string")
+          : [];
       }
     } catch (err) {
       // Surface oversized catalogs so operators know a configured file was

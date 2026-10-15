@@ -3,13 +3,19 @@
  * Resumes the originating agent session when possible and falls back to safe
  * direct delivery only when session resume is unavailable.
  */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sleepWithAbort } from "@openclaw/retry";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../config/sessions/session-actor-storage-binding.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
@@ -17,7 +23,6 @@ import {
   type ExternalBestEffortDeliveryTarget,
 } from "../infra/outbound/best-effort-delivery.js";
 import { sendMessage } from "../infra/outbound/message.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -130,31 +135,48 @@ function shouldSuppressExecDeniedFollowup(sessionKey: string | undefined): boole
  * or `/reset` (#59349). Failure to resolve is treated as "not rebound" so a
  * real result is never suppressed by accident.
  */
-function isExecApprovalFollowupDirectDeliveryStale(params: {
+async function isExecApprovalFollowupDirectDeliveryStale(params: {
   agentId: string | undefined;
   sessionKey: string | undefined;
   expectedSessionId: string | undefined;
   sessionStore: string | undefined;
-}): boolean {
+  source: ReturnType<typeof captureSessionActorStorageOwner>;
+  expectedLifecycleRevision?: string;
+}): Promise<boolean> {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const expectedSessionId = normalizeOptionalString(params.expectedSessionId);
   if (!sessionKey || !expectedSessionId) {
     return false;
   }
   try {
+    if (params.source) {
+      const source = params.source;
+      const entry = readCapturedSessionActorEntry(source, sessionKey);
+      return (
+        !entry ||
+        entry.sessionId !== expectedSessionId ||
+        entry.lifecycleRevision !== params.expectedLifecycleRevision
+      );
+    }
     const storePath = resolveSessionStorePathCore(normalizeOptionalString(params.sessionStore), {
       agentId: params.agentId ?? resolveAgentIdFromSessionKey(sessionKey),
     });
     const resolvedSessionId = normalizeOptionalString(
-      loadSessionEntryReadOnly({
-        agentId: params.agentId,
-        storePath,
-        sessionKey,
-        clone: false,
-      })?.sessionId,
+      (
+        await readSessionEntryReadOnlyInWorker({
+          agentId: params.agentId,
+          storePath,
+          sessionKey,
+          clone: false,
+        })
+      )?.sessionId,
     );
     return isExecApprovalFollowupSessionRebound({ expectedSessionId, resolvedSessionId });
   } catch (err) {
+    if (params.source) {
+      log.debug(`exec approval followup source retired for ${sessionKey}; suppressing delivery`);
+      return true;
+    }
     // Fail open: if the session store can't be resolved we deliver rather than
     // risk dropping a real followup, but log it so this rare path is observable.
     log.debug(
@@ -176,14 +198,13 @@ function formatDirectExecApprovalFollowupText(
     return opts.allowDenied ? formatExecDeniedUserMessage(parsed.raw) : null;
   }
 
+  const metadata =
+    parsed.kind === "finished" ? normalizeLowercaseStringOrEmpty(parsed.metadata) : "";
+  const body = renderUserFacingText(
+    parsed.kind === "finished" || parsed.kind === "completed" ? parsed.body : parsed.raw,
+    { errorContext: !metadata.includes("code 0") },
+  ).trim();
   if (parsed.kind === "finished") {
-    const metadata = normalizeLowercaseStringOrEmpty(parsed.metadata);
-    const body = redactToolPayloadText(
-      renderUserFacingText(parsed.body, {
-        errorContext: !metadata.includes("code 0"),
-      }),
-    ).trim();
-
     return (
       body ||
       (metadata.includes("code 0")
@@ -194,28 +215,11 @@ function formatDirectExecApprovalFollowupText(
     );
   }
 
-  if (parsed.kind === "completed") {
-    const body = redactToolPayloadText(
-      renderUserFacingText(parsed.body, { errorContext: true }),
-    ).trim();
-    return body || "Background command finished.";
-  }
-
-  return (
-    redactToolPayloadText(renderUserFacingText(parsed.raw, { errorContext: true })).trim() || null
-  );
+  return body || (parsed.kind === "completed" ? "Background command finished." : null);
 }
 
-function readGatewayStatus(value: unknown): string | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? normalizeOptionalString((value as { status?: unknown }).status)
-    : undefined;
-}
-
-function readGatewayRunId(value: unknown): string | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? normalizeOptionalString((value as { runId?: unknown }).runId)
-    : undefined;
+function readGatewayString(value: unknown, key: "status" | "runId"): string | undefined {
+  return isRecord(value) ? normalizeOptionalString(value[key]) : undefined;
 }
 
 function buildFollowupWaitError(params: { status?: string; error?: unknown }): Error {
@@ -229,15 +233,14 @@ function buildFollowupWaitError(params: { status?: string; error?: unknown }): E
 }
 
 function hasTerminalFollowupEvidence(value: unknown): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
-  const record = value as Record<string, unknown>;
   return (
-    typeof record.endedAt === "number" ||
-    typeof record.error === "string" ||
-    typeof record.stopReason === "string" ||
-    record.livenessState === "terminal"
+    typeof value.endedAt === "number" ||
+    typeof value.error === "string" ||
+    typeof value.stopReason === "string" ||
+    value.livenessState === "terminal"
   );
 }
 
@@ -276,15 +279,12 @@ async function waitForAgentFollowupRun(params: {
         return { status: "observation_ended", reason: "deadline", transportErrors };
       }
       if (consecutiveTransportErrors > 1) {
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, retryDelayMs);
-          timer.unref?.();
-        });
+        await sleepWithAbort(retryDelayMs, undefined, { ref: false });
       }
       continue;
     }
     consecutiveTransportErrors = 0;
-    const status = readGatewayStatus(wait);
+    const status = readGatewayString(wait, "status");
     if (status === "ok") {
       return { status: "completed" };
     }
@@ -405,13 +405,10 @@ async function sendDirectFollowupFallback(params: {
     completionRetention: DIRECT_FOLLOWUP_COMPLETION_RETENTION,
   });
   if (sendResult.deliveryStatus === "suppressed") {
-    if (sendResult.suppressionReason === "adapter_returned_no_identity") {
-      throw new Error(
-        "exec approval followup delivery could not be confirmed: adapter returned no identity",
-      );
-    }
     throw new Error(
-      `exec approval followup delivery was suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
+      sendResult.suppressionReason === "adapter_returned_no_identity"
+        ? "exec approval followup delivery could not be confirmed: adapter returned no identity"
+        : `exec approval followup delivery was suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
     );
   }
   return true;
@@ -422,6 +419,16 @@ export async function sendExecApprovalFollowup(
   params: ExecApprovalFollowupParams,
 ): Promise<boolean> {
   const sessionKey = params.sessionKey?.trim();
+  const source = sessionKey
+    ? captureSessionActorStorageOwner(
+        { agentId: params.agentId, sessionKey },
+        { assertCurrent() {}, authorize() {} },
+      )
+    : undefined;
+  const expectedLifecycleRevision =
+    source && sessionKey
+      ? readCapturedSessionActorEntry(source, sessionKey)?.lifecycleRevision
+      : undefined;
   // Trimmed text only classifies empty/denied results; the raw text is what reaches the
   // agent so command whitespace survives the follow-up.
   const trimmedResultText = params.resultText.trim();
@@ -478,13 +485,13 @@ export async function sendExecApprovalFollowup(
         idempotencyKey,
       });
       const accepted = await callExecApprovalFollowupGateway("agent", 60_000, agentArgs);
-      const status = readGatewayStatus(accepted);
+      const status = readGatewayString(accepted, "status");
       if (status === "ok") {
         return true;
       }
       if (status === "accepted" || status === "in_flight" || status === "pending") {
         const runId =
-          readGatewayRunId(accepted) ?? normalizeOptionalString(agentArgs.idempotencyKey);
+          readGatewayString(accepted, "runId") ?? normalizeOptionalString(agentArgs.idempotencyKey);
         if (!runId) {
           throw buildFollowupWaitError({ status: "missing-run-id" });
         }
@@ -519,11 +526,13 @@ export async function sendExecApprovalFollowup(
   }
 
   if (
-    isExecApprovalFollowupDirectDeliveryStale({
+    await isExecApprovalFollowupDirectDeliveryStale({
       agentId: params.agentId,
       sessionKey,
       expectedSessionId: params.expectedSessionId,
       sessionStore: params.sessionStore,
+      source,
+      expectedLifecycleRevision,
     })
   ) {
     emitDiagnosticEvent({

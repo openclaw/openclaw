@@ -185,109 +185,116 @@ describe("runCronCommandJob", () => {
     },
   );
 
-  it("runs command argv and returns stdout as the deliverable summary", async () => {
-    const result = await runCronCommandJob({
-      job: makeCommandJob({
-        kind: "command",
-        argv: [process.execPath, "-e", "process.stdout.write('hello from cron')"],
-        timeoutSeconds: 5,
-      }),
-      nowMs: () => 123,
-    });
+  it.each([
+    { output: "NO_REPLY\n", summary: "NO_REPLY", outputMaxBytes: undefined, truncated: false },
+    {
+      output: `Visit https://example.com/device and enter code ABCD-EFGH\n${"x".repeat(200)}`,
+      summary: `action-required output preserved:\nVisit https://example.com/device and enter code ABCD-EFGH\n\n${"x".repeat(24)}`,
+      outputMaxBytes: 24,
+      truncated: true,
+    },
+  ])(
+    "preserves deliverable command output %#",
+    async ({ output, summary, outputMaxBytes, truncated }) => {
+      const result = await runCronCommandJob({
+        job: makeCommandJob({
+          kind: "command",
+          argv: [process.execPath, "-e", `process.stdout.write(${JSON.stringify(output)})`],
+          timeoutSeconds: 5,
+          outputMaxBytes,
+        }),
+        nowMs: () => 123,
+      });
+      expect(result.status).toBe("ok");
+      expect(result.errorClassification).toBeUndefined();
+      expect(result.summary).toBe(summary);
+      expect(result.diagnostics?.summary).toBe(summary);
+      expect(result.diagnostics?.entries[0]).toMatchObject({
+        ts: 123,
+        source: "exec",
+        severity: "info",
+        exitCode: 0,
+        truncated,
+      });
+    },
+  );
 
-    expect(result.status).toBe("ok");
-    expect(result.errorClassification).toBeUndefined();
-    expect(result.summary).toBe("hello from cron");
-    expect(result.diagnostics?.entries[0]).toMatchObject({
-      ts: 123,
-      source: "exec",
-      severity: "info",
-      exitCode: 0,
-    });
-  });
-
-  it("preserves exact NO_REPLY stdout for outbound suppression", async () => {
-    const result = await runCronCommandJob({
-      job: makeCommandJob({
-        kind: "command",
-        argv: [process.execPath, "-e", "process.stdout.write('NO_REPLY\\n')"],
-        timeoutSeconds: 5,
-      }),
-    });
-
-    expect(result.status).toBe("ok");
-    expect(result.summary).toBe("NO_REPLY");
-  });
-
-  it("marks non-zero exit codes as cron errors and keeps stderr as summary", async () => {
-    const result = await runCronCommandJob({
-      job: makeCommandJob({
-        kind: "command",
-        argv: [process.execPath, "-e", "process.stderr.write('bad thing'); process.exit(7)"],
-        timeoutSeconds: 5,
-      }),
-    });
-
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("command exited with code 7");
-    expect(result.errorClassification).toEqual({ kind: "permanent" });
-    expect(result.failureNotificationDetail).toEqual({ kind: "command-exit", exitCode: 7 });
-    expect(result.summary).toBe("bad thing");
-    expect(result.diagnostics?.entries[0]).toMatchObject({
-      source: "exec",
-      severity: "error",
-      exitCode: 7,
-    });
-  });
-
-  it("preserves early action-required command output when the captured tail is truncated", async () => {
-    const result = await runCronCommandJob({
-      job: makeCommandJob({
-        kind: "command",
-        argv: [
-          process.execPath,
-          "-e",
-          [
-            "process.stdout.write('Visit https://example.com/device and enter code ABCD-EFGH\\n')",
-            "process.stdout.write('x'.repeat(200))",
-          ].join(";"),
-        ],
-        timeoutSeconds: 5,
-        outputMaxBytes: 24,
-      }),
-    });
-
-    expect(result.status).toBe("ok");
-    expect(result.summary).toBe(
-      `action-required output preserved:\nVisit https://example.com/device and enter code ABCD-EFGH\n\n${"x".repeat(24)}`,
-    );
-    expect(result.diagnostics?.summary).toBe(result.summary);
-    expect(result.diagnostics?.entries[0]).toMatchObject({ truncated: true });
-  });
-
-  it("marks command timeouts as cron errors", async () => {
-    const result = await runCronCommandJob({
-      job: makeCommandJob({
-        kind: "command",
-        argv: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
-        timeoutSeconds: 0.05,
-      }),
-      nowMs: () => 456,
-    });
-
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("command timed out");
-    expect(result.errorClassification).toEqual({ kind: "reason", reason: "timeout" });
-    expect(result.failureNotificationDetail).toEqual({
-      kind: "command-timeout",
-      mode: "wall-clock",
-    });
-    expect(result.diagnostics?.entries[0]).toMatchObject({
-      ts: 456,
-      source: "exec",
-      severity: "error",
-    });
-  });
+  it.each([
+    {
+      script: "process.stderr.write('bad thing'); process.exit(7)",
+      timeoutSeconds: 5,
+      error: "command exited with code 7",
+      errorClassification: { kind: "permanent" },
+      failureNotificationDetail: { kind: "command-exit", exitCode: 7 },
+      summary: "bad thing",
+      diagnostic: { exitCode: 7 },
+    },
+    {
+      script: "setInterval(() => {}, 1000)",
+      timeoutSeconds: 0.05,
+      error: "command timed out",
+      errorClassification: { kind: "reason", reason: "timeout" },
+      failureNotificationDetail: { kind: "command-timeout", mode: "wall-clock" },
+      diagnostic: {},
+    },
+    {
+      script: "setInterval(() => {}, 1000)",
+      timeoutSeconds: 5,
+      noOutputTimeoutSeconds: 0.05,
+      error: "command produced no output before noOutputTimeoutSeconds",
+      errorClassification: { kind: "reason", reason: "timeout" },
+      failureNotificationDetail: { kind: "command-timeout", mode: "no-output" },
+      diagnostic: {},
+    },
+    {
+      script: "process.stdout.write('should not run')",
+      timeoutSeconds: 5,
+      abort: true,
+      error: "command stopped",
+      errorClassification: undefined,
+      failureNotificationDetail: undefined,
+      diagnostic: {},
+    },
+  ])(
+    "reports command failure: $error",
+    async ({
+      script,
+      timeoutSeconds,
+      noOutputTimeoutSeconds,
+      abort,
+      error,
+      errorClassification,
+      failureNotificationDetail,
+      summary,
+      diagnostic,
+    }) => {
+      const controller = new AbortController();
+      if (abort) {
+        controller.abort();
+      }
+      const result = await runCronCommandJob({
+        job: makeCommandJob({
+          kind: "command",
+          argv: [process.execPath, "-e", script],
+          timeoutSeconds,
+          noOutputTimeoutSeconds,
+        }),
+        abortSignal: controller.signal,
+        nowMs: () => 456,
+      });
+      expect(result.status).toBe("error");
+      expect(result.error).toBe(error);
+      expect(result.errorClassification).toEqual(errorClassification);
+      expect(result.failureNotificationDetail).toEqual(failureNotificationDetail);
+      expect(result.summary).toBe(summary);
+      expect(result.diagnostics?.entries[0]).toMatchObject({
+        ts: 456,
+        source: "exec",
+        severity: "error",
+        ...diagnostic,
+      });
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "kills shell process groups on timeout",
@@ -481,79 +488,31 @@ describe("runCronCommandJob", () => {
     }
   });
 
-  it("marks no-output timeouts as cron errors", async () => {
-    const result = await runCronCommandJob({
-      job: makeCommandJob({
-        kind: "command",
-        argv: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
-        timeoutSeconds: 5,
-        noOutputTimeoutSeconds: 0.05,
-      }),
-    });
-
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("command produced no output before noOutputTimeoutSeconds");
-    expect(result.errorClassification).toEqual({ kind: "reason", reason: "timeout" });
-    expect(result.failureNotificationDetail).toEqual({
-      kind: "command-timeout",
-      mode: "no-output",
-    });
-    expect(result.diagnostics?.entries[0]).toMatchObject({
-      source: "exec",
-      severity: "error",
-    });
-  });
-
-  it("marks aborted command runs as cron errors", async () => {
-    const controller = new AbortController();
-    controller.abort();
-
-    const result = await runCronCommandJob({
-      job: makeCommandJob({
-        kind: "command",
-        argv: [process.execPath, "-e", "process.stdout.write('should not run')"],
-        timeoutSeconds: 5,
-      }),
-      abortSignal: controller.signal,
-    });
-
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("command stopped");
-    expect(result.errorClassification).toBeUndefined();
-    expect(result.summary).toBeUndefined();
-    expect(result.failureNotificationDetail).toBeUndefined();
-  });
-
-  it("keeps command start failures generic", async () => {
-    const result = await runCronCommandJob({
-      job: makeCommandJob({
-        kind: "command",
-        argv: ["openclaw-command-that-does-not-exist"],
-        timeoutSeconds: 5,
-      }),
-    });
-
-    expect(result.status).toBe("error");
-    expect(result.failureNotificationDetail).toBeUndefined();
-    expect(result.errorClassification).toEqual({ kind: "permanent" });
-  });
-
-  it("leaves transient command start errors unclassified", async () => {
-    const spawnError = Object.assign(new Error("spawn EAGAIN"), { code: "EAGAIN" });
-    const runCommand = vi
-      .spyOn(processExecution, "runCommandWithTimeout")
-      .mockRejectedValueOnce(spawnError);
-
+  it.each(["missing", "transient"])("classifies %s command start failures", async (mode) => {
+    const runCommand =
+      mode === "transient"
+        ? vi
+            .spyOn(processExecution, "runCommandWithTimeout")
+            .mockRejectedValueOnce(Object.assign(new Error("spawn EAGAIN"), { code: "EAGAIN" }))
+        : undefined;
     try {
       const result = await runCronCommandJob({
-        job: makeCommandJob({ kind: "command", argv: [process.execPath] }),
+        job: makeCommandJob({
+          kind: "command",
+          argv: [mode === "missing" ? "openclaw-command-that-does-not-exist" : process.execPath],
+          timeoutSeconds: 5,
+        }),
       });
-
       expect(result.status).toBe("error");
-      expect(result.error).toBe("spawn EAGAIN");
-      expect(result.errorClassification).toBeUndefined();
+      expect(result.failureNotificationDetail).toBeUndefined();
+      expect(result.errorClassification).toEqual(
+        mode === "missing" ? { kind: "permanent" } : undefined,
+      );
+      if (mode === "transient") {
+        expect(result.error).toBe("spawn EAGAIN");
+      }
     } finally {
-      runCommand.mockRestore();
+      runCommand?.mockRestore();
     }
   });
 });

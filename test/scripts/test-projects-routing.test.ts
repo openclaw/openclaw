@@ -238,8 +238,18 @@ describe("test-projects args", () => {
     },
     {
       title: "routes fake-timer unit-fast targets to the serial fake-timer config",
-      target: "src/acp/translator.stop-reason.test.ts",
+      target: "src/utils.test.ts",
       config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+    },
+    {
+      title: "routes Gemini embedding auth to its host broker owner",
+      target: "extensions/google/embedding-provider.test.ts",
+      config: "test/vitest/vitest.extension-database-workers.config.ts",
+    },
+    {
+      title: "routes ACP event ledger consumers to their host broker owner",
+      target: "src/acp/translator.stop-reason.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
     },
     {
       title: "routes ACP session signals to their host broker owner",
@@ -352,13 +362,19 @@ describe("test-projects args", () => {
         watchMode: false,
       },
     ]);
-    for (const target of [
-      "src/auto-reply/reply/dispatch-from-config.test.ts",
-      "src/auto-reply/reply/dispatch-from-config.tts-stream.test.ts",
-    ]) {
+    for (const [target, config] of [
+      [
+        "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "test/vitest/vitest.auto-reply.config.ts",
+      ],
+      [
+        "src/auto-reply/reply/dispatch-from-config.tts-stream.test.ts",
+        "test/vitest/vitest.infra.config.ts",
+      ],
+    ] as const) {
       expect(buildVitestRunPlans([target])).toEqual([
         {
-          config: "test/vitest/vitest.auto-reply.config.ts",
+          config,
           forwardedArgs: [],
           includePatterns: [target],
           watchMode: false,
@@ -376,7 +392,6 @@ describe("test-projects args", () => {
           "src/agents/openai-transport-stream.base.test.ts",
           "src/agents/openai-transport-stream.deepseek-and-shaping.test.ts",
           "src/agents/openai-transport-stream.failed-sse.test.ts",
-          "src/agents/openai-transport-stream.incomplete-sse.test.ts",
           "src/agents/openai-transport-stream.replay-and-tools.test.ts",
         ],
         watchMode: false,

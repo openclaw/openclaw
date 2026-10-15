@@ -159,6 +159,11 @@ export async function repairLoadedGatewayServiceForStart(
     hasGatewayServiceLauncherOverride(params.state.command) ||
     hasGatewayServiceEnvironmentDifference(params.state.command, GATEWAY_TARGET_ENV_KEYS)
   ) {
+    if (process.platform === "win32") {
+      throw new Error(
+        "Refusing to repair the managed Gateway service because an operator-owned Scheduled Task override changes its command, working directory, or Gateway target environment. Inspect the task's registered action and working directory in Task Scheduler, then resolve the override before retrying.",
+      );
+    }
     const unitName = path.basename(params.state.command?.sourcePath ?? "<unit>");
     throw new Error(
       `Refusing to repair the managed Gateway service because a systemd drop-in overrides its command, working directory, or Gateway target environment. Inspect the unit with \`systemctl --user cat ${unitName}\`, then update or remove the operator-owned drop-in before retrying.`,

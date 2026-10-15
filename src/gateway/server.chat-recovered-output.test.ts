@@ -22,6 +22,7 @@ const answer = "The answer is 42.";
 const scenarios = ["continuation", "fallback", "terminal", "no-fallback", "settled-write"];
 const requests = new Map<string, Record<string, unknown>[]>();
 const events: ChatEvent[] = [];
+const publishedMessages = new Map<string, unknown[]>();
 let home: Awaited<ReturnType<typeof setupGatewayTempHome>>;
 let gateway: Awaited<ReturnType<typeof startGatewayWithClient>>;
 let provider: ReturnType<typeof createServer>;
@@ -191,6 +192,17 @@ describe("registered chat.send recovered output over Responses HTTP", () => {
         if (event.event === "chat") {
           events.push(event.payload as ChatEvent);
         }
+        if (
+          event.event === "session.message" &&
+          isRecord(event.payload) &&
+          typeof event.payload.sessionKey === "string" &&
+          isRecord(event.payload.message) &&
+          event.payload.message.role === "assistant"
+        ) {
+          const messages = publishedMessages.get(event.payload.sessionKey) ?? [];
+          messages.push(event.payload.message);
+          publishedMessages.set(event.payload.sessionKey, messages);
+        }
       },
     });
   }, 90_000);
@@ -220,6 +232,7 @@ describe("registered chat.send recovered output over Responses HTTP", () => {
     "chat.send retains only the selected output after %s",
     async (scenario) => {
       const sessionKey = `agent:${scenario}:main`;
+      await gateway.client.request("sessions.messages.subscribe", { key: sessionKey });
       const started = await gateway.client.request<{ runId: string }>("chat.send", {
         sessionKey,
         message: "What is the answer?",
@@ -240,10 +253,29 @@ describe("registered chat.send recovered output over Responses HTTP", () => {
       );
       if (failed) {
         expect(completed.status).toBe("error");
-        expect(messageText(history.messages.at(-1))).toBe(
-          `⚠️ LLM request failed (provider internal error). This is usually temporary — try again shortly.\n\n${prefix}`,
-        );
-        expect(terminal.some((event) => event.state === "error")).toBe(true);
+        for (const messages of [history.messages, publishedMessages.get(sessionKey) ?? []]) {
+          const records = messages.filter(isRecord);
+          const partial = records.findLast((message) => message.role === "assistant");
+          expect(messageText(partial)).toBe(prefix);
+          expect(partial).not.toHaveProperty("stopReason");
+          expect(partial).not.toHaveProperty("openclawRunError");
+        }
+        // Terminal failures publish chat.error after persistence; custom receipts live in history.
+        const notices = history.messages
+          .filter(isRecord)
+          .filter((message) => message.customType === "run-failed-before-reply");
+        expect(notices, "durable terminal failure receipt").toHaveLength(1);
+        expect(notices[0]).toMatchObject({
+          role: "custom",
+          openclawRunError: { runId: started.runId, summary: expect.stringMatching(/\S/) },
+        });
+        expect(terminal).toEqual([
+          expect.objectContaining({
+            runId: started.runId,
+            state: "error",
+            errorMessage: expect.stringMatching(/\S/),
+          }),
+        ]);
         const deltas = events.filter(
           (event): event is Extract<ChatEvent, { state: "delta" }> =>
             event.runId === started.runId && event.state === "delta",
@@ -252,7 +284,8 @@ describe("registered chat.send recovered output over Responses HTTP", () => {
           (previous, event) => mergeChatStreamMessage(previous, event),
           undefined,
         );
-        expect(messageText(liveMessage)).toBe(prefix);
+        // Saved assistant content belongs to canonical publication, not the unsaved live tail.
+        expect(messageText(liveMessage)).toBe("");
       } else {
         expect(completed.status).toBe("ok");
         expect(completed.terminalReply?.text).toBe(answer);

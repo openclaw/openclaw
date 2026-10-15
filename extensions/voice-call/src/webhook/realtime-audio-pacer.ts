@@ -1,4 +1,3 @@
-// Realtime telephony audio pacing for mulaw streams.
 import { randomUUID } from "node:crypto";
 import type { StreamFrameAdapter } from "./stream-frame-adapter.js";
 
@@ -12,7 +11,6 @@ const QUEUE_COMPACT_HEAD_THRESHOLD = 256;
 const MAX_PLAYBACK_SEGMENTS = 128;
 const MAX_PENDING_MARK_BOUNDARIES = 64;
 
-/** Queue item sent over the realtime provider media stream. */
 type RealtimeAudioQueueItem =
   | {
       chunk: Buffer;
@@ -40,10 +38,6 @@ type RealtimeMarkBoundary = {
   sentMs: number;
 };
 
-/** WebSocket send callback for realtime audio frames. */
-type RealtimeAudioSend = (message: string) => boolean;
-
-/** Paces outgoing mulaw audio frames at telephony cadence. */
 export class RealtimeAudioPacer {
   private queue: RealtimeAudioQueueItem[] = [];
   private queueHead = 0;
@@ -67,7 +61,9 @@ export class RealtimeAudioPacer {
       onBackpressure?: () => void;
       /** Fires whenever queued audio and playback state are discarded. */
       onPlaybackReset?: () => void;
-      send: RealtimeAudioSend;
+      /** Fires for each audio chunk actually written to the carrier stream. */
+      onAudioSent?: (audio: Buffer) => void;
+      send: (message: string) => boolean;
       serializer: Pick<StreamFrameAdapter, "serializeMedia" | "serializeClear" | "serializeMark">;
     },
   ) {}
@@ -161,18 +157,14 @@ export class RealtimeAudioPacer {
       ) {
         break;
       }
-      const retired = this.playbackSegments.shift();
-      if (retired) {
-        this.retiredAudioMs += retired.sentMs;
-        // Providers may resume the same item after a chunk acknowledgement;
-        // keep its cumulative played offset so later snapshots do not restart
-        // at zero.
-        if (retired.itemId !== undefined) {
-          this.retiredItemOffsets.set(
-            retired.itemId,
-            (this.retiredItemOffsets.get(retired.itemId) ?? 0) + retired.sentMs,
-          );
-        }
+      this.playbackSegments.shift();
+      this.retiredAudioMs += head.sentMs;
+      // Providers can resume the same item after acknowledgement; retain its played offset.
+      if (head.itemId !== undefined) {
+        this.retiredItemOffsets.set(
+          head.itemId,
+          (this.retiredItemOffsets.get(head.itemId) ?? 0) + head.sentMs,
+        );
       }
     }
     this.confirmedPlayedMs = Math.max(
@@ -187,8 +179,6 @@ export class RealtimeAudioPacer {
       return 0;
     }
     const clearedAudioBytes = this.queuedAudioBytes;
-    this.clearTimer();
-    this.resetQueue();
     this.resetPlaybackState();
     this.params.send(this.params.serializer.serializeClear());
     return clearedAudioBytes;
@@ -199,11 +189,8 @@ export class RealtimeAudioPacer {
     return !this.closed && (this.queuedAudioBytes > 0 || this.timer !== null);
   }
 
-  /** Stop sending and discard queued frames. */
   close(): void {
     this.closed = true;
-    this.clearTimer();
-    this.resetQueue();
     this.resetPlaybackState();
   }
 
@@ -224,6 +211,8 @@ export class RealtimeAudioPacer {
   }
 
   private resetPlaybackState(): void {
+    this.clearTimer();
+    this.resetQueue();
     this.playbackSegments = [];
     this.queuedAudioBytes = 0;
     this.sentAudioMs = 0;
@@ -236,7 +225,6 @@ export class RealtimeAudioPacer {
     this.params.onPlaybackReset?.();
   }
 
-  /** Clear the scheduled pump timer. */
   private clearTimer(): void {
     if (!this.timer) {
       return;
@@ -245,29 +233,19 @@ export class RealtimeAudioPacer {
     this.timer = null;
   }
 
-  /** Start the pump when queued work exists and no timer is active. */
   private ensurePump(): void {
     if (!this.timer) {
       this.pump();
     }
   }
 
-  /** Close the pacer and notify the caller about queued-audio backpressure. */
   private failBackpressure(): void {
     this.close();
     this.params.onBackpressure?.();
   }
 
-  private get pendingQueueSize(): number {
-    return Math.max(0, this.queue.length - this.queueHead);
-  }
-
   /** Take one queued item without shifting the remaining paced-audio backlog. */
   private takeNextItem(): RealtimeAudioQueueItem | undefined {
-    if (this.queueHead >= this.queue.length) {
-      this.resetQueue();
-      return undefined;
-    }
     const item = this.queue[this.queueHead];
     this.queueHead += 1;
     if (this.queueHead >= this.queue.length) {
@@ -296,13 +274,13 @@ export class RealtimeAudioPacer {
     const now = performance.now();
     this.streamClockMs ??= now;
 
-    while (this.pendingQueueSize > 0 && this.streamClockMs < now + LEAD_MS) {
+    while (this.queueHead < this.queue.length && this.streamClockMs < now + LEAD_MS) {
       const item = this.takeNextItem();
       if (!item) {
         break;
       }
 
-      const sent = item.type === "audio" ? this.sendAudioItem(item) : this.sendMarkItem(item);
+      const sent = item.type === "audio" ? this.sendAudioItem(item) : this.sendMarkItem(item.name);
       if (!sent) {
         this.resetQueue();
         this.queuedAudioBytes = 0;
@@ -311,7 +289,7 @@ export class RealtimeAudioPacer {
       }
     }
 
-    if (this.pendingQueueSize === 0) {
+    if (this.queueHead === this.queue.length) {
       this.streamClockMs = null;
       return;
     }
@@ -325,6 +303,7 @@ export class RealtimeAudioPacer {
       this.params.serializer.serializeMedia(item.chunk.toString("base64")),
     );
     if (sent) {
+      this.params.onAudioSent?.(item.chunk);
       item.segment.sentMs += item.durationMs;
       this.sentAudioMs += item.durationMs;
       item.segment.lastSentEndMs = this.sentAudioMs;
@@ -340,18 +319,15 @@ export class RealtimeAudioPacer {
     // Confirm playout during long provider chunks, before their final provider mark.
     this.lastPlaybackMarkMs = this.sentAudioMs;
     this.playbackMarkSequence += 1;
-    return this.sendMarkItem({
-      type: "mark",
-      name: `${this.playbackMarkPrefix}-${this.playbackMarkSequence}`,
-    });
+    return this.sendMarkItem(`${this.playbackMarkPrefix}-${this.playbackMarkSequence}`);
   }
 
   /** Send a queued mark frame and bind it to the playback prefix before it. */
-  private sendMarkItem(item: Extract<RealtimeAudioQueueItem, { type: "mark" }>): boolean {
-    const sent = this.params.send(this.params.serializer.serializeMark(item.name));
+  private sendMarkItem(name: string): boolean {
+    const sent = this.params.send(this.params.serializer.serializeMark(name));
     if (sent) {
       this.markBoundaries.push({
-        name: item.name,
+        name,
         sentMs: this.sentAudioMs,
       });
       if (this.markBoundaries.length > MAX_PENDING_MARK_BOUNDARIES) {

@@ -15,8 +15,8 @@ export type FaceTimeTalkEventSummary = {
   message?: string;
 };
 
-export function summarizeRecentTalkEvents(events: readonly unknown[], limit = 12) {
-  return events.slice(-limit).map((event): FaceTimeTalkEventSummary => {
+export function summarizeRecentTalkEvents(events: readonly unknown[]) {
+  return events.slice(-12).map((event): FaceTimeTalkEventSummary => {
     const record = asRecord(event);
     const payload = asRecord(record.payload);
     return {

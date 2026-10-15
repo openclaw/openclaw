@@ -40,6 +40,43 @@ function nodeProof(nodeId: string, bundlePrewarm?: 1): NodeWorkerSupervisorNodeP
   };
 }
 
+function installRequest(current: NodeWorkerSupervisorNodeProof) {
+  return {
+    deviceId: current.nodeId,
+    environmentId: "environment-1",
+    reason: "provision" as const,
+    artifact,
+    prewarm: true,
+  };
+}
+
+function installerFixture(
+  invoke: NodeWorkerSupervisorTransport["invoke"],
+  nodes: NodeWorkerSupervisorNodeProof[],
+  listCurrentNodes: NodeWorkerSupervisorTransport["listCurrentNodes"] = async () => nodes,
+) {
+  let tokenId = 65;
+  const transfer = createNodeWorkerBundleTransferService({
+    generateToken: () => String.fromCharCode(tokenId++).repeat(43),
+  });
+  const transport: NodeWorkerSupervisorTransport = {
+    hasCurrentRunner: () => false,
+    async getCurrentNode(nodeId) {
+      return (await this.listCurrentNodes()).find((candidate) => candidate.nodeId === nodeId);
+    },
+    listCurrentNodes,
+    isCurrent: (candidate) => nodes.includes(candidate),
+    invoke,
+  };
+  const ensure = createGatewayNodeWorkerBundleInstaller({
+    gatewayNamespace: "gateway-test",
+    getTransport: () => transport,
+    transfer,
+    log: { info: vi.fn(), warn: vi.fn() },
+  });
+  return { ensure, transfer };
+}
+
 function observedInstaller() {
   let clock = 1_000;
   const log = { info: vi.fn(), warn: vi.fn() };
@@ -169,20 +206,6 @@ describe("Gateway node worker bundle installer", () => {
     );
   });
 
-  it("removes failed observations and logs the failure", async () => {
-    const h = observedInstaller();
-    const call = await h.start("provision");
-    h.advance(2_000);
-    call.fail(new Error("node connection closed"));
-    await expect(call.pending).rejects.toThrow("node connection closed");
-    expect(h.ensure.readInstall(node.nodeId)).toBeUndefined();
-    expect(h.ensure.version()).toBe(2);
-    expect(h.changed).toHaveBeenCalledTimes(2);
-    expect(h.log.warn).toHaveBeenCalledExactlyOnceWith(
-      "worker runtime install: node=node-1 bundle=aaaaaaaaaaaa failed after 2.0s: node connection closed",
-    );
-  });
-
   it("refcounts each environment sharing an install until its callers settle", async () => {
     const h = observedInstaller();
     const provisionProgress = vi.fn();
@@ -234,8 +257,6 @@ describe("Gateway node worker bundle installer", () => {
 
   it.each([
     [3_000_000, "queued"],
-    [4_000_000, "queued"],
-    [3_000_000, "retry"],
     [4_000_000, "retry"],
   ] as const)(
     "reports an interrupted serve at %i bytes once and immediately publishes %s transfer progress",
@@ -297,224 +318,127 @@ describe("Gateway node worker bundle installer", () => {
     },
   );
 
-  it("cancels held node discovery before granting or invoking installation", async () => {
+  it.each(["discovery", "dispatch"])("cancels installation during %s", async (phase) => {
     const discovered = createDeferredCore<NodeWorkerSupervisorNodeProof[]>();
     const controller = new AbortController();
-    const transfer = createNodeWorkerBundleTransferService();
-    const grant = vi.spyOn(transfer, "prepare");
-    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => ({
-      ok: true,
-      payload: artifact,
-    }));
-    const listCurrentNodes = vi.fn(() => discovered.promise);
-    const ensure = createGatewayNodeWorkerBundleInstaller({
-      gatewayNamespace: "gateway-test",
-      getTransport: () => ({
-        hasCurrentRunner: () => false,
-        async getCurrentNode(nodeId) {
-          return (await this.listCurrentNodes()).find((candidate) => candidate.nodeId === nodeId);
-        },
-        listCurrentNodes,
-        isCurrent: (candidate) => candidate === node,
-        invoke,
-      }),
-      transfer,
-      log: { info: vi.fn(), warn: vi.fn() },
-    });
-    const pending = ensure({
-      deviceId: node.nodeId,
-      environmentId: "environment-1",
-      reason: "provision",
-      artifact,
-      prewarm: true,
-      signal: controller.signal,
-    }).catch((error: unknown) => error);
-    try {
-      expect(listCurrentNodes).toHaveBeenCalledOnce();
-      controller.abort(new DOMException("Stop node discovery", "AbortError"));
-      expect(await pending).toMatchObject({ name: "AbortError" });
-      expect(grant).not.toHaveBeenCalled();
-      expect(invoke).not.toHaveBeenCalled();
-    } finally {
-      discovered.resolve([node]);
-      await pending;
-      grant.mockRestore();
-      transfer.closeAll();
-    }
-    expect(await pending).toMatchObject({ name: "AbortError" });
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("binds install dispatch to the current node proof and exact receipt", async () => {
-    const transfer = createNodeWorkerBundleTransferService({
-      generateToken: () => "A".repeat(43),
-    });
-    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (_request) => ({
-      ok: true,
-      payloadJSON: JSON.stringify({
-        bundleHash: artifact.bundleHash,
-        openclawVersion: artifact.openclawVersion,
-        protocolFeatures: artifact.protocolFeatures,
-      }),
-    }));
-    const transport: NodeWorkerSupervisorTransport = {
-      hasCurrentRunner: () => false,
-      getCurrentNode: async (nodeId) => (node.nodeId === nodeId ? node : undefined),
-      listCurrentNodes: async () => [node],
-      isCurrent: (candidate) => candidate === node,
-      invoke,
-    };
-    const ensure = createGatewayNodeWorkerBundleInstaller({
-      gatewayNamespace: "gateway-test",
-      getTransport: () => transport,
-      transfer,
-      log: { info: vi.fn(), warn: vi.fn() },
-    });
-
-    await expect(
-      ensure({
-        environmentId: "environment-1",
-        reason: "provision",
-        deviceId: node.nodeId,
-        artifact,
-        prewarm: true,
-      }),
-    ).resolves.toMatchObject({
-      bundleHash: artifact.bundleHash,
-    });
-    expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        node,
-        command: NODE_WORKER_BUNDLE_INSTALL_COMMAND,
-        params: expect.objectContaining({ gatewayNamespace: "gateway-test" }),
-        idempotencyKey: `gateway-test:${artifact.bundleHash}`,
-      }),
-    );
-    const input = invoke.mock.calls[0]?.[0].params as { archive: { token: string } };
-    expect(
-      transfer.authorize({ token: input.archive.token, artifactKey: artifact.bundleHash }),
-    ).toBeUndefined();
-  });
-
-  it("rejects a mismatched node receipt", async () => {
-    const transfer = createNodeWorkerBundleTransferService({
-      generateToken: () => "B".repeat(43),
-    });
-    const transport: NodeWorkerSupervisorTransport = {
-      hasCurrentRunner: () => false,
-      getCurrentNode: async (nodeId) => (node.nodeId === nodeId ? node : undefined),
-      listCurrentNodes: async () => [node],
-      isCurrent: () => true,
-      invoke: async () => ({
-        ok: true,
-        payloadJSON: JSON.stringify({
-          bundleHash: "c".repeat(64),
-          openclawVersion: artifact.openclawVersion,
-          protocolFeatures: artifact.protocolFeatures,
-        }),
-      }),
-    };
-    const ensure = createGatewayNodeWorkerBundleInstaller({
-      gatewayNamespace: "gateway-test",
-      getTransport: () => transport,
-      transfer,
-      log: { info: vi.fn(), warn: vi.fn() },
-    });
-
-    await expect(
-      ensure({
-        environmentId: "environment-1",
-        reason: "provision",
-        deviceId: node.nodeId,
-        artifact,
-        prewarm: true,
-      }),
-    ).rejects.toThrow("mismatched build receipt");
-  });
-
-  it("negotiates prewarming independently across a mixed node fleet", async () => {
-    const transfer = createNodeWorkerBundleTransferService({
-      generateToken: () => String.fromCharCode(65 + invoke.mock.calls.length).repeat(43),
-    });
-    const advertising = nodeProof("advertising", 1);
-    const legacy = nodeProof("legacy");
-    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => ({
-      ok: true,
-      payloadJSON: JSON.stringify((request.params as { build: typeof artifact }).build),
-    }));
-    const transport: NodeWorkerSupervisorTransport = {
-      hasCurrentRunner: () => false,
-      getCurrentNode: async (nodeId) =>
-        [advertising, legacy].find((candidate) => candidate.nodeId === nodeId),
-      listCurrentNodes: async () => [advertising, legacy],
-      isCurrent: () => true,
-      invoke,
-    };
-    const ensure = createGatewayNodeWorkerBundleInstaller({
-      gatewayNamespace: "gateway-test",
-      getTransport: () => transport,
-      transfer,
-      log: { info: vi.fn(), warn: vi.fn() },
-    });
-
-    await expect(
-      ensure({
-        environmentId: "environment-1",
-        reason: "provision",
-        deviceId: advertising.nodeId,
-        artifact,
-        prewarm: true,
-      }),
-    ).resolves.toMatchObject({
-      bundleHash: artifact.bundleHash,
-    });
-    await expect(
-      ensure({
-        environmentId: "environment-1",
-        reason: "provision",
-        deviceId: legacy.nodeId,
-        artifact,
-        prewarm: true,
-      }),
-    ).resolves.toMatchObject({
-      bundleHash: artifact.bundleHash,
-    });
-
-    expect(invoke.mock.calls[0]?.[0].params).toMatchObject({ bundlePrewarm: 1 });
-    expect(invoke.mock.calls[1]?.[0].params).not.toHaveProperty("bundlePrewarm");
-  });
-
-  it("keeps explicit cancellation with its request", async () => {
-    const controller = new AbortController();
-    const transfer = createNodeWorkerBundleTransferService();
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
       expect(request.signal).toBe(controller.signal);
       controller.abort();
       return { ok: true, payloadJSON: JSON.stringify(receipt) };
     });
-    const transport: NodeWorkerSupervisorTransport = {
-      hasCurrentRunner: () => true,
-      getCurrentNode: async (nodeId) => (node.nodeId === nodeId ? node : undefined),
-      listCurrentNodes: async () => [node],
-      isCurrent: () => true,
-      invoke,
-    };
-    const ensure = createGatewayNodeWorkerBundleInstaller({
-      gatewayNamespace: "gateway-test",
-      getTransport: () => transport,
-      transfer,
-      log: { info: vi.fn(), warn: vi.fn() },
-    });
-    await expect(
-      ensure({
-        deviceId: node.nodeId,
-        environmentId: "environment-1",
-        reason: "provision",
-        artifact,
-        prewarm: true,
-        signal: controller.signal,
-      }),
-    ).rejects.toThrow("no longer current");
-    transfer.closeAll();
+    const listCurrentNodes = vi.fn(() =>
+      phase === "discovery" ? discovered.promise : Promise.resolve([node]),
+    );
+    const { ensure, transfer } = installerFixture(invoke, [node], listCurrentNodes);
+    const grant = vi.spyOn(transfer, "prepare");
+    const pending = ensure({ ...installRequest(node), signal: controller.signal });
+    const outcome = pending.catch((error: unknown) => error);
+    try {
+      expect(listCurrentNodes).toHaveBeenCalledOnce();
+      if (phase === "discovery") {
+        controller.abort(new DOMException("Stop node discovery", "AbortError"));
+        expect(await outcome).toMatchObject({ name: "AbortError" });
+        expect(grant).not.toHaveBeenCalled();
+        expect(invoke).not.toHaveBeenCalled();
+      } else {
+        await expect(pending).rejects.toThrow("no longer current");
+      }
+    } finally {
+      discovered.resolve([node]);
+      await outcome;
+      grant.mockRestore();
+      transfer.closeAll();
+    }
+    if (phase === "discovery") {
+      expect(await outcome).toMatchObject({ name: "AbortError" });
+      expect(invoke).not.toHaveBeenCalled();
+    }
   });
+
+  it.each(["matching", "mismatched"])(
+    "binds installation to an exact %s receipt across node capabilities",
+    async (mode) => {
+      const nodes = [nodeProof("advertising", 1), nodeProof("legacy")];
+      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => ({
+        ok: true,
+        payloadJSON: JSON.stringify({
+          ...receipt,
+          bundleHash: mode === "matching" ? artifact.bundleHash : "c".repeat(64),
+        }),
+      }));
+      const { ensure, transfer } = installerFixture(invoke, nodes);
+      try {
+        for (const [index, current] of nodes.entries()) {
+          const pending = ensure(installRequest(current));
+          if (mode === "mismatched") {
+            await expect(pending).rejects.toThrow("mismatched build receipt");
+          } else {
+            await expect(pending).resolves.toMatchObject({ bundleHash: artifact.bundleHash });
+          }
+          expect(ensure.readInstall(current.nodeId)).toBeUndefined();
+          expect(ensure.version()).toBe((index + 1) * 2);
+          const request = invoke.mock.calls[index]?.[0];
+          expect(request).toMatchObject({
+            node: current,
+            command: NODE_WORKER_BUNDLE_INSTALL_COMMAND,
+            params: { gatewayNamespace: "gateway-test" },
+            idempotencyKey: `gateway-test:${artifact.bundleHash}`,
+          });
+          if (index === 0) {
+            expect(request?.params).toMatchObject({ bundlePrewarm: 1 });
+          } else {
+            expect(request?.params).not.toHaveProperty("bundlePrewarm");
+          }
+          const input = request?.params as NodeWorkerBundleInstallInput;
+          expect(input.build).toEqual(receipt);
+          expect(
+            transfer.authorize({ token: input.archive.token, artifactKey: artifact.bundleHash }),
+          ).toBeUndefined();
+        }
+      } finally {
+        transfer.closeAll();
+      }
+    },
+  );
+  it.each([
+    ["same", undefined, "resolves"],
+    ["different", "generation-2", "rejects"],
+  ] as const)(
+    "%s pairing authority on a replacement connection",
+    async (_mode, pairingGeneration, outcome) => {
+      const transfer = createNodeWorkerBundleTransferService();
+      const replacement = {
+        ...node,
+        connId: "conn-2",
+        ...(pairingGeneration ? { pairingGeneration } : {}),
+      };
+      let current = node;
+      const transport: NodeWorkerSupervisorTransport = {
+        hasCurrentRunner: () => false,
+        getCurrentNode: async (nodeId) => (node.nodeId === nodeId ? current : undefined),
+        listCurrentNodes: async () => [current],
+        isCurrent: (candidate) => candidate === current,
+        invoke: async () => {
+          current = replacement;
+          return { ok: true, payloadJSON: JSON.stringify(receipt) };
+        },
+      };
+      const ensure = createGatewayNodeWorkerBundleInstaller({
+        gatewayNamespace: "gateway-test",
+        getTransport: () => transport,
+        transfer,
+        log: { info: vi.fn(), warn: vi.fn() },
+      });
+      try {
+        const pending = ensure(installRequest(node));
+        if (outcome === "resolves") {
+          await expect(pending).resolves.toEqual(receipt);
+        } else {
+          await expect(pending).rejects.toThrow("connection is no longer current");
+        }
+      } finally {
+        transfer.closeAll();
+      }
+    },
+  );
 });

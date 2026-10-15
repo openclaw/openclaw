@@ -156,9 +156,7 @@ export async function verifyServiceCleanupRecovery(createFixture: RecoveryFixtur
 export async function verifyIndependentPostCommitActivation(
   createFixture: RecoveryFixtureFactory,
   boundary:
-    | "channel"
     | "channel-retry"
-    | "hook"
     | "publication"
     | "notification"
     | "memory"
@@ -166,8 +164,7 @@ export async function verifyIndependentPostCommitActivation(
     | "hook-and-channel",
 ) {
   const failure = new Error(`${boundary} activation refused`);
-  const channelFailure =
-    boundary === "hook-and-channel" ? new Error("channel preparation refused") : failure;
+  const channelFailure = new Error("channel preparation refused");
   const starts: string[] = [];
   let generation = 0;
   const fixture = await createFixture({
@@ -216,7 +213,7 @@ export async function verifyIndependentPostCommitActivation(
         });
       }
       api.on("gateway_start", () => {
-        if ((boundary === "hook" || boundary === "hook-and-channel") && current > 1) {
+        if (boundary === "hook-and-channel" && current > 1) {
           throw failure;
         }
       });
@@ -231,11 +228,7 @@ export async function verifyIndependentPostCommitActivation(
               id,
               config: {
                 listAccountIds: () => {
-                  if (
-                    (boundary === "channel" || boundary === "hook-and-channel") &&
-                    current > 1 &&
-                    id === "first-channel"
-                  ) {
+                  if (boundary === "hook-and-channel" && current > 1 && id === "first-channel") {
                     throw channelFailure;
                   }
                   return ["default"];
@@ -315,8 +308,6 @@ export async function verifyIndependentPostCommitActivation(
       expect(result.message).toContain(channelFailure.message);
     } else if (boundary === "memory") {
       expect(result.cause).toMatchObject({ errors: [failure] });
-    } else if (boundary === "hook") {
-      expect(result.cause).toMatchObject({ cause: failure });
     } else if (boundary === "channel-retry") {
       expect(result.cause).toMatchObject({
         message: "Plugin channel first-channel could not start: default",
@@ -329,7 +320,7 @@ export async function verifyIndependentPostCommitActivation(
     expect(starts).toContain("healthy-channel:2");
     expect(resumed).toHaveBeenCalledWith(1);
     expect(fixture.siblingStart).toHaveBeenCalledOnce();
-    expect(fixture.siblingStop).not.toHaveBeenCalled();
+    expect(fixture.siblingStop).toHaveBeenCalledTimes(boundary === "memory" ? 1 : 0);
     const routes = fixture.registryOwner.registry.httpRoutes;
     expect(routes.some((route) => route.handoff)).toBe(false);
     expect(routes.some((route) => route.path === "/removed-channel")).toBe(false);

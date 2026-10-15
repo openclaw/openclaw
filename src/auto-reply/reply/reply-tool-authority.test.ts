@@ -21,10 +21,8 @@ import {
   queueCurrentReplyRunMessage,
 } from "./reply-run-registry.test-helpers.js";
 import { testing } from "./reply-run-registry.test-support.js";
-import {
-  prepareReplyToolAuthority,
-  resolveFollowupRunToolAuthorityFingerprint,
-} from "./reply-tool-authority.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import { resolveFollowupRunToolAuthorityFingerprintAsync } from "./reply-tool-authority.test-support.js";
 
 function toolAuthorityOverlay(
   run: ReturnType<typeof createQueueTestRun>,
@@ -70,20 +68,37 @@ describe("reply tool authority", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["agent:agent:main", "global"])(
-    "distinguishes hidden allowlist intersections in steering authority for %s",
-    (sessionKey) => {
+  it.each([
+    ["agent allowlist intersection", "agent:agent:main", undefined, undefined],
+    ["global allowlist intersection", "global", undefined, undefined],
+    [
+      "provider",
+      undefined,
+      { provider: "openai", model: "gpt-test" },
+      { provider: "anthropic", model: "gpt-test" },
+    ],
+    [
+      "model",
+      undefined,
+      { provider: "openai", model: "gpt-primary" },
+      { provider: "openai", model: "gpt-fallback" },
+    ],
+  ] as const)(
+    "distinguishes %s in steering authority",
+    async (_dimension, sessionKey, firstRoute, secondRoute) => {
       const first = createQueueTestRun({ prompt: "first" });
       const second = createQueueTestRun({ prompt: "second" });
-      for (const run of [first, second]) {
-        run.run.sessionKey = sessionKey;
-        run.run.config = { agents: { ownership: "explicit", entries: { agent: {}, other: {} } } };
+      if (sessionKey) {
+        for (const run of [first, second]) {
+          run.run.sessionKey = sessionKey;
+          run.run.config = { agents: { ownership: "explicit", entries: { agent: {}, other: {} } } };
+        }
+        first.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"]]);
+        second.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["message"]]);
       }
-      first.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"]]);
-      second.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["message"]]);
 
-      expect(resolveFollowupRunToolAuthorityFingerprint(first)).not.toBe(
-        resolveFollowupRunToolAuthorityFingerprint(second),
+      expect(await resolveFollowupRunToolAuthorityFingerprintAsync(first, firstRoute)).not.toBe(
+        await resolveFollowupRunToolAuthorityFingerprintAsync(second, secondRoute),
       );
     },
   );
@@ -104,8 +119,8 @@ describe("reply tool authority", () => {
         assertCurrent: () => {},
       });
       const operation = createTestReplyOperation({ sessionId: "personal-steering" });
-      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
-      const fingerprint = operation.bindToolAuthorityRoute(run.run);
+      await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
+      const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
       const queueMessage = vi.fn(
         async (_text: string, _options?: ReplyBackendQueueMessageOptions) => {},
       );
@@ -122,9 +137,11 @@ describe("reply tool authority", () => {
       };
       // An owner reassignment can update the next turn's bootstrap selection,
       // but it is not a permission change and must not rewrite the active turn.
-      expect(resolveFollowupRunToolAuthorityFingerprint(incoming)).toBe(fingerprint);
+      expect(await resolveFollowupRunToolAuthorityFingerprintAsync(incoming)).toBe(fingerprint);
       for (const options of [
-        { toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(incoming) },
+        {
+          toolAuthorityFingerprint: await resolveFollowupRunToolAuthorityFingerprintAsync(incoming),
+        },
         { toolAuthorityOverlay: toolAuthorityOverlay(incoming) },
       ]) {
         await expect(
@@ -165,107 +182,53 @@ describe("reply tool authority", () => {
     }));
 
   it.each([
-    {
-      name: "automatic rotation",
-      source: "auto",
-      nextSource: "auto",
-      nextProfile: "backup",
-      accepted: true,
-    },
-    {
-      name: "unchanged user pin",
-      source: "user",
-      nextSource: "user",
-      nextProfile: "primary",
-      accepted: true,
-    },
-    {
-      name: "changed user pin",
-      source: "user",
-      nextSource: "user",
-      nextProfile: "backup",
-      accepted: false,
-    },
-    {
-      name: "explicit pin replacing automatic selection",
-      source: "auto",
-      nextSource: "user",
-      nextProfile: "primary",
-      accepted: false,
-    },
-    {
-      name: "removed automatic selection",
-      source: "auto",
-      nextSource: undefined,
-      nextProfile: undefined,
-      accepted: false,
-    },
-    {
-      name: "permission change during automatic rotation",
-      source: "auto",
-      nextSource: "auto",
-      nextProfile: "backup",
-      accepted: false,
-      permissionMode: "guarded",
-    },
-  ] as const)("preserves steering admission for $name", async (selection) => {
-    const run = createQueueTestRun({ prompt: "running request" });
-    run.run.authProfileId = "openai:primary";
-    run.run.authProfileIdSource = selection.source;
-    run.run.permissionMode = "full";
-    const operation = createTestReplyOperation({ sessionId: "profile-steering" });
-    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
-    operation.bindToolAuthorityRoute(run.run);
-    const queueMessage = vi.fn(async () => {});
-    operation.attachBackend({ kind: "embedded", cancel: vi.fn(), queueMessage });
-    operation.setPhase("running");
-    const incoming = {
-      ...run,
-      run: {
-        ...run.run,
-        authProfileId: selection.nextProfile ? `openai:${selection.nextProfile}` : undefined,
-        authProfileIdSource: selection.nextSource,
-        permissionMode:
-          "permissionMode" in selection ? selection.permissionMode : run.run.permissionMode,
-      },
-    };
+    ["automatic rotation", "auto", "auto", "backup", "full", true],
+    ["unchanged user pin", "user", "user", "primary", "full", true],
+    ["changed user pin", "user", "user", "backup", "full", false],
+    ["explicit pin replacing automatic selection", "auto", "user", "primary", "full", false],
+    ["removed automatic selection", "auto", undefined, undefined, "full", false],
+    ["permission change during automatic rotation", "auto", "auto", "backup", "guarded", false],
+  ] as const)(
+    "preserves steering admission for %s",
+    async (_name, source, nextSource, nextProfile, permissionMode, accepted) => {
+      const run = createQueueTestRun({ prompt: "running request" });
+      run.run.authProfileId = "openai:primary";
+      run.run.authProfileIdSource = source;
+      run.run.permissionMode = "full";
+      const operation = createTestReplyOperation({ sessionId: "profile-steering" });
+      await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
+      await operation.bindToolAuthorityRouteAsync(run.run);
+      const queueMessage = vi.fn(async () => {});
+      operation.attachBackend({ kind: "embedded", cancel: vi.fn(), queueMessage });
+      operation.setPhase("running");
+      const incoming = {
+        ...run,
+        run: {
+          ...run.run,
+          authProfileId: nextProfile ? `openai:${nextProfile}` : undefined,
+          authProfileIdSource: nextSource,
+          permissionMode,
+        },
+      };
 
-    await expect(
-      queueCurrentReplyRunMessage("profile-steering", "change direction", {
-        isInboundUserMessage: true,
-        toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(incoming),
-      }),
-    ).resolves.toMatchObject(
-      selection.accepted
-        ? { status: "accepted" }
-        : { status: "rejected", reason: "tool_authority_mismatch" },
-    );
-    expect(queueMessage).toHaveBeenCalledTimes(selection.accepted ? 1 : 0);
-    expect(run.run.authProfileId).toBe("openai:primary");
-  });
-
-  it.each([
-    {
-      label: "provider",
-      first: { provider: "openai", model: "gpt-test" },
-      second: { provider: "anthropic", model: "gpt-test" },
+      await expect(
+        queueCurrentReplyRunMessage("profile-steering", "change direction", {
+          isInboundUserMessage: true,
+          toolAuthorityFingerprint: await resolveFollowupRunToolAuthorityFingerprintAsync(incoming),
+        }),
+      ).resolves.toMatchObject(
+        accepted
+          ? { status: "accepted" }
+          : { status: "rejected", reason: "tool_authority_mismatch" },
+      );
+      expect(queueMessage).toHaveBeenCalledTimes(accepted ? 1 : 0);
+      expect(run.run.authProfileId).toBe("openai:primary");
     },
-    {
-      label: "model",
-      first: { provider: "openai", model: "gpt-primary" },
-      second: { provider: "openai", model: "gpt-fallback" },
-    },
-  ])("distinguishes the concrete $label route in steering authority", ({ first, second }) => {
-    const run = createQueueTestRun({ prompt: "route authority" });
-
-    expect(resolveFollowupRunToolAuthorityFingerprint(run, first)).not.toBe(
-      resolveFollowupRunToolAuthorityFingerprint(run, second),
-    );
-  });
+  );
 
   it.each(["complete", "abortForRestart"] as const)(
     "requires a snapshot for route preparation and rejects it after %s",
-    (close) => {
+    async (close) => {
       const run = createQueueTestRun({ prompt: "operation projection" });
       const operation = createTestReplyOperation({ sessionId: "session-projector" });
       const snapshot = prepareReplyToolAuthority(run);
@@ -277,15 +240,15 @@ describe("reply tool authority", () => {
       );
       expect(operation.toolAuthorityRoute).toBeUndefined();
       expect(operation.toolAuthorityFingerprint).toBeUndefined();
-      operation.bindToolAuthoritySnapshot(snapshot);
-      expect(operation.projectToolAuthorityFingerprint(overlay)).toBeUndefined();
+      await operation.bindToolAuthoritySnapshotAsync(snapshot);
+      expect(await operation.projectToolAuthorityFingerprintAsync(overlay)).toBeUndefined();
 
-      const fingerprint = resolveFollowupRunToolAuthorityFingerprint(run, route);
-      expect(operation.bindToolAuthorityRoute(route)).toBe(fingerprint);
-      expect(operation.projectToolAuthorityFingerprint(overlay)).toBe(fingerprint);
+      const fingerprint = await resolveFollowupRunToolAuthorityFingerprintAsync(run, route);
+      expect(await operation.bindToolAuthorityRouteAsync(route)).toBe(fingerprint);
+      expect(await operation.projectToolAuthorityFingerprintAsync(overlay)).toBe(fingerprint);
 
       operation[close]();
-      expect(operation.projectToolAuthorityFingerprint(overlay)).toBeUndefined();
+      expect(await operation.projectToolAuthorityFingerprintAsync(overlay)).toBeUndefined();
       expect(() => operation.bindToolAuthorityRoute({ ...route, model: "gpt-late" })).toThrow(
         "Reply operation has no active tool authority snapshot",
       );
@@ -294,18 +257,21 @@ describe("reply tool authority", () => {
     },
   );
 
-  it("keeps the initial policy snapshot while tracking concrete fallback authority", () => {
+  it("keeps the initial policy snapshot while tracking concrete fallback authority", async () => {
     const run = createQueueTestRun({ prompt: "route authority" });
     const operation = createTestReplyOperation({ sessionId: "session-route" });
     const snapshot = prepareReplyToolAuthority(run);
     const primary = { provider: "openai", model: "gpt-primary" };
     const fallback = { provider: "anthropic", model: "claude-fallback" };
-    const primaryFingerprint = resolveFollowupRunToolAuthorityFingerprint(run, primary);
-    const fallbackFingerprint = resolveFollowupRunToolAuthorityFingerprint(run, fallback);
+    const primaryFingerprint = await resolveFollowupRunToolAuthorityFingerprintAsync(run, primary);
+    const fallbackFingerprint = await resolveFollowupRunToolAuthorityFingerprintAsync(
+      run,
+      fallback,
+    );
     const overlay = toolAuthorityOverlay(run);
-    operation.bindToolAuthoritySnapshot(snapshot);
+    await operation.bindToolAuthoritySnapshotAsync(snapshot);
 
-    expect(operation.bindToolAuthorityRoute(primary)).toBe(primaryFingerprint);
+    expect(await operation.bindToolAuthorityRouteAsync(primary)).toBe(primaryFingerprint);
     expect(operation.toolAuthorityRoute).toEqual(primary);
     expect(operation.toolAuthorityFingerprint).toBe(primaryFingerprint);
 
@@ -314,12 +280,12 @@ describe("reply tool authority", () => {
       "Reply operation cannot change tool authority after admission",
     );
     expect(operation.toolAuthorityFingerprint).toBe(primaryFingerprint);
-    expect(operation.bindToolAuthorityRoute(fallback)).toBe(fallbackFingerprint);
+    expect(await operation.bindToolAuthorityRouteAsync(fallback)).toBe(fallbackFingerprint);
     expect(operation.toolAuthorityRoute).toEqual(fallback);
     expect(operation.toolAuthorityFingerprint).toBe(fallbackFingerprint);
-    expect(operation.projectToolAuthorityFingerprint(overlay)).toBe(fallbackFingerprint);
+    expect(await operation.projectToolAuthorityFingerprintAsync(overlay)).toBe(fallbackFingerprint);
 
-    operation.bindToolAuthoritySnapshot(snapshot);
+    await operation.bindToolAuthoritySnapshotAsync(snapshot);
     expect(operation.toolAuthorityRoute).toEqual(fallback);
     expect(operation.toolAuthorityFingerprint).toBe(fallbackFingerprint);
     operation.attachBackend({
@@ -327,7 +293,7 @@ describe("reply tool authority", () => {
       cancel: vi.fn(),
       toolAuthorityFingerprint: "backend-exact-authority",
     });
-    operation.bindToolAuthoritySnapshot(snapshot);
+    await operation.bindToolAuthoritySnapshotAsync(snapshot);
     expect(operation.toolAuthorityRoute).toEqual(fallback);
     expect(operation.toolAuthorityFingerprint).toBe("backend-exact-authority");
     operation.complete();
@@ -440,8 +406,8 @@ describe("reply tool authority", () => {
             grant,
           );
           const operation = createTestReplyOperation({ sessionId: "reconnected-steering" });
-          operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
-          const fingerprint = operation.bindToolAuthorityRoute(run.run);
+          await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
+          const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
           const queueMessage = vi.fn(
             async (_text: string, _options?: ReplyBackendQueueMessageOptions) => {},
           );
@@ -609,8 +575,8 @@ describe("reply tool authority", () => {
       async (_text: string, _options?: ReplyBackendQueueMessageOptions) => {},
     );
     const operation = createTestReplyOperation({ sessionId: "session-projected-authority" });
-    operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
-    operation.bindToolAuthorityRoute(route);
+    await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
+    await operation.bindToolAuthorityRouteAsync(route);
     operation.attachBackend({
       kind: "embedded",
       cancel: vi.fn(),
@@ -629,7 +595,7 @@ describe("reply tool authority", () => {
     const forwardedOptions = queueMessage.mock.calls[0]?.[1];
     expect(forwardedOptions).toMatchObject({
       isInboundUserMessage: true,
-      toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(run, route),
+      toolAuthorityFingerprint: await resolveFollowupRunToolAuthorityFingerprintAsync(run, route),
     });
     expect(forwardedOptions).not.toHaveProperty("toolAuthorityOverlay");
     expect(forwardedOptions).not.toHaveProperty("approvalReviewerDeviceId");
@@ -687,8 +653,11 @@ describe("reply tool authority", () => {
       }
       const queueMessage = vi.fn(async () => {});
       const operation = createTestReplyOperation({ sessionId: "screen-unavailable" });
-      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
-      operation.bindToolAuthorityRoute({ provider: run.run.provider, model: run.run.model });
+      await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
+      await operation.bindToolAuthorityRouteAsync({
+        provider: run.run.provider,
+        model: run.run.model,
+      });
       operation.attachBackend({
         kind: "embedded",
         cancel: vi.fn(),

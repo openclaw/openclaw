@@ -3,7 +3,7 @@ import "../commands/agent-command.test-mocks.js";
 import "../commands/agent-command-attempt.test-mocks.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { resolveSandboxContext } from "../agents/sandbox/context.js";
-import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
+import { resolveSandboxRuntimeStatusAsync } from "../agents/sandbox/runtime-status.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -13,6 +13,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
@@ -50,9 +51,14 @@ let cfg: OpenClawConfig;
 let profileId: string;
 let proxyListener: Awaited<ReturnType<typeof reserveTestPortListener>>;
 let ownerListener: Awaited<ReturnType<typeof reserveTestPortListener>>;
+let releaseProfileCatalog: (() => void) | undefined;
 
 beforeAll(async () => {
-  state = await createOpenClawTestState({ label: "http-session-sandbox", scenario: "minimal" });
+  state = await createOpenClawTestState({
+    label: "http-session-sandbox",
+    scenario: "minimal",
+    prepareProfileCatalog: true,
+  });
   cfg = {
     agents: {
       entries: { main: {} },
@@ -92,12 +98,14 @@ beforeAll(async () => {
   profileId = ensureProfileForEmail("sandbox-guest@example.test").id;
   const ordinary = ensureProfileForEmail("ordinary@example.test");
   setUserProfileRole(ordinary.id, "ordinary");
+  releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
   const context = createGatewayRequestContext(makeContextParams());
   context.resolveGatewayContext = () => context;
   const overrides = {
     openAiChatCompletionsEnabled: true,
     openResponsesEnabled: true,
     getGatewayRequestContext: () => context,
+    httpRequestLifetime: context,
   };
   proxyListener = await reserveTestPortListener({
     offsets: [0],
@@ -116,6 +124,7 @@ afterAll(async () => {
       await reservation.claim.release();
     }
   }
+  releaseProfileCatalog?.();
   await state?.cleanup();
 });
 
@@ -157,7 +166,7 @@ async function post(params: {
 
 function reportRuntimeIsolation() {
   vi.mocked(runEmbeddedAgent).mockImplementation(async (params) => {
-    const runtime = resolveSandboxRuntimeStatus({
+    const runtime = await resolveSandboxRuntimeStatusAsync({
       cfg: params.config,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
@@ -170,20 +179,30 @@ function reportRuntimeIsolation() {
 }
 
 describe.each(endpointCases)("$name session sandbox boundary", (endpoint) => {
-  it("persists the verified creator's sandbox requirement before the first runtime", async () => {
-    const sessionKey = `agent:main:http-${endpoint.key}-fresh`;
-    reportRuntimeIsolation();
-
-    const response = await post({ endpoint, sessionKey });
-
-    expect(response.status, response.body).toBe(200);
-    expect(response.body).toContain("sandbox execution");
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey })).toMatchObject({
-      sandbox: "required",
-      createdActor: { type: "human", source: "profile", id: profileId },
-    });
-  });
+  it.each([
+    { caller: "required", email: "sandbox-guest@example.test", owner: false, required: true },
+    { caller: "ordinary", email: "ordinary@example.test", owner: false, required: false },
+    { caller: "owner", email: "ordinary@example.test", owner: true, required: false },
+  ])(
+    "persists the $caller creator's sandbox policy before execution",
+    async ({ caller, email, owner, required }) => {
+      const sessionKey = `agent:main:http-${endpoint.key}-${caller}`;
+      reportRuntimeIsolation();
+      const response = await post({ endpoint, sessionKey, email, owner });
+      expect(response.status, response.body).toBe(200);
+      expect(response.body).toContain(required ? "sandbox execution" : "host execution");
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      const entry = loadSessionEntryReadOnly({ agentId: "main", sessionKey });
+      if (required) {
+        expect(entry).toMatchObject({
+          sandbox: "required",
+          createdActor: { type: "human", source: "profile", id: profileId },
+        });
+      } else {
+        expect(entry?.sandbox).toBeUndefined();
+      }
+    },
+  );
 
   it("rejects an existing unsandboxed session before executing its runtime", async () => {
     const sessionKey = `agent:main:http-${endpoint.key}-host`;
@@ -205,21 +224,6 @@ describe.each(endpointCases)("$name session sandbox boundary", (endpoint) => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
     expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey })?.sandbox).toBeUndefined();
   });
-
-  it.each([false, true])(
-    "preserves inherited sandboxing for ordinary callers (owner=%s)",
-    async (owner) => {
-      const sessionKey = `agent:main:http-${endpoint.key}-ordinary-${owner}`;
-      reportRuntimeIsolation();
-
-      const response = await post({ endpoint, sessionKey, email: "ordinary@example.test", owner });
-
-      expect(response.status, response.body).toBe(200);
-      expect(response.body).toContain("host execution");
-      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-      expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey })?.sandbox).toBeUndefined();
-    },
-  );
 
   it("fails closed when the required sandbox cannot be provisioned", async () => {
     const sessionKey = `agent:main:http-${endpoint.key}-unavailable`;

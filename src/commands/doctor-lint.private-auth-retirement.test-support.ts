@@ -7,6 +7,7 @@ import { closeAuthProfileReadPool } from "../agents/auth-profiles/sqlite.js";
 import type { HealthCheck, HealthFinding } from "../flows/health-checks.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { removeTempDirectoryAsync } from "../infra/sqlite-readonly-location-cleanup.js";
+import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
@@ -16,7 +17,10 @@ import {
   registerOpenClawStateDatabaseAsyncResource,
 } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateReadConnection } from "../state/openclaw-state-db-read-connection.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
@@ -54,7 +58,7 @@ export async function verifyDoctorLintPrivateAuthRetirement(
       } finally {
         database.close();
       }
-      const reader = acquireAuthProfileReadDatabase(filename);
+      const reader = acquireAuthProfileReadDatabase(filename, openSqliteReadOnlyDatabase);
       if (reader.status !== "readable") {
         throw new Error("auth reader fixture is not readable");
       }
@@ -93,6 +97,13 @@ export async function verifyDoctorLintPrivateAuthRetirement(
         kind: "core",
         description: "inspects private runtime state",
         async detect() {
+          if (mode === "normal") {
+            expect(() =>
+              runOpenClawStateWriteTransaction(() => undefined, { database: source }),
+            ).toThrow(
+              "Programming error: shared-state write during artifact-preserving inspection.",
+            );
+          }
           writeConfigMachineState("doctorLint.synthetic.privateWrite", true);
           const writer = openOpenClawStateDatabase();
           const reader = openOpenClawStateReadConnection(writer.path, writer.path);

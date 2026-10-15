@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { createFixtureLifetime } from "./fixture-lifetime.js";
@@ -9,6 +10,8 @@ import { withinTest } from "./promise.js";
 import { runNodeScript } from "./run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "./temp-dir.js";
 
+const PID_CLEANUP_HANG_GUARD_MS = 2_000;
+const PROCESS_CLEANUP_HANG_GUARD_MS = 15_000;
 let cleanupFixture: (() => Promise<void>) | undefined;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -61,6 +64,32 @@ child.once("message", () => process.exit(17));
     stderr: "drained stderr\n",
   });
 });
+
+it.for(["node", "current"] as const)(
+  "builds source worker arguments for the selected %s runtime",
+  async (runtime) => {
+    const script = join(tempDirs.make("openclaw-node-script-runtime-"), "worker.ts");
+    writeFileSync(
+      script,
+      `enum Answer { value = 42 }
+console.log(JSON.stringify({ answer: Answer.value, bun: Boolean(process.versions.bun), args: process.argv.slice(2) }));
+`,
+    );
+    const result = await runNodeScript(
+      (workerArgv) => [...workerArgv(pathToFileURL(script)), "worker-argument"],
+      process.env,
+      5_000,
+      { executable: runtime === "current" ? process.execPath : undefined },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      answer: 42,
+      bun: runtime === "current" && Boolean(process.versions.bun),
+      args: ["worker-argument"],
+    });
+  },
+);
 
 it.for(["at limit", "stdout overflow", "stderr overflow"])(
   "preserves independent 2 MiB output failure boundaries: %s",
@@ -145,7 +174,9 @@ child.once('message',()=>process.exit(0));
         // manually disposing roots the lifetime owner deliberately retained.
         if (existsSync(pidFile)) {
           writeFileSync(release, "release");
-          await waitForDead(await waitForPidFile(pidFile, 2_000), 15_000);
+          // Cleanup hang guards after the owner released the leaf, not readiness races.
+          const pid = await waitForPidFile(pidFile, AbortSignal.timeout(PID_CLEANUP_HANG_GUARD_MS));
+          await waitForDead(pid, AbortSignal.timeout(PROCESS_CLEANUP_HANG_GUARD_MS));
         }
         await fixture.cleanup();
         rmSync(directory, { recursive: true, force: true });

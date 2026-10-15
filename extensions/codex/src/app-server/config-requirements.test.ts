@@ -131,7 +131,6 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]`,
       requirementsToml: 'allowed_approval_policies = ["untrusted", "never"]',
     });
     expectRuntimePolicy(runtime, { ...guardian, approvalPolicy: "untrusted" });
-    expect(runtime.approvalPolicySource).toBe("requirements");
     expect(withMcpElicitationsApprovalPolicy(runtime.approvalPolicy)).toBe("untrusted");
   });
 

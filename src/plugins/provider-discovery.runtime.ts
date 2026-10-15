@@ -369,10 +369,9 @@ export function planPluginDiscoveryRuntime(
         providers: retainSyntheticAuthProviders(runtimeEntryProviders, authProviders),
       };
     }
-    const fullPluginIdSet = new Set(fullPluginIds);
-    retainedProviders = runtimeEntryProviders.filter(
-      (provider) => !provider.pluginId || !fullPluginIdSet.has(provider.pluginId),
-    );
+    // Replace catalogs by provider id below, not by plugin: a mixed owner can
+    // expose a native discovery entry alongside a different runtime provider.
+    retainedProviders = runtimeEntryProviders;
   } else if (entryProviders.length > 0) {
     const entryPluginIds = sortUniqueStrings(
       entryProviders
@@ -413,7 +412,9 @@ export function resolvePluginDiscoveryProvidersRuntime(
       // Runtime owns catalog replacement and its auth pair. A lightweight-only
       // auth contribution survives without keeping a superseded catalog hook.
       providers[index] =
-        provider.resolveSyntheticAuth || provider.prepareSyntheticAuth
+        !params.includeSyntheticAuthProviders ||
+        provider.resolveSyntheticAuth ||
+        provider.prepareSyntheticAuth
           ? provider
           : {
               ...provider,

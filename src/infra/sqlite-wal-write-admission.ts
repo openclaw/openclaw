@@ -9,6 +9,8 @@ import type {
 
 export type SqliteWalPeriodicRequest = {
   maxPages: number;
+  /** Subsequent vacuum units keep FIFO yields without repeating once-per-pass maintenance. */
+  continuation?: boolean;
   checkpointMode: SqliteWalCheckpointMode;
   checkpoint?: SqliteWalCheckpointSnapshot;
 };
@@ -23,6 +25,7 @@ type MaintenanceAdmission = {
   execute?: (request: SqliteWalPeriodicRequest) => Promise<SqliteWalPeriodicResult | undefined>;
   flush?: (assertCurrent: () => void) => void;
   cancel?: () => void | Promise<void>;
+  stopCheckpointTick?: () => void;
 };
 
 const admissions = resolveGlobalSingleton(
@@ -36,21 +39,14 @@ export function registerSqliteWalWorkerMaintenance(
   execute: NonNullable<MaintenanceAdmission["execute"]>,
   cancel?: MaintenanceAdmission["cancel"],
 ): void {
-  const previous = Number(
-    // sqlite-allow-raw -- Checkpoint policy belongs to the WAL owner.
-    database.prepare("PRAGMA wal_autocheckpoint;").get()?.wal_autocheckpoint ?? 0,
-  );
   database.exec("PRAGMA wal_autocheckpoint = 0;"); // sqlite-allow-raw -- Checkpoint policy belongs to the WAL owner.
-  admissions.set(database, {
-    execute,
-    cancel: () => {
-      // Without its worker the writer falls back to the bounded inline threshold.
-      if (previous > 0 && database.isOpen && !database.isTransaction) {
-        database.exec(`PRAGMA wal_autocheckpoint = ${previous};`); // sqlite-allow-raw -- Restore the connection-local threshold.
-      }
-      return cancel?.();
-    },
-  });
+  const stopCheckpointTick = admissions.get(database)?.stopCheckpointTick;
+  admissions.set(database, { execute, cancel });
+  stopCheckpointTick?.();
+}
+
+export function isSqliteWalWorkerMaintained(database: DatabaseSync): boolean {
+  return admissions.get(database)?.execute !== undefined;
 }
 
 export function cancelSqliteWalWriteAdmission(database: DatabaseSync): void | Promise<void> {
@@ -64,13 +60,17 @@ export function createSqliteWalMaintenanceScheduler(
   observe: (snapshot: SqliteWalCheckpointSnapshot) => void,
   onError: (error: unknown) => void,
   pageBudget: () => number,
+  stopCheckpointTick: () => void,
 ): () => Promise<void> {
+  const existingAdmission = admissions.get(database);
+  admissions.set(database, { ...existingAdmission, stopCheckpointTick });
   let pending: Promise<void> | undefined;
   return () => {
     if (!pending) {
       const run = async () => {
         // A zero budget runs one checkpoint-only pass without vacuum units.
         let remaining = pageBudget();
+        let continuation = false;
         while (true) {
           const request = prepare(remaining);
           // A delegated writer's checkpoint-only tick would round-trip through its worker
@@ -78,6 +78,7 @@ export function createSqliteWalMaintenanceScheduler(
           if (!request || (remaining === 0 && admissions.get(database)?.execute)) {
             return;
           }
+          request.continuation = continuation;
           let result: SqliteWalPeriodicResult | undefined;
           const admitted = () => {
             if (prepare(remaining)) {
@@ -103,6 +104,7 @@ export function createSqliteWalMaintenanceScheduler(
           if (reclaimed <= 0 || remaining <= 0) {
             return;
           }
+          continuation = true;
           // Return both the native lock and FIFO custody before another page unit.
           await setImmediate();
         }
@@ -151,6 +153,7 @@ export function registerDeferredSqliteWalWriteAdmission(
     }
   };
   admissions.set(database, {
+    stopCheckpointTick: admissions.get(database)?.stopCheckpointTick,
     admit: (operation) =>
       new Promise<void>((resolve, reject) => {
         pending = { operation, resolve, reject };

@@ -51,7 +51,7 @@ export async function runSetupInferenceProbeWork<TParams, TResult>(
     );
   }
   if (failures.size > 0) {
-    throw new AggregateError([...failures], "Inference setup probe cleanup did not finish safely.");
+    throw new AggregateError([...failures], "Inference setup check cleanup did not finish safely.");
   }
   return result;
 }

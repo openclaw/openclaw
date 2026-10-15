@@ -4,7 +4,6 @@ import {
   createSessionCapabilityHarness,
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
-import { buildSessionListParams } from "../lib/sessions/session-requests.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { projectSidebarArchiveVisibility } from "./app-sidebar-session-archive-visibility.ts";
 import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
@@ -45,12 +44,6 @@ describe("sidebar snooze visibility", () => {
     ["all", ["awake", "snoozed", "expired", "archived"]],
   ] as const)("shows the expected rows in %s", (filter, keys) => {
     expect(project(rows, filter).rows.map((row) => row.key)).toEqual(keys);
-  });
-
-  it("requests the same active lifecycle window for Snoozed and Active", () => {
-    expect(buildSessionListParams({ archivedFilter: "snoozed", agentId: "main" })).toEqual(
-      buildSessionListParams({ archivedFilter: "active", agentId: "main" }),
-    );
   });
 
   it("applies snooze and wake publications immediately without a pending visibility state or list read", async () => {

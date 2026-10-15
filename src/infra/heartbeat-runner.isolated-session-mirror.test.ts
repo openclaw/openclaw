@@ -27,11 +27,9 @@ type MockDeliveryRequest = {
 };
 
 const beforeMockDeliveryCompletion = vi.hoisted(() => vi.fn(async () => {}));
-const beforeMockDeliveryConfirmation = vi.hoisted(() => vi.fn(async () => {}));
 const deliverOutboundPayloadsInternal = vi.hoisted(() =>
   vi.fn(async (request: MockDeliveryRequest) => {
     const payload = request.payloads?.[0];
-    await beforeMockDeliveryConfirmation();
     request.onDeliveredPayload?.({
       text: payload?.text ?? "",
       mediaUrls: [payload?.mediaUrl, ...(payload?.mediaUrls ?? [])].filter((url): url is string =>
@@ -51,8 +49,6 @@ vi.mock("./outbound/deliver.js", () => ({
 installHeartbeatRunnerTestRuntime();
 
 afterEach(() => {
-  beforeMockDeliveryConfirmation.mockReset();
-  beforeMockDeliveryConfirmation.mockResolvedValue(undefined);
   beforeMockDeliveryCompletion.mockReset();
   beforeMockDeliveryCompletion.mockResolvedValue(undefined);
   deliverOutboundPayloadsInternal.mockClear();
@@ -108,7 +104,7 @@ async function createMirrorFixture(
   projection: boolean | "inexact",
 ) {
   const cfg = heartbeatTestConfig(tmpDir, "last", "whatsapp", storePath);
-  cfg.agents!.list = [{ id: "main", default: true }];
+  cfg.agents!.entries = { main: {} };
   cfg.agents!.defaults!.heartbeat!.isolatedSession = true;
   if (projection) {
     installWhatsAppRoute({ exact: projection !== "inexact" });
@@ -161,7 +157,6 @@ async function createMirrorFixture(
     nowMs,
     run,
     awareness,
-    replaceTarget,
   };
 }
 
@@ -252,17 +247,13 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
     });
   });
 
-  it.each(["inexact route", "failed delivery", "replaced lifecycle"] as const)(
+  it.each(["inexact route", "failed delivery"] as const)(
     "does not project an alert after %s",
     async (scenario) => {
       await withMirror(
-        async ({ run, awareness, replaceTarget }) => {
+        async ({ run, awareness }) => {
           if (scenario === "failed delivery") {
             deliverOutboundPayloadsInternal.mockRejectedValueOnce(new Error("channel unavailable"));
-          } else if (scenario === "replaced lifecycle") {
-            beforeMockDeliveryConfirmation.mockImplementationOnce(() =>
-              replaceTarget("target-lifecycle-2"),
-            );
           }
           const result = await run();
           expect(result.status).toBe(scenario === "failed delivery" ? "failed" : "ran");

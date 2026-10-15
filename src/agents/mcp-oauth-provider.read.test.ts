@@ -22,6 +22,46 @@ import { countMcpOAuthPrincipals } from "./mcp-oauth.js";
 import { seedMcpOAuthStoreForTest, withMcpOAuthProviderForTest } from "./mcp-oauth.test-support.js";
 
 describe("MCP OAuth worker reads", () => {
+  it("only ignores the port for portless HTTP loopback registrations", async () => {
+    await withOpenClawTestState({ prefix: "openclaw-mcp-oauth-registered-redirect-" }, async () => {
+      const identity = operatorMcpOAuthIdentity("redirects", "https://mcp.example.test/rpc");
+      const cases: [string, string, boolean][] = [
+        ["http://127.0.0.1:8989/callback", "http://127.0.0.1:8989/callback", true],
+        ["http://127.0.0.1/oauth/callback", "http://127.0.0.1:8989/oauth/callback", true],
+        ["http://[::1]/oauth/callback", "http://[::1]:8989/oauth/callback", true],
+        ["http://localhost/oauth/callback", "http://localhost:8989/oauth/callback", true],
+        ["http://localhost", "http://localhost:8989", true],
+        ["http://LOCALHOST/callback", "http://LOCALHOST:80/callback", true],
+        ["http://localhost/callback", "http://LOCALHOST:8989/callback", false],
+        ["http://[::1]/callback", "http://[0:0:0:0:0:0:0:1]:8989/callback", false],
+        ["http://127.0.0.1/callback", "http://127.0.0.1:8989/a/../callback", false],
+        ["https://example.test:8989/callback", "https://example.test:8989/callback", true],
+        ["https://example.test/callback", "https://example.test:8989/callback", false],
+        ["http://example.test/callback", "http://example.test:8989/callback", false],
+        ["https://localhost/callback", "https://localhost:8989/callback", false],
+        ["http://localhost/callback", "http://127.0.0.1:8989/callback", false],
+        ["http://127.0.0.1/callback", "http://127.0.0.1:8989/other", false],
+        ["http://127.0.0.1/callback?a=1", "http://127.0.0.1:8989/callback?a=2", false],
+        ["http://127.0.0.1/callback#one", "http://127.0.0.1:8989/callback#two", false],
+        ["http://127.0.0.1/callback", "http://user@127.0.0.1:8989/callback", false],
+        ["http://127.0.0.1:9000/callback", "http://127.0.0.1:8989/callback", false],
+        ["invalid-url", "another-invalid-url", false],
+      ];
+      for (const [registered, redirectUrl, matches] of cases) {
+        const clientInformation = { client_id: "fixture-client", redirect_uris: [registered] };
+        seedMcpOAuthStoreForTest(identity.storeKey, { clientInformation });
+        await withMcpOAuthProviderForTest(
+          { identity, config: { redirectUrl } },
+          async (provider) => {
+            expect(await provider.clientInformation(), `${registered} -> ${redirectUrl}`).toEqual(
+              matches ? clientInformation : undefined,
+            );
+          },
+        );
+      }
+    });
+  });
+
   it("prepares provider facts and reopens persisted reads without parent SQL", async () => {
     await withOpenClawTestState({ prefix: "openclaw-mcp-oauth-worker-read-" }, async () => {
       requireNodeSqlite();
@@ -37,7 +77,10 @@ describe("MCP OAuth worker reads", () => {
       });
       const prefix = requesterMcpOAuthStoreKeyPrefix(operator.serverName, operator.serverUrl);
       const store: McpOAuthStore = {
-        clientInformation: { client_id: "fixture-client" },
+        clientInformation: {
+          client_id: "fixture-client",
+          redirect_uris: ["http://127.0.0.1:8989/oauth/callback"],
+        },
         tokens: {
           access_token: "fixture-access",
           refresh_token: "fixture-refresh",

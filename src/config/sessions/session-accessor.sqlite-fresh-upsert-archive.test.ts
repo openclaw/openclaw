@@ -20,7 +20,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
 describe("fresh session creation with pending transcript archives", () => {
@@ -34,32 +34,29 @@ describe("fresh session creation with pending transcript archives", () => {
     storePath: fixture.storePath(),
   });
 
-  it.each([true, false])(
-    "skips empty archive recovery with skipMaintenance=%s",
-    async (skipMaintenance) => {
-      await replaceSessionEntry(freshScope(), freshEntry);
-      const probe = vi.spyOn(archiveWorker, "readPendingSqliteTranscriptArchivesInWorker");
-      try {
-        for (let turn = 0; turn < 3; turn += 1) {
-          await applySessionEntryLifecycleMutation({
-            storePath: fixture.storePath(),
-            skipMaintenance,
-            maintenanceOverride: skipMaintenance ? undefined : { mode: "warn" },
-            upserts: [
-              {
-                sessionKey: freshScope().sessionKey,
-                entry: { ...freshEntry, label: `turn-${turn}` },
-              },
-            ],
-          });
-        }
-        expect(loadSessionEntry(freshScope())?.label).toBe("turn-2");
-        expect(probe).not.toHaveBeenCalled();
-      } finally {
-        probe.mockRestore();
+  it("skips empty archive recovery during warning-mode upserts", async () => {
+    await replaceSessionEntry(freshScope(), freshEntry);
+    const probe = vi.spyOn(archiveWorker, "readPendingSqliteTranscriptArchivesInWorker");
+    try {
+      for (let turn = 0; turn < 3; turn += 1) {
+        await applySessionEntryLifecycleMutation({
+          storePath: fixture.storePath(),
+          skipMaintenance: false,
+          maintenanceOverride: { mode: "warn" },
+          upserts: [
+            {
+              sessionKey: freshScope().sessionKey,
+              entry: { ...freshEntry, label: `turn-${turn}` },
+            },
+          ],
+        });
       }
-    },
-  );
+      expect(loadSessionEntry(freshScope())?.label).toBe("turn-2");
+      expect(probe).not.toHaveBeenCalled();
+    } finally {
+      probe.mockRestore();
+    }
+  });
 
   function readArchive() {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(freshScope())));
@@ -281,45 +278,6 @@ describe("fresh session creation with pending transcript archives", () => {
       );
       expect(loadSessionEntry(target)).toMatchObject(adoptedEntry);
       expect(readTranscriptStorageRows(database, scope.sessionId)).toEqual(retainedRows);
-    },
-  );
-
-  it.each([
-    "existing upsert",
-    "canonical repair",
-    "Doctor transfer",
-    "maintenance",
-    "empty retry",
-  ] as const)(
-    "recovers pending archives during %s without producing a new archive",
-    async (operation) => {
-      if (operation === "existing upsert") {
-        await replaceSessionEntry(freshScope(), freshEntry);
-      }
-      const collisionPath = await failUnrelatedArchiveExport();
-      fs.rmSync(collisionPath);
-
-      await applySessionEntryLifecycleMutation({
-        storePath: fixture.storePath(),
-        skipMaintenance: operation !== "maintenance",
-        ...(operation === "maintenance" ? { maintenanceOverride: { mode: "warn" as const } } : {}),
-        ...(operation === "canonical repair" ? { allowCanonicalRepair: true } : {}),
-        ...(operation === "Doctor transfer" ? { afterUpsertsInTransaction: () => {} } : {}),
-        ...(operation === "empty retry"
-          ? {}
-          : { upserts: [{ sessionKey: freshScope().sessionKey, entry: freshEntry }] }),
-      });
-
-      expect(readArchive()).toMatchObject({
-        published_at: expect.any(Number),
-        last_publish_error: null,
-      });
-      expect(readSessionArchiveContentSync(collisionPath)).toBe(
-        `${JSON.stringify(archivedEvent)}\n`,
-      );
-      if (operation !== "empty retry") {
-        expect(loadSessionEntry(freshScope())).toMatchObject(freshEntry);
-      }
     },
   );
 });

@@ -2,11 +2,16 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -21,6 +26,7 @@ import * as pageReclamation from "./session-accessor.sqlite-page-reclamation.js"
 import {
   getSessionKysely,
   resolveSqliteTranscriptArchiveDirectory,
+  runExclusiveSqliteSessionWrite,
 } from "./session-accessor.sqlite-scope.js";
 import type { PublishedSessionTranscriptArchive } from "./session-history-archive-pruning.types.js";
 
@@ -126,40 +132,52 @@ it("selects at most 256 published rows in stable order before applying retention
   expect(retainedIds()).toEqual(["bounded-256", "bounded-257"]);
 });
 
-it.each([
-  "publication",
-  "generation",
-  "name",
-  "created",
-  "reference",
-  "file",
-  "revoked",
-  "rejected",
-])("rechecks a delayed retention delete after %s changes", async (change) => {
-  const row = seed("candidate");
-  seed("unaffected");
-  replaceSessionEntrySync(
-    { agentId: "main", storePath: database.path, env: state.env, sessionKey: "agent:main:owner" },
-    { sessionId: "live-generation", updatedAt: 1 },
-  );
+it("admits foreground writes during retention selection and between deletion batches", async ({
+  signal,
+}) => {
+  for (let index = 0; index < 17; index++) {
+    seed(`batch-${String(index).padStart(3, "0")}`);
+  }
   const entered = createDeferred();
   const release = createDeferred();
+  const scope = {
+    agentId: "main",
+    storePath: database.path,
+    env: state.env,
+    sessionKey: "agent:main:retention-owner",
+  };
+  replaceSessionEntrySync(scope, { sessionId: "live-generation", updatedAt: Date.now() });
+  const writeForeground = (previousSessionId?: string) =>
+    runExclusiveSqliteSessionWrite(
+      options(),
+      async () =>
+        replaceSessionEntrySync(scope, {
+          sessionId: "live-generation",
+          updatedAt: Date.now(),
+          label: previousSessionId ?? "selection write",
+          ...(previousSessionId ? { previousSessionId } : {}),
+        }),
+      "session-entry.patch",
+    );
   const withPages = pageReclamation.withSqliteSessionPageReclamation;
-  let attempts = 0;
+  let selectionWrite: Promise<unknown> | undefined;
+  let foreground: Promise<unknown> | undefined;
   vi.spyOn(pageReclamation, "withSqliteSessionPageReclamation").mockImplementation(
     <T>(...args: Parameters<typeof withPages<T>>) => {
       const [input, run] = args;
       return withPages(input, (reclaim, assertCurrent, prepared, archives) =>
         run(reclaim, assertCurrent, prepared, {
           ...archives,
-          pruneRetention: async (retention) => {
-            attempts += 1;
+          readRetentionCandidates: async () => {
             entered.resolve();
             await release.promise;
-            if (change === "rejected") {
-              throw new Error("injected retention rejection");
-            }
-            return archives.pruneRetention(retention);
+            return archives.readRetentionCandidates();
+          },
+          pruneRetention: async (retention) => {
+            const removed = await archives.pruneRetention(retention);
+            // Queue the foreground update while the first batch still owns the writer.
+            foreground ??= writeForeground("batch-016");
+            return removed;
           },
         }),
       );
@@ -167,47 +185,109 @@ it.each([
   );
   const work = prune();
   try {
-    await awaitGateBeforeSettlement(entered.promise, work, "retention never reached deletion");
-    expect(retainedIds()).toEqual(["candidate", "unaffected"]);
-    const db = getSessionKysely(database.db);
-    if (change === "reference") {
-      executeSqliteQuerySync(
-        database.db,
-        db.updateTable("session_nodes").set({ current_session_id: row.session_id }),
-      );
-    } else if (change === "file") {
-      fs.writeFileSync(path.join(directory, row.archive_name), "republished");
-    } else if (change === "revoked") {
-      closeOpenClawAgentDatabaseByPath(database.path);
-    } else if (change !== "rejected") {
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .updateTable("session_transcript_archives")
-          .set(
-            change === "publication"
-              ? { published_at: null }
-              : change === "generation"
-                ? { generation: "replacement-generation" }
-                : change === "name"
-                  ? { archive_name: "replacement.retention-test" }
-                  : { created_at: 99 },
-          )
-          .where("session_id", "=", row.session_id),
-      );
-    }
+    await withinTest(
+      awaitGateBeforeSettlement(entered.promise, work, "retention never reached selection"),
+      signal,
+    );
+    selectionWrite = writeForeground();
+    await withinTest(selectionWrite, signal);
     release.resolve();
-    if (change === "revoked" || change === "rejected") {
-      await expect(work).rejects.toThrow(/revoked|closed|injected retention rejection/);
-      database = openOpenClawAgentDatabase(options());
-      expect(retainedIds()).toEqual(["candidate", "unaffected"]);
-    } else {
-      expect(await work).toBe(1);
-      expect(retainedIds()).toEqual(["candidate"]);
-    }
-    expect(attempts).toBe(1);
+    expect(await withinTest(work, signal)).toBe(16);
+    await foreground;
+    expect(retainedIds()).toEqual(["batch-016"]);
   } finally {
     release.resolve();
-    await Promise.allSettled([work]);
+    await Promise.allSettled([work, foreground, selectionWrite]);
   }
 });
+
+it.each(["changed", "revoked", "rejected"])(
+  "rechecks a delayed retention delete when candidates are %s",
+  async (outcome) => {
+    const candidates =
+      outcome === "changed"
+        ? ["created", "file", "generation", "name", "publication", "reference"]
+        : ["candidate"];
+    const rows = candidates.map((sessionId) => seed(sessionId));
+    seed("unaffected");
+    replaceSessionEntrySync(
+      { agentId: "main", storePath: database.path, env: state.env, sessionKey: "agent:main:owner" },
+      { sessionId: "live-generation", updatedAt: 1 },
+    );
+    const entered = createDeferred();
+    const release = createDeferred();
+    const withPages = pageReclamation.withSqliteSessionPageReclamation;
+    let attempts = 0;
+    vi.spyOn(pageReclamation, "withSqliteSessionPageReclamation").mockImplementation(
+      <T>(...args: Parameters<typeof withPages<T>>) => {
+        const [input, run] = args;
+        return withPages(input, (reclaim, assertCurrent, prepared, archives) =>
+          run(reclaim, assertCurrent, prepared, {
+            ...archives,
+            pruneRetention: async (retention) => {
+              attempts += 1;
+              entered.resolve();
+              await release.promise;
+              if (outcome === "rejected") {
+                throw new Error("injected retention rejection");
+              }
+              return archives.pruneRetention(retention);
+            },
+          }),
+        );
+      },
+    );
+    const work = prune();
+    try {
+      await awaitGateBeforeSettlement(entered.promise, work, "retention never reached deletion");
+      expect(retainedIds()).toEqual([...candidates, "unaffected"]);
+      const db = getSessionKysely(database.db);
+      if (outcome === "revoked") {
+        closeOpenClawAgentDatabaseByPath(database.path);
+      } else if (outcome === "changed") {
+        for (const row of rows) {
+          if (row.session_id === "reference") {
+            executeSqliteQuerySync(
+              database.db,
+              db.updateTable("session_nodes").set({ current_session_id: row.session_id }),
+            );
+          } else if (row.session_id === "file") {
+            fs.writeFileSync(path.join(directory, row.archive_name), "republished");
+          } else {
+            executeSqliteQuerySync(
+              database.db,
+              db
+                .updateTable("session_transcript_archives")
+                .set(
+                  row.session_id === "publication"
+                    ? { published_at: null }
+                    : row.session_id === "generation"
+                      ? { generation: "replacement-generation" }
+                      : row.session_id === "name"
+                        ? { archive_name: "replacement.retention-test" }
+                        : { created_at: 99 },
+                )
+                .where("session_id", "=", row.session_id),
+            );
+          }
+        }
+      }
+      release.resolve();
+      if (outcome !== "changed") {
+        await expect(work).rejects.toThrow(/revoked|closed|injected retention rejection/);
+        if (outcome === "revoked") {
+          await closeOpenClawAgentDatabaseByPathAsync(database.path);
+        }
+        database = openOpenClawAgentDatabase(options());
+        expect(retainedIds()).toEqual([...candidates, "unaffected"]);
+      } else {
+        expect(await work).toBe(1);
+        expect(retainedIds()).toEqual(candidates);
+      }
+      expect(attempts).toBe(1);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([work]);
+    }
+  },
+);

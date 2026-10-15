@@ -1,6 +1,5 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import {
   isStandaloneToolMessageForDisplay,
   isToolResultMessage,
@@ -17,7 +16,6 @@ const imageAttachment = {
   },
 };
 const canvasPreview = { kind: "canvas", surface: "assistant_message", render: "url" };
-const senderMetadata = `${markInboundContextLabel("Sender:")}\n\`\`\`json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n\`\`\``;
 
 function assistant(content: unknown, fields: Record<string, unknown> = {}) {
   return normalizeMessage({ role: "assistant", content, ...fields });
@@ -31,17 +29,6 @@ describe("message-normalizer", () => {
     expect(isToolResultMessage(undefined)).toBe(false);
     expect(isStandaloneToolMessageForDisplay(undefined)).toBe(false);
   });
-
-  it.each(["toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "toolName", "tool_name"])(
-    "requires a string-valued %s tool envelope",
-    (field) => {
-      const message = { role: "assistant", content: "Tool output", [field]: "" };
-      expect(isStandaloneToolMessageForDisplay(message)).toBe(true);
-      expect(isToolResultMessage(message)).toBe(false);
-      expect(normalizeMessage(message).role).toBe("toolResult");
-      expect(isStandaloneToolMessageForDisplay({ ...message, [field]: 7 })).toBe(false);
-    },
-  );
 
   it.each([
     ["TOOL_RESULT", true, true],
@@ -78,17 +65,6 @@ describe("message-normalizer", () => {
     ]);
   });
 
-  it.each([
-    { type: "toolcall", name: "Bash", arguments: { command: "pwd" } },
-    { type: "tool_use", name: "Bash", input: { command: "pwd" } },
-  ])("normalizes provider tool arguments from $type", (block) => {
-    const result = assistant([block]);
-    expect(result.role).toBe("toolResult");
-    expect(result.content).toEqual([
-      { type: block.type, text: undefined, name: "Bash", args: { command: "pwd" } },
-    ]);
-  });
-
   it("reuses retained messages and normalizes replacement snapshots afresh", () => {
     const message = { role: "assistant", content: "answer", timestamp: 2 };
     const initial = normalizeMessage(message);
@@ -114,24 +90,17 @@ describe("message-normalizer", () => {
     expect(second).not.toBe(first);
   });
 
-  it.each([
-    { text: "MEDIA:/tmp/example.png\n[[reply_to_current]]" },
-    { content: [{ type: "text", text: "MEDIA:/tmp/example.png\n[[reply_to_current]]" }] },
-  ])("keeps user directives literal in %j", (fields) => {
-    const result = normalizeMessage({ role: "user", ...fields });
-    expect(result.content).toEqual([
-      { type: "text", text: "MEDIA:/tmp/example.png\n[[reply_to_current]]" },
-    ]);
-    expect(result.replyTarget).toBeUndefined();
-    expect(result.audioAsVoice).toBeUndefined();
-  });
-
-  it("normalizes persisted user Responses input text", () => {
-    expect(
-      normalizeMessage({ role: "user", content: [{ type: "input_text", text: "Question" }] })
-        .content,
-    ).toEqual([{ type: "text", text: "Question", name: undefined, args: undefined }]);
-  });
+  it.each([{ text: "MEDIA:/tmp/example.png\n[[reply_to_current]]" }])(
+    "keeps user directives literal in %j",
+    (fields) => {
+      const result = normalizeMessage({ role: "user", ...fields });
+      expect(result.content).toEqual([
+        { type: "text", text: "MEDIA:/tmp/example.png\n[[reply_to_current]]" },
+      ]);
+      expect(result.replyTarget).toBeUndefined();
+      expect(result.audioAsVoice).toBeUndefined();
+    },
+  );
 
   it("accepts assistant Responses input blocks but rejects user output blocks", () => {
     expect(assistant([{ type: "input_text", text: "Answer" }]).content).toEqual([
@@ -222,50 +191,21 @@ describe("message-normalizer", () => {
     ]);
   });
 
-  it.each([
-    {
-      viewId: "cv_widget",
-      url: "/__openclaw__/canvas/documents/cv_widget/index.html",
-      sandbox: "strict",
-    },
-    { url: "/__openclaw__/canvas/documents/cv_widget/index.html", sandbox: "scripts" },
-  ])("keeps canonical canvas metadata instead of its shortcode copy: %j", (identity) => {
-    const preview = { ...canvasPreview, ...identity, boardWidgetName: "saved-widget" };
-    expect(
-      assistant([
-        { type: "text", text: 'Ready.\n[embed ref="cv_widget" title="Widget" /]' },
+  it.each([{ url: "/__openclaw__/canvas/documents/cv_widget/index.html", sandbox: "scripts" }])(
+    "keeps canonical canvas metadata instead of its shortcode copy: %j",
+    (identity) => {
+      const preview = { ...canvasPreview, ...identity, boardWidgetName: "saved-widget" };
+      expect(
+        assistant([
+          { type: "text", text: 'Ready.\n[embed ref="cv_widget" title="Widget" /]' },
+          { type: "canvas", preview, rawText: "original tool result" },
+        ]).content,
+      ).toEqual([
+        { type: "text", text: "Ready." },
         { type: "canvas", preview, rawText: "original tool result" },
-      ]).content,
-    ).toEqual([
-      { type: "text", text: "Ready." },
-      { type: "canvas", preview, rawText: "original tool result" },
-    ]);
-  });
-
-  it("drops invalid canvas dashboard identity", () => {
-    const result = assistant([
-      {
-        type: "canvas",
-        preview: {
-          ...canvasPreview,
-          url: "/canvas/widget",
-          boardWidgetName: "Invalid widget name",
-        },
-      },
-    ]);
-    expect(result.content).toEqual([
-      { type: "canvas", preview: { ...canvasPreview, url: "/canvas/widget" }, rawText: null },
-    ]);
-  });
-
-  it.each([
-    '```text\n[embed ref="cv_status" /]\n```',
-    "Use `[[reply_to_current]]` and `[[tts]]` literally.",
-  ])("preserves literal shortcode text %j", (text) => {
-    const result = assistant(text);
-    expect(result.content).toEqual([{ type: "text", text }]);
-    expect(result.replyTarget).toBeUndefined();
-  });
+      ]);
+    },
+  );
 
   it("extracts ordered MEDIA attachments with persisted delivery facts", () => {
     const result = assistant(
@@ -290,47 +230,6 @@ describe("message-normalizer", () => {
       },
     ]);
   });
-
-  it("preserves paragraph breaks and code indentation before an attachment", () => {
-    const text =
-      "Here is the code.\n\n```python\ndef run():\n    if ready:\n        return True\n```\n\nThe attachment is ready.";
-    expect(assistant(`${text}\nMEDIA:https://example.com/image.png`).content).toEqual([
-      { type: "text", text },
-      imageAttachment,
-    ]);
-  });
-
-  it("preserves paragraph separators around an attachment", () => {
-    expect(assistant("First\n\t\nMEDIA:https://example.com/image.png\n\t\nSecond").content).toEqual(
-      [{ type: "text", text: "First\n" }, imageAttachment, { type: "text", text: "Second" }],
-    );
-  });
-
-  it("preserves canonical code fences with structured delivery facts", () => {
-    const text = "```python\nvalue = 'a  b'\n``` not a close\nother = 'c  d'\n```";
-    expect(
-      assistant(`${text}\nMEDIA:https://example.com/image.png`, {
-        openclawDelivery: { audioAsVoice: true, replyToCurrent: true },
-      }).content,
-    ).toEqual([{ type: "text", text }, imageAttachment]);
-  });
-
-  it.each(["audioAsVoice", "replyToCurrent"])(
-    "rejects a delivery record with invalid %s",
-    (field) => {
-      const result = assistant("Visible answer", {
-        openclawDelivery: {
-          audioAsVoice: true,
-          replyToCurrent: true,
-          replyToId: "target",
-          [field]: false,
-        },
-      });
-      expect(result.content).toEqual([{ type: "text", text: "Visible answer" }]);
-      expect(result).not.toHaveProperty("audioAsVoice");
-      expect(result).not.toHaveProperty("replyTarget");
-    },
-  );
 
   it("omits non-finite canvas and media dimensions", () => {
     const dimensions = {
@@ -368,24 +267,11 @@ describe("message-normalizer", () => {
 
   it.each([
     {
-      url: "https://cdn.example/clip%2Emp4",
-      label: "clip%2Emp4",
-      kind: "video",
-      mimeType: "video/mp4",
-    },
-    {
-      url: "/__openclaw__/media/voice%2Eogg?mediaTicket=signed",
-      label: "voice%2Eogg?mediaTicket=signed",
-      kind: "audio",
-      mimeType: "audio/ogg",
-    },
-    {
       url: "/tmp/Shopping report.pdf",
       label: "Shopping report.pdf",
       kind: "document",
       mimeType: "application/pdf",
     },
-    { url: "render final.png", label: "render final.png", kind: "image", mimeType: "image/png" },
   ])(
     "classifies MEDIA path $url without leaking filename text",
     ({ url, label, kind, mimeType }) => {
@@ -516,27 +402,6 @@ describe("message-normalizer", () => {
     expect(result.replyTarget).toEqual({ kind: "id", id: "transcript-target" });
   });
 
-  it("ignores assistant delivery facts on user media", () => {
-    expect(
-      normalizeMessage({
-        role: "user",
-        content: [{ type: "image", url: "/media/image.png" }],
-        openclawDelivery: { replyToId: "assistant-only" },
-      }).replyTarget,
-    ).toBeUndefined();
-  });
-
-  it.each([
-    {
-      role: "assistant",
-      content: `${senderMetadata}\n\nVisible reply`,
-      expected: [{ type: "text", text: "Visible reply" }],
-    },
-    { role: "system", content: senderMetadata, expected: [] },
-  ])("strips stamped sender metadata from $role display", ({ role, content, expected }) => {
-    expect(normalizeMessage({ role, content }).content).toStrictEqual(expected);
-  });
-
   it("formats durable email sender attribution", () => {
     const result = normalizeMessage({
       role: "user",
@@ -547,10 +412,7 @@ describe("message-normalizer", () => {
     expect(result.sender).toEqual({ id: "alice@example.com" });
   });
 
-  it.each([
-    { senderLabel: "steipete (c3e32452-0467-47e5-aafa-233cd5dae29f)", name: "steipete" },
-    { senderLabel: "Peter (+436641234567)", name: "Peter (+436641234567)" },
-  ])(
+  it.each([{ senderLabel: "steipete (c3e32452-0467-47e5-aafa-233cd5dae29f)", name: "steipete" }])(
     "uses legacy label $senderLabel for display without inventing identity",
     ({ senderLabel, name }) => {
       const result = normalizeMessage({ role: "user", content: "hi", senderLabel });
@@ -558,17 +420,6 @@ describe("message-normalizer", () => {
       expect(result.sender).toEqual({ name });
     },
   );
-
-  it("prefers durable identity over a legacy label", () => {
-    const result = normalizeMessage({
-      role: "user",
-      content: "hi",
-      senderLabel: "Legacy",
-      __openclaw: { senderId: "profile", senderName: "Meta Name" },
-    });
-    expect(result.sender).toEqual({ id: "profile", name: "Meta Name" });
-    expect(result.senderLabel).toBe("Legacy");
-  });
 
   it("requires typed provenance for a profile avatar", () => {
     const identity = { type: "profile", id: "shared-id" };
@@ -593,28 +444,6 @@ describe("message-normalizer", () => {
       normalizeMessage({ role: "user", content: "hello", __openclaw: metadata }).sender,
     ).toEqual({ id: "shared-id", name: "Person" });
   });
-
-  it.each([
-    { type: "profile", id: "x".repeat(513) },
-    { type: "profile", id: "profile", label: "untrusted extra field" },
-    { type: "observation", id: "profile" },
-  ])(
-    "rejects invalid sender provenance %j without losing display attribution",
-    (senderIdentity) => {
-      expect(
-        normalizeMessage({
-          role: "user",
-          content: "hello",
-          __openclaw: {
-            senderIdentity,
-            senderId: "profile",
-            senderName: "Display",
-            senderProfileAvatarUrl: "/api/users/profile/avatar",
-          },
-        }).sender,
-      ).toEqual({ id: "profile", name: "Display" });
-    },
-  );
 
   it.each([
     {

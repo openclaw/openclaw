@@ -65,7 +65,7 @@ if (advertisedProvider.id !== expectedProviderId) {
     `expected provider ${expectedProviderId}, but node advertised ${advertisedProvider.id}`,
   );
 }
-const tool = createComputerTool({ modelHasVision: true });
+const tool = createComputerTool();
 let callSequence = 0;
 
 async function call(action: string, fields: JsonRecord = {}): Promise<ToolResult> {

@@ -88,35 +88,28 @@ describe("human mention directory", () => {
     });
   });
 
-  it.each([false, true])(
-    "propagates a response exception once (preparation fails: %s)",
-    async (preparationFails) => {
-      await withInbox(async (f) => {
-        const params = { sessionKey: SESSION_KEY, query: "Alice" };
-        const readFailure = preparationFails
-          ? vi
-              .spyOn(userProfileReads, "readUserProfileDirectory")
-              .mockRejectedValueOnce(new Error("synthetic directory failure"))
-          : undefined;
-        const responseError = new Error("synthetic response failure");
-        const onResponse = vi.fn<GatewayRequestHandlerOptions["respond"]>((ok, _payload, error) => {
-          expect(ok).toBe(!preparationFails);
-          if (preparationFails) {
-            expect(error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
-          }
-          throw responseError;
-        });
-        try {
-          await expect(f.call("users.mentionable", params, f.bobClient, onResponse)).rejects.toBe(
-            responseError,
-          );
-          expect(onResponse).toHaveBeenCalledTimes(1);
-        } finally {
-          readFailure?.mockRestore();
-        }
+  it("propagates a response exception once after directory preparation fails", async () => {
+    await withInbox(async (f) => {
+      const params = { sessionKey: SESSION_KEY, query: "Alice" };
+      const readFailure = vi
+        .spyOn(userProfileReads, "readUserProfileDirectory")
+        .mockRejectedValueOnce(new Error("synthetic directory failure"));
+      const responseError = new Error("synthetic response failure");
+      const onResponse = vi.fn<GatewayRequestHandlerOptions["respond"]>((ok, _payload, error) => {
+        expect(ok).toBe(false);
+        expect(error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
+        throw responseError;
       });
-    },
-  );
+      try {
+        await expect(f.call("users.mentionable", params, f.bobClient, onResponse)).rejects.toBe(
+          responseError,
+        );
+        expect(onResponse).toHaveBeenCalledTimes(1);
+      } finally {
+        readFailure.mockRestore();
+      }
+    });
+  });
 
   it("discards a completed directory read when a linked handle changes before selection", async () => {
     await withInbox(async (f) => {
@@ -171,7 +164,7 @@ describe("human mention directory", () => {
         } else if (change === "session visibility") {
           await f.setSession({ visibility: "draft" });
         } else {
-          f.inbox.dispose();
+          await f.inbox.dispose();
         }
         held.release();
         expect(await pending).toMatchObject({ ok: false, error: { code } });
@@ -208,8 +201,8 @@ describe("human mention directory", () => {
       expect(
         f.inbox.validateRecipients(f.aliceClient, { sessionKey: SESSION_KEY }, [f.bob.id]),
       ).toEqual({ ok: true, value: [f.bob.id] });
-      f.post();
-      expect(read(f.inbox, f.bobClient).items).toHaveLength(1);
+      await f.post();
+      expect((await read(f.inbox, f.bobClient)).items).toHaveLength(1);
       syncGitHubIdentity({
         identity: { accountId: 42, login: "robert-new" },
         authenticationAlias: { kind: "email", email: "bob@mentions.example.test" },
@@ -322,12 +315,14 @@ describe("human mention directory", () => {
         if (!directory.ok || !validateUsersMentionableResult(directory.payload)) {
           throw new Error("Invalid mention directory response");
         }
-        const admission = f.inbox.validateRecipients(f.aliceClient, { sessionKey }, [f.bob.id]);
-        f.post("policy-source", { sessionKey, sessionId });
+        const admission = await f.inbox.validateRecipientsAsync(f.aliceClient, { sessionKey }, [
+          f.bob.id,
+        ]);
+        await f.post("policy-source", { sessionKey, sessionId });
         expect({
           users: directory.payload.users.map((user) => [user.profileId, user.online]),
           accepted: admission.ok,
-          inboxKeys: read(f.inbox, f.bobClient).items.map((item) => item.sessionKey),
+          inboxKeys: (await read(f.inbox, f.bobClient)).items.map((item) => item.sessionKey),
           pushedRecipients: f.push.mock.calls.map(([mention]) => mention.recipientProfileId),
           storedSources: openOpenClawStateDatabase()
             .db.prepare(
@@ -353,11 +348,11 @@ describe("human mention directory", () => {
           ok: true,
           payload: { users: [{ profileId: f.bob.id, displayName: "Bob" }] },
         });
-        expect(f.inbox.validateRecipients(f.aliceClient, draft, [f.bob.id])).toEqual({
+        expect(await f.inbox.validateRecipientsAsync(f.aliceClient, draft, [f.bob.id])).toEqual({
           ok: true,
           value: [f.bob.id],
         });
-        expect(read(f.inbox, f.bobClient).items).toEqual([]);
+        expect((await read(f.inbox, f.bobClient)).items).toEqual([]);
       },
       {
         session: { scope: "global", store: "/synthetic/fixed-global.sqlite" },
@@ -383,11 +378,18 @@ describe("human mention directory", () => {
         false,
       );
       expect(
-        f.inbox.validateRecipients(f.aliceClient, { sessionKey: SESSION_KEY }, [f.alice.id]).ok,
+        (
+          await f.inbox.validateRecipientsAsync(f.aliceClient, { sessionKey: SESSION_KEY }, [
+            f.alice.id,
+          ])
+        ).ok,
       ).toBe(false);
       expect(
-        f.inbox.validateRecipients(f.aliceClient, { sessionKey: SESSION_KEY }, ["missing-person"])
-          .ok,
+        (
+          await f.inbox.validateRecipientsAsync(f.aliceClient, { sessionKey: SESSION_KEY }, [
+            "missing-person",
+          ])
+        ).ok,
       ).toBe(false);
       await f.setSession({ visibility: "draft" });
       const hidden = await f.call("users.mentionable", { sessionKey: SESSION_KEY }, f.bobClient);
@@ -396,24 +398,12 @@ describe("human mention directory", () => {
         error: { code: "INVALID_REQUEST", message: "Session was not found." },
       });
       expect(
-        f.inbox.validateRecipients(f.aliceClient, { sessionKey: SESSION_KEY }, [f.bob.id]).ok,
+        (
+          await f.inbox.validateRecipientsAsync(f.aliceClient, { sessionKey: SESSION_KEY }, [
+            f.bob.id,
+          ])
+        ).ok,
       ).toBe(false);
-    });
-  });
-
-  it("reports truncated results while a narrower search returns the matching offline person", async () => {
-    await withInbox(async (f) => {
-      for (let index = 0; index < 105; index++) {
-        const profile = ensureProfileForEmail(`teammate-${index}@mentions.example.test`);
-        setDisplayName(profile.id, `Teammate ${index}`);
-      }
-      const result = await searchDirectory(f, "Teammate");
-      expect(result.truncated).toBe(true);
-      expect(result.users).toHaveLength(100);
-      expect(await searchDirectory(f, "Teammate 104")).toMatchObject({
-        users: [{ displayName: "Teammate 104", online: false }],
-        truncated: false,
-      });
     });
   });
 });

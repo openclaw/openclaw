@@ -2,33 +2,13 @@
  * Warns when assistant text appears to expose raw tool-call syntax.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { detectToolCallShapedText } from "../../packages/tool-call-repair/src/index.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { detectAssistantTranscriptRoleHeaderText } from "../shared/text/assistant-transcript-role-headers.js";
-import { detectToolCallShapedText } from "../shared/text/tool-call-shaped-text.js";
 import { isToolCallBlockType } from "../shared/tool-block-contract.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
-
-// Detect provider/model bugs where a reply serializes a tool call as plain
-// assistant text instead of emitting a structured invocation block.
-function hasStructuredToolInvocation(message: AssistantMessage): boolean {
-  if (!Array.isArray(message.content)) {
-    return false;
-  }
-  return message.content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const rawType = Reflect.get(block, "type");
-    const type = typeof rawType === "string" ? rawType.trim() : "";
-    return (
-      isToolCallBlockType(type) ||
-      Array.isArray(Reflect.get(block, "tool_calls")) ||
-      Array.isArray(Reflect.get(block, "toolCalls"))
-    );
-  });
-}
 
 function isRegisteredToolName(
   toolName: string | undefined,
@@ -51,7 +31,10 @@ export function warnIfAssistantEmittedSuspiciousText(
   ctx: EmbeddedAgentSubscribeContext,
   assistantMessage: AssistantMessage,
 ) {
-  const structuredToolInvocation = hasStructuredToolInvocation(assistantMessage);
+  // Detect text pretending to call a tool only when no real invocation was emitted.
+  const structuredToolInvocation = assistantMessage.content.some((block) =>
+    isToolCallBlockType(block.type),
+  );
   const text =
     extractTextFromChatContent(assistantMessage.content, {
       joinWith: "\n",

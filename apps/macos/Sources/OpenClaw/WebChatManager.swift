@@ -101,12 +101,9 @@ final class WebChatManager {
     private var gatewayWindows: [UUID: GatewayWindowInstance] = [:]
     private var gatewayWindowOrder: [UUID] = []
     @ObservationIgnored private var unavailableProfileIDs: Set<String> = []
-    @ObservationIgnored private var sessionObserverOwners = WebChatSessionObserverVisibilityOwners()
+    @ObservationIgnored private(set) var sessionObserverOwners = WebChatSessionObserverVisibilityOwners()
     @ObservationIgnored private var sessionObserverMonitors: [ObjectIdentifier: Task<Void, Never>] = [:]
-    @ObservationIgnored private var sessionObserverRequests: [ObjectIdentifier: (id: UUID, task: Task<Void, Never>)] =
-        [:]
-    @ObservationIgnored private var sessionObserverDeclarations:
-        [ObjectIdentifier: (lease: GatewayConnection.ServerLease, visible: Bool)] = [:]
+    @ObservationIgnored private var sessionObserverRequests: [ObjectIdentifier: Task<Void, Never>] = [:]
 
     var onChatWindowVisibilityChanged: ((Bool) -> Void)?
 
@@ -441,6 +438,14 @@ final class WebChatManager {
         self.gatewayWindowOrder.count { self.gatewayWindows[$0]?.target == target }
     }
 
+    var openProfileIDs: Set<String> {
+        // Hidden windows still retain their saved route until the window owner closes them.
+        Set(self.gatewayWindows.values.compactMap {
+            guard case let .profile(id) = $0.target else { return nil }
+            return id
+        })
+    }
+
     func closeGatewayWindows(profileID: String) {
         self.unavailableProfileIDs.insert(profileID)
         self.closeGatewayWindows(target: .profile(profileID))
@@ -514,8 +519,7 @@ final class WebChatManager {
         // A retired profile has no future socket on which to declare hidden.
         // Its subscription must end even when the final hide cannot acquire a lease.
         self.sessionObserverMonitors.removeValue(forKey: connectionID)?.cancel()
-        self.sessionObserverRequests.removeValue(forKey: connectionID)?.task.cancel()
-        self.sessionObserverDeclarations.removeValue(forKey: connectionID)
+        self.sessionObserverRequests.removeValue(forKey: connectionID)?.cancel()
     }
 
     private func setSessionObserverVisible(
@@ -550,15 +554,12 @@ final class WebChatManager {
 
     private func scheduleSessionObserverVisibility(
         _ visible: Bool,
-        connection: GatewayConnection,
-        remainingHiddenRetries: Int = 1)
+        connection: GatewayConnection)
     {
         let connectionID = ObjectIdentifier(connection)
-        let previous = self.sessionObserverRequests[connectionID]?.task
-        let requestID = UUID()
+        let previous = self.sessionObserverRequests[connectionID]
         let task = Task { @MainActor [weak self] in
             await previous?.value
-            defer { self?.finishSessionObserverRequest(connection: connectionID, id: requestID) }
             guard !Task.isCancelled, let self,
                   self.sessionObserverOwners.isVisible(connection: connectionID) == visible,
                   let lease = await connection.captureServerLease(),
@@ -566,14 +567,6 @@ final class WebChatManager {
                   self.sessionObserverOwners.isVisible(connection: connectionID) == visible
             else { return }
 
-            if let declaration = self.sessionObserverDeclarations[connectionID],
-               declaration.visible == visible,
-               await connection.isCurrentServerLease(declaration.lease)
-            { return }
-
-            // A timed-out mutation may already have changed the Gateway. Clear
-            // the old confirmation before dispatch so reopening retries truthfully.
-            self.sessionObserverDeclarations.removeValue(forKey: connectionID)
             do {
                 if visible {
                     let subscribe = OpenClawChatGatewayRequests.subscribeSessions()
@@ -587,36 +580,15 @@ final class WebChatManager {
                 _ = try await connection.request(
                     request, ifCurrentServerLease: lease)
                 guard !Task.isCancelled else { return }
-                if visible {
-                    self.sessionObserverDeclarations[connectionID] = (lease: lease, visible: true)
-                } else {
-                    self.sessionObserverDeclarations.removeValue(forKey: connectionID)
-                    if !self.sessionObserverOwners.isVisible(connection: connectionID) {
-                        self.sessionObserverMonitors.removeValue(forKey: connectionID)?.cancel()
-                    }
+                if !visible, !self.sessionObserverOwners.isVisible(connection: connectionID) {
+                    self.sessionObserverMonitors.removeValue(forKey: connectionID)?.cancel()
                 }
             } catch {
-                // A hidden mutation can time out after dispatch. Retry once on its
-                // original socket; keep the snapshot monitor for a replaced socket.
-                if !visible,
-                   !Task.isCancelled,
-                   remainingHiddenRetries > 0,
-                   await connection.isCurrentServerLease(lease),
-                   !self.sessionObserverOwners.isVisible(connection: connectionID)
-                {
-                    self.scheduleSessionObserverVisibility(
-                        false,
-                        connection: connection,
-                        remainingHiddenRetries: remainingHiddenRetries - 1)
-                }
+                // Visibility is best effort; the next transition or reconnect redeclares it.
+                webChatManagerLogger.debug("Could not update native session observer visibility: \(error)")
             }
         }
-        self.sessionObserverRequests[connectionID] = (id: requestID, task: task)
-    }
-
-    private func finishSessionObserverRequest(connection: ObjectIdentifier, id: UUID) {
-        guard self.sessionObserverRequests[connection]?.id == id else { return }
-        self.sessionObserverRequests.removeValue(forKey: connection)
+        self.sessionObserverRequests[connectionID] = task
     }
 
     enum GatewayProfileSelection {
@@ -628,7 +600,7 @@ final class WebChatManager {
     static func promptForGatewayProfile(
         profiles: [MacGatewayProfile],
         preferredID: String?,
-        local: DashboardGatewayEntry? = nil) -> GatewayProfileSelection?
+        local: DashboardGatewayEntry? = nil) async -> GatewayProfileSelection?
     {
         let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 28), pullsDown: false)
         if let local { popup.addItem(withTitle: local.name) }
@@ -644,7 +616,7 @@ final class WebChatManager {
         alert.addButton(withTitle: "Open Window")
         alert.addButton(withTitle: "Manage Gateways…")
         alert.addButton(withTitle: "Cancel")
-        switch alert.runModal() {
+        switch await AppActivation.shared.response(to: alert) {
         case .alertFirstButtonReturn:
             if local != nil, popup.indexOfSelectedItem == 0 { return .local }
             let index = popup.indexOfSelectedItem - offset
@@ -664,13 +636,6 @@ final class WebChatManager {
     private static func showProfileError(_ error: Error, message: String) {
         let alert = NSAlert(error: error)
         alert.messageText = message
-        alert.runModal()
+        AppActivation.shared.presentAlert(alert)
     }
-
-    #if DEBUG
-    func _testSessionObserverVisible(connection: GatewayConnection) -> Bool {
-        self.sessionObserverOwners.isVisible(connection: ObjectIdentifier(connection))
-    }
-
-    #endif
 }

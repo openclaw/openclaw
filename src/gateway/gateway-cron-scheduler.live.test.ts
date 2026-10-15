@@ -459,7 +459,7 @@ describeLive("cron scheduling through an isolated Gateway", () => {
             fixturePidBeforeSettlement(path.join(onExitDir, "watch-2.pid"), gatewayClosed),
             signal,
           );
-          await waitForDead(replacementPid, 10_000);
+          await waitForDead(replacementPid, signal);
           expect(
             isProcessAlive(firstPid),
             "replacement watch must exit before the first payload",

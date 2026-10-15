@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -11,9 +12,13 @@ const suite = createControlUiE2eSuite({ name: "Gateway status with native accoun
 
 async function connectionStatusOverlapsComposer(page: Page): Promise<boolean> {
   return page.evaluate(() => {
-    const statusBounds = document
-      .querySelector(".shell-connection-status")!
-      .getBoundingClientRect();
+    const status =
+      document.querySelector(".shell-connection-status") ??
+      document.querySelector(".sidebar-identity-card[data-connection-status]");
+    if (!status) {
+      throw new Error("Expected a visible Gateway connection status surface");
+    }
+    const statusBounds = status.getBoundingClientRect();
     const composerBounds = document
       .querySelector(".agent-chat__composer-shell")!
       .getBoundingClientRect();
@@ -27,6 +32,66 @@ async function connectionStatusOverlapsComposer(page: Page): Promise<boolean> {
 }
 
 suite.define(() => {
+  it("keeps shared chat usable without polling operator-only surfaces", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 1000 }, locale: "en-US", colorScheme: "dark" },
+      async ({ page }) => {
+        await page.clock.install();
+        const sessionKey = "agent:main:scope-reader";
+        const operatorMethods = [
+          "board.get",
+          "presence.activity",
+          "cron.list",
+          "cron.status",
+          "talk.catalog",
+          "taskSuggestions.list",
+          "mcp.app.discover",
+          "models.authStatus",
+          "config.get",
+        ];
+        const gateway = await installMockGateway(page, {
+          sessionKey,
+          operatorScopes: ["operator.sessions.read"],
+          featureMethods: [...defaultControlUiFeatureMethods, ...operatorMethods],
+          historyMessages: [
+            { role: "assistant", content: [{ type: "text", text: "Shared discussion" }] },
+          ],
+          methodResponses: Object.fromEntries(
+            operatorMethods.map((method) => [
+              method,
+              {
+                __mockError: { code: "FORBIDDEN", message: "Operator access required" },
+              },
+            ]),
+          ),
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await page.getByText("Shared discussion", { exact: true }).waitFor();
+        for (let minute = 0; minute < 15; minute++) {
+          await gateway.emitGatewayEvent("cron", {});
+          await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+          await page.clock.runFor(60_000);
+        }
+        const requests = await gateway.getRequests();
+        expect(requests.filter((request) => operatorMethods.includes(request.method))).toEqual([]);
+        expect(requests.some((request) => request.method === "chat.startup")).toBe(true);
+        await page.goto(`${suite.server.baseUrl}cron`);
+        await page
+          .getByText(
+            "You don't have permission to view scheduled tasks. Ask the person who manages OpenClaw for access.",
+            { exact: true },
+          )
+          .waitFor();
+        expect(await gateway.getRequests("cron.list")).toHaveLength(0);
+
+        await gateway.setOperatorScopes(["operator.admin"]);
+        await gateway.closeLatest();
+        await page.clock.runFor(5_000);
+        await gateway.waitForRequest("cron.list");
+      },
+    );
+  });
+
   it("keeps initial recovery from moving the session frame and shows later reconnect recovery", async () => {
     await suite.withPage(
       {
@@ -118,10 +183,11 @@ suite.define(() => {
         });
         await page.locator(".shell--nav-collapsed").waitFor({ state: "visible" });
         await gateway.setOnline(false);
-        await page
-          .locator(".shell-connection-status .gateway-status__label")
-          .getByText("Reconnecting…", { exact: true })
-          .waitFor({ state: "visible" });
+        const retainedStatus = page.locator(
+          ".sidebar-identity-card[data-connection-status=reconnecting]",
+        );
+        await retainedStatus.waitFor({ state: "visible" });
+        expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting…");
         await expect.poll(() => connectionStatusOverlapsComposer(page)).toBe(false);
       },
     );
@@ -180,12 +246,13 @@ suite.define(() => {
             path: path.join(suite.artifactDir, "native-reconnecting.png"),
           });
         }
-        const visibleStatus = footer.locator(".gateway-status__label");
-        expect(await visibleStatus.count()).toBe(1);
-        expect(await visibleStatus.textContent()).toBe("Reconnecting…");
+        const identityStatus = footer.locator(".sidebar-identity-card");
+        expect(await identityStatus.isVisible()).toBe(true);
+        expect(await identityStatus.getAttribute("aria-label")).toContain("Reconnecting…");
         expect(await footer.locator(".sidebar-identity-card").textContent()).toContain("Alex");
         expect(await footer.locator(".sidebar-identity-card [role=status]").count()).toBe(0);
-        const announcement = footer.getByRole("status");
+        const announcement = footer.locator(":scope > [role=status]");
+        expect(await announcement.count()).toBe(1);
         expect(await announcement.textContent()).toContain("Reconnecting…");
         expect(await announcement.textContent()).not.toContain("in outbox");
         expect(await footer.textContent()).not.toContain("in outbox");
@@ -201,7 +268,7 @@ suite.define(() => {
         await footer.waitFor({ state: "visible" });
 
         await footer.locator(".sidebar-identity-card").click();
-        const menu = page.locator("wa-dropdown.sidebar-identity-menu");
+        const menu = page.locator(".sidebar-identity-menu");
         await menu.getByText("Alex", { exact: true }).waitFor();
         await menu.getByText("Studio Gateway", { exact: true }).waitFor();
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
@@ -219,7 +286,7 @@ suite.define(() => {
         await page.getByRole("button", { name: "Expand sidebar" }).click();
         await footer.locator(".sidebar-identity-card").click();
         await menu.getByText("Alex", { exact: true }).waitFor();
-        const retry = menu.locator('wa-dropdown-item[value="command:retry-connect"]');
+        const retry = menu.locator('[data-value="command:retry-connect"]');
         await retry.waitFor();
         expect(await menu.locator(".sidebar-identity-menu__outbox").count()).toBe(0);
         const bounds = await retry.boundingBox();

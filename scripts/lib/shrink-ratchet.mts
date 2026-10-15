@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 // Owns file-backed baselines and the per-file count ratchet lifecycle, including
@@ -35,11 +36,21 @@ export function parseRatchetArgs(argv: string[]) {
 }
 
 function readGitText(root: string, args: string[]) {
-  return execFileSync("git", args, {
-    cwd: root,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ratchet-git-"));
+  const output = path.join(temporary, "stdout");
+  let descriptor: number | undefined;
+  try {
+    descriptor = fs.openSync(output, "wx", 0o600);
+    // Baseline blobs can exceed execFileSync's pipe limit. Git writes directly
+    // to a file; only a successful command may supply the complete snapshot.
+    execFileSync("git", args, { cwd: root, stdio: ["ignore", descriptor, "ignore"] });
+    return fs.readFileSync(output, "utf8");
+  } finally {
+    if (descriptor !== undefined) {
+      fs.closeSync(descriptor);
+    }
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
 }
 
 function resolvesCommit(root: string, ref: string) {

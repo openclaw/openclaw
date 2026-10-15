@@ -150,7 +150,14 @@ describe("backup create CLI", () => {
       const result = await runBackupCli({ env: { ...process.env, ...state.env }, outputPath });
       expect(result.code).toBe(1);
       expect(result.stderr).not.toContain("Config invalid");
-      expect(result.stderr).toContain("Cannot read shared state for discovery");
+      expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+      expect(result.stderr).toContain("[openclaw] For help, run `openclaw doctor`.");
+      const failure = JSON.parse(result.stdout);
+      expect(failure).toMatchObject({ ok: false, error: { type: "cli_error" } });
+      expect(failure.error.message).toContain(
+        `Cannot read shared state for discovery: ${state.statePath("state/openclaw.sqlite")}.`,
+      );
+      expect(failure.error.message).toContain("file is not a database");
       await expect(fs.stat(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });

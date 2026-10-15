@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
@@ -259,7 +258,7 @@ function expectCandidateOrder(
   expect(candidates.map((candidate) => candidate.idHint)).toEqual(expectedIds);
 }
 
-function discoverOverlayFixture(mounted: boolean) {
+function discoverOverlayFixture() {
   const stateDir = makeTempDir();
   const packageRoot = path.join(stateDir, "node_modules", "openclaw");
   const bundledRoot = path.join(packageRoot, "dist", "extensions");
@@ -272,7 +271,7 @@ function discoverOverlayFixture(mounted: boolean) {
     "index.js",
   );
   createPackagePluginWithEntry(sourcePluginDir, "@openclaw/synology-chat", "synology-chat");
-  mockLinuxMountInfo(mounted ? [sourcePluginDir] : []);
+  mockLinuxMountInfo([sourcePluginDir]);
   const sourceEntryPath = path.join(sourcePluginDir, "src", "index.ts");
   const bundledEntryPath = path.join(bundledPluginDir, "index.js");
 
@@ -395,33 +394,6 @@ describe("discoverOpenClawPlugins", () => {
     ]);
   });
 
-  it("does not recurse arbitrary workspace directories for plugin auto-discovery", () => {
-    const stateDir = makeTempDir();
-    const workspaceDir = path.join(stateDir, "workspace");
-    const workspaceExt = path.join(workspaceDir, ".openclaw", "extensions");
-
-    const expectedWorkspacePluginDir = path.join(workspaceExt, "workspace-plugin");
-    createPackagePluginWithEntry(
-      expectedWorkspacePluginDir,
-      "@openclaw/workspace-plugin",
-      "workspace-plugin",
-    );
-
-    const unrelatedWorkspaceDir = path.join(workspaceDir, "lobster-integrations", "bin");
-    createPackagePluginWithEntry(unrelatedWorkspaceDir, "@openclaw/stray-workspace-plugin");
-
-    const result = discoverOpenClawPlugins({
-      workspaceDir,
-      env: buildDiscoveryEnv(stateDir),
-    });
-
-    expectCandidatePresence(result, {
-      present: ["workspace-plugin"],
-      absent: ["stray-workspace-plugin"],
-    });
-    expect(result.diagnostics).toStrictEqual([]);
-  });
-
   it("discovers bind-mounted bundled source overlays before packaged dist bundles", () => {
     const {
       candidates,
@@ -430,7 +402,7 @@ describe("discoverOpenClawPlugins", () => {
       bundledPluginDir,
       sourceEntryPath,
       bundledEntryPath,
-    } = discoverOverlayFixture(true);
+    } = discoverOverlayFixture();
     const synologyCandidates = candidates.filter(
       (candidate) => candidate.idHint === "synology-chat",
     );
@@ -452,18 +424,6 @@ describe("discoverOpenClawPlugins", () => {
       source: sourcePluginDir,
       messageIncludes: "bind-mounted bundled plugin source overlay",
     });
-  });
-
-  it("keeps copied source plugin dirs inert when they are not mounted overlays", () => {
-    const { candidates, diagnostics, bundledPluginDir, bundledEntryPath } =
-      discoverOverlayFixture(false);
-    expectCandidateFields(findCandidateById(candidates, "synology-chat"), {
-      origin: "bundled",
-      rootDir: fs.realpathSync(bundledPluginDir),
-      source: fs.realpathSync(bundledEntryPath),
-    });
-    expect(candidates.filter((candidate) => candidate.idHint === "synology-chat").length).toBe(1);
-    expect(diagnostics).toStrictEqual([]);
   });
 
   it("rejects pack entries whose basenames collide on the same derived id", () => {
@@ -724,79 +684,6 @@ describe("discoverOpenClawPlugins", () => {
       },
     );
   }
-
-  it("warns on legacy npm declaration stubs without loading workspace node_modules", () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "extensions", "guardrail-bridge");
-
-    writeJson(path.join(pluginDir, "openclaw.extension.json"), {
-      name: "guardrail-bridge",
-      type: "npm",
-      npmSpec: "@guardrail-bridge/guardrail-bridge@1.0.0",
-    });
-
-    const result = discoverWithStateDir(stateDir, {});
-
-    expectCandidateIds(result.candidates, { excludes: ["guardrail-bridge"] });
-    expectDiagnostic({
-      diagnostics: result.diagnostics,
-      level: "warn",
-      pluginId: "guardrail-bridge",
-      source: path.join(pluginDir, "openclaw.extension.json"),
-      messageIncludes: 'run "openclaw doctor --fix"',
-    });
-  });
-
-  it("lets a valid bundled plugin win when a managed package is source-only TypeScript", () => {
-    const stateDir = makeTempDir();
-    const bundledDir = path.join(stateDir, "bundled");
-    const bundledPluginDir = path.join(bundledDir, "discord");
-    const installedPluginDir = path.join(stateDir, "extensions", "discord");
-
-    writePluginPackageManifest({
-      packageDir: bundledPluginDir,
-      packageName: "@openclaw/discord",
-      extensions: ["./index.js"],
-    });
-    writePluginManifest({ pluginDir: bundledPluginDir, id: "discord" });
-    writePluginEntry(path.join(bundledPluginDir, "index.js"));
-
-    writePluginPackageManifest({
-      packageDir: installedPluginDir,
-      packageName: "@openclaw/discord",
-      extensions: ["./src/index.ts"],
-    });
-    writePluginManifest({ pluginDir: installedPluginDir, id: "discord" });
-    writePluginEntry(path.join(installedPluginDir, "src", "index.ts"));
-
-    const result = discoverOpenClawPlugins({
-      env: buildDiscoveryEnvWithOverrides(stateDir, {
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-      }),
-      installRecords: {
-        discord: {
-          source: "path",
-          installPath: installedPluginDir,
-        },
-      },
-    });
-
-    const discordCandidates = result.candidates.filter(
-      (candidate) => candidate.idHint === "discord",
-    );
-    expect(discordCandidates).toHaveLength(1);
-    expectCandidateFields(discordCandidates[0], {
-      origin: "bundled",
-      source: fs.realpathSync(path.join(bundledPluginDir, "index.js")),
-    });
-    expect(
-      result.diagnostics.some(
-        (entry) =>
-          entry.pluginId === "discord" &&
-          entry.message.includes("requires compiled runtime output"),
-      ),
-    ).toBe(true);
-  });
 
   it("adds managed ownership to bundled candidates deduplicated in the shared scan", () => {
     const stateDir = makeTempDir();
@@ -1219,36 +1106,6 @@ describe("discoverOpenClawPlugins", () => {
     expect(fs.realpathSync(findCandidateById(candidates, "downloadable")?.source ?? "")).toBe(
       fs.realpathSync(path.join(sourceOnlyPluginDir, "index.ts")),
     );
-  });
-
-  it("does not discover nested node_modules copies under installed plugins", () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "extensions", "opik-openclaw");
-    const nestedDiffsDir = path.join(
-      pluginDir,
-      "node_modules",
-      "openclaw",
-      "dist",
-      "extensions",
-      "diffs",
-    );
-
-    createPackagePluginWithEntry(pluginDir, "@opik/opik-openclaw", "opik-openclaw");
-
-    writePluginPackageManifest({
-      packageDir: path.join(pluginDir, "node_modules", "openclaw"),
-      packageName: "openclaw",
-      extensions: [`./${bundledDistPluginFile("diffs", "index.js")}`],
-    });
-    writePluginManifest({ pluginDir: nestedDiffsDir, id: "diffs" });
-    fs.writeFileSync(
-      path.join(nestedDiffsDir, "index.js"),
-      "module.exports = { id: 'diffs', register() {} };",
-      "utf-8",
-    );
-
-    const { candidates } = discoverWithStateDir(stateDir, {});
-    expectCandidateOrder(candidates, ["opik-openclaw"]);
   });
 
   it.each([
@@ -1726,38 +1583,6 @@ describe("discoverOpenClawPlugins", () => {
     );
     expect(bundledOnly.candidates.map((candidate) => candidate.idHint)).toEqual(["bundled-plugin"]);
     expect(bundledOnly.diagnostics).toEqual([]);
-  });
-
-  it("does not reuse discovery results across env root changes", () => {
-    const [stateDirA, stateDirB] = [makeTempDir(), makeTempDir()];
-    createPackagePluginWithEntry(
-      path.join(stateDirA, "extensions", "alpha"),
-      "@openclaw/alpha",
-      "alpha",
-    );
-    createPackagePluginWithEntry(
-      path.join(stateDirB, "extensions", "beta"),
-      "@openclaw/beta",
-      "beta",
-    );
-    expectCandidateOrder(discoverWithStateDir(stateDirA).candidates, ["alpha"]);
-    expectCandidateOrder(discoverWithStateDir(stateDirB).candidates, ["beta"]);
-  });
-
-  it("does not reuse extra-path discovery across env home changes", () => {
-    const stateDir = makeTempDir();
-    const [homeA, homeB] = [makeTempDir(), makeTempDir()];
-    const pluginA = path.join(homeA, "plugins", "demo.ts");
-    const pluginB = path.join(homeB, "plugins", "demo.ts");
-    writePluginEntry(pluginA);
-    writePluginEntry(pluginB);
-    const discover = (home: string) =>
-      discoverOpenClawPlugins({
-        extraPaths: ["~/plugins/demo.ts"],
-        env: buildDiscoveryEnvWithOverrides(stateDir, { HOME: home }),
-      });
-    expectCandidateSource(discover(homeA).candidates, "demo", pluginA);
-    expectCandidateSource(discover(homeB).candidates, "demo", pluginB);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

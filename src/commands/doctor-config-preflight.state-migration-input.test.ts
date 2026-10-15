@@ -190,11 +190,13 @@ describe("runDoctorConfigPreflight state migration input", () => {
     });
     expect(autoMigrateLegacyState).toHaveBeenCalledWith({
       cfg: expect.objectContaining(migratedConfig),
+      sourceConfigBeforeMigrations: resolvedConfig,
       pluginDoctorConfig: resolvedConfig,
       configIncludedPaths: includedPaths,
       env: process.env,
-      log: undefined,
       doctorOnlyStateMigrations: undefined,
+      invocationPurpose: undefined,
+      beforeWorkspaceStateMigration: undefined,
       onStepReceipt: expect.any(Function),
     });
   });

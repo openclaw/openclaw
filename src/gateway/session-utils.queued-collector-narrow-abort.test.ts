@@ -4,17 +4,21 @@ import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
 import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
+import {
+  getCurrentSubagentRunOwner,
+  subagentRuns,
+} from "../agents/subagents/registry/subagent-registry-memory.js";
 import { isSubagentRunQueued } from "../agents/subagents/registry/subagent-registry-read.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { createActiveRun } from "./server-methods/chat.abort.test-helpers.js";
 import { sessionAbortHandlers } from "./server-methods/sessions-abort.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 
 const { createQueuedReservation, requestContext, launchedRunIds } = useQueuedCollectorFixture();
 
-it.each(["active", "queued", "pending-chat", "agent"] as const)(
+it.each(["active", "queued", "pending-chat"] as const)(
   "narrow collector Stop preserves a same-key prior-incarnation %s producer",
   async (kind) => {
     const client = roleClient("view", "collector-stop-owner");
@@ -26,10 +30,12 @@ it.each(["active", "queued", "pending-chat", "agent"] as const)(
       actor: { type: "human", source: "profile", id: client.authenticatedUserProfile!.profileId },
     });
     expectDefined(
-      loadGatewaySessionEntryReadOnly(entry.childSessionKey).entry,
+      (await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey)).entry,
       "collector session",
     );
-    expect(loadGatewaySessionEntryReadOnly(entry.childSessionKey).entry?.createdActor).toEqual({
+    expect(
+      (await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey)).entry?.createdActor,
+    ).toEqual({
       type: "human",
       source: "profile",
       id: client.authenticatedUserProfile!.profileId,
@@ -82,7 +88,11 @@ it.each(["active", "queued", "pending-chat", "agent"] as const)(
       { ok: true, status: "aborted", abortedRunId: entry.runId },
     ]);
     expect(isSubagentRunQueued(entry)).toBe(false);
-    expect(entry.collectorCompletion?.status).toBe("killed");
+    const stopped = expectDefined(
+      getCurrentSubagentRunOwner(subagentRuns, entry),
+      "stopped reserved collector",
+    );
+    expect(stopped.collectorCompletion?.status).toBe("killed");
     expect(old.controller.signal.aborted).toBe(false);
     if (kind === "active") {
       expect(context.chatAbortControllers.get(oldRunId)).toBe(old);

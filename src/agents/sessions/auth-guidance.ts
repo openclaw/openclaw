@@ -17,11 +17,6 @@ function getProviderLoginHelp(): string {
   ].join("\n");
 }
 
-/** Formats the message shown when no configured model can be used. */
-export function formatNoModelsAvailableMessage(): string {
-  return `No models available. ${getProviderLoginHelp()}`;
-}
-
 /** Formats the message shown before a model is selected. */
 export function formatNoModelSelectedMessage(): string {
   return `No model selected.\n\n${getProviderLoginHelp()}\n\nThen use /model to select a model.`;

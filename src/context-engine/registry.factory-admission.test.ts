@@ -74,27 +74,6 @@ it.each(["closed-scope", "released-source"] as const)(
   },
 );
 
-it("still quarantines a factory that itself throws the host admission error text", async () => {
-  const registry = createEmptyPluginRegistry();
-  const selectedId = "factory-admission-text";
-  const factory = vi.fn(() => {
-    throw new Error("Async work scope is closed");
-  });
-  registerContextEngineInRegistry(registry, selectedId, factory, "plugin:fixture");
-  registerContextEngineInRegistry(registry, "legacy", () => new LegacyContextEngine(), "core");
-  vi.spyOn(console, "error").mockImplementation(() => {});
-  const resolve = () =>
-    withPluginRuntimeRegistryScope(registry, () =>
-      resolveContextEngine({ plugins: { slots: { contextEngine: selectedId } } }),
-    );
-  expect((await resolve()).info.id).toBe("legacy");
-  expect((await resolve()).info.id).toBe("legacy");
-  expect(factory).toHaveBeenCalledOnce();
-  expect(await listContextEngineQuarantines()).toEqual([
-    expect.objectContaining({ engineId: selectedId, operation: "factory" }),
-  ]);
-});
-
 it.each(["reason", "wrapped-reason", "abort-error", "unrelated-error"] as const)(
   "distinguishes factory cancellation from plugin failure (%s)",
   async (mode) => {

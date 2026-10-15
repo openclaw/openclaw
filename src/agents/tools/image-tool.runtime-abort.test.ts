@@ -26,6 +26,9 @@ import {
   testing,
 } from "./image-tool.test-support.js";
 
+const buildProviderRegistry = buildMediaUnderstandingRegistry;
+const readProvider = getMediaUnderstandingProvider;
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createRequiredImageTool(options: Parameters<typeof createImageTool>[0]) {
@@ -87,13 +90,12 @@ describe("image tool run abort", () => {
     ],
     resolveModelAsync = resolveConfiguredImageModelForTest,
   ) {
-    const providerRegistry = buildMediaUnderstandingRegistry(undefined, undefined, providers);
+    const providerRegistry = buildProviderRegistry(undefined, undefined, providers);
     testing.setProviderDepsForTest({
-      buildProviderRegistry: (overrides, cfg) =>
-        buildMediaUnderstandingRegistry(overrides, cfg, providers),
-      getMediaUnderstandingProvider,
+      buildProviderRegistry: (overrides, cfg) => buildProviderRegistry(overrides, cfg, providers),
+      getMediaUnderstandingProvider: readProvider,
       resolveRegisteredMediaUnderstandingProvider: ({ providerId }) =>
-        getMediaUnderstandingProvider(providerId, providerRegistry),
+        readProvider(providerId, providerRegistry),
       resolveModelAsync,
       loadImageWebMediaRuntime: async () => ({
         loadWebMedia,

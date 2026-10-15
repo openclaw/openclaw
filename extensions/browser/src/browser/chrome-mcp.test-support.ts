@@ -4,10 +4,31 @@ import type { ChromeMcpSession } from "./chrome-mcp-contracts.js";
 import { resetChromeMcpSessionsForTest } from "./chrome-mcp-session.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 
+const { resetChromeMcpProcessMocks } = await vi.hoisted(
+  () => import("./chrome-mcp-process.test-support.js"),
+);
+
+export function waitForChromeMcpState<T>(assertion: () => T | Promise<T>): Promise<T> {
+  return vi.waitFor(assertion, { interval: 1 });
+}
+
 export type ToolCall = {
   name: string;
   arguments?: Record<string, unknown>;
 };
+
+export type ToolCallMock = {
+  mock: {
+    calls: Array<[ToolCall, unknown?, { signal?: AbortSignal; timeout?: number }?]>;
+  };
+};
+
+export function fakeListPagesResult() {
+  return {
+    content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
+  };
+}
+
 export type SessionPage = { id: number; url: string; selected?: boolean };
 
 export function createPageSession(params: {
@@ -52,7 +73,10 @@ export function installChromeMcpSessionTestHooks() {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await resetChromeMcpSessionsForTest();
+    resetChromeMcpProcessMocks();
+    vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllEnvs();
   });

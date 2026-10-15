@@ -1,6 +1,10 @@
 import fs from "node:fs";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
@@ -14,6 +18,8 @@ import { readSessionGroupMembershipInWorker } from "./session-group-catalog.js";
 
 const EXPECTED_OPEN_HANDLE_CAP = 64;
 
+afterEach(clearRuntimeConfigSnapshot);
+
 test.each([false, true])(
   "discovers current group members without decoding saved prompts (cold=%s)",
   async (cold) => {
@@ -24,8 +30,9 @@ test.each([false, true])(
         { agentId: "research", sessionKey: "agent:research:matrix:group:!Room:example.org" },
       ] as const;
       const config = {
-        agents: { list: [{ id: "main", default: true }, { id: "research" }] },
+        agents: { entries: { main: {}, research: {} } },
       } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot(config);
       const entry = {
         sessionId: "group-member",
         updatedAt: 1,
@@ -70,6 +77,7 @@ test.each([false, true])(
         );
         const entryUrl = new URL("../config/sessions/session-accessor.ts", import.meta.url);
         const cleanupUrl = new URL("../test-utils/session-state-cleanup.ts", import.meta.url);
+        const configUrl = new URL("../config/runtime-snapshot.ts", import.meta.url);
         // A foreign canonical writer refreshes metadata without this process's publications.
         const external = await runCliProcessChild({
           nodeArgs: [
@@ -78,6 +86,8 @@ test.each([false, true])(
             "--eval",
             `import { upsertSessionEntryCore } from ${JSON.stringify(entryUrl.href)};
              import { cleanupSessionStateForTest } from ${JSON.stringify(cleanupUrl.href)};
+             import { setRuntimeConfigSnapshot } from ${JSON.stringify(configUrl.href)};
+             setRuntimeConfigSnapshot(${JSON.stringify(config)});
              try {
                await upsertSessionEntryCore(${JSON.stringify(scopes[0])}, { category: "External" });
              } finally {
@@ -115,9 +125,10 @@ test("discovers groups across more than the handle cap without writable database
     );
     const config = {
       agents: {
-        list: agentIds.map((id, index) => ({ id, ...(index === 0 ? { default: true } : {}) })),
+        entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
       },
     } satisfies OpenClawConfig;
+    setRuntimeConfigSnapshot(config);
 
     for (const [index, agentId] of agentIds.entries()) {
       await upsertSessionEntryCore(

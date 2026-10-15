@@ -17,6 +17,7 @@ import {
 import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
 import { prepareControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -29,7 +30,7 @@ import { makeContextParams } from "./server-request-context.test-support.js";
 import { createGatewayWsTestSocket } from "./server/ws-connection.test-helpers.js";
 import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 
 const METHOD = "controlUi.sessionPullRequests.subscribe";
 export const sessionKey = "agent:main:guest-publication";
@@ -124,13 +125,14 @@ export async function createFixture(
       hasAvatar: false,
       updatedAt: 1,
     };
+    prepareGatewayRecipientProfile(client);
     connections.clients.add(client);
     return { client, socket, access };
   };
-  const reader = addReader("guest-publication-reader");
   const load = vi.fn<Load>(async () => snapshot);
   const subscriptions = createControlUiSessionPullRequestSubscriptions({
     scheduler,
+    getSessionRowProjection: () => getSessionRowProjection(context),
     broadcastToConnIds: connections.broadcastToConnIds,
     isConnectionActive: connections.isConnectionActive,
     prepareRead: async (connId, session) => {
@@ -151,6 +153,12 @@ export async function createFixture(
   context.getRuntimeConfig = getRuntimeConfig;
   context.controlUiSessionPullRequests = subscriptions;
   await initializeSessionReadContext(context);
+  const reader = addReader("guest-publication-reader");
+  const projection = getSessionRowProjection(context);
+  if (!projection) {
+    throw new Error("Missing fixture session projection");
+  }
+  const detachProjection = connections.attachSessionRowProjection(projection);
   return {
     ...reader,
     clock,
@@ -218,6 +226,7 @@ export async function createFixture(
       await subscriptions.stop();
       await scheduler.stop();
       connections.clients.clear();
+      detachProjection();
       await disposeSessionReadContexts();
     },
     async removeSessions() {
@@ -226,7 +235,8 @@ export async function createFixture(
         if (original) {
           await deleteSessionEntryLifecycle({
             agentId: "main",
-            storePath: loadGatewaySessionEntryReadOnly(key, { agentId: "main" }).storePath,
+            storePath: (await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" }))
+              .storePath,
             target: { canonicalKey: key, storeKeys: [key] },
             expectedSessionId: original.sessionId,
             archiveTranscript: false,

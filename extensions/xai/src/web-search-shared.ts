@@ -1,13 +1,9 @@
 import { wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import {
   requestXaiResponsesTool,
   resolveXaiToolDefaultReasoningEffort,
   requireXaiResponseTextCitationsAndInline,
-  resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
-import { resolveNormalizedXaiToolModel } from "./tool-config-shared.js";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 export type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
@@ -40,25 +36,6 @@ export function buildXaiWebSearchPayload(params: {
     ...(params.inlineCitations ? { inlineCitations: params.inlineCitations } : {}),
     ...(params.truncated ? { truncated: true } : {}),
   };
-}
-
-function resolveXaiSearchConfig(searchConfig?: Record<string, unknown>): Record<string, unknown> {
-  return isRecord(searchConfig?.grok) ? searchConfig.grok : {};
-}
-
-export function resolveXaiWebSearchModel(searchConfig?: Record<string, unknown>): string {
-  return resolveNormalizedXaiToolModel({
-    config: resolveXaiSearchConfig(searchConfig),
-    defaultModel: XAI_DEFAULT_MODEL_ID,
-  });
-}
-
-export function resolveXaiWebSearchEndpoint(searchConfig?: Record<string, unknown>): string {
-  return resolveXaiResponsesEndpoint(resolveXaiSearchConfig(searchConfig).baseUrl);
-}
-
-export function resolveXaiInlineCitations(searchConfig?: Record<string, unknown>): boolean {
-  return resolveXaiSearchConfig(searchConfig).inlineCitations === true;
 }
 
 export function wrapXaiWebSearchError(error: unknown, timeoutSeconds: number): never {

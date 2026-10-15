@@ -38,12 +38,6 @@ const GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE =
   "Google video generation response missing generated videos";
 
-function assertGeneratedVideoBufferWithinLimit(buffer: Buffer, maxBytes: number): void {
-  if (buffer.length > maxBytes) {
-    throw new Error(`Google generated video download exceeds ${maxBytes} bytes`);
-  }
-}
-
 function resolveGoogleVideoRestBaseUrl(configuredBaseUrl?: string): string {
   return `${configuredBaseUrl ?? "https://generativelanguage.googleapis.com"}/v1beta`;
 }
@@ -513,11 +507,10 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
             operation: () => client.operations.getVideosOperation({ operation: sdkOperation }),
           });
         }
+        if (sdkOperation.error) {
+          throw new Error(JSON.stringify(sdkOperation.error));
+        }
         operation = sdkOperation;
-      }
-      const finalOperation = operation as { error?: unknown; name?: string };
-      if (finalOperation.error) {
-        throw new Error(JSON.stringify(finalOperation.error));
       }
       let generatedVideos = extractGeneratedVideos(operation);
       if (generatedVideos.length === 0 && !hasReferenceInputs && !usedRestFallback) {
@@ -527,6 +520,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
       if (generatedVideos.length === 0) {
         throw new Error(GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE);
       }
+      const finalOperation = operation as { name?: string };
       const maxVideoBytes = resolveGeneratedMediaMaxBytes(req.cfg, "video");
       const videos = await Promise.all(
         generatedVideos.map(async (entry, index) => {
@@ -539,7 +533,9 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
               throw new Error("Google video generation returned malformed base64 video data");
             }
             const buffer = Buffer.from(canonicalVideo, "base64");
-            assertGeneratedVideoBufferWithinLimit(buffer, maxVideoBytes);
+            if (buffer.length > maxVideoBytes) {
+              throw new Error(`Google generated video download exceeds ${maxVideoBytes} bytes`);
+            }
             return {
               buffer,
               mimeType: normalizeOptionalString(inline.mimeType) || "video/mp4",

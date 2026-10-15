@@ -155,8 +155,9 @@ else: sys.exit("unexpected fake tool: " + name)
 describe("macOS packaging checkpoint boundary", () => {
   it("retains a signed DMG before notarization and resumes without build or signing credentials", () => {
     const f = makeCheckpointFixture();
-    const built = f.run("--checkpoint-only");
+    const built = f.run("--checkpoint-only", { SIGN_IDENTITY: "" });
     expect(built.status, built.stderr).toBe(0);
+    expect(f.events()).toContain("--sign Developer ID Application: Fixture --timestamp");
     const manifest = JSON.parse(readFileSync(path.join(f.checkpoint, "manifest.json"), "utf8"));
     expect(manifest).toMatchObject({
       sourceSha: "a".repeat(40),
@@ -206,13 +207,6 @@ describe("macOS packaging checkpoint boundary", () => {
       expect(existsSync(path.join(f.root, "appcast.xml"))).toBe(false);
     },
   );
-
-  it("uses the automatically selected app identity for the checkpoint DMG", () => {
-    const f = makeCheckpointFixture();
-    const built = f.run("--checkpoint-only", { SIGN_IDENTITY: "" });
-    expect(built.status, built.stderr).toBe(0);
-    expect(f.events()).toContain("--sign Developer ID Application: Fixture --timestamp");
-  });
 
   it("preserves an explicit signed identity when smoke flags are present", () => {
     const f = makeCheckpointFixture();
@@ -647,30 +641,30 @@ describe("package-mac-dist plist validation", () => {
     ]);
   });
 
-  it("keeps dependency bootstrap output out of captured Sparkle build values", () => {
-    const result = runSparkleBootstrap(
-      'echo "ExperimentalWarning: tsx loader changed" >&2',
-      'echo "Already up to date"\ntouch "$OPENCLAW_MARKER"',
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("2026060200\n");
-    expect(result.stderr).toContain("Ensuring deps for Sparkle build metadata");
-    expect(result.stderr).toContain("Already up to date");
-    expect(result.stderr).toContain("ExperimentalWarning: tsx loader changed");
-  });
-
-  it("stops when dependency bootstrap fails during Sparkle build retry", () => {
-    const result = runSparkleBootstrap(
-      'echo "node reran after failed install" >&2',
-      'touch "$OPENCLAW_MARKER"\necho "pnpm failed" >&2\nexit 42',
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("pnpm failed");
-    expect(result.stderr).not.toContain("node reran after failed install");
-  });
+  it.each(["successful", "failed"] as const)(
+    "keeps %s Sparkle bootstrap diagnostics separate from build values",
+    (outcome) => {
+      const failed = outcome === "failed";
+      const result = runSparkleBootstrap(
+        failed
+          ? 'echo "node reran after failed install" >&2'
+          : 'echo "ExperimentalWarning: tsx loader changed" >&2',
+        failed
+          ? 'touch "$OPENCLAW_MARKER"\necho "pnpm failed" >&2\nexit 42'
+          : 'echo "Already up to date"\ntouch "$OPENCLAW_MARKER"',
+      );
+      expect(result.status).toBe(failed ? 1 : 0);
+      expect(result.stdout).toBe(failed ? "" : "2026060200\n");
+      if (failed) {
+        expect(result.stderr).toContain("pnpm failed");
+        expect(result.stderr).not.toContain("node reran after failed install");
+      } else {
+        expect(result.stderr).toContain("Ensuring deps for Sparkle build metadata");
+        expect(result.stderr).toContain("Already up to date");
+        expect(result.stderr).toContain("ExperimentalWarning: tsx loader changed");
+      }
+    },
+  );
 
   it.runIf(process.platform === "darwin").each(["app", "dmg"] as const)(
     "re-audits the retained %s before resuming without build products",

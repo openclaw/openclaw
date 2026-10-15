@@ -14,24 +14,6 @@ type ChannelContextVisibilityConfig = {
   accounts?: Record<string, { contextVisibility?: ContextVisibilityMode }>;
 };
 
-type ContextVisibilityDefaultsConfig = {
-  channels?: {
-    defaults?: {
-      /**
-       * Global default supplemental context visibility for channels without a local override.
-       */
-      contextVisibility?: ContextVisibilityMode;
-    };
-  };
-};
-
-/** Reads the global channel default supplemental context visibility mode. */
-export function resolveDefaultContextVisibility(
-  cfg: ContextVisibilityDefaultsConfig,
-): ContextVisibilityMode | undefined {
-  return cfg.channels?.defaults?.contextVisibility;
-}
-
 /** Resolves supplemental context visibility using explicit, account, channel, default precedence. */
 export function resolveChannelContextVisibilityMode(params: {
   /** Full OpenClaw config containing channel defaults and per-channel overrides. */
@@ -60,7 +42,7 @@ export function resolveChannelContextVisibilityMode(params: {
   return (
     accountMode ??
     channelConfig?.contextVisibility ??
-    resolveDefaultContextVisibility(params.cfg) ??
+    params.cfg.channels?.defaults?.contextVisibility ??
     "all"
   );
 }

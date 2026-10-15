@@ -2,8 +2,11 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import type { UiSettings } from "../../../app/settings.ts";
 import type { SessionCapability, SessionScopeHost } from "../../../lib/sessions/index.ts";
-import type { FileSidebarNavigation } from "./chat-sidebar-content-types.ts";
-import type { SidebarContent, SidebarSelection } from "./chat-sidebar.ts";
+import type {
+  FileSidebarNavigation,
+  SidebarContent,
+  SidebarSelection,
+} from "./chat-sidebar-content-types.ts";
 
 export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
 
@@ -16,15 +19,11 @@ export type SessionWorkspaceProps = {
   loading: boolean;
   error: string | null;
   activeId: string | null;
-  onRefresh: () => void;
   onBrowsePath: (path: string) => void;
   onOpenFile: (path: string, origin: "session" | "workspace") => void;
   onSearch: (search: string) => void;
   onSetFilter: (filter: SessionWorkspaceFilter) => void;
   onOpenArtifact: (artifactId: string) => void;
-  onToggleTerminal?: () => void;
-  onToggleBrowser?: () => void;
-  onToggleDesktop?: () => void;
   /** Opens the session diff panel; absent until a usable checkout is known. */
   onOpenDiff?: () => void;
 };

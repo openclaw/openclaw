@@ -10,59 +10,26 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
-import {
-  compactDoctorSqliteFile,
-  type DoctorSqliteCompactSnapshot,
-} from "./doctor-sqlite-compact.js";
+import { compactDoctorSqliteFile } from "./doctor-sqlite-compact.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
-type DoctorStateSqliteCompactReport =
-  | {
-      mode: "compact";
-      path: string;
-      reason: "missing";
-      skipped: true;
-    }
-  | {
-      after: DoctorSqliteCompactSnapshot;
-      before: DoctorSqliteCompactSnapshot;
-      integrityCheck: "ok";
-      mode: "compact";
-      path: string;
-      reclaimedBytes: number;
-      skipped: false;
-    };
-
-type DoctorStateSqliteCompactOptions = {
-  env?: NodeJS.ProcessEnv;
-};
-
-type DoctorStateSqliteCompactDeps = {
-  busyTimeoutMs?: number;
-  withMaintenanceLock?: typeof withDoctorSqliteMaintenanceLock;
-};
-
 /** Compact only the canonical shared state database resolved for this invocation. */
-export async function runDoctorStateSqliteCompact(
-  options: DoctorStateSqliteCompactOptions = {},
-  deps: DoctorStateSqliteCompactDeps = {},
-): Promise<DoctorStateSqliteCompactReport> {
+export async function runDoctorStateSqliteCompact(options: { env?: NodeJS.ProcessEnv } = {}) {
   const env = options.env ?? process.env;
   const sqlitePath = resolveOpenClawStateSqlitePath(env);
-  const stat = readCanonicalStateDatabaseStat(sqlitePath);
+  const stat = fs.lstatSync(sqlitePath, { throwIfNoEntry: false });
   if (!stat) {
     return {
-      mode: "compact",
+      mode: "compact" as const,
       path: sqlitePath,
-      reason: "missing",
-      skipped: true,
+      reason: "missing" as const,
+      skipped: true as const,
     };
   }
   if (!stat.isFile()) {
-    throw new Error(`Canonical OpenClaw state database is not a regular file: ${sqlitePath}`);
+    throw new Error(`OpenClaw state database is not a regular file: ${sqlitePath}`);
   }
-  const withMaintenanceLock = deps.withMaintenanceLock ?? withDoctorSqliteMaintenanceLock;
-  return await withMaintenanceLock({
+  return await withDoctorSqliteMaintenanceLock({
     env,
     operation: "state SQLite compaction",
     protectedPaths: resolveSqliteDatabaseFilePaths(sqlitePath),
@@ -84,7 +51,6 @@ export async function runDoctorStateSqliteCompact(
           clearOpenClawStateDatabaseOpenFailure(sqlitePath);
           ensureOpenClawStatePermissions(sqlitePath, env);
         },
-        ...(deps.busyTimeoutMs !== undefined ? { busyTimeoutMs: deps.busyTimeoutMs } : {}),
         sqlitePath,
         validateBeforeMutation: (database) => {
           authority.assertCurrent();
@@ -94,21 +60,10 @@ export async function runDoctorStateSqliteCompact(
       });
       return {
         ...compact,
-        mode: "compact",
+        mode: "compact" as const,
         path: sqlitePath,
-        skipped: false,
+        skipped: false as const,
       };
     },
   });
-}
-
-function readCanonicalStateDatabaseStat(sqlitePath: string): fs.Stats | undefined {
-  try {
-    return fs.lstatSync(sqlitePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
 }

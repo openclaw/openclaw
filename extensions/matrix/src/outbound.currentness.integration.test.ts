@@ -190,51 +190,41 @@ describe("registered Matrix sender currentness", () => {
   // The message adapter delegates to outbound; only receipt projection needs both surfaces.
   describe("shared outbound path", () => {
     const registration = "message";
-    it.each([false, true])(
-      `${registration} media preparation with canceled=%s`,
-      async (canceled) => {
-        await withMatrixFixture(registration, async ({ senders, context, uploads, timeline }) => {
-          const mediaStarted = createDeferred<void>();
-          const media = createDeferred<Buffer>();
-          const caller = new AbortController();
-          const cancellation = new Error("Matrix caller canceled during media preparation");
-          const result = settle(
-            senders.sendMedia({
-              ...context,
-              text: "attachment",
-              mediaUrl: `${MEDIA_ROOT}/fixture.txt`,
-              mediaReadFile: async () => {
-                mediaStarted.resolve();
-                return await media.promise;
-              },
-              signal: caller.signal,
-              onPlatformSendDispatch: async () => {},
-            }),
-          );
-          try {
-            await waitForBoundary(mediaStarted.promise, result, "media preparation");
-            if (canceled) {
-              caller.abort(cancellation);
-            }
-            media.resolve(MEDIA_BYTES);
-            const settled = await result;
-            if (canceled) {
-              expect(settled.error).toMatchObject({
-                message: expect.stringContaining(cancellation.message),
-              });
-            } else {
-              expect(settled.error).toBeUndefined();
-              expect(settled.value).toMatchObject({ messageId: "$accepted" });
-            }
-            expect(uploads).toHaveLength(canceled ? 0 : 1);
-            expect(timeline).toHaveLength(canceled ? 0 : 1);
-          } finally {
-            media.resolve(MEDIA_BYTES);
-            await result;
-          }
-        });
-      },
-    );
+    it(`${registration} stops canceled media preparation before uploading`, async () => {
+      await withMatrixFixture(registration, async ({ senders, context, uploads, timeline }) => {
+        const mediaStarted = createDeferred<void>();
+        const media = createDeferred<Buffer>();
+        const caller = new AbortController();
+        const cancellation = new Error("Matrix caller canceled during media preparation");
+        const result = settle(
+          senders.sendMedia({
+            ...context,
+            text: "attachment",
+            mediaUrl: `${MEDIA_ROOT}/fixture.txt`,
+            mediaReadFile: async () => {
+              mediaStarted.resolve();
+              return await media.promise;
+            },
+            signal: caller.signal,
+            onPlatformSendDispatch: async () => {},
+          }),
+        );
+        try {
+          await waitForBoundary(mediaStarted.promise, result, "media preparation");
+          caller.abort(cancellation);
+          media.resolve(MEDIA_BYTES);
+          const settled = await result;
+          expect(settled.error).toMatchObject({
+            message: expect.stringContaining(cancellation.message),
+          });
+          expect(uploads).toHaveLength(0);
+          expect(timeline).toHaveLength(0);
+        } finally {
+          media.resolve(MEDIA_BYTES);
+          await result;
+        }
+      });
+    });
 
     it(`${registration} rechecks caller retirement after awaited dispatch bookkeeping`, async () => {
       await withMatrixFixture(registration, async ({ senders, context, timeline }) => {

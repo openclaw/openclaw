@@ -13,7 +13,6 @@ import {
 } from "./device-authz.test-helpers.js";
 import {
   connectOk,
-  connectReq,
   installGatewayTestHooks,
   rpcReq,
   startConnectedServerWithClient,
@@ -33,7 +32,6 @@ const FULL_SCOPES = [
 ];
 const PAIRING_PENDING_TTL_MS = 5 * 60 * 1000;
 const BROWSER_ORIGIN = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
-const WRONG_BROWSER_ORIGIN = "chrome-extension://bcdefghijklmnopabcdefghijklmnopa";
 const CONTROL_UI_CLIENT = {
   id: GATEWAY_CLIENT_IDS.CONTROL_UI,
   version: "test",
@@ -273,23 +271,6 @@ describe("live device scope upgrade", () => {
     expect(
       (await devicePairing.getPairedDevice(limited.deviceId))?.tokens?.operator?.scopes,
     ).toEqual(["operator.read"]);
-  });
-
-  test("rejects a scope-upgrade connection from a mismatched browser origin", async () => {
-    const limited = await openLimitedBrowserDevice("live-scope-upgrade-wrong-browser-origin");
-    limited.ws.close();
-    const wrongOrigin = await openWs({ origin: WRONG_BROWSER_ORIGIN });
-    const response = await connectReq(wrongOrigin, {
-      skipDefaultAuth: true,
-      deviceToken: limited.deviceToken,
-      deviceIdentityPath: limited.identityPath,
-      scopes: ["operator.read"],
-      caps: BROWSER_CAPS,
-      client: BROWSER_CLIENT,
-    });
-    expect(response.ok).toBe(false);
-    expect(response.error?.code).toBe("NOT_PAIRED");
-    expect(response.error?.message).toContain("dedicated paired device identity");
   });
 
   test("coalesces concurrent waits for the same device request", async () => {

@@ -16,12 +16,6 @@ const LEGACY_TALK_FIELD_KEYS = [
 
 type JsonRecord = Record<string, unknown>;
 
-type ElevenLabsApiKeyDeps = {
-  fs?: typeof fs;
-  os?: typeof os;
-  path?: typeof path;
-};
-
 export const ELEVENLABS_TALK_PROVIDER_ID = "elevenlabs";
 
 function ensureRecord(root: JsonRecord, key: string): JsonRecord {
@@ -119,19 +113,15 @@ export function migrateElevenLabsLegacyTalkConfig<T>(raw: T): { config: T; chang
   };
 }
 
-function readApiKeyFromProfile(deps: ElevenLabsApiKeyDeps = {}): string | null {
-  const fsImpl = deps.fs ?? fs;
-  const osImpl = deps.os ?? os;
-  const pathImpl = deps.path ?? path;
-
-  const home = osImpl.homedir();
+function readApiKeyFromProfile(): string | null {
+  const home = os.homedir();
   for (const candidate of PROFILE_CANDIDATES) {
-    const fullPath = pathImpl.join(home, candidate);
-    if (!fsImpl.existsSync(fullPath)) {
+    const fullPath = path.join(home, candidate);
+    if (!fs.existsSync(fullPath)) {
       continue;
     }
     try {
-      const text = fsImpl.readFileSync(fullPath, "utf-8");
+      const text = fs.readFileSync(fullPath, "utf-8");
       const match = text.match(
         /(?:^|\n)\s*(?:export\s+)?ELEVENLABS_API_KEY\s*=\s*["']?([^\n"']+)["']?/,
       );
@@ -146,13 +136,10 @@ function readApiKeyFromProfile(deps: ElevenLabsApiKeyDeps = {}): string | null {
   return null;
 }
 
-export function resolveElevenLabsApiKeyWithProfileFallback(
-  env: NodeJS.ProcessEnv = process.env,
-  deps: ElevenLabsApiKeyDeps = {},
-): string | null {
-  const envValue = (env[ELEVENLABS_API_KEY_ENV] ?? "").trim();
+export function resolveElevenLabsApiKeyWithProfileFallback(): string | null {
+  const envValue = (process.env[ELEVENLABS_API_KEY_ENV] ?? "").trim();
   if (envValue) {
     return envValue;
   }
-  return readApiKeyFromProfile(deps);
+  return readApiKeyFromProfile();
 }

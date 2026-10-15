@@ -1,6 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { openWarmImageStore } from "./crabbox-state.test-support.js";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
 import { commandResult } from "./crabbox-worker-provider.test-support.js";
@@ -172,7 +172,8 @@ describe("Crabbox provisioning cancellation", () => {
     expect(calls.some(({ argv }) => argv[1] === "run")).toBe(false);
   });
 
-  it("does not activate keepalive or warm capture after a late enrollment result", async () => {
+  it("stops preparation keepalive without warm capture after a late enrollment result", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const waiting = createDeferred<void>();
     const enrolled = createDeferred<string>();
     const controller = new AbortController();
@@ -185,14 +186,22 @@ describe("Crabbox provisioning cancellation", () => {
           return await enrolled.promise;
         }),
     }).catch((error: unknown) => error);
-    await waiting.promise;
-    controller.abort();
-    enrolled.resolve("late-device");
-    expect(await operation).toMatchObject({ name: "AbortError" });
-    await setImmediate();
-    expect(calls.some(({ argv }) => argv[1] === "heartbeat")).toBe(false);
-    calls.length = 0;
-    await provider.destroy({ leaseId: LEASE_ID, profile: PROFILE });
-    expect(calls.map(({ argv }) => argv[1])).toEqual(["stop"]);
+    try {
+      await waiting.promise;
+      await vi.advanceTimersByTimeAsync(0);
+      const heartbeatsBeforeCancellation = calls.filter(({ argv }) => argv[1] === "heartbeat");
+      controller.abort();
+      enrolled.resolve("late-device");
+      expect(await operation).toMatchObject({ name: "AbortError" });
+      expect(heartbeatsBeforeCancellation).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(calls.filter(({ argv }) => argv[1] === "heartbeat")).toHaveLength(1);
+      calls.length = 0;
+      await provider.destroy({ leaseId: LEASE_ID, profile: PROFILE });
+      expect(calls.map(({ argv }) => argv[1])).toEqual(["stop"]);
+    } finally {
+      await provider.dispose();
+      vi.useRealTimers();
+    }
   });
 });

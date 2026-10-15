@@ -70,10 +70,8 @@ export async function ensureCodexSandboxExecServerEnvironment(params: {
     );
   }
   const { server: execServer, nodeLease } = await acquireOpenClawExecServer({
+    ...params,
     sandbox: params.sandbox,
-    runtime: params.runtime,
-    signal: params.signal,
-    onExecutionDisconnect: params.onExecutionDisconnect,
   });
   // Codex retains a thread's environment instance when its id and cwd stay equal.
   // A single-use paired-node channel therefore needs a fresh selected identity.
@@ -84,8 +82,11 @@ export async function ensureCodexSandboxExecServerEnvironment(params: {
   if (processAuthority && !("node" in execServer)) {
     const authorities = (execServer.processAuthorities ??= new Map());
     if (!authorities.has(processAuthority.authPath)) {
-      authorities.set(processAuthority.authPath, processAuthority);
-      params.client.addCloseHandler(() => authorities.delete(processAuthority.authPath));
+      const unsubscribe = params.client.addCloseHandler(() => {
+        unsubscribe();
+        authorities.delete(processAuthority.authPath);
+      });
+      authorities.set(processAuthority.authPath, { authority: processAuthority, unsubscribe });
     }
   }
   const environmentId = nodeLease
@@ -175,8 +176,18 @@ async function acquireOpenClawExecServer(params: {
   const { sandbox, runtime, signal, onExecutionDisconnect } = params;
   const key = sandbox.runtimeId;
   while (true) {
-    const existing = sandboxExecServerRegistry.servers.get(key);
-    const promise = existing ?? startAndRememberOpenClawExecServer(sandbox);
+    let promise = sandboxExecServerRegistry.servers.get(key);
+    if (!promise) {
+      const created = startOpenClawExecServer(sandbox);
+      const createdKey = sandbox.runtimeId;
+      sandboxExecServerRegistry.servers.set(createdKey, created);
+      void created.catch(() => {
+        if (sandboxExecServerRegistry.servers.get(createdKey) === created) {
+          sandboxExecServerRegistry.servers.delete(createdKey);
+        }
+      });
+      promise = created;
+    }
     const server = await promise;
     if (!server.closed && sandboxExecServerRegistry.servers.get(key) === promise) {
       server.refCount += 1;
@@ -238,20 +249,6 @@ async function acquireOpenClawExecServer(params: {
   }
 }
 
-function startAndRememberOpenClawExecServer(
-  sandbox: SandboxContext,
-): Promise<OpenClawLeasedExecServer> {
-  const created = startOpenClawExecServer(sandbox);
-  const key = sandbox.runtimeId;
-  sandboxExecServerRegistry.servers.set(key, created);
-  void created.catch(() => {
-    if (sandboxExecServerRegistry.servers.get(key) === created) {
-      sandboxExecServerRegistry.servers.delete(key);
-    }
-  });
-  return created;
-}
-
 async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenClawLeasedExecServer> {
   const backend = sandbox.backend;
   const fsBridge = sandbox.fsBridge;
@@ -289,7 +286,10 @@ async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenCla
   if (!address || typeof address === "string") {
     throw new Error("OpenClaw Codex exec-server did not bind to a TCP port.");
   }
-  const environmentId = buildEnvironmentId(sandbox);
+  const environmentId = `openclaw-sandbox-${createHash("sha256")
+    .update(sandbox.runtimeId)
+    .digest("hex")
+    .slice(0, 16)}`;
   const authPath = `/openclaw-${randomUUID()}`;
   const url = `ws://127.0.0.1:${address.port}${authPath}`;
   const common = {
@@ -317,7 +317,9 @@ async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenCla
         };
   server.on("connection", (socket, request) => {
     // ws emits error for maxPayload rejections before auth or JSON-RPC sees the frame.
-    socket.on("error", handleExecServerSocketError);
+    socket.on("error", (error) => {
+      embeddedAgentLog.debug("codex sandbox exec-server websocket failed", { error });
+    });
     const requestUrl = new URL(request.url ?? "", "ws://127.0.0.1");
     if (
       requestUrl.pathname !== execServer.authPath &&
@@ -330,7 +332,11 @@ async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenCla
       handleNodeConnection(execServer, socket, requestUrl);
       return;
     }
-    handleConnection(execServer, socket, execServer.processAuthorities?.get(requestUrl.pathname));
+    handleConnection(
+      execServer,
+      socket,
+      execServer.processAuthorities?.get(requestUrl.pathname)?.authority,
+    );
   });
   embeddedAgentLog.info("codex sandbox exec-server started", {
     environmentId,
@@ -360,11 +366,6 @@ async function releaseOpenClawExecServer(execServer: OpenClawLeasedExecServer): 
   await sandboxExecServerRegistry.close(execServer);
 }
 
-function buildEnvironmentId(sandbox: SandboxContext): string {
-  const hash = createHash("sha256").update(sandbox.runtimeId).digest("hex").slice(0, 16);
-  return `openclaw-sandbox-${hash}`;
-}
-
 function readCodexPlacementNodeId(sandbox: SandboxContext): string | undefined {
   if (
     !("placementExecutionMode" in sandbox) ||
@@ -386,13 +387,9 @@ function readCodexPlacementWorkspaceIdentity(sandbox: SandboxContext): {
 } {
   if (
     !("placementEnvironmentId" in sandbox) ||
-    typeof sandbox.placementEnvironmentId !== "string" ||
-    !sandbox.placementEnvironmentId ||
-    sandbox.placementEnvironmentId.trim() !== sandbox.placementEnvironmentId ||
+    !isWorkspaceIdentityString(sandbox.placementEnvironmentId) ||
     !("placementSessionId" in sandbox) ||
-    typeof sandbox.placementSessionId !== "string" ||
-    !sandbox.placementSessionId ||
-    sandbox.placementSessionId.trim() !== sandbox.placementSessionId ||
+    !isWorkspaceIdentityString(sandbox.placementSessionId) ||
     !("placementOwnerEpoch" in sandbox) ||
     typeof sandbox.placementOwnerEpoch !== "number" ||
     !Number.isSafeInteger(sandbox.placementOwnerEpoch) ||
@@ -408,6 +405,10 @@ function readCodexPlacementWorkspaceIdentity(sandbox: SandboxContext): {
     ownerEpoch: sandbox.placementOwnerEpoch,
     sessionKey: sandbox.sessionKey,
   };
+}
+
+function isWorkspaceIdentityString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.trim() === value;
 }
 
 function handleNodeConnection(
@@ -508,10 +509,6 @@ function trackExecServerCleanup(
       });
     },
   );
-}
-
-function handleExecServerSocketError(error: unknown): void {
-  embeddedAgentLog.debug("codex sandbox exec-server websocket failed", { error });
 }
 
 async function handleMessage(session: CodexSandboxExecSession, data: RawData): Promise<void> {

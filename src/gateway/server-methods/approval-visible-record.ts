@@ -19,13 +19,14 @@ import type {
   OperatorApprovalRecord,
   OperatorApprovalStoreGuard,
 } from "../operator-approval-store.types.js";
-import { canAccessApprovalSession } from "./approval-record-lookup.js";
+import { prepareApprovalSessionAccess } from "./approval-record-lookup.js";
 import type { ApprovalRequestAuthority } from "./approval-request-authority.js";
 import type { GatewayClient } from "./types.js";
 
 type PreparedVisibleApproval = {
   readCurrent: () => OperatorApprovalRecord | null;
   guard: OperatorApprovalStoreGuard;
+  [Symbol.dispose]: () => void;
 };
 
 export async function loadVisibleApproval(params: {
@@ -52,27 +53,6 @@ export async function loadVisibleApproval(params: {
     params.execApprovalManager.getLiveSnapshot(params.id) ??
     params.pluginApprovalManager.getLiveSnapshot(params.id) ??
     params.systemAgentApprovalManager?.getLiveSnapshot(params.id);
-  if (
-    liveRecord &&
-    !canAccessApprovalSession({
-      cfg: params.getCfg(),
-      client: params.client,
-      sessionKey: liveRecord.request.sessionKey,
-      agentId: liveRecord.request.agentId,
-    })
-  ) {
-    return null;
-  }
-  if (
-    liveRecord &&
-    !canAccessOperatorApproval({
-      client: params.client,
-      allowApprovalRuntime: params.allowApprovalRuntime,
-      binding: { reviewerDeviceIds: liveRecord.approvalReviewerDeviceIds },
-    })
-  ) {
-    return null;
-  }
   let bindingId = params.id;
   let admittedRecord = liveRecord?.resolvedAtMs === undefined ? liveRecord : undefined;
   let admittedManager = admittedRecord
@@ -86,6 +66,40 @@ export async function loadVisibleApproval(params: {
   let sourceAgentId = admittedRecord?.request.agentId;
   if (admittedRecord) {
     params.authority.bindSource(admittedRecord.request);
+  }
+  let sessionAccess = await prepareApprovalSessionAccess({
+    client: params.client,
+    getCfg: params.getCfg,
+    sources: liveRecord ? [liveRecord.request] : [],
+  });
+  using sessionAccessLifetime = {
+    retained: false,
+    [Symbol.dispose]() {
+      if (!this.retained) {
+        sessionAccess[Symbol.dispose]();
+      }
+    },
+  };
+  params.authority.assertCurrent();
+  // Config and policy callbacks can reenter; defer source and reviewer reads to their use sites.
+  const canAccess = (
+    source: () => { sessionKey?: string | null; agentId?: string | null },
+    reviewerDeviceIds: () => readonly string[] | null | undefined,
+  ) =>
+    sessionAccess.canAccess(source()) &&
+    canAccessOperatorApproval({
+      client: params.client,
+      allowApprovalRuntime: params.allowApprovalRuntime,
+      binding: { reviewerDeviceIds: reviewerDeviceIds() },
+    });
+  if (
+    liveRecord &&
+    !canAccess(
+      () => liveRecord.request,
+      () => liveRecord.approvalReviewerDeviceIds,
+    )
+  ) {
+    return null;
   }
   const assertBindingCurrent = () => {
     if (
@@ -170,22 +184,28 @@ export async function loadVisibleApproval(params: {
     return null;
   }
   if (lookup.outcome === "found") {
+    const found = lookup;
     if (
-      !canAccessApprovalSession({
-        cfg: params.getCfg(),
-        client: params.client,
-        sessionKey: lookup.record.source.sessionKey,
-        agentId: lookup.record.source.agentId,
-      })
+      !liveRecord ||
+      (normalizeOptionalString(liveRecord.request.sessionKey) ?? null) !==
+        found.record.source.sessionKey ||
+      (normalizeOptionalString(liveRecord.request.agentId) ?? null) !== found.record.source.agentId
     ) {
+      sessionAccess[Symbol.dispose]();
+      sessionAccess = await prepareApprovalSessionAccess({
+        client: params.client,
+        getCfg: params.getCfg,
+        sources: [found.record.source],
+      });
+    }
+    if (!isLookupCurrent()) {
       return null;
     }
     if (
-      !canAccessOperatorApproval({
-        client: params.client,
-        allowApprovalRuntime: params.allowApprovalRuntime,
-        binding: { reviewerDeviceIds: lookup.record.reviewerDeviceIds },
-      })
+      !canAccess(
+        () => found.record.source,
+        () => found.record.reviewerDeviceIds,
+      )
     ) {
       return null;
     }
@@ -228,23 +248,18 @@ export async function loadVisibleApproval(params: {
     if (!reconciled) {
       return null;
     }
+    sessionAccessLifetime.retained = true;
     return {
       guard: lookupAuthority.guard,
+      [Symbol.dispose]: () => sessionAccess[Symbol.dispose](),
       readCurrent: () =>
         params.authority.isCurrent() &&
         (reconciled.status !== "pending" || isLookupCurrent()) &&
         !params.client?.invalidated &&
-        canAccessApprovalSession({
-          cfg: params.getCfg(),
-          client: params.client,
-          sessionKey: reconciled.source.sessionKey,
-          agentId: reconciled.source.agentId,
-        }) &&
-        canAccessOperatorApproval({
-          client: params.client,
-          allowApprovalRuntime: params.allowApprovalRuntime,
-          binding: { reviewerDeviceIds: reconciled.reviewerDeviceIds },
-        })
+        canAccess(
+          () => reconciled.source,
+          () => reconciled.reviewerDeviceIds,
+        )
           ? reconciled
           : null,
     };

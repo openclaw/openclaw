@@ -91,7 +91,7 @@ test("joins queued admission after Worker exit without granting the dead Worker"
   const worker = new Worker(
     `const { parentPort } = require("node:worker_threads");
      parentPort.on("message", () => {});
-     parentPort.postMessage({ type: "admission-request", operationId: 8, admissionId: 1 });`,
+     parentPort.postMessage({ type: "admission-request", operationId: 8 });`,
     { eval: true, execArgv: [] },
   );
   const queued = createDeferred();

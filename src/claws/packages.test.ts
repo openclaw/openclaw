@@ -5,6 +5,7 @@ import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { describe, expect, it, vi } from "vitest";
 import type { installPluginFromClawHub } from "../plugins/clawhub.js";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
+import type { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import { installClawPackages, preflightClawPackage } from "./packages.js";
 import { packageInstallPlan as plan } from "./packages.test-support.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
@@ -70,7 +71,12 @@ function pluginProbe(overrides: Partial<PluginProbe> = {}): PluginProbe {
     ...overrides,
   };
 }
-const acquirePackageLease = vi.fn(() => ({ heartbeat: vi.fn(), release: vi.fn() }));
+const withPackageLease: typeof withClawPackageLifecycleLease = async (_artifact, operation) =>
+  operation({
+    signal: new AbortController().signal,
+    assertOwned: vi.fn(),
+    assertOwnedInTransaction: vi.fn(),
+  });
 const probePlugin = vi.fn(async ({ spec }: { spec: string }) => {
   const pluginId = spec.slice(spec.lastIndexOf("/") + 1).split("@")[0]!;
   const packageName = spec.replace(/^clawhub:/, "").replace(/@[^@]+$/, "");
@@ -425,7 +431,7 @@ describe("installClawPackages", () => {
             .mockResolvedValue({ ok: true, action: "install", integrity: skillIntegrity }),
           persistPackageRef,
           completePackageRef,
-          acquirePackageLease,
+          withPackageLease,
         },
         onExternalMutation,
       },
@@ -473,7 +479,7 @@ describe("installClawPackages", () => {
         preflightPlugin,
         persistPackageRef,
         completePackageRef,
-        acquirePackageLease,
+        withPackageLease,
       },
     });
 
@@ -528,7 +534,7 @@ describe("installClawPackages", () => {
         persistPackageRef,
         completePackageRef,
         readPackageRefs: vi.fn().mockReturnValue([introduced]),
-        acquirePackageLease,
+        withPackageLease,
       },
     });
 
@@ -574,7 +580,7 @@ describe("installClawPackages", () => {
         persistPackageRef,
         completePackageRef,
         readPackageRefs: vi.fn().mockReturnValue([]),
-        acquirePackageLease,
+        withPackageLease,
       },
     });
 
@@ -622,7 +628,7 @@ describe("installClawPackages", () => {
           persistPackageRef,
           completePackageRef,
           readPackageRefs: vi.fn().mockReturnValue([]),
-          acquirePackageLease,
+          withPackageLease,
         },
       }),
     ).rejects.toMatchObject({
@@ -653,7 +659,7 @@ describe("installClawPackages", () => {
         persistPackageRef,
         completePackageRef,
         readPackageRefs: vi.fn().mockReturnValue([existing]),
-        acquirePackageLease,
+        withPackageLease,
       },
     });
 
@@ -691,7 +697,7 @@ describe("installClawPackages", () => {
         persistPackageRef,
         completePackageRef,
         readPackageRefs: vi.fn().mockReturnValue([existing]),
-        acquirePackageLease,
+        withPackageLease,
       },
     });
 
@@ -723,7 +729,7 @@ describe("installClawPackages", () => {
           preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
           persistPackageRef,
           completePackageRef,
-          acquirePackageLease,
+          withPackageLease,
         },
       }),
     ).rejects.toMatchObject({
@@ -778,7 +784,7 @@ describe("installClawPackages", () => {
             persistPackageRef,
             completePackageRef,
             readPackageRefs,
-            acquirePackageLease,
+            withPackageLease,
             resolvePlugin: vi.fn().mockResolvedValue({
               status: "found",
               pluginId: "first",
@@ -880,7 +886,7 @@ describe("installClawPackages", () => {
           preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
           persistPackageRef: vi.fn().mockReturnValue(pending),
           completePackageRef: failingCompletePackageRef,
-          acquirePackageLease,
+          withPackageLease,
         },
       }),
     ).rejects.toMatchObject({
@@ -904,7 +910,7 @@ describe("installClawPackages", () => {
           preflightPlugin,
           persistPackageRef,
           completePackageRef,
-          acquirePackageLease,
+          withPackageLease,
         },
       }),
     ).rejects.toMatchObject({ code: "package_owner_state_changed" });
@@ -934,7 +940,7 @@ describe("installClawPackages", () => {
             integrity: skillIntegrity,
             warning: "review warning two",
           }),
-          acquirePackageLease,
+          withPackageLease,
         },
       }),
     ).rejects.toMatchObject({ code: "package_owner_state_changed" });
@@ -953,7 +959,7 @@ describe("installClawPackages", () => {
             warning: "review warning two",
             clawhub: { integrity },
           }),
-          acquirePackageLease,
+          withPackageLease,
         },
       }),
     ).rejects.toMatchObject({ code: "package_owner_state_changed" });

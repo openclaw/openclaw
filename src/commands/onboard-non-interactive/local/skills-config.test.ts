@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { applyNonInteractiveSkillsConfig } from "./skills-config.js";
 
@@ -16,7 +16,6 @@ describe("non-interactive skills config", () => {
     const result = applyNonInteractiveSkillsConfig({
       nextConfig,
       opts: { nodeManager: requested },
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     });
 
     expect(result.skills?.install).toEqual({ nodeManager: expected, preferBrew: false });
@@ -31,7 +30,6 @@ describe("non-interactive skills config", () => {
       applyNonInteractiveSkillsConfig({
         nextConfig,
         opts: { skipSkills: true, nodeManager: "npm" },
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       }),
     ).toEqual(nextConfig);
   });

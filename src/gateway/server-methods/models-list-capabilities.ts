@@ -3,31 +3,8 @@ import { createPreparedModelCatalogProviderNormalizer } from "../../agents/model
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listAvailableManifestContractPlugins } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 
 export class UnknownModelCatalogProviderError extends Error {}
-
-type ApiKeyProviderCapabilities = {
-  providers: ReadonlyMap<string, boolean>;
-  resolveProvider(provider: string): string;
-};
-export function apiKeyProviderCapabilities(params: {
-  cfg: OpenClawConfig;
-  metadataSnapshot: PluginMetadataSnapshot;
-  workspaceDir: string;
-}): ApiKeyProviderCapabilities {
-  const { capabilities, resolveProvider } = resolveModelProviderCapabilities({
-    config: params.cfg,
-    metadataSnapshot: params.metadataSnapshot,
-    workspaceDir: params.workspaceDir,
-  });
-  return {
-    providers: new Map(
-      capabilities.map(({ provider, apiKeySupported }) => [provider, apiKeySupported]),
-    ),
-    resolveProvider,
-  };
-}
 
 export function listDecisionModels({
   config,

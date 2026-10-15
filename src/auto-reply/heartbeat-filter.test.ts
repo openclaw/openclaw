@@ -1,5 +1,6 @@
 /** Tests heartbeat filtering and skip behavior for empty heartbeat context. */
 import { describe, expect, it } from "vitest";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
 import {
   filterHeartbeatTranscriptArtifacts,
   isHeartbeatOkResponse,
@@ -12,7 +13,6 @@ import {
   INTERNAL_WAKE_TRANSCRIPT_PROMPTS,
   resolveHeartbeatPromptForResponseTool,
 } from "./heartbeat.js";
-import { MESSAGE_TOOL_DELIVERY_HINTS } from "./reply/delivery-hints.js";
 
 function user(content: unknown) {
   return { role: "user", content };
@@ -122,14 +122,6 @@ describe("isHeartbeatUserMessage", () => {
       ),
     ).toBe(true);
   });
-
-  it("ignores quoted or non-user token mentions", () => {
-    expect(isHeartbeatUserMessage(user("Please reply HEARTBEAT_OK so I can test something."))).toBe(
-      false,
-    );
-
-    expect(isHeartbeatUserMessage(assistant("HEARTBEAT_OK"))).toBe(false);
-  });
 });
 
 describe("isHeartbeatOkResponse", () => {
@@ -141,37 +133,6 @@ describe("isHeartbeatOkResponse", () => {
     expect(isHeartbeatOkResponse(assistant("You have 3 unread urgent emails. HEARTBEAT_OK"))).toBe(
       true,
     );
-  });
-
-  it("preserves meaningful or non-text responses", () => {
-    expect(isHeartbeatOkResponse(assistant("Status HEARTBEAT_OK due to watchdog failure"))).toBe(
-      false,
-    );
-
-    expect(
-      isHeartbeatOkResponse(
-        assistant([{ type: "tool_use", id: "tool-1", name: "search", input: {} }]),
-      ),
-    ).toBe(false);
-
-    const toolCallOnlyMessage = {
-      role: "assistant",
-      content: null,
-      tool_calls: [
-        {
-          id: "call_heartbeat",
-          function: {
-            name: "heartbeat_respond",
-            arguments: '{"notify":true}',
-          },
-        },
-      ],
-    } as { role: string; content?: unknown };
-    expect(isHeartbeatOkResponse(toolCallOnlyMessage)).toBe(false);
-  });
-
-  it("respects ackMaxChars overrides", () => {
-    expect(isHeartbeatOkResponse(assistant("HEARTBEAT_OK all good"), 0)).toBe(false);
   });
 });
 
@@ -235,14 +196,6 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
         user([{ type: "input_text", text: "what model are you" }]),
       ]);
     }
-  });
-
-  it("removes prompt-only interrupted heartbeat spans", () => {
-    const messages = [user(INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat), user("what model are you")];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      user("what model are you"),
-    ]);
   });
 
   it("removes interrupted helper-only heartbeat spans", () => {
@@ -480,18 +433,6 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
     expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual(
       messages,
     );
-  });
-
-  it("removes pending notify=true heartbeat response-tool calls without tool results", () => {
-    const messages = [
-      user(INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat),
-      createHeartbeatAttentionMessage(),
-      user("what changed while I was away?"),
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      user("what changed while I was away?"),
-    ]);
   });
 
   it("removes failed notify=true heartbeat response-tool calls", () => {

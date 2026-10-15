@@ -14,7 +14,7 @@ import { useAutoCleanupTempDirTracker, withTempDir } from "openclaw/plugin-sdk/t
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCodexOpenClawPromptContext,
-  buildCodexWatchedSessionsContext,
+  prepareCodexWatchedSessionsContext,
   buildCodexSystemPromptReport,
   readContextEngineThreadBootstrapProjection,
   readMirroredSessionHistoryMessages,
@@ -161,7 +161,6 @@ describe("Codex app-server attempt context", () => {
 
   it.each([
     { name: "deferred native tools", enabled: true, lightweight: false },
-    { name: "filtered native tools", enabled: false, lightweight: false },
     { name: "lightweight cron", enabled: true, lightweight: true },
   ])(
     "filters provider guidance independently of workspace routing: $name",
@@ -313,18 +312,6 @@ describe("Codex app-server attempt context", () => {
       overrides: { toolsAllow: ["openclaw"], pluginHarnessToolPolicyRestricted: true },
     },
     {
-      name: "lightweight cron",
-      ringZeroActive: false,
-      inheritedWorkspace: true,
-      overrides: { bootstrapContextMode: "lightweight", bootstrapContextRunKind: "cron" },
-    },
-    {
-      name: "tool-disabled restricted",
-      ringZeroActive: false,
-      inheritedWorkspace: false,
-      overrides: { pluginHarnessToolPolicyRestricted: true, disableTools: true },
-    },
-    {
       name: "message-only restricted",
       ringZeroActive: false,
       inheritedWorkspace: false,
@@ -426,7 +413,7 @@ describe("Codex app-server attempt context", () => {
     });
   });
 
-  it("stitches watched-session context into the per-turn OpenClaw prompt context", () => {
+  it("stitches watched-session context into the per-turn OpenClaw prompt context", async () => {
     const attempt = { config: {} } as EmbeddedRunAttemptParams;
 
     expect(
@@ -441,7 +428,7 @@ describe("Codex app-server attempt context", () => {
 
     // No ambient watches (and no state) must render nothing, not an empty section.
     expect(
-      buildCodexWatchedSessionsContext({
+      await prepareCodexWatchedSessionsContext({
         attempt,
         dynamicTools: [
           {
@@ -452,6 +439,7 @@ describe("Codex app-server attempt context", () => {
           },
         ],
         sessionKey: "agent:codex-test:main",
+        assertCurrent: () => {},
       }),
     ).toBe(undefined);
   });

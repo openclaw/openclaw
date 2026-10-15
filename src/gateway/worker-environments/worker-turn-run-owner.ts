@@ -5,15 +5,20 @@ import {
   setActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
 } from "../../agents/embedded-agent-runner/runs.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import {
   createAgentRunRestartAbortError,
   createAgentRunSupersededAbortError,
+  createSessionPlacementSettlementClosedAbortError,
 } from "../../agents/run-termination.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import { withSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
+import { registerReplyOperationSuccessorBarrier } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
+import { logWarn } from "../../logger.js";
 import {
   closeDiagnosticEmbeddedRunOwner,
   createDiagnosticEmbeddedRunOwner,
@@ -21,15 +26,20 @@ import {
   markDiagnosticRunProgress,
 } from "../../logging/diagnostic-run-activity.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore, WorkerSessionTurnClaim } from "./placement-store.js";
+import { boundedWorkerError } from "./worker-error.js";
 
 export type ActiveWorkerTurn = {
   claim: WorkerSessionTurnClaim;
   sessionKey: string;
   signal: AbortSignal;
-  recoverTerminal?: () => string | undefined;
+  settled: Promise<void>;
+  isReplyDelivered: () => boolean;
+  recoverTerminal?: (assertCurrent?: () => void) => Promise<string | undefined>;
   dispose: () => void;
 };
 
@@ -45,11 +55,39 @@ type WorkerRunOwner = WorkerTurnLiveEventOwner & {
 
 const activeOwners = new Map<string, WorkerRunOwner>();
 
+export async function prepareWorkerTurnReplyDelivery(
+  previous: ActiveWorkerTurn | undefined,
+  turn: Pick<SessionPlacementTurnParams, "runId" | "abortSignal">,
+) {
+  // Settlement can invalidate placement reads even after the reply has completed.
+  if (previous?.isReplyDelivered() && previous.claim.runId !== turn.runId) {
+    await raceNodeWorkerOperation(previous.settled, turn.abortSignal);
+  }
+  const reply = createDeferredCore<EmbeddedAgentRunResult>();
+  let delivered = false;
+  return {
+    isDelivered: () => delivered,
+    deliver(this: void, result: EmbeddedAgentRunResult) {
+      delivered = true;
+      reply.resolve(result);
+    },
+    wait(this: void, execution: Promise<EmbeddedAgentRunResult>) {
+      void execution.catch((error: unknown) => {
+        if (delivered) {
+          logWarn(`Cloud worker background settlement failed: ${boundedWorkerError(error)}`);
+        }
+      });
+      return Promise.race([reply.promise, execution]);
+    },
+  };
+}
+
 export async function createWorkerTurnRunOwner(params: {
   placements: WorkerSessionPlacementStore;
   claim: WorkerSessionTurnClaim;
   turn: SessionPlacementTurnParams;
   sessionKey: string;
+  isReplyDelivered: () => boolean;
   assertCurrent?: () => void;
 }): Promise<ActiveWorkerTurn> {
   const { claim: requestedClaim, turn, sessionKey } = params;
@@ -159,6 +197,13 @@ export async function createWorkerTurnRunOwner(params: {
       cancel,
       abort: cancel,
     } satisfies EmbeddedAgentQueueHandle;
+    const completion = createDeferredCore();
+    const settle = async () => {
+      cancel();
+      // Cancellation must join write-capable preparation and possibly dispatched
+      // work. Only the launcher's fenced read waits may detach their source.
+      await completion.promise;
+    };
     let disposed = false;
     cleanup = () => {
       if (disposed) {
@@ -169,7 +214,11 @@ export async function createWorkerTurnRunOwner(params: {
       try {
         clearActiveEmbeddedRun(claim.sessionId, handle, sessionKey, turn.sessionFile);
       } finally {
-        handle.closeDiagnostics();
+        try {
+          handle.closeDiagnostics();
+        } finally {
+          completion.resolve();
+        }
       }
     };
     if (restartSignal.aborted) {
@@ -184,11 +233,40 @@ export async function createWorkerTurnRunOwner(params: {
     // until caller, lifecycle, and retained placement admission are still current.
     assertCurrent();
     signal.throwIfAborted();
-    setActiveEmbeddedRun(claim.sessionId, handle, sessionKey, turn.sessionFile, turn.agentId);
+    withSessionPlacementForcedTerminalSettlement(
+      settle,
+      () => {
+        params.assertCurrent?.();
+        if (
+          !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
+          !claimAuthority.isCurrent()
+        ) {
+          throw createSessionPlacementSettlementClosedAbortError();
+        }
+        signal.throwIfAborted();
+      },
+      () =>
+        setActiveEmbeddedRun(claim.sessionId, handle, sessionKey, turn.sessionFile, turn.agentId),
+    );
+    if (turn.replyOperation) {
+      registerReplyOperationSuccessorBarrier({
+        operation: turn.replyOperation,
+        sessionId: claim.sessionId,
+        sessionKeys: [sessionKey],
+        start: settle,
+      });
+    }
     assertCurrent();
     signal.throwIfAborted();
     activeOwners.set(claim.sessionId, owner);
-    return { claim, sessionKey, signal, dispose: cleanup };
+    return {
+      claim,
+      sessionKey,
+      signal,
+      settled: completion.promise,
+      isReplyDelivered: params.isReplyDelivered,
+      dispose: cleanup,
+    };
   } catch (error) {
     cleanup();
     throw error;

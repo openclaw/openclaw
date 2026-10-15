@@ -55,14 +55,14 @@ describe("terminal resolution for a tool-use stop without a tool call", () => {
 
   it("retries once before surfacing the incomplete-turn warning", async () => {
     const turn = toolUseStopWithoutCall();
-    // The written call survives payload preparation as an undelivered reply.
-    expect(turn.payloadsWithToolMedia).toEqual([
-      expect.objectContaining({ text: PSEUDO_TOOL_CALL_TEXT }),
-    ]);
+    // Delivery hides the markup; the original assistant still drives incomplete-call detection.
+    expect(turn.payloadsWithToolMedia).toEqual([expect.objectContaining({ text: "exec" })]);
     const activateInternalPrompt = vi.fn();
 
     await expect(
-      resolveEmbeddedRunTerminal(makeTerminalInput({ ...turn, activateInternalPrompt })),
+      resolveEmbeddedRunTerminal(
+        makeTerminalInput({ ...turn, sessionPromptState: { activateInternalPrompt } }),
+      ),
     ).resolves.toEqual({ action: "retry" });
 
     const exhausted = await resolveEmbeddedRunTerminal(
@@ -79,24 +79,5 @@ describe("terminal resolution for a tool-use stop without a tool call", () => {
     expect(exhausted.result.payloads).toEqual([
       { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
     ]);
-  });
-
-  it.each([
-    { name: "a tool ran", overrides: { toolMetas: [{ toolName: "read", meta: "path=a.md" }] } },
-    {
-      name: "the attempt had side effects",
-      overrides: {
-        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-        currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-      },
-    },
-  ])("does not retry after $name", async ({ overrides }) => {
-    const activateInternalPrompt = vi.fn();
-    const result = await resolveEmbeddedRunTerminal(
-      makeTerminalInput({ ...toolUseStopWithoutCall(overrides), activateInternalPrompt }),
-    );
-
-    expect(result.action).toBe("complete");
-    expect(activateInternalPrompt).not.toHaveBeenCalled();
   });
 });

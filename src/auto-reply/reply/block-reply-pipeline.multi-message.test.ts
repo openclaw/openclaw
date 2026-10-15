@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
+import { setBlockReplyDelivery } from "./block-reply-delivery.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
 
 function blockFor(text: string, assistantMessageIndex: number) {
@@ -101,4 +102,35 @@ describe("block reply pipeline multi-assistant-message suppression", () => {
       expect(replyPayloads).toEqual([expect.objectContaining({ text: "Same answer" })]);
     },
   );
+
+  it("retries a later message's unsent answer that matches an earlier delivered message", async () => {
+    let sends = 0;
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: () => {
+        if (++sends === 2) {
+          setBlockReplyDelivery(Promise.resolve({ outcome: "failed-before-deliver" }));
+        }
+      },
+      timeoutMs: 5000,
+    });
+    const block = (assistantMessageIndex: number) =>
+      setReplyPayloadMetadata(
+        { text: "Done." },
+        { assistantMessageIndex, assistantMessageStartIndex: assistantMessageIndex },
+      );
+
+    pipeline.enqueue(block(0));
+    pipeline.enqueue(block(1));
+    await pipeline.flush({ force: true });
+    const { replyPayloads } = await buildReplyPayloads({
+      payloads: [setReplyPayloadMetadata({ text: "Done." }, { assistantMessageIndex: 1 })],
+      isHeartbeat: false,
+      didLogHeartbeatStrip: false,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      replyToMode: "off",
+    });
+
+    expect(replyPayloads).toEqual([expect.objectContaining({ text: "Done." })]);
+  });
 });

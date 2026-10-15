@@ -34,6 +34,10 @@ import {
 } from "./service-update-authority.js";
 
 type TaskFile = { path: string; contents: Buffer };
+export type ScheduledTaskFileRecovery = {
+  assertPublished: () => Promise<void>;
+  restore: () => Promise<boolean>;
+};
 type TaskFileState = NonNullable<Awaited<ReturnType<typeof readServiceFileState>>>;
 type TaskFileSnapshot = TaskFile & {
   original: { contents: Buffer; state: TaskFileState } | null;
@@ -63,6 +67,18 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
   };
   const original = await readXml();
   const originalRuntime = original === null ? null : probeScheduledTaskState(taskName);
+  if (
+    original !== null &&
+    (originalRuntime?.status !== "found" ||
+      typeof originalRuntime.enabled !== "boolean" ||
+      (originalRuntime.state !== 1 && originalRuntime.state !== 3 && originalRuntime.state !== 4))
+  ) {
+    throw new Error(
+      `Scheduled Task ${taskName} previous running state and enable policy could not be verified before replacement.`,
+    );
+  }
+  const wasEnabled = originalRuntime?.status === "found" && originalRuntime.enabled === true;
+  const wasRunning = originalRuntime?.status === "found" && originalRuntime.state === 4;
   const backupPath = `${scriptPath}.task.xml.bak`;
   if (original !== null) {
     assertGatewayServiceUpdateCurrent();
@@ -75,6 +91,7 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
   let receipt = original;
   let changed = false;
   let unsettled = false;
+  let stoppedProcess = false;
   // Disabling is our only allowed registration change during settlement.
   const withoutEnabled = (xml: string | null) =>
     xml === null ? null : setScheduledTaskXmlEnabled(xml, false);
@@ -89,6 +106,11 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
   };
   return {
     registered: original !== null,
+    xml: original,
+    assertCurrent: assertReceipt,
+    recordStoppedProcess: () => {
+      stoppedProcess = true;
+    },
     retainRecovery: () => {
       unsettled = true;
     },
@@ -101,10 +123,7 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
       }
       unsettled = false;
     },
-    restore: async (
-      files: { assertPublished: () => Promise<void>; restore: () => Promise<boolean> },
-      activated: boolean,
-    ) => {
+    restore: async (files: ScheduledTaskFileRecovery, activated: boolean) => {
       await files.assertPublished();
       await assertReceipt();
       if (changed || activated) {
@@ -149,34 +168,25 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
           throw new Error(`Could not remove replacement Scheduled Task ${taskName}.`);
         }
       } else {
-        await restoreScheduledTaskDefinition({
-          env,
-          xml: original,
-          beforeWrite: () => assertReceipt(true),
-          assertCurrent: assertGatewayServiceUpdateCurrent,
-        });
+        if (changed) {
+          await restoreScheduledTaskDefinition({
+            env,
+            xml: original,
+            beforeWrite: () => assertReceipt(true),
+            assertCurrent: assertGatewayServiceUpdateCurrent,
+          });
+        }
         receipt = setScheduledTaskXmlEnabled(original, false);
         await assertReceipt();
-        if (
-          originalRuntime?.status !== "found" ||
-          typeof originalRuntime.enabled !== "boolean" ||
-          (originalRuntime.state !== 1 &&
-            originalRuntime.state !== 3 &&
-            originalRuntime.state !== 4)
-        ) {
-          throw new Error(
-            `Scheduled Task ${taskName} previous running state could not be verified.`,
-          );
-        }
         // Definition restoration preserves settlement's disabled state; policy is owned here.
-        if (originalRuntime.enabled) {
+        if (wasEnabled) {
           await resumeScheduledTaskAutoStartAfterUpdate(env, { beforeMutation: assertReceipt });
           receipt = setScheduledTaskXmlEnabled(original, true);
           await assertReceipt();
         }
-        if (originalRuntime.state === 4) {
-          // Disabling a running task only suspends its triggers; preserve both prior facts.
-          const restoreDisabled = !originalRuntime.enabled;
+        if (wasRunning || stoppedProcess) {
+          // Detached processes can outlive Ready/Disabled; preserve liveness and policy separately.
+          const restoreDisabled = !wasEnabled;
           try {
             if (restoreDisabled) {
               await resumeScheduledTaskAutoStartAfterUpdate(env, { beforeMutation: assertReceipt });
@@ -215,8 +225,10 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
 export async function publishScheduledTaskFiles(
   files: TaskFile[],
   definitionTransaction?: GatewayServiceInstallArgs["definitionTransaction"],
+  beforePublish?: (recovery?: ScheduledTaskFileRecovery) => Promise<void>,
 ) {
   if (definitionTransaction) {
+    await beforePublish?.();
     for (const file of files) {
       assertGatewayServiceUpdateCurrent();
       await fs.mkdir(path.dirname(file.path), { recursive: true });
@@ -305,6 +317,8 @@ export async function publishScheduledTaskFiles(
     return changed.length > 0;
   };
   return withGatewayServiceInstallationRecovery(async () => {
+    await beforePublish?.({ restore, assertPublished });
+    await assertPublished();
     for (const directory of new Set(files.map((file) => path.dirname(file.path)))) {
       assertGatewayServiceUpdateCurrent();
       await fs.mkdir(directory, { recursive: true });

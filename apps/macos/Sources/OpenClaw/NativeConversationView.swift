@@ -138,8 +138,8 @@ final class NativeConversationController {
                 self.owner.openSessionActions = { [weak self, weak bridge] context in
                     guard let self, let bridge, self.bridge === bridge,
                           bridge.currentDocumentId == documentID, self.owner.mode == .web else { return }
-                    bridge.document.webView.window?.makeKeyAndOrderFront(nil)
-                    NSApp.activate(ignoringOtherApps: true)
+                    AppActivation.shared.makeKeyAndOrderFront(window: bridge.document.webView.window)
+                    AppActivation.shared.activate()
                     self.present(visible: true, active: true)
                     self.navigate(context, source: .user, openSessionActions: true)
                 }

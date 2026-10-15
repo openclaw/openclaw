@@ -4,6 +4,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type DeliverFn = (
@@ -48,9 +49,9 @@ function createDeliverableBot(startupConfig: OpenClawConfig): {
   });
 
   createLineBot({
-    channelAccessToken: "test-token",
-    channelSecret: "test-secret",
     config: startupConfig,
+    runtime: createNonExitingRuntime(),
+    onMessage: async () => {},
   });
 
   if (!deliver) {

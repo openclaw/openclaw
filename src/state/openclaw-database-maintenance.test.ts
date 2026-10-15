@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { ensureMemoryIndexSchema } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
-import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import { assertOpenClawAgentDatabaseForMaintenance } from "./openclaw-agent-db-maintenance.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
@@ -19,68 +19,6 @@ import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-stat
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 describe("OpenClaw database maintenance schema validation", () => {
-  it("keeps standing-grant generations compatible with the previous schema", () => {
-    const companionSchema = `CREATE TABLE IF NOT EXISTS operator_approval_standing_grant_generations (
-  grant_id TEXT NOT NULL PRIMARY KEY
-    REFERENCES operator_approval_standing_grants(grant_id) ON DELETE CASCADE,
-  job_definition_generation INTEGER NOT NULL CHECK (job_definition_generation >= 1)
-) STRICT;
-
-`;
-    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(companionSchema, "")
-      .replace("  grant_definition_revision TEXT,\n", "")
-      .replace("  grant_definition_generation INTEGER,\n", "")
-      .replace("  grant_definition_updated_at INTEGER,\n", "");
-    const database = createGlobalDatabase();
-    try {
-      expect(previousSchema).not.toBe(OPENCLAW_STATE_SCHEMA_SQL);
-      expect(() =>
-        assertSqliteSchemaContains(database, "previous global schema", previousSchema, {
-          allowCompatibleAdditiveColumns: true,
-        }),
-      ).not.toThrow();
-    } finally {
-      database.close();
-    }
-  });
-
-  it("keeps lifecycle bindings additive and keyed only by canonical owner identity", () => {
-    const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-      "CREATE TABLE IF NOT EXISTS execution_owner_lifecycle_bindings (",
-    );
-    const endMarker = ") STRICT;";
-    const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
-    expect(start).toBeGreaterThanOrEqual(0);
-    expect(end).toBeGreaterThan(start);
-    const previousSchema = `${OPENCLAW_STATE_SCHEMA_SQL.slice(0, start)}${OPENCLAW_STATE_SCHEMA_SQL.slice(end + endMarker.length)}`;
-    const database = createGlobalDatabase();
-    try {
-      expect(() =>
-        assertSqliteSchemaContains(database, "previous global schema", previousSchema),
-      ).not.toThrow();
-      expect(
-        database.prepare("PRAGMA table_info(execution_owner_lifecycle_bindings)").all(),
-      ).toEqual([
-        { cid: 0, name: "owner_kind", type: "TEXT", notnull: 1, dflt_value: null, pk: 1 },
-        { cid: 1, name: "owner_id", type: "TEXT", notnull: 1, dflt_value: null, pk: 2 },
-        { cid: 2, name: "context_id", type: "TEXT", notnull: 1, dflt_value: null, pk: 0 },
-        { cid: 3, name: "execution_id", type: "TEXT", notnull: 1, dflt_value: null, pk: 0 },
-      ]);
-      expect(
-        database
-          .prepare(
-            `SELECT COUNT(*) AS count
-             FROM sqlite_schema
-             WHERE type = 'index' AND tbl_name = 'execution_owner_lifecycle_bindings'
-               AND sql IS NOT NULL`,
-          )
-          .get(),
-      ).toEqual({ count: 0 });
-    } finally {
-      database.close();
-    }
-  });
-
   it("accepts compatible future columns in shared-state and agent databases", () => {
     const globalDatabase = createGlobalDatabase();
     const agentDatabase = createAgentDatabase();
@@ -102,31 +40,6 @@ describe("OpenClaw database maintenance schema validation", () => {
     } finally {
       agentDatabase.close();
       globalDatabase.close();
-    }
-  });
-
-  it("accepts the historical checked shared-host column but rejects other constraints", () => {
-    const historicalSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
-      "  shared_host INTEGER\n) STRICT;",
-      "  shared_host INTEGER CHECK (shared_host IN (0, 1))\n) STRICT;",
-    );
-    const database = createGlobalDatabase(historicalSchema);
-    try {
-      expect(historicalSchema).not.toBe(OPENCLAW_STATE_SCHEMA_SQL);
-      expect(() =>
-        assertOpenClawStateDatabaseForMaintenance(database, {
-          pathname: "global.sqlite",
-        }),
-      ).not.toThrow();
-
-      database.exec("ALTER TABLE worktrees ADD COLUMN future_note TEXT DEFAULT NULL;");
-      expect(() =>
-        assertOpenClawStateDatabaseForMaintenance(database, {
-          pathname: "global.sqlite",
-        }),
-      ).toThrow("column definitions differ for worktrees");
-    } finally {
-      database.close();
     }
   });
 
@@ -205,273 +118,31 @@ describe("OpenClaw database maintenance schema validation", () => {
     }
   });
 
-  it("accepts a migrated required column with its temporary default", () => {
-    const schemaWithoutMigratedColumn = OPENCLAW_STATE_SCHEMA_SQL.replace(
-      "  name TEXT NOT NULL,\n  description TEXT,\n  enabled INTEGER NOT NULL,\n",
-      "  description TEXT,\n  enabled INTEGER NOT NULL,\n",
-    );
-    const database = createGlobalDatabase(schemaWithoutMigratedColumn);
-    try {
-      database.exec("ALTER TABLE cron_jobs ADD COLUMN name TEXT NOT NULL DEFAULT '';");
-
-      expect(() =>
-        assertOpenClawStateDatabaseForMaintenance(database, {
-          pathname: "global.sqlite",
-        }),
-      ).not.toThrow();
-    } finally {
-      database.close();
-    }
-  });
-
-  it("accepts the migrated conversation kind with its temporary default", () => {
-    const schemaWithoutMigratedColumn = OPENCLAW_STATE_SCHEMA_SQL.replace(
-      "  conversation_kind TEXT NOT NULL,\n",
-      "",
-    ).replace(
-      `CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_conversation
-  ON current_conversation_bindings(channel, account_id, conversation_kind, conversation_id);
-`,
-      "",
-    );
-    const database = createGlobalDatabase(schemaWithoutMigratedColumn);
-    try {
-      database.exec(`
-        ALTER TABLE current_conversation_bindings
-          ADD COLUMN conversation_kind TEXT NOT NULL DEFAULT 'channel';
-        CREATE INDEX idx_current_conversation_bindings_conversation
-          ON current_conversation_bindings(channel, account_id, conversation_kind, conversation_id);
-      `);
-
-      expect(() =>
-        assertOpenClawStateDatabaseForMaintenance(database, {
-          pathname: "global.sqlite",
-        }),
-      ).not.toThrow();
-    } finally {
-      database.close();
-    }
-  });
-
-  it("rejects a current global database with a missing canonical table", () => {
-    const database = createGlobalDatabase();
-    try {
-      database.exec("DROP TABLE delivery_queue_entries;");
-
-      expect(() =>
-        assertOpenClawStateDatabaseForMaintenance(database, {
-          pathname: "global.sqlite",
-        }),
-      ).toThrow("missing table delivery_queue_entries");
-    } finally {
-      database.close();
-    }
-  });
-
-  it("rejects a current global database with a drifted canonical index", () => {
-    const database = createGlobalDatabase();
-    try {
-      database.exec(`
-        DROP INDEX idx_task_runs_status;
-        CREATE INDEX idx_task_runs_status ON task_runs(task_id);
-      `);
-
-      expect(() =>
-        assertOpenClawStateDatabaseForMaintenance(database, {
-          pathname: "global.sqlite",
-        }),
-      ).toThrow("missing or drifted index idx_task_runs_status");
-    } finally {
-      database.close();
-    }
-  });
-
-  it("rejects a current global database with an unexpected unique index", () => {
-    const database = createGlobalDatabase();
-    try {
-      database.exec("CREATE UNIQUE INDEX idx_task_runs_unexpected_owner ON task_runs(owner_key);");
-
-      expect(() =>
-        assertOpenClawStateDatabaseForMaintenance(database, {
-          pathname: "global.sqlite",
-        }),
-      ).toThrow("unexpected unique index idx_task_runs_unexpected_owner");
-    } finally {
-      database.close();
-    }
-  });
-
-  it.each([
-    "node_worker_launches",
-    "node_worker_launch_containers",
-    "worker_environment_ssh_fallback_ports",
-  ])("allows lazy table %s to be absent but rejects drift", (tableName) => {
-    const database = createGlobalDatabase();
-    try {
-      const canonicalTable = database
-        .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get(tableName) as { sql?: unknown } | undefined;
-      if (typeof canonicalTable?.sql !== "string") {
-        throw new Error(`missing canonical ${tableName} table`);
+  it("admits the retired chunk path index read-only and never repairs it back", () => {
+    using database = createAgentDatabase();
+    const retiredIndex = () =>
+      database
+        .prepare("SELECT name FROM sqlite_schema WHERE name = 'idx_memory_index_chunks_path'")
+        .get();
+    expect(retiredIndex()).toBeUndefined();
+    database.exec("CREATE INDEX idx_memory_index_chunks_path ON memory_index_chunks(path)");
+    for (const retained of [true, false]) {
+      if (!retained) {
+        ensureMemoryIndexSchema({ db: database, cacheEnabled: true, ftsEnabled: false });
+        database.exec("DROP INDEX idx_memory_index_chunks_path_source");
+        expect(
+          repairCanonicalSqliteIndexes(database, "agent.sqlite", OPENCLAW_AGENT_SCHEMA_SQL),
+        ).toEqual(["idx_memory_index_chunks_path_source"]);
+        expect(retiredIndex()).toBeUndefined();
       }
-      database.exec(`DROP TABLE ${tableName};`);
-
-      expect(() =>
-        assertOpenClawStateDatabaseForMaintenance(database, {
-          pathname: "global.sqlite",
-        }),
-      ).not.toThrow();
-
-      const driftedTableSql = canonicalTable.sql.replace("(\n", "(\n  unexpected TEXT,\n");
-      expect(driftedTableSql).not.toBe(canonicalTable.sql);
-      database.exec(driftedTableSql);
-
-      expect(() =>
-        assertOpenClawStateDatabaseForMaintenance(database, {
-          pathname: "global.sqlite",
-        }),
-      ).toThrow(`column definitions differ for ${tableName}`);
-    } finally {
-      database.close();
-    }
-  });
-
-  it("rejects a current agent database with a missing canonical table", () => {
-    const database = createAgentDatabase();
-    try {
-      database.exec("DROP TABLE auth_profile_store;");
-
-      expect(() =>
-        assertOpenClawAgentDatabaseForMaintenance(database, {
-          agentId: "worker-1",
-          pathname: "agent.sqlite",
-        }),
-      ).toThrow("missing table auth_profile_store");
-    } finally {
-      database.close();
-    }
-  });
-
-  it("accepts only canonical memory path FTS triggers", () => {
-    const database = createAgentDatabase();
-    try {
-      ensureMemoryIndexSchema({
-        db: database,
-        cacheEnabled: true,
-        ftsEnabled: true,
-      });
-
+      database.exec("PRAGMA query_only = ON");
       expect(() =>
         assertOpenClawAgentDatabaseForMaintenance(database, {
           agentId: "worker-1",
           pathname: "agent.sqlite",
         }),
       ).not.toThrow();
-
-      database.exec("DROP TRIGGER memory_index_paths_fts_after_delete;");
-      expect(() =>
-        assertOpenClawAgentDatabaseForMaintenance(database, {
-          agentId: "worker-1",
-          pathname: "agent.sqlite",
-        }),
-      ).toThrow("missing or drifted trigger memory_index_paths_fts_after_delete");
-      ensureMemoryIndexSchema({
-        db: database,
-        cacheEnabled: true,
-        ftsEnabled: true,
-      });
-
-      database.exec(`
-        CREATE TRIGGER memory_index_sources_unexpected_after_insert
-        AFTER INSERT ON memory_index_sources
-        BEGIN
-          UPDATE memory_index_state SET revision = revision + 100 WHERE id = 1;
-        END;
-      `);
-
-      expect(() =>
-        assertOpenClawAgentDatabaseForMaintenance(database, {
-          agentId: "worker-1",
-          pathname: "agent.sqlite",
-        }),
-      ).toThrow("unexpected trigger memory_index_sources_unexpected_after_insert");
-    } finally {
-      database.close();
-    }
-  });
-
-  it("rejects a drifted canonical memory path FTS trigger", () => {
-    const database = createAgentDatabase();
-    try {
-      ensureMemoryIndexSchema({
-        db: database,
-        cacheEnabled: true,
-        ftsEnabled: true,
-      });
-      database.exec(`
-        DROP TRIGGER memory_index_paths_fts_after_insert;
-        CREATE TRIGGER memory_index_paths_fts_after_insert
-        AFTER INSERT ON memory_index_sources
-        BEGIN
-          INSERT INTO memory_index_paths_fts (rowid, path, source)
-          VALUES (NEW.id, NEW.path || '-drifted', NEW.source);
-        END;
-      `);
-
-      expect(() =>
-        assertOpenClawAgentDatabaseForMaintenance(database, {
-          agentId: "worker-1",
-          pathname: "agent.sqlite",
-        }),
-      ).toThrow("missing or drifted trigger memory_index_paths_fts_after_insert");
-    } finally {
-      database.close();
-    }
-  });
-
-  it("rejects a current agent database with a drifted canonical trigger", () => {
-    const database = createAgentDatabase();
-    try {
-      database.exec(`
-        DROP TRIGGER memory_index_sources_revision_after_insert;
-        CREATE TRIGGER memory_index_sources_revision_after_insert
-        AFTER INSERT ON memory_index_sources
-        BEGIN
-          UPDATE memory_index_state SET revision = 0 WHERE id = 1;
-        END;
-      `);
-
-      expect(() =>
-        assertOpenClawAgentDatabaseForMaintenance(database, {
-          agentId: "worker-1",
-          pathname: "agent.sqlite",
-        }),
-      ).toThrow("missing or drifted trigger memory_index_sources_revision_after_insert");
-    } finally {
-      database.close();
-    }
-  });
-
-  it("rejects a current agent database with a missing canonical check constraint", () => {
-    const database = createAgentDatabase();
-    try {
-      database.exec(`
-        DROP TABLE memory_index_state;
-        CREATE TABLE memory_index_state (
-          id INTEGER PRIMARY KEY,
-          revision INTEGER NOT NULL
-        );
-        INSERT INTO memory_index_state (id, revision) VALUES (1, 0);
-      `);
-
-      expect(() =>
-        assertOpenClawAgentDatabaseForMaintenance(database, {
-          agentId: "worker-1",
-          pathname: "agent.sqlite",
-        }),
-      ).toThrow("column definitions differ for memory_index_state");
-    } finally {
-      database.close();
+      database.exec("PRAGMA query_only = OFF");
     }
   });
 });

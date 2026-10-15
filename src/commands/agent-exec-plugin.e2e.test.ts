@@ -13,6 +13,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 
 const execFileAsync = promisify(execFile);
+const TRANSPORT_CLEANUP_GUARD_MS = 5_000;
 let cleanupFixture: (() => Promise<void>) | undefined;
 const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) =>
   afterEach(async () => {
@@ -303,7 +304,10 @@ if (process.argv[2] === "--version") {
             );
             throw error;
           } finally {
-            await Promise.all(pids.map((pid) => waitForDead(pid, 5_000)));
+            // Cleanup hang guard after the owner signalled/killed transports, not a readiness race.
+            await Promise.all(
+              pids.map((pid) => waitForDead(pid, AbortSignal.timeout(TRANSPORT_CLEANUP_GUARD_MS))),
+            );
           }
         })());
       cleanupFixture = cleanup;
@@ -441,10 +445,12 @@ if (process.argv[2] === "--version") {
       }),
     ]);
 
-    // A completed result followed by a timeout identifies retained process resources.
+    expect(
+      completion,
+      completion.status === "rejected" ? String(completion.reason) : undefined,
+    ).toMatchObject({ status: "fulfilled" });
     expect(JSON.parse(await fs.readFile(outputPath, "utf8"))).toMatchObject({
       payloads: [{ text: "PLUGIN_HARNESS_OK" }],
     });
-    expect(completion).toMatchObject({ status: "fulfilled" });
   });
 });

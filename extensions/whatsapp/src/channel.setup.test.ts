@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createQueuedWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { moveSingleAccountChannelSectionToDefaultAccount } from "openclaw/plugin-sdk/setup";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { WHATSAPP_AUTH_UNSTABLE_CODE } from "./auth-store.js";
@@ -62,8 +63,33 @@ vi.mock("./auth-store.js", async () => {
 });
 
 describe("WhatsApp setup promotion contract", () => {
-  it("exposes authDir on the setup-only plugin surface", () => {
-    expect(whatsappSetupPlugin.setupContract?.singleAccountKeysToMove).toEqual(["authDir"]);
+  it("keeps shared root policy while writing an explicit scoped auth directory", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+          accounts: { work: { authDir: "/synthetic/work" } },
+        },
+      },
+    };
+    const setup = whatsappSetupPlugin.setupContract!;
+    const preserved = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg,
+      channelKey: "whatsapp",
+      setupSurface: setup,
+    });
+    expect(preserved).toEqual(cfg);
+    const next = setup.applyAccountConfig({
+      cfg: preserved,
+      accountId: "default",
+      input: { authDir: "/synthetic/default" },
+    });
+    expect(next.channels?.whatsapp?.accounts).toEqual({
+      work: { authDir: "/synthetic/work" },
+      default: { enabled: true, authDir: "/synthetic/default" },
+    });
+    expect(next.channels?.whatsapp?.allowFrom).toEqual(["+15550001111"]);
   });
 });
 

@@ -13,8 +13,12 @@ import {
 import type { GithubIssueSubmitHooks, RunGithubCli } from "../../../infra/github-issue.js";
 import type { RestartSentinelPayload } from "../../../infra/restart-sentinel.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../../state/openclaw-state-db.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../agent-runtime-approval-authority.js";
+import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -39,9 +43,9 @@ vi.mock("../../../infra/github-issue.js", async () => {
   };
 });
 
-vi.mock("../../server-restart-sentinel.js", async () => {
-  const actual = await vi.importActual<typeof import("../../server-restart-sentinel.js")>(
-    "../../server-restart-sentinel.js",
+vi.mock("../../server-update-sentinel.js", async () => {
+  const actual = await vi.importActual<typeof import("../../server-update-sentinel.js")>(
+    "../../server-update-sentinel.js",
   );
   return {
     ...actual,
@@ -74,7 +78,8 @@ const failure: RestartSentinelPayload = {
 const originalWriteFile = fs.writeFile.bind(fs);
 let stateDir = "";
 
-function countReportReceipts(): number {
+async function countReportReceipts(): Promise<number> {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
   if (!existsSync(databasePath)) {
@@ -126,10 +131,11 @@ function createReportHarness(params: { getGeneration: () => string }) {
   };
   const harness = createDispatchTestHarness({
     extraHandlers: { "update.report": handler },
-    buildRequestContext: () => ({
-      getRuntimeConfig: () => ({}),
-      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-    }),
+    buildRequestContext: () =>
+      createDirectChatContext({
+        getRuntimeConfig: () => ({}),
+        validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
+      }),
     getRequiredSharedGatewaySessionGeneration: params.getGeneration,
   });
   return { harness, waitForNextHandler: () => nextFinished.promise };
@@ -224,6 +230,7 @@ describe("update report live authority boundary", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
     await fs.rm(stateDir, { force: true, recursive: true });
@@ -246,7 +253,7 @@ describe("update report live authority boundary", () => {
 
       expect(mocks.submitGithubIssue).toHaveBeenCalledOnce();
       expect(await countReportFiles()).toBe(0);
-      expect(countReportReceipts()).toBe(1);
+      expect(await countReportReceipts()).toBe(1);
       expect(response).toMatchObject({
         ok: true,
         payload: {
@@ -343,7 +350,7 @@ describe("update report live authority boundary", () => {
         expect
           .soft(runGh.mock.calls.map(([args]) => args[0]))
           .toEqual(retire ? ["auth"] : ["auth", "api"]);
-        expect.soft(countReportReceipts()).toBe(retire ? 0 : 1);
+        expect.soft(await countReportReceipts()).toBe(retire ? 0 : 1);
         expect(await countReportFiles()).toBe(0);
         const response = await harness.awaitResponseFrame("runtime-submit");
         if (retire) {
@@ -409,7 +416,7 @@ describe("update report live authority boundary", () => {
 
       expect(runGh).toHaveBeenCalledOnce();
       expect(await countReportFiles()).toBe(0);
-      expect(countReportReceipts()).toBe(0);
+      expect(await countReportReceipts()).toBe(0);
       expect(harness.send).toHaveBeenCalledWith(
         expect.objectContaining({
           id: `changed-${change}`,
@@ -445,7 +452,7 @@ describe("update report live authority boundary", () => {
       const response = await harness.awaitResponseFrame(`denied-${scopes[0]}`);
 
       expect(await countReportFiles()).toBe(0);
-      expect(countReportReceipts()).toBe(0);
+      expect(await countReportReceipts()).toBe(0);
       if (!allowed) {
         expect(response).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
         expect(mocks.refreshLatest).not.toHaveBeenCalled();
@@ -480,7 +487,7 @@ describe("update report live authority boundary", () => {
           ok: true,
           payload: { status: "duplicate", fallbackUrl: submitted.payload.fallbackUrl },
         });
-        expect(countReportReceipts()).toBe(1);
+        expect(await countReportReceipts()).toBe(1);
         expect(await countReportFiles()).toBe(1);
       }
       expect(mocks.submitGithubIssue).not.toHaveBeenCalled();
@@ -549,7 +556,7 @@ describe("update report live authority boundary", () => {
       expect(mocks.submitGithubIssue).toHaveBeenCalledOnce();
       expect(issueCreateCalls).toBe(0);
       expect(await countReportFiles()).toBe(0);
-      expect(countReportReceipts()).toBe(0);
+      expect(await countReportReceipts()).toBe(0);
       expect(harness.send).not.toHaveBeenCalledWith(
         expect.objectContaining({ id: `denied-preflight-${testCase.change}`, ok: true }),
       );
@@ -612,7 +619,7 @@ describe("update report live authority boundary", () => {
       expect(harness.close).toHaveBeenCalledWith(4001, testCase.closeReason);
       expect(mocks.submitGithubIssue).not.toHaveBeenCalled();
       expect(await countReportFiles()).toBe(0);
-      expect(countReportReceipts()).toBe(0);
+      expect(await countReportReceipts()).toBe(0);
       expect(harness.send).not.toHaveBeenCalledWith(
         expect.objectContaining({ id: `denied-${testCase.change}`, ok: true }),
       );
@@ -667,7 +674,7 @@ describe("update report live authority boundary", () => {
       expect(harness.close).toHaveBeenCalledWith(4001, testCase.closeReason);
       expect(mocks.submitGithubIssue).not.toHaveBeenCalled();
       expect(await countReportFiles()).toBe(0);
-      expect(countReportReceipts()).toBe(0);
+      expect(await countReportReceipts()).toBe(0);
       expect(harness.send).not.toHaveBeenCalledWith(
         expect.objectContaining({ id: `preview-denied-${testCase.change}`, ok: true }),
       );

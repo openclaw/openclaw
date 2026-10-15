@@ -17,24 +17,16 @@ extension VoiceWakeOverlayController {
         """
         self.logger.log(level: .info, "\(message)")
         self.activeToken = token
-        self.activeSource = source
-        self.autoSendTask?.cancel()
-        self.autoSendTask = nil
-        self.model.text = transcript
-        self.model.isFinal = isFinal
-        self.model.forwardEnabled = forwardEnabled
-        self.model.isSending = false
-        self.model.isEditing = false
-        self.model.attributed = attributed ?? self.makeAttributed(from: transcript)
-        self.model.level = 0
+        SimpleTaskSupport.stop(task: &self.autoSendTask)
+        self.setTranscript(transcript, attributed: attributed, isFinal: isFinal, forwardEnabled: forwardEnabled)
         self.lastLevelUpdate = 0
         self.present()
         self.updateWindowFrame(animate: true)
         return token
     }
 
-    func snapshot() -> (token: UUID?, source: VoiceSessionCoordinator.Source?, text: String, isVisible: Bool) {
-        (self.activeToken, self.activeSource, self.model.text, self.model.isVisible)
+    func snapshot() -> (token: UUID?, text: String, isVisible: Bool) {
+        (self.activeToken, self.model.text, self.model.isVisible)
     }
 
     func updatePartial(token: UUID, transcript: String, attributed: NSAttributedString? = nil) {
@@ -45,15 +37,8 @@ extension VoiceWakeOverlayController {
         len=\(transcript.count)
         """
         self.logger.log(level: .info, "\(message)")
-        self.autoSendTask?.cancel()
-        self.autoSendTask = nil
-        self.model.text = transcript
-        self.model.isFinal = false
-        self.model.forwardEnabled = false
-        self.model.isSending = false
-        self.model.isEditing = false
-        self.model.attributed = attributed ?? self.makeAttributed(from: transcript)
-        self.model.level = 0
+        SimpleTaskSupport.stop(task: &self.autoSendTask)
+        self.setTranscript(transcript, attributed: attributed, isFinal: false, forwardEnabled: false)
         self.present()
         self.updateWindowFrame(animate: true)
     }
@@ -73,13 +58,11 @@ extension VoiceWakeOverlayController {
         """
         self.logger.log(level: .info, "\(message)")
         self.autoSendTask?.cancel()
-        self.model.text = transcript
-        self.model.isFinal = true
-        self.model.forwardEnabled = !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        self.model.isSending = false
-        self.model.isEditing = false
-        self.model.attributed = attributed ?? self.makeAttributed(from: transcript)
-        self.model.level = 0
+        self.setTranscript(
+            transcript,
+            attributed: attributed,
+            isFinal: true,
+            forwardEnabled: !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         self.present()
         if let delay {
             if delay <= 0 {
@@ -89,6 +72,21 @@ extension VoiceWakeOverlayController {
                 self.scheduleAutoSend(token: token, after: delay)
             }
         }
+    }
+
+    private func setTranscript(
+        _ transcript: String,
+        attributed: NSAttributedString?,
+        isFinal: Bool,
+        forwardEnabled: Bool)
+    {
+        self.model.text = transcript
+        self.model.isFinal = isFinal
+        self.model.forwardEnabled = forwardEnabled
+        self.model.isSending = false
+        self.model.isEditing = false
+        self.model.attributed = attributed ?? self.makeAttributed(from: transcript)
+        self.model.level = 0
     }
 
     func userBeganEditing() {
@@ -174,29 +172,25 @@ extension VoiceWakeOverlayController {
         self.presentation.animateDismiss(self, reason, outcome) { completion in
             switch completion {
             case .disabledUI:
-                self.model.isVisible = false
-                self.model.level = 0
-                self.lastLevelUpdate = 0
-                self.activeToken = nil
-                self.activeSource = nil
+                self.clearDismissedSession()
             case .missingWindow:
                 if ProcessInfo.processInfo.isRunningTests {
-                    self.model.isVisible = false
-                    self.model.level = 0
-                    self.activeToken = nil
-                    self.activeSource = nil
+                    self.clearDismissedSession(resetLevelUpdate: false)
                 }
             case let .animated(finishWindow):
                 guard self.guardToken(dismissedToken, context: "dismissCompletion") else { return }
                 finishWindow()
-                self.model.isVisible = false
-                self.model.level = 0
-                self.lastLevelUpdate = 0
-                self.activeToken = nil
-                self.activeSource = nil
+                self.clearDismissedSession()
                 actions?.didDismiss(dismissedToken, outcome)
             }
         }
+    }
+
+    private func clearDismissedSession(resetLevelUpdate: Bool = true) {
+        self.model.isVisible = false
+        self.model.level = 0
+        if resetLevelUpdate { self.lastLevelUpdate = 0 }
+        self.activeToken = nil
     }
 
     func updateLevel(token: UUID, _ level: Double) {
@@ -242,20 +236,11 @@ extension VoiceWakeOverlayController {
             overlay scheduleAutoSend token=\(token.uuidString) \
             after=\(delay)
             """)
-        self.autoSendTask?.cancel()
-        self.autoSendTask = Task<Void, Never> { [weak self, token] in
-            let nanos = UInt64(max(0, delay) * 1_000_000_000)
-            try? await Task.sleep(nanoseconds: nanos)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self else { return }
-                guard self.guardToken(token, context: "autoSend") else { return }
-                self.logger.log(
-                    level: .info,
-                    "overlay autoSend firing token=\(token.uuidString, privacy: .public)")
-                self.actions()?.send(token, "autoSendDelay")
-                self.autoSendTask = nil
-            }
+        SimpleTaskSupport.schedule(task: &self.autoSendTask, delay: max(0, delay)) { [weak self] in
+            guard let self, self.guardToken(token, context: "autoSend") else { return }
+            self.logger.log(level: .info, "overlay autoSend firing token=\(token.uuidString, privacy: .public)")
+            self.actions()?.send(token, "autoSendDelay")
+            self.autoSendTask = nil
         }
     }
 

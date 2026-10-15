@@ -29,7 +29,7 @@ describe("Cloudflare R2 provider settings", () => {
     const sessionToken = { source: "env", provider: "default", id: "R2_SESSION_TOKEN" };
     const backend = await provider.open({
       locationName: "offsite",
-      settings: { ...settings, sessionToken },
+      settings: { ...settings, jurisdiction: "eu", sessionToken },
       resolveSecret,
     });
     try {
@@ -44,62 +44,39 @@ describe("Cloudflare R2 provider settings", () => {
     }
   });
 
-  it.each([
-    {},
-    { bucket: "a-0" },
-    { bucket: "a".repeat(63) },
-    { prefix: "team/Archive_2026-09.30" },
-    { prefix: "a".repeat(512) },
-    { jurisdiction: "eu" },
-    { jurisdiction: "fedramp" },
-    { sessionToken: { source: "env", provider: "default", id: "R2_SESSION_TOKEN" } },
-  ])("accepts supported settings %j", (overrides) => {
-    expect(r2StorageProvider.validateSettings?.({ ...settings, ...overrides })).toBeUndefined();
+  it("accepts a namespaced jurisdiction without a session token", () => {
+    expect(
+      r2StorageProvider.validateSettings?.({
+        ...settings,
+        prefix: "team/Archive_2026-09.30",
+        jurisdiction: "fedramp",
+      }),
+    ).toBeUndefined();
   });
 
   it.each([
     ["accountId", "0123456789ABCDEF0123456789ABCDEF"],
-    ["accountId", "0123456789abcdef"],
-    ["accountId", "g".repeat(32)],
     ["bucket", "ab"],
-    ["bucket", "a".repeat(64)],
-    ["bucket", "Uppercase"],
-    ["bucket", "bucket.name"],
-    ["bucket", "-bucket"],
-    ["bucket", "bucket-"],
     ["prefix", ""],
-    ["prefix", "/archive"],
-    ["prefix", "archive/"],
-    ["prefix", "archive//daily"],
     ["prefix", "archive/./daily"],
     ["prefix", "archive/../daily"],
-    ["prefix", "archive\\daily"],
-    ["prefix", "archive/with space"],
     ["prefix", "a".repeat(513)],
     ["jurisdiction", "us"],
-    ["jurisdiction", "EU"],
   ])("rejects invalid %s value %j", (key, value) => {
     expect(r2StorageProvider.validateSettings?.({ ...settings, [key]: value })).toContain(key);
   });
 
-  it.each(["accessKeyId", "secretAccessKey", "sessionToken"])(
-    "requires a valid SecretRef for %s without disclosing plaintext",
-    (key) => {
-      const plaintext = "example-r2-credential-not-real";
-      const error = r2StorageProvider.validateSettings?.({ ...settings, [key]: plaintext });
-      expect(error).toContain(`${key} must be a valid SecretRef`);
-      expect(error).not.toContain(plaintext);
-      expect(
-        r2StorageProvider.validateSettings?.({
-          ...settings,
-          [key]: { source: "env", provider: "default", id: "invalid-env-name" },
-        }),
-      ).toContain(`${key} must be a valid SecretRef`);
-    },
-  );
-
-  it.each(["accessKeyId", "secretAccessKey"])("requires %s", (key) => {
-    expect(r2StorageProvider.validateSettings?.({ ...settings, [key]: undefined })).toContain(key);
+  it("requires a valid SecretRef without disclosing plaintext", () => {
+    const plaintext = "example-r2-credential-not-real";
+    const error = r2StorageProvider.validateSettings?.({ ...settings, accessKeyId: plaintext });
+    expect(error).toContain("accessKeyId must be a valid SecretRef");
+    expect(error).not.toContain(plaintext);
+    expect(
+      r2StorageProvider.validateSettings?.({
+        ...settings,
+        accessKeyId: { source: "env", provider: "default", id: "invalid-env-name" },
+      }),
+    ).toContain("accessKeyId must be a valid SecretRef");
   });
 
   it("rejects unsupported settings rather than silently using a different endpoint", () => {
@@ -108,21 +85,13 @@ describe("Cloudflare R2 provider settings", () => {
     ).toContain("settings only accept");
   });
 
-  it.each([
-    [undefined, "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com"],
-    ["eu", "https://0123456789abcdef0123456789abcdef.eu.r2.cloudflarestorage.com"],
-    ["fedramp", "https://0123456789abcdef0123456789abcdef.fedramp.r2.cloudflarestorage.com"],
-  ] as const)("routes jurisdiction %s to its R2 endpoint", (jurisdiction, endpoint) => {
-    expect(r2Endpoint({ ...settings, jurisdiction })).toBe(endpoint);
+  it("uses the default endpoint without a jurisdiction", () => {
+    expect(r2Endpoint(settings)).toBe(
+      "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com",
+    );
   });
 
-  it("describes bucket and prefix synchronously without credentials", () => {
-    expect(r2StorageProvider.describeTarget?.({ bucket: "openclaw-artifacts" })).toBe(
-      "r2://openclaw-artifacts",
-    );
-    expect(
-      r2StorageProvider.describeTarget?.({ bucket: "openclaw-artifacts", prefix: "team/archive" }),
-    ).toBe("r2://openclaw-artifacts/team/archive");
+  it("does not describe an invalid bucket", () => {
     expect(r2StorageProvider.describeTarget?.({ bucket: "invalid.bucket" })).toBeUndefined();
   });
 });

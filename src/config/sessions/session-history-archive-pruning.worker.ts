@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal-reclamation.js";
+import { readSqliteFreePageCount } from "../../infra/sqlite-wal-reclamation.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
@@ -19,6 +19,7 @@ import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type {
   PublishedSessionTranscriptArchive,
   SessionArchivePruningRead,
+  SessionArchivePruningSnapshot,
   SessionArchiveRetentionDelete,
   SessionLegacyArchiveRemovalResult,
 } from "./session-history-archive-pruning.types.js";
@@ -26,9 +27,10 @@ import type {
 export function readSessionArchivePruningInDatabase(
   database: OpenClawAgentReadOnlyDatabase,
   limit = 1,
-): PublishedSessionTranscriptArchive[] {
+): SessionArchivePruningSnapshot {
+  const freePages = readSqliteFreePageCount(database.db);
   if (!tableExists(database.db, "session_transcript_archives")) {
-    return [];
+    return { archives: [], freePages };
   }
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
@@ -47,19 +49,18 @@ export function readSessionArchivePruningInDatabase(
         "session_key",
       ])
       .where("published_at", "is not", null)
+      .$narrowType<{ published_at: number }>()
       .orderBy("created_at", "asc")
       .orderBy("session_id", "asc")
       .orderBy("generation", "asc")
       .limit(limit),
   ).rows;
-  return rows.flatMap((row) =>
-    row.published_at === null ? [] : [{ ...row, published_at: row.published_at }],
-  );
+  return { archives: rows.map((row) => Object.assign({}, row)), freePages };
 }
 
 export function readSessionArchivePruningInWorker(
   request: SessionArchivePruningRead,
-): PublishedSessionTranscriptArchive[] {
+): SessionArchivePruningSnapshot {
   const identity = `file:${request.expectedIdentity.physicalIdentity}`;
   assertExistingDatabaseIdentity(request.database.path, identity);
   const result = withOpenClawAgentDatabaseReadOnly(
@@ -229,16 +230,4 @@ export function deletePublishedSessionArchiveInDatabase(
     options,
     { operationLabel: "session.archive.delete-published" },
   );
-}
-
-export function reclaimSessionArchivePagesInWorker(
-  database: OpenClawAgentDatabase,
-  maxPages: number | undefined,
-  admit: (stage: "transaction" | "commit") => void,
-): SqliteWalReclamationResult {
-  return database.walMaintenance.reclaimFreePages({
-    maxPages,
-    beforeMutation: () => admit("transaction"),
-    onCommit: () => admit("commit"),
-  });
 }

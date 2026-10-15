@@ -3,26 +3,26 @@ import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contra
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import {
   CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
-  CRON_LEGACY_OWNER_REPAIR_REQUIRED_MESSAGE,
   tryResolveCronJobEffectiveAgentId,
 } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { resolveFailureAlert } from "../service/failure-alerts.js";
 import { hasActiveCronRun } from "../service/jobs-scheduling.js";
 import type { CronJobPolicyContext } from "../service/state.js";
 import { applyJobResult } from "../service/timer-outcomes.js";
+import { recordSkippedCronRequestInDatabase } from "./run-history.kernel.js";
 import { findActiveCronRunReceiptInDatabase } from "./run-receipt-store.js";
-import type { CronRuntimeMutationContracts } from "./runtime-mutation.types.js";
-import {
-  createCronMutationLogger,
-  prepareCronRuntimeMutation,
-  retainCronRuntimeMutationOutcome,
-} from "./runtime-mutation.worker.js";
+import { createCronMutationLogger } from "./runtime-mutation.worker.js";
 import { mutateCronRuntimeRowsInDatabase } from "./runtime-rows.kernel.js";
-import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
+import type {
+  CronRuntimeMutationContracts,
+  CronRuntimeWorkerOperations,
+} from "./runtime-worker.types.js";
 
 export function recordSkippedCronRunsInWorker(
   database: OpenClawStateDatabase,
   input: CronRuntimeWorkerOperations["cron.recordSkippedRuns"]["input"],
+  options?: { recordHistory: true },
 ): CronRuntimeWorkerOperations["cron.recordSkippedRuns"]["output"] {
   const { change } = input;
   const proposals = new Map(
@@ -38,34 +38,19 @@ export function recordSkippedCronRunsInWorker(
         storeKey: input.storeKey,
         jobIds,
         mutate({ jobs }) {
-          const preparation = prepareCronRuntimeMutation("cron.recordSkippedRuns", input.nonce, {
-            jobs: [...jobs.values()].map(({ id, delivery, failureAlert }) => ({
-              id,
-              delivery,
-              failureAlert,
-            })),
-          });
+          const policy = input.snapshot;
           const outcome: CronRuntimeMutationContracts["cron.recordSkippedRuns"]["outcome"] = {
             jobs: [],
             rejected: [],
-            nowMs: preparation.nowMs,
+            nowMs: policy.nowMs,
             notifications: [],
             logs: [],
           };
-          if (change.kind === "ownerless" && preparation.legacyDefaultAgentId) {
-            throw new Error(CRON_LEGACY_OWNER_REPAIR_REQUIRED_MESSAGE);
-          }
-          const ownership = new Map(preparation.ownership.map((owner) => [owner.jobId, owner]));
-          const failureAlerts = new Map(
-            preparation.failureAlerts.map((alert) => [alert.jobId, alert]),
-          );
+          const ownership = new Map(policy.ownership.map((owner) => [owner.jobId, owner]));
           for (const job of jobs.values()) {
             if (change.kind === "ownerless") {
               const planned = proposals.get(job.id);
               const owner = ownership.get(job.id);
-              if (!owner) {
-                throw new Error("Cron ownerless skip has no prepared process ownership");
-              }
               if (
                 !planned ||
                 job.enabled !== planned.enabled ||
@@ -73,17 +58,13 @@ export function recordSkippedCronRunsInWorker(
                 job.state.lastRunAtMs !== planned.lastRunAtMs ||
                 job.state.lastRunStatus !== planned.lastRunStatus ||
                 resolveCronJobConfigRevision(job) !== planned.configRevision ||
-                hasActiveCronRun(job, owner.active) ||
+                hasActiveCronRun(job, owner?.active ?? false) ||
                 findActiveCronRunReceiptInDatabase({
                   database: db,
                   storePath: input.storeKey,
                   jobId: job.id,
                 }) ||
-                tryResolveCronJobEffectiveAgentId(
-                  job,
-                  preparation.defaultAgentId,
-                  preparation.legacyDefaultAgentId,
-                )
+                tryResolveCronJobEffectiveAgentId(job, policy.defaultAgentId)
               ) {
                 if (planned) {
                   outcome.rejected.push(job);
@@ -93,17 +74,17 @@ export function recordSkippedCronRunsInWorker(
             } else if (resolveCronJobConfigRevision(job) !== change.configRevision) {
               continue;
             }
-            const failureAlert = failureAlerts.get(job.id);
-            if (!failureAlert) {
-              throw new Error("Cron skipped run has no prepared failure-alert policy");
-            }
             const state: CronJobPolicyContext = {
               deps: {
-                nowMs: () => preparation.nowMs,
-                cronConfig: preparation.cronConfig,
+                nowMs: () => policy.nowMs,
+                cronConfig: policy.cronConfig,
+                failureRepairTimeoutMs: policy.failureRepairTimeoutMs,
                 log: createCronMutationLogger(outcome.logs),
               },
-              preparedFailureAlert: { jobId: job.id, value: failureAlert.value },
+              preparedFailureAlert: {
+                jobId: job.id,
+                value: resolveFailureAlert({ deps: { cronConfig: policy.cronConfig } }, job),
+              },
             };
             applyJobResult(
               state,
@@ -113,15 +94,13 @@ export function recordSkippedCronRunsInWorker(
                 completionStatus: "failed",
                 error:
                   change.kind === "ownerless"
-                    ? preparation.legacyDefaultAgentId
-                      ? CRON_LEGACY_OWNER_REPAIR_REQUIRED_MESSAGE
-                      : CRON_AGENT_SELECTION_REQUIRED_MESSAGE
+                    ? CRON_AGENT_SELECTION_REQUIRED_MESSAGE
                     : change.error,
                 ...(change.kind === "ownerless"
                   ? { executionStarted: false }
                   : { diagnostics: change.diagnostics }),
-                startedAt: preparation.nowMs,
-                endedAt: preparation.nowMs,
+                startedAt: policy.nowMs,
+                endedAt: policy.nowMs,
               },
               {
                 deferredNotifications: outcome.notifications,
@@ -132,19 +111,27 @@ export function recordSkippedCronRunsInWorker(
               },
             );
             outcome.jobs.push(job);
+            if (options?.recordHistory) {
+              recordSkippedCronRequestInDatabase(db, {
+                storeKey: input.storeKey,
+                jobId: job.id,
+                startedAt: policy.nowMs,
+                endedAt: policy.nowMs,
+                error:
+                  change.kind === "ownerless"
+                    ? CRON_AGENT_SELECTION_REQUIRED_MESSAGE
+                    : change.error,
+                nextRunAtMs: job.state.nextRunAtMs,
+              });
+            }
           }
           for (const notification of outcome.notifications) {
-            notification.routing = preparation.notificationRouting;
+            notification.routing = policy.notificationRouting;
           }
           return { upsertJobIds: outcome.jobs.map((job) => job.id), value: outcome };
         },
       });
-      return retainCronRuntimeMutationOutcome(
-        "cron.recordSkippedRuns",
-        db,
-        input.nonce,
-        committed.value,
-      );
+      return { outcome: committed.value };
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     {

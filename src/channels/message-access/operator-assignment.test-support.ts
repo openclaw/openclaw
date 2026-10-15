@@ -27,7 +27,8 @@ import { initializeSessionReadContext } from "../../gateway/server-methods/sessi
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
 import { resolveGatewayScopedTools } from "../../gateway/tool-resolution.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { unlinkUserChannelIdentity } from "../../state/user-channel-identities.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { withAdminIngress } from "./operator-authority.test-support.js";
@@ -82,14 +83,16 @@ async function prepareAssignment(fixture: Fixture, turn: MsgContext, nativeAgent
     ctx: turn,
     commandAuthorized: true,
   });
-  const tools = resolveGatewayScopedTools({
-    cfg,
-    sessionKey,
-    messageProvider: turn.Provider,
-    senderIsOwner,
-    surface: "loopback",
-    admittedRunContext: admitted,
-  }).tools;
+  const tools = (
+    await resolveGatewayScopedTools({
+      cfg,
+      sessionKey,
+      messageProvider: turn.Provider,
+      senderIsOwner,
+      surface: "loopback",
+      admittedRunContext: admitted,
+    })
+  ).tools;
   const run = <T>(action: () => Promise<T>) =>
     withPluginRuntimeGatewayRequestScope(
       {
@@ -242,7 +245,9 @@ export function registerOperatorAssignmentTests() {
             } else if (change === "gateway") {
               fixture.replaceGatewayContext();
             } else if (change === "database") {
-              await closeOpenClawStateDatabaseAsync();
+              await closeOpenClawStateDatabaseByPathAsync(
+                resolveOpenClawStateSqlitePath(fixture.state.env),
+              );
             }
             await expect(assignment.assign()).rejects.toThrow(revokedMessage);
             expect(loadSessionEntry(assignment.scope(humanSessionKey))?.owner).toBeUndefined();

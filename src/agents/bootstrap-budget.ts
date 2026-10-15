@@ -18,6 +18,8 @@ import {
 import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
+export { buildBootstrapPromptWarningNotice } from "./bootstrap-budget-warning.js";
+
 const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
 
 type BootstrapTruncationReportMeta = {
@@ -208,19 +210,6 @@ export function buildBootstrapBudgetState(params: {
     bootstrapPromptWarningMode,
     bootstrapTotalMaxChars,
   };
-}
-
-/** Builds the compact truncation notice mirrored into run metadata. */
-export function buildBootstrapPromptWarningNotice(warningLines?: string[]): string | undefined {
-  const hasWarning = (warningLines ?? []).some((line) => line.trim().length > 0);
-  if (!hasWarning) {
-    return undefined;
-  }
-  return [
-    "[Bootstrap truncation warning]",
-    "Some workspace bootstrap files were truncated before Project Context injection.",
-    "Treat Project Context as partial and read the relevant files directly if details seem missing.",
-  ].join("\n");
 }
 
 /** Serializes truncation warning state for run reports and future dedupe. */

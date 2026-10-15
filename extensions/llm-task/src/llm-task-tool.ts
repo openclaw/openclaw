@@ -22,25 +22,6 @@ function stripCodeFences(s: string): string {
   return trimmed;
 }
 
-function toModelKey(provider?: string, model?: string): string | undefined {
-  const p = provider?.trim();
-  const m = model?.trim();
-  if (!p || !m) {
-    return undefined;
-  }
-  return `${p}/${m}`;
-}
-
-function stripDuplicateProviderPrefix(provider: string | undefined, model: string | undefined) {
-  const p = provider?.trim();
-  const m = model?.trim();
-  if (!p || !m) {
-    return m || undefined;
-  }
-  const prefix = `${p}/`;
-  return m.startsWith(prefix) ? m.slice(prefix.length) : m;
-}
-
 function resolveLlmTaskModelRef(params: {
   api: OpenClawPluginApi;
   provider?: string;
@@ -51,9 +32,13 @@ function resolveLlmTaskModelRef(params: {
     normalizeOptionalString(params.provider) ??
     normalizeOptionalString(params.api.runtime.agent.defaults.provider);
   const rawModel = normalizeOptionalString(params.rawModel);
+  const providerPrefix = params.provider?.trim();
   const selectedModelRef = {
     provider: params.provider,
-    model: stripDuplicateProviderPrefix(params.provider, rawModel),
+    model:
+      providerPrefix && rawModel?.startsWith(`${providerPrefix}/`)
+        ? rawModel.slice(providerPrefix.length + 1)
+        : rawModel,
   };
   if (!rawModel || !defaultProvider) {
     return selectedModelRef;
@@ -117,8 +102,9 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         normalizeOptionalString(params.authProfileId) ??
         normalizeOptionalString(pluginCfg.defaultAuthProfileId);
 
-      const modelKey = toModelKey(provider, model);
-      if (!provider || !model || !modelKey) {
+      const providerId = provider?.trim();
+      const modelId = model?.trim();
+      if (!providerId || !modelId) {
         throw new Error(
           `provider/model could not be resolved (provider=${provider ?? ""}, model=${model ?? ""})`,
         );
@@ -165,7 +151,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           },
         ],
         systemPrompt: system,
-        model: hasModelOverride ? modelKey : undefined,
+        model: hasModelOverride ? `${providerId}/${modelId}` : undefined,
         reasoning: thinkLevel,
         maxTokens,
         temperature,

@@ -180,7 +180,7 @@ describe("Codex trajectory recorder", () => {
       reasoningTokens: 2_038,
       total: 724_402,
     };
-    const hostRecorder = createTrajectoryRuntimeRecorderForTest({
+    const hostRecorder = await createTrajectoryRuntimeRecorderForTest({
       sessionId: sessionTarget.sessionId,
       sessionKey: sessionTarget.sessionKey,
       sessionTarget,
@@ -312,7 +312,7 @@ describe("Codex trajectory recorder", () => {
         reason: "trajectory-field-size-limit",
       },
     });
-    expect(tool?.data?.authorization).toBeUndefined();
+    expect(tool?.data?.authorization).toBe(`Bearer ${"t".repeat(40)}`);
     expect(JSON.stringify(tool)).not.toContain(`token=${"t".repeat(40)}`);
     expect(completion?.data).toMatchObject({
       truncated: true,

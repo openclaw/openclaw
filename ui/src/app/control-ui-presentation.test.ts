@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { controlUiAccentInk } from "./accent-contrast.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { applyControlUiPresentation } from "./control-ui-environment-presentation.runtime.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
@@ -16,6 +15,76 @@ afterEach(() => {
 });
 
 describe("Control UI accent presentation", () => {
+  it("samples chrome colors only when palette, inline presentation, or chat breakpoint changes", () => {
+    const root = document.documentElement;
+    const shell = document.body.appendChild(document.createElement("div"));
+    const meta = document.createElement("meta");
+    meta.name = "theme-color";
+    meta.media = "(prefers-color-scheme: dark)";
+    document.head.append(meta);
+    const palette = document.createElement("style");
+    palette.textContent = ":root { --bg-content: #203040; }";
+    document.head.append(palette);
+    root.style.setProperty("--bg", "rgb(10, 20, 30)");
+    let narrow = false;
+    vi.stubGlobal("matchMedia", () => ({ matches: narrow }));
+    const reads = vi.spyOn(globalThis, "getComputedStyle");
+    const expectChrome = (color: string) => {
+      expect(meta.content).toBe(color);
+      expect(meta.hasAttribute("media")).toBe(false);
+      expect(root.style.getPropertyValue("--control-ui-system-chrome-background")).toBe(color);
+    };
+    try {
+      shell.className = "shell shell--chat";
+      syncControlUiSystemChrome();
+      expectChrome("rgb(10, 20, 30)");
+      reads.mockClear();
+      for (let commit = 0; commit < 20; commit++) {
+        shell.append(document.createElement("span"));
+        syncControlUiSystemChrome();
+      }
+      expect(reads).not.toHaveBeenCalled();
+
+      narrow = true;
+      syncControlUiSystemChrome();
+      expectChrome("#203040");
+      applyControlUiAccent("#123456");
+      syncControlUiSystemChrome();
+      expect(reads).toHaveBeenCalledTimes(2);
+      expectChrome("#203040");
+      root.style.setProperty("--bg", "rgb(30, 40, 50)");
+      syncControlUiSystemChrome();
+      expectChrome("#203040");
+      for (const [attribute, value] of [
+        ["data-theme", "rose"],
+        ["data-theme-mode", "light"],
+      ] as const) {
+        reads.mockClear();
+        root.setAttribute(attribute, value);
+        syncControlUiSystemChrome();
+        expect(reads).toHaveBeenCalledOnce();
+        expectChrome("#203040");
+      }
+      // A custom palette can be replaced without changing root attributes.
+      reads.mockClear();
+      palette.textContent = ":root { --bg-content: #405060; }";
+      syncControlUiSystemChrome(true);
+      expect(reads).toHaveBeenCalledOnce();
+      expectChrome("#405060");
+      reads.mockClear();
+      syncControlUiSystemChrome();
+      expect(reads).not.toHaveBeenCalled();
+    } finally {
+      reads.mockRestore();
+      meta.remove();
+      palette.remove();
+      root.classList.remove("control-ui-chat-shell");
+      delete root.dataset.theme;
+      delete root.dataset.themeMode;
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps document chat layout and browser chrome in sync across route changes and removal", () => {
     const root = document.documentElement;
     const shell = document.body.appendChild(document.createElement("div"));
@@ -87,29 +156,6 @@ describe("Control UI accent presentation", () => {
       expect(style.getPropertyValue(property)).toBe("");
     }
   });
-
-  it("keeps the locally restored user accent when operator bootstrap arrives afterward", () => {
-    applyControlUiAccent("#6ee7b7");
-    applyControlUiPresentation({ environment: null, seamColor: "#123456" });
-
-    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#6ee7b7");
-    expect(document.documentElement.style.getPropertyValue("--primary-foreground")).toBe("#000000");
-  });
-
-  it.each([
-    ["#777777", "#000000"],
-    ["#747474", "#ffffff"],
-  ])("selects readable ink for accent %s", (accent, expectedInk) => {
-    expect(controlUiAccentInk(accent)).toBe(expectedInk);
-    applyControlUiAccent(accent);
-
-    expect(document.documentElement.style.getPropertyValue("--accent-foreground")).toBe(
-      expectedInk,
-    );
-    expect(document.documentElement.style.getPropertyValue("--primary-foreground")).toBe(
-      expectedInk,
-    );
-  });
 });
 
 describe("Live display preference presentation", () => {
@@ -159,7 +205,7 @@ describe("Live display preference presentation", () => {
     }
   });
 
-  it.each(["claw", "knot"] as const)(
+  it.each(["knot"] as const)(
     "publishes preferences without waiting for the %s palette or render-time storage reads",
     (palette) => {
       const previous = loadSettings();

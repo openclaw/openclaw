@@ -2,9 +2,23 @@ import type { WorkerOperationHandlers } from "../state/worker-operation-registry
 import * as approval from "./device-pairing-approval.kernel.js";
 import * as core from "./device-pairing-core.kernel.js";
 import { devicePairingMutation } from "./device-pairing-dispatch.worker.js";
+import {
+  registerDevicePairingJoinCodeInWorker,
+  redeemDevicePairingJoinCodeInWorker,
+} from "./device-pairing-join-code.worker.js";
 import * as tokens from "./device-pairing-tokens.kernel.js";
 
 export const devicePairingOperations = {
+  "devicePairing.registerJoinCode": devicePairingMutation(
+    (input: Parameters<typeof registerDevicePairingJoinCodeInWorker>[1], { database }) =>
+      registerDevicePairingJoinCodeInWorker(database.db, input),
+    { publishPairing: false },
+  ),
+  "devicePairing.redeemJoinCode": devicePairingMutation(
+    (input: Parameters<typeof redeemDevicePairingJoinCodeInWorker>[1], { database }) =>
+      redeemDevicePairingJoinCodeInWorker(database.db, input),
+    { publishPairing: false },
+  ),
   "devicePairing.request": devicePairingMutation(
     (input: { request: Parameters<typeof core.requestDevicePairingInWorker>[0]; nowMs: number }) =>
       core.requestDevicePairingInWorker(input.request, input.nowMs),
@@ -17,14 +31,9 @@ export const devicePairingOperations = {
     core.removePairedDeviceInWorker(input.deviceId, input.nowMs),
   ),
   "devicePairing.pruneSilent": devicePairingMutation(
-    (
-      input: Omit<Parameters<typeof core.pruneSupersededSilentPairedDevicesInWorker>[0], "baseDir">,
-    ) => core.pruneSupersededSilentPairedDevicesInWorker(input),
+    core.pruneSupersededSilentPairedDevicesInWorker,
   ),
-  "devicePairing.removeRole": devicePairingMutation(
-    (input: Omit<Parameters<typeof core.removePairedDeviceRoleInWorker>[0], "baseDir">) =>
-      core.removePairedDeviceRoleInWorker(input),
-  ),
+  "devicePairing.removeRole": devicePairingMutation(core.removePairedDeviceRoleInWorker),
   "devicePairing.updateMetadata": devicePairingMutation(
     (input: {
       deviceId: string;
@@ -77,20 +86,8 @@ export const devicePairingOperations = {
       return result;
     },
   ),
-  "devicePairing.verifyToken": devicePairingMutation(
-    (input: Omit<Parameters<typeof tokens.verifyDeviceTokenInWorker>[0], "baseDir">) =>
-      tokens.verifyDeviceTokenInWorker(input),
-  ),
-  "devicePairing.ensureToken": devicePairingMutation(
-    (input: Omit<Parameters<typeof tokens.ensureDeviceTokenInWorker>[0], "baseDir">) =>
-      tokens.ensureDeviceTokenInWorker(input),
-  ),
-  "devicePairing.rotateToken": devicePairingMutation(
-    (input: Omit<Parameters<typeof tokens.rotateDeviceTokenInWorker>[0], "baseDir">) =>
-      tokens.rotateDeviceTokenInWorker(input),
-  ),
-  "devicePairing.revokeToken": devicePairingMutation(
-    (input: Omit<Parameters<typeof tokens.revokeDeviceTokenInWorker>[0], "baseDir">) =>
-      tokens.revokeDeviceTokenInWorker(input),
-  ),
+  "devicePairing.verifyToken": devicePairingMutation(tokens.verifyDeviceTokenInWorker),
+  "devicePairing.ensureToken": devicePairingMutation(tokens.ensureDeviceTokenInWorker),
+  "devicePairing.rotateToken": devicePairingMutation(tokens.rotateDeviceTokenInWorker),
+  "devicePairing.revokeToken": devicePairingMutation(tokens.revokeDeviceTokenInWorker),
 } satisfies WorkerOperationHandlers;

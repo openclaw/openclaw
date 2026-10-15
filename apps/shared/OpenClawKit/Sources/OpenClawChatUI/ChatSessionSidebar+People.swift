@@ -92,14 +92,14 @@ private struct ChatSidebarPeopleFacepile: View {
     }
 }
 
-private struct ChatSidebarPersonAvatar: View {
+struct ChatSidebarPersonAvatar: View {
     @Environment(\.openClawSidebarPeopleActions) private var actions
     @State private var image: NSImage?
     let person: OpenClawChatSidebarPeople.Person
     let size: CGFloat
 
     var body: some View {
-        Group {
+        ZStack {
             if let image {
                 Image(nsImage: image).resizable().scaledToFill()
             } else {
@@ -280,7 +280,7 @@ private struct ChatSidebarPersonRow: View {
     }
 }
 
-private struct ChatSidebarPersonCard: View {
+struct ChatSidebarPersonCard: View {
     @Environment(\.openClawSidebarPeopleActions) private var actions
     @State private var recentKeys: [String]?
     @FocusState private var focusedControl: String?
@@ -290,10 +290,18 @@ private struct ChatSidebarPersonCard: View {
     @Binding var focused: Bool
     let dismiss: () -> Void
 
+    var sessionRows: [OpenClawChatSessionEntry] {
+        // ui/src/components/person-activity-card.ts:46 reads loaded roster pages, not the conversation's first page.
+        if let owner = self.viewModel.sidebarData, let state = owner.queryState, state.page != nil {
+            return owner.project(state.pageIDs)
+        }
+        return self.viewModel.sessions
+    }
+
     var body: some View {
         let sessions = self.people.cardSessions(
-            for: self.person, sessions: self.viewModel.sessions, recentKeys: self.recentKeys)
-        let canCapture = self.viewModel.hasAppliedLiveSessions || !self.viewModel.sessions.isEmpty
+            for: self.person, sessions: self.sessionRows, recentKeys: self.recentKeys)
+        let canCapture = self.viewModel.hasAppliedLiveSessions || !self.sessionRows.isEmpty
         TimelineView(.periodic(from: .now, by: 1)) { context in
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {

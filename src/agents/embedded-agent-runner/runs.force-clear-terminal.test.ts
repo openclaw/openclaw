@@ -9,6 +9,7 @@ import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-reg
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   loadSessionEntry,
+  replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
@@ -45,7 +46,7 @@ function forceClear(settleMs = 0, key = sessionKey) {
 function seed(id = sessionId) {
   return upsertSessionEntryCore(
     { sessionKey, storePath },
-    { sessionId: id, updatedAt: Date.now(), status: "running" },
+    { sessionId: id, updatedAt: Date.now() },
   );
 }
 
@@ -86,7 +87,8 @@ describe("force-clear terminal state persistence", () => {
   it("defers followups until the old owner settles", async () => {
     // Keep owner ordering independent of the wall-clock drain deadline.
     vi.useFakeTimers({ toFake: ["Date"] });
-    const handle = createRunHandle(),
+    const cancelled = createDeferredCore();
+    const handle = createRunHandle({ abort: () => cancelled.resolve() }),
       operation = startReply(handle);
     const observed: boolean[] = [];
     runAfterReplyOperationClear(operation, () => {
@@ -95,6 +97,7 @@ describe("force-clear terminal state persistence", () => {
     const recovery = forceClear(100);
     expect(isReplyRunActiveForSessionId(sessionId)).toBe(true);
     expect(observed).toEqual([]);
+    await cancelled.promise;
     clearActiveEmbeddedRun(sessionId, handle, sessionKey);
     let settled = false;
     void recovery.then(() => {
@@ -165,7 +168,7 @@ describe("force-clear terminal state persistence", () => {
     });
     await upsertSessionEntryCore(
       { agentId: "ops", sessionKey: "global", storePath },
-      { sessionId, updatedAt: startedAt, startedAt, status: "running" },
+      { sessionId, updatedAt: startedAt, startedAt },
     );
     setActiveEmbeddedRun(sessionId, createRunHandle(), "global");
     await expect(forceClear(0, "global")).resolves.toMatchObject({ forceCleared: true });
@@ -190,7 +193,6 @@ describe("force-clear terminal state persistence", () => {
           sessionId: owner === agentId ? sessionId : "main-global",
           updatedAt: startedAt,
           startedAt,
-          status: "running",
           lifecycleRunId: `${owner}-run`,
         },
       );
@@ -219,9 +221,9 @@ describe("force-clear terminal state persistence", () => {
     expect(getActiveEmbeddedRunSnapshot(sessionId)).toBeUndefined();
     expect(loadSessionEntry({ agentId: "main", sessionKey: key })).toMatchObject({
       sessionId: "main-global",
-      status: "running",
       lifecycleRunId: "main-run",
     });
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key })?.status).toBeUndefined();
   });
 
   it("preserves a replacement session entry", async () => {
@@ -231,8 +233,8 @@ describe("force-clear terminal state persistence", () => {
     await expect(forceClear()).resolves.toMatchObject({ forceCleared: true });
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
       sessionId: "new-session",
-      status: "running",
     });
+    expect(loadSessionEntry({ sessionKey, storePath })?.status).toBeUndefined();
   });
 
   it.each([sessionId, "new-session"])(
@@ -250,7 +252,29 @@ describe("force-clear terminal state persistence", () => {
         forceCleared: replacementId !== sessionId,
       });
       expect(isEmbeddedAgentRunHandleActive(replacementId)).toBe(true);
-      expect(loadSessionEntry({ sessionKey, storePath })?.status).toBe("running");
+      expect(loadSessionEntry({ sessionKey, storePath })?.status).toBeUndefined();
+    },
+  );
+
+  it.each(["successor", "terminal"] as const)(
+    "preserves %s metadata committed during cancellation",
+    async (replacement) => {
+      const original = { sessionId, updatedAt: startedAt, startedAt, lifecycleRunId: "old-run" };
+      await upsertSessionEntryCore({ sessionKey, storePath }, original);
+      const current = {
+        ...original,
+        lifecycleRunId: replacement === "successor" ? "new-run" : original.lifecycleRunId,
+        ...(replacement === "terminal" ? { status: "done" as const, endedAt: startedAt } : {}),
+      };
+      const handle = createRunHandle({
+        runId: original.lifecycleRunId,
+        abort: () => replaceSessionEntrySync({ sessionKey, storePath }, current),
+      });
+      setActiveEmbeddedRun(sessionId, handle, sessionKey);
+      await expect(forceClear()).resolves.toMatchObject({ forceCleared: true });
+      const entry = loadSessionEntry({ sessionKey, storePath });
+      expect(entry).toMatchObject(current);
+      expect(entry?.status).toBe(current.status);
     },
   );
 });

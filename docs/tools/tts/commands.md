@@ -25,6 +25,10 @@ When `tts.auto` is `"tagged"`, **directives are required** to trigger
 audio. Streaming block delivery strips directives from visible text before the
 channel sees them, even when split across adjacent blocks.
 
+A reply can consist entirely of a nonempty `[[tts:text]]...[[/tts:text]]`
+block. No visible text prefix is required, including when the model also
+returns reasoning.
+
 `provider=...` is ignored unless `modelOverrides.allowProvider: true`. When a
 reply declares `provider=...`, the other keys in that directive are parsed
 only by that provider; unsupported keys are stripped and reported as TTS

@@ -8,7 +8,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Devices bindings during Settings reload" });
 const requireRecord = createRequireRecord("record", "expected-object-value");
 const config = {
-  agents: { entries: { main: { default: true } } },
+  agents: { entries: { main: {} } },
   tools: { exec: { node: "disk-node" } },
 };
 const snapshot = {

@@ -7,7 +7,10 @@ import {
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
-import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js";
+import {
+  createTerminalToolPresentationTracker,
+  resolveSettledTurnFinalizationRequest,
+} from "./terminal-resolution.js";
 
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "The previous assistant turn completed its tool calls but did not produce a user-visible answer. Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
@@ -133,7 +136,7 @@ describe("resolveSettledTurnFinalizationRequest", () => {
   it("preserves optional authored silence after a settled tool failure", () => {
     const toolAssistant = buildEmbeddedRunnerAssistant({
       stopReason: "toolUse",
-      content: [{ type: "toolCall", id: "tool-rejected", name: "tool_call", arguments: {} }],
+      content: [{ type: "toolCall", id: "tool-rejected", name: "dispatch_action", arguments: {} }],
     });
     const silentAssistant = buildEmbeddedRunnerAssistant({
       content: [{ type: "text", text: "NO_REPLY" }],
@@ -144,14 +147,25 @@ describe("resolveSettledTurnFinalizationRequest", () => {
       currentAttemptAssistant: silentAssistant,
       messagesSnapshot: [
         toolAssistant,
-        makeTextToolResult("tool-rejected", "tool_call", "Required argument missing", true, 0),
+        makeTextToolResult(
+          "tool-rejected",
+          "dispatch_action",
+          "Required argument missing",
+          true,
+          0,
+        ),
         silentAssistant,
       ],
       toolMetas: [
-        { toolName: "tool_call", toolCallId: "tool-rejected", isError: true, replaySafe: true },
+        {
+          toolName: "dispatch_action",
+          toolCallId: "tool-rejected",
+          isError: true,
+          replaySafe: true,
+        },
       ],
       itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-      lastToolError: { toolName: "tool_call", error: "Required argument missing" },
+      lastToolError: { toolName: "dispatch_action", error: "Required argument missing" },
     });
     const request = (terminalReplyExpectation: "required" | "optional") =>
       resolveSettledTurnFinalizationRequest({
@@ -304,5 +318,28 @@ describe("resolveSettledTurnFinalizationRequest", () => {
       buildEmbeddedRunnerAssistant({ content: [{ type: "text", text: finalAnswer }] }),
     );
     expect(request([{ text: finalAnswer }])).toBeNull();
+  });
+});
+
+describe("terminal presentation and delivery state", () => {
+  it("carries presentation across retries until a newer tool outcome replaces it", () => {
+    const tracker = createTerminalToolPresentationTracker();
+    const firstOrdinal = tracker.allocateOrdinal();
+    tracker.observe({
+      toolCallOrdinal: firstOrdinal,
+      terminalPresentation: "Fetched https://example.com",
+    });
+
+    expect(tracker.read()).toBe("Fetched https://example.com");
+
+    const retryOrdinal = tracker.allocateOrdinal();
+    expect(tracker.read()).toBe("Fetched https://example.com");
+    tracker.observe({ toolCallOrdinal: retryOrdinal });
+    tracker.observe({
+      toolCallOrdinal: firstOrdinal,
+      terminalPresentation: "stale presentation",
+    });
+
+    expect(tracker.read()).toBeUndefined();
   });
 });

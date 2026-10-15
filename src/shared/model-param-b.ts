@@ -9,9 +9,6 @@ export function inferParamBFromIdOrName(text: string): number | null {
   let best: number | null = null;
   for (const match of matches) {
     const numRaw = match[1];
-    if (!numRaw) {
-      continue;
-    }
     const value = Number(numRaw);
     if (!Number.isFinite(value) || value <= 0) {
       continue;

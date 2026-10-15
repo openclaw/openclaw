@@ -34,6 +34,7 @@ type SidebarSessionListOwner = {
   sessionsResult: SessionListSnapshot["result"];
   sessionsAgentId: SessionListSnapshot["agentId"];
   sessionsLoading: boolean;
+  sessionsStartupPending?: boolean;
   sessionMutationError: string | null;
   expandedAgentId(): string;
   sessionListQuery(agentId: string): SessionListOptions;
@@ -63,12 +64,10 @@ function pruneSidebarAgentSessionCaches(
   agentIds: readonly string[],
 ): void {
   const retainedAgentIds = new Set(agentIds.map(normalizeAgentId));
-  for (const agentId of Object.keys(owner.sessionResultsByAgent)) {
-    if (!retainedAgentIds.has(agentId)) {
-      const next = { ...owner.sessionResultsByAgent };
-      delete next[agentId];
-      owner.sessionResultsByAgent = next;
-    }
+  const entries = Object.entries(owner.sessionResultsByAgent);
+  const retained = entries.filter(([agentId]) => retainedAgentIds.has(agentId));
+  if (retained.length !== entries.length) {
+    owner.sessionResultsByAgent = Object.fromEntries(retained);
   }
   if (owner.sessionsAgentId && !retainedAgentIds.has(normalizeAgentId(owner.sessionsAgentId))) {
     owner.sessionsResult = null;
@@ -111,11 +110,14 @@ export function hasSidebarListFilter(owner: SidebarSessionQueryOwner): boolean {
 export function sidebarSessionListQuery(owner: SidebarSessionQueryOwner, agentId: string) {
   const { ownerId, involvingMe } = owner.sidebarSessionOwnerFilter();
   return {
+    source: "sidebar",
+    excludeDock: true,
     ownerId: involvingMe ? undefined : ownerId || undefined,
     involvingMe: involvingMe || undefined,
-    agentId,
+    agentId: ownerId ? undefined : agentId,
     archivedFilter: owner.sidebarSessionStatusFilter(),
     limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+    rowMode: "sidebar",
     includeDerivedTitles: true,
     includeLastMessage: true,
   } as const;
@@ -127,6 +129,7 @@ export function publishSidebarSessionList(
 ): void {
   owner.sessionsResult = snapshot.result;
   owner.sessionsAgentId = snapshot.agentId;
+  owner.sessionsStartupPending = snapshot.startupPending === true;
   if (snapshot.result && snapshot.agentId) {
     const agentId = normalizeAgentId(snapshot.agentId);
     if (owner.sessionResultsByAgent[agentId] !== snapshot.result) {
@@ -158,6 +161,7 @@ export function subscribeFilteredSidebarSessions(
   apply(sessions.listSnapshot(scope));
   return () => {
     unsubscribe();
+    owner.sessionsStartupPending = false;
     publishSidebarSessionError(owner, null, "list");
   };
 }
@@ -191,25 +195,35 @@ export function scheduleFilteredSidebarSessions(
 
 export function refreshSidebarSessionList(
   owner: SidebarSessionListOwner,
-  agentId: string | null,
-  append = false,
+  {
+    agentId,
+    append = false,
+    affectedAgentId,
+  }: {
+    agentId?: string | null;
+    append?: boolean;
+    affectedAgentId?: string;
+  },
 ): Promise<void> {
   const result = owner.sessionsResult;
+  const query = owner.sessionListQuery(agentId ?? owner.expandedAgentId());
   // An omitted cursor falls back to accumulated rows; an explicit null is terminal.
   const offset = result?.nextOffset === undefined ? result?.sessions.length : result.nextOffset;
   if (
     !owner.context?.sessions ||
-    !agentId ||
+    (affectedAgentId !== undefined &&
+      query.agentId !== undefined &&
+      normalizeAgentId(affectedAgentId) !== normalizeAgentId(query.agentId)) ||
     (append &&
       (owner.sessionsLoading ||
         !result?.hasMore ||
         typeof offset !== "number" ||
-        normalizeAgentId(agentId) !== normalizeAgentId(owner.expandedAgentId())))
+        query.agentId !== owner.sessionListQuery(owner.expandedAgentId()).agentId))
   ) {
     return Promise.resolve();
   }
   return owner.context.sessions.refreshList({
-    ...owner.sessionListQuery(agentId),
+    ...query,
     ...(append && typeof offset === "number" ? { offset, append: true } : {}),
     force: true,
   });

@@ -61,11 +61,7 @@ const DEFAULT_DIFFS_TOOL_DEFAULTS: DiffToolDefaults = {
   ttlSeconds: 1800,
 };
 
-type DiffsPluginSecurityConfig = {
-  allowRemoteViewer: boolean;
-};
-
-const DEFAULT_DIFFS_PLUGIN_SECURITY: DiffsPluginSecurityConfig = {
+const DEFAULT_DIFFS_PLUGIN_SECURITY = {
   allowRemoteViewer: false,
 };
 
@@ -234,7 +230,7 @@ export function resolveDiffsPluginDefaults(config: unknown): DiffToolDefaults {
   };
 }
 
-export function resolveDiffsPluginSecurity(config: unknown): DiffsPluginSecurityConfig {
+export function resolveDiffsPluginSecurity(config: unknown) {
   return {
     allowRemoteViewer:
       asOptionalRecord(asOptionalRecord(config)?.security)?.allowRemoteViewer === true,
@@ -290,19 +286,9 @@ function normalizeTtlSeconds(ttlSeconds?: number): number {
   return clampInt(asFiniteNumber(ttlSeconds) ?? DEFAULT_DIFFS_TOOL_DEFAULTS.ttlSeconds, 1, 21_600);
 }
 
-export function resolveDiffImageRenderOptions(params: {
-  defaults: DiffFileDefaults;
-  fileFormat?: DiffOutputFormat;
-  fileQuality?: DiffImageQualityPreset;
-  fileScale?: number;
-  fileMaxWidth?: number;
-}): {
-  format: DiffOutputFormat;
-  qualityPreset: DiffImageQualityPreset;
-  scale: number;
-  maxWidth: number;
-  maxPixels: number;
-} {
+export function resolveDiffImageRenderOptions(
+  params: Partial<DiffFileDefaults> & { defaults: DiffFileDefaults },
+) {
   const format = normalizeFileFormat(params.fileFormat ?? params.defaults.fileFormat);
   const qualityOverrideProvided = params.fileQuality !== undefined;
   const qualityPreset = normalizeFileQuality(params.fileQuality ?? params.defaults.fileQuality);

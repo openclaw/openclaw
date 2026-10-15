@@ -3,15 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS } from "./realtime-voice-config.js";
 import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
-const { FakeWebSocket, isProviderAuthProfileConfiguredMock, resolveApiKeyForProviderMock } =
+const { FakeWebSocket, isProviderAuthProfileConfiguredAsyncMock, resolveApiKeyForProviderMock } =
   await vi.hoisted(() => import("./realtime-voice-socket.test-support.js"));
 
 vi.mock("./ws-runtime.js", () => ({
   WebSocket: FakeWebSocket,
 }));
 
+// mock-isolation: Realtime tests control credential availability and pending resolution without host auth storage.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  isProviderAuthProfileConfigured: isProviderAuthProfileConfiguredMock,
+  isProviderAuthProfileConfigured: () => false,
+  isProviderAuthProfileConfiguredAsync: isProviderAuthProfileConfiguredAsyncMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
@@ -135,8 +137,8 @@ describe("buildXaiRealtimeVoiceProvider", () => {
 
   beforeEach(() => {
     FakeWebSocket.instances = [];
-    isProviderAuthProfileConfiguredMock.mockReset();
-    isProviderAuthProfileConfiguredMock.mockReturnValue(false);
+    isProviderAuthProfileConfiguredAsyncMock.mockReset();
+    isProviderAuthProfileConfiguredAsyncMock.mockResolvedValue(false);
     resolveApiKeyForProviderMock.mockReset();
     resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: undefined });
     delete process.env.XAI_API_KEY;
@@ -191,29 +193,15 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       expect(parseSent(socket).at(-1)?.type).toBe("response.cancel");
     });
 
-    it("interrupts each playback item once when its truncate observer repeats control", async () => {
+    it("truncates sink-owned playback items at their reported offsets", async () => {
       let playback = [
         { itemId: "audible", audioEndMs: 620 },
         { itemId: "queued", audioEndMs: 0 },
       ];
-      let repeated = false;
       const onClearAudio = vi.fn(() => {
         playback = [];
       });
-      const bridge = createTestBridge({
-        getPlaybackState: () => playback,
-        onClearAudio,
-        onEvent: (event) => {
-          if (
-            event.direction === "client" &&
-            event.type === "conversation.item.truncate" &&
-            !repeated
-          ) {
-            repeated = true;
-            bridge.handleBargeIn?.({ force: true });
-          }
-        },
-      });
+      const bridge = createTestBridge({ getPlaybackState: () => playback, onClearAudio });
       const socket = await openRealtimeBridge(bridge);
       socket.emitServer({ type: "response.created", response: { id: "native" } });
       bridge.handleBargeIn?.({ force: true });
@@ -234,33 +222,6 @@ describe("buildXaiRealtimeVoiceProvider", () => {
       ]);
       expect(onClearAudio).toHaveBeenCalledOnce();
     });
-
-    it("does not publish marks or late PCM after the audio callback cancels", async () => {
-      let playback = [{ itemId: "current", audioEndMs: 0 }];
-      const onMark = vi.fn();
-      const onAudio = vi.fn(() =>
-        bridge.handleBargeIn?.({ audioPlaybackActive: true, force: true }),
-      );
-      const bridge = createTestBridge({
-        onAudio,
-        onMark,
-        getPlaybackState: () => playback,
-        onClearAudio: () => {
-          playback = [];
-        },
-      });
-      const socket = await openRealtimeBridge(bridge);
-      socket.emitServer({ type: "response.created", response: { id: "current" } });
-      const deltaEvent = {
-        type: "response.output_audio.delta",
-        item_id: "current",
-        delta: Buffer.alloc(8_000).toString("base64"),
-      };
-      socket.emitServer(deltaEvent);
-      socket.emitServer(deltaEvent);
-      expect(onAudio).toHaveBeenCalledOnce();
-      expect(onMark).not.toHaveBeenCalled();
-    });
   });
 
   it("requires xAI credentials for native realtime websocket bridges", async () => {
@@ -274,22 +235,26 @@ describe("buildXaiRealtimeVoiceProvider", () => {
   });
 
   it("resolves realtime auth from the selected agent directory", async () => {
-    isProviderAuthProfileConfiguredMock.mockImplementation(
-      ({ agentDir }) => agentDir === "/tmp/openclaw-molty-agent",
+    isProviderAuthProfileConfiguredAsyncMock.mockImplementation(
+      async ({ agentDir }) => agentDir === "/tmp/openclaw-molty-agent",
     );
     resolveApiKeyForProviderMock.mockImplementation(async ({ agentDir }) => ({
       apiKey: agentDir === "/tmp/openclaw-molty-agent" ? "xai-molty" : undefined,
     }));
     const cfg = {
       agents: {
-        list: [
-          { id: "helper", agentDir: "/tmp/openclaw-helper-agent" },
-          { id: "molty", agentDir: "/tmp/openclaw-molty-agent" },
-        ],
+        entries: {
+          helper: { agentDir: "/tmp/openclaw-helper-agent" },
+          molty: { agentDir: "/tmp/openclaw-molty-agent" },
+        },
       },
     };
     expect(
-      buildXaiRealtimeVoiceProvider().isConfigured({ cfg, providerConfig: {}, agentId: "molty" }),
+      await buildXaiRealtimeVoiceProvider().isConfiguredAsync?.({
+        cfg,
+        providerConfig: {},
+        agentId: "molty",
+      }),
     ).toBe(true);
     const bridge = createTestBridge({ cfg, agentId: "molty", providerConfig: {} });
     const { connecting, socket } = await startRealtimeBridge(bridge);

@@ -1,3 +1,4 @@
+import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -6,7 +7,7 @@ import type { SessionTreeEntry } from "../types.js";
 
 const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
 export const SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY = "openclawSyntheticMissingToolResult";
-export const DEFAULT_MISSING_TOOL_RESULT_TEXT =
+export const LEGACY_MISSING_TOOL_RESULT_TEXT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 
 type ToolCallLike = {
@@ -169,7 +170,7 @@ export function isSyntheticMissingToolResult(message: {
     Array.isArray(content) &&
     content.some((block) => {
       const record = asOptionalObjectRecord(block);
-      return record?.type === "text" && record.text === DEFAULT_MISSING_TOOL_RESULT_TEXT;
+      return record?.type === "text" && record.text === LEGACY_MISSING_TOOL_RESULT_TEXT;
     })
   );
 }

@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { assert, beforeAll, describe, expect, it, vi } from "vitest";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
-import { readTestSelectorSourceFacts } from "../../scripts/lib/test-selector-source-facts.mts";
+import {
+  readRuntimeWorkerDescriptorReads,
+  readTestSelectorSourceFacts,
+} from "../../scripts/lib/test-selector-source-facts.mts";
 import {
   listVitestRuntimeConsumerFiles,
   resolveVitestPretestBuildMode,
@@ -15,7 +18,6 @@ import { resolveVitestRuntimeCliSelections } from "../../scripts/lib/vitest-runt
 import { resolveShardTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import {
-  applyDefaultVitestCachePaths,
   applyDefaultVitestNoOutputTimeout,
   applyFullExtensionsHeapBudget,
   buildFullSuiteVitestRunPlans,
@@ -52,6 +54,7 @@ import {
   isSharedVitestExcludedPath,
   matchesVitestCliSelection,
 } from "../vitest/vitest.pattern-file.ts";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
 const normalizeRepoPath = toRepoPath;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
@@ -78,12 +81,10 @@ describe("Windows CI partitions", () => {
     assert(first && second);
     const targets = [...first.targets, ...second.targets];
     expect(new Set(targets).size).toBe(targets.length);
-    // Tooling and infra own shared fixtures; the extension catch-all retains
-    // separate plugin processes. The other projects share setup within one part.
+    // Tooling and infra own shared fixtures. Other projects share setup within one part.
     expect([...first.configs].filter((config) => second.configs.has(config))).toEqual([
       "test/vitest/vitest.tooling.config.ts",
       "test/vitest/vitest.infra.config.ts",
-      "test/vitest/vitest.extensions.config.ts",
     ]);
   });
 });
@@ -119,34 +120,48 @@ describe("test runtime prerequisites", () => {
     ).toBe(expected);
   });
 
-  it("prepares direct lifecycle selection under test/vitest/vitest.full-agentic.config.ts", () => {
-    const config = "test/vitest/vitest.full-agentic.config.ts";
-    for (const [file, expected] of [
-      ["src/gateway/server-sidecar-retention.test.ts", "runtime"],
-      ["src/gateway/server-request-context.test.ts", undefined],
-    ] as const) {
-      const selections = resolveVitestRuntimeCliSelections(config, ["run", file], {});
-      expect(resolveVitestPretestBuildMode(selections), file).toBe(expected);
-    }
-  });
-
   const catalogFile = "test/plugins/codex-model-catalog.gateway.test.ts";
   const freshnessFile = "src/gateway/server-methods/models-list.freshness.integration.test.ts";
   const scopedFreshnessFile = "**/models-list.freshness.integration.test.ts";
   it.each([
+    ["full-agentic", ["src/gateway/server-sidecar-retention.test.ts"], "runtime"],
+    ["full-agentic", ["src/gateway/server-request-context.test.ts"], undefined],
     ["gateway-database-workers", [], "runtime"],
     ["gateway-database-workers", [freshnessFile], "runtime"],
     ["gateway-database-workers", ["models-list.freshness.integration"], "runtime"],
     ["gateway-database-workers", [freshnessFile, "--exclude", scopedFreshnessFile], undefined],
     ["gateway-methods", [catalogFile], undefined],
     ["gateway", [catalogFile, "--exclude", catalogFile], undefined],
-  ] as const)("binds %s runtime prerequisites to their owner for %s", (project, args, expected) => {
-    const selections = resolveVitestRuntimeCliSelections(
-      `test/vitest/vitest.${project}.config.ts`,
-      ["run", ...args],
-      {},
-    );
-    expect(resolveVitestPretestBuildMode(selections)).toBe(expected);
+    ["bundled", ["--exclude", "src/plugins/loader.test.ts"], undefined],
+    ["extensions", ["--exclude", "deepinfra/**"], "runtime"],
+    [
+      "extensions",
+      ["--exclude", "deepinfra/**", "--exclude", "google-meet/**", "--exclude", "file-transfer/**"],
+      undefined,
+    ],
+    ["tui-pty", ["--exclude", "tui/tui-session-identity-pty.e2e.test.ts"], undefined],
+    ["tui-pty", ["--exclude", "tui/tui-text-wrap-pty.e2e.test.ts"], "runtime"],
+    ["gateway-core", ["--exclude", "gateway-*.test.ts"], "runtime"],
+    ["gateway-core", ["--exclude", "gateway*.test.ts"], undefined],
+    ["gateway", ["--exclude", "gateway-*.test.ts"], "runtime"],
+    ["infra", ["--exclude", "**/gateway-codex-delivery-cache.test.ts"], "runtime"],
+    [
+      "agents-core",
+      resolveVitestRuntimeConfigScopes("test/vitest/vitest.agents-core.config.ts").flatMap(
+        ({ file, dir }) => ["--exclude", path.posix.relative(dir, file)],
+      ),
+      undefined,
+    ],
+  ] as const)("binds %s prerequisites to CLI selection %j", (project, args, expected) => {
+    expect(
+      resolveVitestPretestBuildMode(
+        resolveVitestRuntimeCliSelections(
+          `test/vitest/vitest.${project}.config.ts`,
+          ["run", ...args],
+          {},
+        ),
+      ),
+    ).toBe(expected);
   });
 
   it("keeps Gateway worker runtime selection rooted at the repository for src/gateway/setup-inference.first-signin.integration.test.ts", () => {
@@ -164,31 +179,6 @@ describe("test runtime prerequisites", () => {
         resolveVitestRuntimeCliSelections(config, ["run", file, "--exclude", file], {}),
       ),
     ).toBeUndefined();
-  });
-
-  it.each([
-    ["bundled", ["src/plugins/loader.test.ts"], undefined],
-    ["extensions", ["deepinfra/**"], "runtime"],
-    ["extensions", ["deepinfra/**", "google-meet/**", "file-transfer/**"], undefined],
-    ["tui-pty", ["tui/tui-session-identity-pty.e2e.test.ts"], undefined],
-    ["tui-pty", ["tui/tui-text-wrap-pty.e2e.test.ts"], "runtime"],
-    ["gateway-core", ["gateway-*.test.ts"], undefined],
-    ["gateway", ["gateway-*.test.ts"], "runtime"],
-    ["tooling", ["**/gateway-codex-delivery-cache.test.ts"], "runtime"],
-    [
-      "agents-core",
-      resolveVitestRuntimeConfigScopes("test/vitest/vitest.agents-core.config.ts").map(
-        ({ file, dir }) => path.posix.relative(dir, file),
-      ),
-      undefined,
-    ],
-  ] as const)("keeps %s selection scoped after excluding %s", (project, exclude, expected) => {
-    const selections = resolveVitestRuntimeCliSelections(
-      `test/vitest/vitest.${project}.config.ts`,
-      ["run", ...exclude.flatMap((pattern) => ["--exclude", pattern])],
-      {},
-    );
-    expect(resolveVitestPretestBuildMode(selections)).toBe(expected);
   });
 
   it.each([
@@ -383,36 +373,41 @@ describe("scripts/test-projects changed-target routing", () => {
     ).toStrictEqual([]);
   });
 
-  it("records broad fallback paths skipped by focused changed mode", () => {
-    expect(
-      resolveChangedTestTargetPlan([
-        "test/vitest/vitest.shared.config.ts",
-        "src/utils/provider-utils.ts",
-      ]),
-    ).toEqual({
-      mode: "targets",
-      skippedBroadFallbackPaths: ["test/vitest/vitest.shared.config.ts"],
-      targets: ["src/utils/provider-utils.test.ts"],
-    });
-  });
-
-  it("keeps changed mode precise for global config and source edits", () => {
-    expect(resolveChangedTestTargetPlan(["package.json", "src/commands/channels.add.ts"])).toEqual({
-      mode: "targets",
-      skippedBroadFallbackPaths: ["package.json"],
-      targets: ["src/commands/channels.add.test.ts"],
-    });
-  });
-
   it.each([
-    ["src/plugin-sdk/provider-entry.ts", "src/plugin-sdk/provider-entry.test.ts"],
     [
-      "extensions/qa-lab/src/scenario-catalog.test.ts",
-      "extensions/qa-lab/src/scenario-catalog.test.ts",
+      "test/vitest/vitest.shared.config.ts",
+      "src/utils/provider-utils.ts",
+      "src/utils/provider-utils.test.ts",
     ],
-    ["ui/src/components/markdown.test.ts", "ui/src/components/markdown.test.ts"],
-  ])("retains the precise owner for changed %s", (changedPath, target) => {
-    expectChangedTargets([changedPath], [target]);
+    ["package.json", "src/commands/channels.add.ts", "src/commands/channels.add.test.ts"],
+  ])("records skipped broad fallback %s beside precise source %s", (fallback, source, target) => {
+    expect(resolveChangedTestTargetPlan([fallback, source])).toEqual({
+      mode: "targets",
+      skippedBroadFallbackPaths: [fallback],
+      targets: [target],
+    });
+  });
+
+  it.each<[string[], string[]]>([
+    [["src/plugin-sdk/provider-entry.ts"], ["src/plugin-sdk/provider-entry.test.ts"]],
+    [
+      ["extensions/qa-lab/src/scenario-catalog.test.ts"],
+      ["extensions/qa-lab/src/scenario-catalog.test.ts"],
+    ],
+    [["ui/src/components/markdown.test.ts"], ["ui/src/components/markdown.test.ts"]],
+    [["scripts/crabbox-wrapper.mts"], ["test/scripts/crabbox-wrapper.test.ts"]],
+    [
+      ["scripts/check-composite-action-input-interpolation.py"],
+      ["test/scripts/check-composite-action-input-interpolation.test.ts"],
+    ],
+    [["scripts/check-no-conflict-markers.mjs"], ["test/scripts/check-no-conflict-markers.test.ts"]],
+    [
+      ["scripts/lib/restart-mac-gateway.sh"],
+      ["test/scripts/build-and-run-mac.test.ts", "test/scripts/restart-mac.test.ts"],
+    ],
+    [["src/gateway/gateway-codex-harness.live.test.ts"], []],
+  ])("retains precise changed owners for %j", (paths, targets) => {
+    expectChangedTargets(paths, targets);
   });
 
   it("discovers conventional nested, dashed and basename script owners for .mts", () => {
@@ -460,10 +455,6 @@ describe("scripts/test-projects changed-target routing", () => {
       buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => targets),
       { config: "test/vitest/vitest.tooling.config.ts" },
     );
-  });
-
-  it("keeps Crabbox runner script edits on their regression tests", () => {
-    expectChangedTargets(["scripts/crabbox-wrapper.mts"], ["test/scripts/crabbox-wrapper.test.ts"]);
   });
 
   it("unions semantic workflow owners with bounded direct references", () => {
@@ -547,18 +538,6 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it("keeps workflow helper guard edits on their regression tests", () => {
-    expectChangedTargets(
-      ["scripts/check-composite-action-input-interpolation.py"],
-      ["test/scripts/check-composite-action-input-interpolation.test.ts"],
-    );
-
-    expectChangedTargets(
-      ["scripts/check-no-conflict-markers.mjs"],
-      ["test/scripts/check-no-conflict-markers.test.ts"],
-    );
-  });
-
   it("leaves actionlint validation external while retaining config consumers", () => {
     for (const withConsumers of [false, true]) {
       withTinyGitRepo(
@@ -608,15 +587,61 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it("routes explicit source files through precise owner tests before broad globs", () => {
-    expectSingleVitestRunPlan(buildVitestRunPlans(["src/gateway/server-startup-early.ts"]), {
-      config: "test/vitest/vitest.gateway-server.config.ts",
-      includePatterns: ["src/gateway/server-startup-early.test.ts"],
+  it.each<{
+    file: string;
+    owner: string;
+    source?: string;
+    inventory?: readonly string[];
+  }>([
+    {
+      file: "src/gateway/server-startup-early.test.ts",
+      owner: "gateway-server",
+      source: "src/gateway/server-startup-early.ts",
+    },
+    {
+      file: "src/commands/onboarding-plugin-install.test.ts",
+      owner: "commands",
+      source: "src/commands/onboarding-plugin-install.ts",
+    },
+    { file: "src/agents/cli-runner/bundle-mcp.user-config.test.ts", owner: "agents-core-isolated" },
+    {
+      file: "src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts",
+      owner: "agents-spawn-production-boundary",
+    },
+    { file: "src/agents/agent-command-local.test.ts", owner: "cli-process" },
+    ...[
+      "src/gateway/health/collector.queue-health.test.ts",
+      "src/gateway/provider-auth-account-relogin.persistence.integration.test.ts",
+      "src/gateway/server-methods/server-methods.test.ts",
+    ].map((file) => ({
+      file,
+      owner: "gateway-database-workers",
+      inventory: gatewayDatabaseWorkerTestFiles,
+    })),
+    ...[
+      "src/agents/command/session-store.test.ts",
+      "src/agents/embedded-agent-runner/run-entry.cyber-failover.runner.test.ts",
+      "src/agents/models-config.providers.endpoint.test.ts",
+      "src/agents/models-config.root-authorship.test.ts",
+      "src/agents/models-config.runtime-source-snapshot.test.ts",
+      "src/agents/models-config.write-serialization.test.ts",
+      "src/agents/plugin-model-catalog-auth.test.ts",
+      "src/agents/plugin-model-catalog.test.ts",
+      "src/agents/prepared-model-catalog-worker.agent-database.integration.test.ts",
+      "src/agents/prepared-model-catalog-worker.heap.integration.test.ts",
+      "src/agents/prepared-model-catalog-worker.workspace-heap.integration.test.ts",
+      "src/state/openclaw-state-db.test.ts",
+      "src/worker/worker.runtime.test.ts",
+      "test/cron-conversation-delivery.codex.integration.test.ts",
+    ].map((file) => ({ file, owner: "infra", inventory: databaseWorkerCoreTestFiles })),
+  ])("routes $file to $owner", ({ file, owner, source, inventory }) => {
+    expectSingleVitestRunPlan(buildVitestRunPlans([source ?? file]), {
+      config: `test/vitest/vitest.${owner}.config.ts`,
+      includePatterns: [file],
     });
-    expectSingleVitestRunPlan(buildVitestRunPlans(["src/commands/onboarding-plugin-install.ts"]), {
-      config: "test/vitest/vitest.commands.config.ts",
-      includePatterns: ["src/commands/onboarding-plugin-install.test.ts"],
-    });
+    if (inventory) {
+      expect(inventory.filter((entry) => entry === file)).toEqual([file]);
+    }
   });
 
   it.each(["src/selector/one.test.ts", "./src/selector/one.test.ts"])(
@@ -706,6 +731,104 @@ describe("scripts/test-projects changed-target routing", () => {
         expect(spec?.env.OPENCLAW_VITEST_INCLUDE_FILE).not.toBe(borrowed);
         expect(fs.existsSync(borrowed)).toBe(false);
       });
+    },
+  );
+
+  it.each([
+    { name: "Git inventory", withRepo: withTinyGitRepo },
+    { name: "filesystem inventory", withRepo: withTinyFileTree },
+  ])(
+    "attributes runtime-worker fixtures to their executing descriptor readers ($name)",
+    ({ withRepo }) => {
+      const aggregator = "src/workers/entrypoints.test-support.ts";
+      const dep = "src/workers/fixtures/dep-a.ts";
+      const readerA = "src/workers/read-a.test.ts";
+      const readerAll = "src/workers/read-all.test.ts";
+      const readerB = "src/workers/read-b.test.ts";
+      const readerSingle = "src/workers/read-single.test.ts";
+      const readerSingleChild = "src/workers/read-single-child.test.ts";
+      const readerInline = "src/workers/read-inline.test.ts";
+      const readerManifest = "test/scripts/manifest.test.ts";
+      const expected = [readerA, readerAll];
+      withRepo(
+        {
+          [aggregator]: `export const group = {
+  a: { currentModuleUrl: import.meta.url, sourceWorkerName: "fixtures/a.test-support" },
+  b: { sourceWorkerName: "fixtures/b.test-support", currentModuleUrl: import.meta.url },
+} as const;
+export const single = {
+  currentModuleUrl: import.meta.url, sourceWorkerName: "fixtures/single.test-support",
+  child: { currentModuleUrl: import.meta.url, sourceWorkerName: "fixtures/b.test-support" },
+} as const;`,
+          "src/workers/fixtures/a.test-support.ts": 'import "./dep-a.js";',
+          "src/workers/fixtures/b.test-support.ts": 'import "./dep-b.js";',
+          "src/workers/fixtures/single.test-support.ts": 'import "./dep-single.js";',
+          "src/workers/fixtures/inline.test-support.ts": 'import "./dep-inline.js";',
+          [dep]: "export {};",
+          "src/workers/fixtures/dep-b.ts": "export {};",
+          "src/workers/fixtures/dep-single.ts": "export {};",
+          "src/workers/fixtures/dep-inline.ts": "export {};",
+          [readerA]:
+            'import { group as workers } from "./entrypoints.test-support.js"; void workers.a;',
+          [readerB]: 'import { group } from "./entrypoints.test-support.js"; void group.b;',
+          [readerAll]:
+            'import { group } from "./entrypoints.test-support.js"; Object.values(group);',
+          [readerSingle]:
+            'import { single } from "./entrypoints.test-support.js"; void single.distWorkerPath;',
+          [readerSingleChild]:
+            'import { single } from "./entrypoints.test-support.js"; void single.child;',
+          [readerInline]: `const worker = {
+  currentModuleUrl: import.meta.url, sourceWorkerName: "fixtures/inline.test-support",
+}; void worker;`,
+          "scripts/lib/manifest.mts":
+            'import { group } from "../../src/workers/entrypoints.test-support.js"; Object.values(group);',
+          [readerManifest]: 'import "../../scripts/lib/manifest.mjs";',
+        },
+        (cwd) => {
+          const options = { tooling: true, resolveAliases: true, runtimeOnly: true };
+          // The aggregator may already be visited when its executing consumer is reached.
+          expect(hasImportGraphImpactOnTargets([dep], [aggregator, readerA], cwd, options)).toBe(
+            true,
+          );
+          expect(hasImportGraphImpactOnTargets([dep], [readerAll], cwd, options)).toBe(true);
+          for (const unrelated of [
+            readerB,
+            readerSingle,
+            readerSingleChild,
+            readerInline,
+            readerManifest,
+          ]) {
+            expect(hasImportGraphImpactOnTargets([dep], [unrelated], cwd, options), unrelated).toBe(
+              false,
+            );
+          }
+          expect(resolveChangedTestTargetPlan([dep], { cwd, broad: true })).toEqual({
+            mode: "targets",
+            targets: expected,
+          });
+          expect(
+            resolveAffectedTestsFromImportGraph([dep], cwd, { ...options, forceFull: true }),
+          ).toEqual(expected);
+          for (const [dependency, reader] of [
+            ["dep-b", readerB],
+            ["dep-single", readerSingle],
+            ["dep-inline", readerInline],
+          ] satisfies [string, string][]) {
+            expect(
+              resolveAffectedTestsFromImportGraph([`src/workers/fixtures/${dependency}.ts`], cwd, {
+                ...options,
+                forceFull: true,
+              }),
+            ).toEqual(
+              dependency === "dep-b"
+                ? [readerAll, reader, readerSingleChild].toSorted((left, right) =>
+                    left.localeCompare(right),
+                  )
+                : [reader],
+            );
+          }
+        },
+      );
     },
   );
 
@@ -1450,10 +1573,6 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
-  it("does not route live tests through the normal changed-test lane", () => {
-    expectChangedTargets(["src/gateway/gateway-codex-harness.live.test.ts"], []);
-  });
-
   it.each<{
     args: string[];
     owner: string;
@@ -1520,18 +1639,6 @@ describe("scripts/test-projects changed-target routing", () => {
     },
   );
 
-  it.each([
-    "src/gateway/health/collector.queue-health.test.ts",
-    "src/gateway/provider-auth-account-relogin.persistence.integration.test.ts",
-    "src/gateway/server-methods/server-methods.test.ts",
-  ])("routes Gateway SQLite consumer %s exactly once to its broker owner", (testFile) => {
-    expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
-      config: "test/vitest/vitest.gateway-database-workers.config.ts",
-      includePatterns: [testFile],
-    });
-    expect(gatewayDatabaseWorkerTestFiles.filter((file) => file === testFile)).toEqual([testFile]);
-  });
-
   it.each(
     ["src/gateway", "src/gateway/**/*.test.ts"].flatMap((target) =>
       ["alone", "worker-first", "aggregate-first"].map((order) => ({ target, order })),
@@ -1591,26 +1698,6 @@ describe("scripts/test-projects changed-target routing", () => {
   );
 
   it.each([
-    "src/agents/command/session-store.test.ts",
-    "src/agents/models-config.providers.endpoint.test.ts",
-    "src/agents/models-config.root-authorship.test.ts",
-    "src/agents/models-config.runtime-source-snapshot.test.ts",
-    "src/agents/models-config.write-serialization.test.ts",
-    "src/agents/plugin-model-catalog-auth.test.ts",
-    "src/agents/plugin-model-catalog.test.ts",
-    "src/agents/prepared-model-catalog-worker.heap.integration.test.ts",
-    "src/agents/prepared-model-catalog-worker.workspace-heap.integration.test.ts",
-    "src/state/openclaw-state-db.test.ts",
-    "src/worker/worker.runtime.test.ts",
-  ])("routes native shared-state consumer %s exactly once to its broker owner", (testFile) => {
-    expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
-      config: "test/vitest/vitest.infra.config.ts",
-      includePatterns: [testFile],
-    });
-    expect(databaseWorkerCoreTestFiles.filter((file) => file === testFile)).toEqual([testFile]);
-  });
-
-  it.each([
     ["src/agents/**/*.test.ts", "test/vitest/vitest.agents.config.ts"],
     ["test/plugins", "test/vitest/vitest.tooling.config.ts"],
     ["test/scripts", "test/vitest/vitest.tooling.config.ts"],
@@ -1668,7 +1755,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it.each([
     ["src/agents/**/*.test.ts", "test/plugins"],
     ["src/plugin-sdk/memory-host-events.test.ts", "src/plugin-sdk/provider-auth.test.ts"],
-    ["src/plugin-sdk/outbound-media.bulk.test.ts", "src/plugin-sdk/provider-auth.test.ts"],
+    ["src/agents/provider-transport-fetch.capture.test.ts", "src/plugin-sdk/provider-auth.test.ts"],
   ])("retains the mixed watch rejection for %s and %s", (...targets) => {
     expect(() => buildVitestRunPlans(["--watch", ...targets])).toThrow(
       "watch mode with mixed test suites is not supported",
@@ -1708,7 +1795,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/plugin-sdk/memory-host-events.test.ts",
       );
       expect(plan?.databaseWorkerWatchTests).not.toContain(
-        "src/plugin-sdk/outbound-media.bulk.test.ts",
+        "src/plugin-sdk/session-store-runtime.maintenance.test.ts",
       );
     }
     const [spec] = createVitestRunSpecs(["--watch", config, file], { baseEnv: {} });
@@ -1735,22 +1822,6 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
-  it("routes isolated agent test src/agents/cli-runner/bundle-mcp.user-config.test.ts to the isolated agents-core shard", () => {
-    const testFile = "src/agents/cli-runner/bundle-mcp.user-config.test.ts";
-    expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
-      config: "test/vitest/vitest.agents-core-isolated.config.ts",
-      includePatterns: [testFile],
-    });
-  });
-
-  it("routes production-boundary agent test src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts to its dedicated shard", () => {
-    const testFile = "src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts";
-    expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
-      config: "test/vitest/vitest.agents-spawn-production-boundary.config.ts",
-      includePatterns: [testFile],
-    });
-  });
-
   describe("agent directory and glob inventory", () => {
     const inventories = new Map<string, string[]>();
     const toolRoot = "src/agents/tools";
@@ -1766,7 +1837,6 @@ describe("scripts/test-projects changed-target routing", () => {
       [`${failoverRoot}/failover-classification.corpus.test.ts`, "agents-core-isolated"],
       [`${failoverRoot}/provider-structured-signals.test.ts`, "agents-core-isolated"],
       [`${runtimeRoot}/materialize-model.test.ts`, "agents-support"],
-      [`${embeddedRoot}/run.inherited-auth-owner.test.ts`, "agents-embedded-agent"],
       [
         `${embeddedRoot}/run.incomplete-turn.classification.test.ts`,
         "agents-embedded-agent-incomplete-turn",
@@ -1964,83 +2034,72 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it("routes mac restart helpers through restart-mac owner tests", () => {
-    expectChangedTargets(
-      ["scripts/lib/restart-mac-gateway.sh"],
-      ["test/scripts/build-and-run-mac.test.ts", "test/scripts/restart-mac.test.ts"],
-    );
-  });
-
-  it("routes MCP and cron Docker E2E script targets instead of skipping changed tests", () => {
-    const targets = [
-      "scripts/e2e/mcp-channels-docker.sh",
-      "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts",
-      "test/e2e/qa-lab/runtime/mcp-channels.fixture.ts",
-      "test/e2e/qa-lab/runtime/mcp-client-temp-state.fixture.ts",
-      "scripts/e2e/mcp-code-mode-gateway-docker.sh",
-      "scripts/e2e/mcp-code-mode-gateway-live-docker.sh",
-      "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
-      "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
-      "scripts/mcp-code-mode-gateway-e2e.ts",
-      "scripts/e2e/cron-cli-docker.sh",
-      "scripts/e2e/cron-mcp-cleanup-docker.sh",
-      "scripts/e2e/cron-mcp-cleanup-docker-client.ts",
-    ];
-
+  it.each<[string[], string[]]>([
+    [
+      [
+        "scripts/e2e/mcp-channels-docker.sh",
+        "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts",
+        "test/e2e/qa-lab/runtime/mcp-channels.fixture.ts",
+        "test/e2e/qa-lab/runtime/mcp-client-temp-state.fixture.ts",
+        "scripts/e2e/mcp-code-mode-gateway-docker.sh",
+        "scripts/e2e/mcp-code-mode-gateway-live-docker.sh",
+        "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
+        "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
+        "scripts/mcp-code-mode-gateway-e2e.ts",
+        "scripts/e2e/cron-cli-docker.sh",
+        "scripts/e2e/cron-mcp-cleanup-docker.sh",
+        "scripts/e2e/cron-mcp-cleanup-docker-client.ts",
+      ],
+      [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-observability.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/plugin-prerelease-test-plan.test.ts",
+        "test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts",
+        "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
+        "test/scripts/mcp-code-mode-gateway-client.test.ts",
+        "src/agents/agent-bundle-mcp-runtime.test.ts",
+        "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
+        "src/gateway/server.cron.test.ts",
+        "src/gateway/server-methods/agent.test.ts",
+        "src/cron/isolated-agent/run.fast-mode.test.ts",
+        "src/cron/active-jobs-manual-run.test.ts",
+      ],
+    ],
+    [
+      [
+        "scripts/e2e/openai-image-auth-docker.sh",
+        "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts",
+      ],
+      [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/openai-image-auth-docker-client.test.ts",
+        "extensions/openai/image-generation-provider.test.ts",
+        "src/image-generation/openai-compatible-image-provider.test.ts",
+      ],
+    ],
+    [
+      [
+        "scripts/e2e/codex-media-path-docker.sh",
+        "scripts/e2e/codex-npm-plugin-live-docker.sh",
+        "scripts/e2e/codex-on-demand-docker.sh",
+        "scripts/e2e/live-plugin-tool-docker.sh",
+        "scripts/e2e/plugin-binding-command-escape-docker.sh",
+        "scripts/e2e/qr-import-docker.sh",
+      ],
+      [
+        "test/scripts/docker-build-helper.test.ts",
+        "test/scripts/docker-e2e-plan.test.ts",
+        "test/scripts/codex-media-path-client.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/live-plugin-tool-assertions.test.ts",
+        "test/scripts/plugin-binding-command-escape-docker.test.ts",
+      ],
+    ],
+  ])("routes Docker E2E targets %j to their semantic owners", (targets, owners) => {
     expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
-    expectChangedTargets(targets, [
-      "test/scripts/docker-build-helper.test.ts",
-      "test/scripts/docker-e2e-observability.test.ts",
-      "test/scripts/docker-e2e-plan.test.ts",
-      "test/scripts/plugin-prerelease-test-plan.test.ts",
-      "test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts",
-      "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
-      "test/scripts/mcp-code-mode-gateway-client.test.ts",
-      "test/scripts/session-log-mentions.test.ts",
-      "src/agents/agent-bundle-mcp-runtime.test.ts",
-      "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
-      "src/gateway/server.cron.test.ts",
-      "src/gateway/server-methods/agent.test.ts",
-      "src/cron/isolated-agent/run.fast-mode.test.ts",
-      "src/cron/active-jobs-manual-run.test.ts",
-    ]);
-  });
-
-  it("routes OpenAI image auth Docker E2E script targets instead of skipping changed tests", () => {
-    const targets = [
-      "scripts/e2e/openai-image-auth-docker.sh",
-      "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts",
-    ];
-
-    expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
-    expectChangedTargets(targets, [
-      "test/scripts/docker-build-helper.test.ts",
-      "test/scripts/docker-e2e-plan.test.ts",
-      "test/scripts/openai-image-auth-docker-client.test.ts",
-      "extensions/openai/image-generation-provider.test.ts",
-      "src/image-generation/openai-compatible-image-provider.test.ts",
-    ]);
-  });
-
-  it("routes package-backed Docker shell targets instead of skipping changed tests", () => {
-    const targets = [
-      "scripts/e2e/codex-media-path-docker.sh",
-      "scripts/e2e/codex-npm-plugin-live-docker.sh",
-      "scripts/e2e/codex-on-demand-docker.sh",
-      "scripts/e2e/live-plugin-tool-docker.sh",
-      "scripts/e2e/plugin-binding-command-escape-docker.sh",
-      "scripts/e2e/qr-import-docker.sh",
-    ];
-
-    expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
-    expectChangedTargets(targets, [
-      "test/scripts/docker-build-helper.test.ts",
-      "test/scripts/docker-e2e-plan.test.ts",
-      "test/scripts/codex-media-path-client.test.ts",
-      "test/scripts/package-acceptance-workflow.test.ts",
-      "test/scripts/live-plugin-tool-assertions.test.ts",
-      "test/scripts/plugin-binding-command-escape-docker.test.ts",
-    ]);
+    expectChangedTargets(targets, owners);
   });
 
   it.each([
@@ -2082,11 +2141,6 @@ describe("scripts/test-projects changed-target routing", () => {
         }
       }
     }
-  });
-
-  it("routes the agent command child through its isolated CLI project", () => {
-    const file = "src/agents/agent-command-local.test.ts";
-    expect(buildVitestRunPlans([file])).toEqual([runPlan("cli-process", [file])]);
   });
 
   it("adds the CLI process project for broad CLI targets", () => {
@@ -2157,13 +2211,13 @@ describe("scripts/test-projects changed-target routing", () => {
         {
           encoding: "utf8",
           // Keep the native help probe inside its invocation-owned temporary directory.
-          env: { ...process.env, TMPDIR: tempDir, TMP: tempDir, TEMP: tempDir },
+          env: testRunnerFixtureEnv({ TMPDIR: tempDir, TMP: tempDir, TEMP: tempDir }),
           timeout: 5_000,
         },
       );
 
       expect(result.status).toBe(0);
-      expect(result.stdout).toContain("Usage: node --import tsx scripts/test-projects.mts");
+      expect(result.stdout).toContain("Usage: node scripts/test-projects.mts");
       expect(result.stderr).not.toContain("[test] starting");
     });
   });
@@ -2182,12 +2236,16 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(plans.every((plan) => plan.includePatterns === null)).toBe(true);
   });
 
-  it("routes the plugin contracts directory to the plugin contracts lane", () => {
+  it("routes the plugin contracts directory across contract and database worker lanes", () => {
     const plans = buildVitestRunPlans(["src/plugins/contracts"]);
 
-    expectSingleVitestRunPlan(plans, {
-      config: "test/vitest/vitest.contracts-plugin.config.ts",
-    });
+    expect(plans).toEqual([
+      runPlan("contracts-plugin"),
+      runPlan("infra", [
+        "src/plugins/contracts/host-hook-state.identity.test.ts",
+        "src/plugins/contracts/host-hooks.contract.test.ts",
+      ]),
+    ]);
   });
 
   it.each([
@@ -2339,10 +2397,11 @@ describe("scripts/test-projects changed-target routing", () => {
     },
     {
       directory: "extensions/matrix/src/matrix/sdk",
-      selected: [
-        "extensions/matrix/src/matrix/sdk/idb-persistence.test.ts",
-        "extensions/matrix/src/matrix/sdk/recovery-key-store.test.ts",
-      ],
+      // Worker membership belongs to the database lane; this case protects the
+      // directory intersection as that membership grows.
+      selected: databaseWorkerExtensionTestFiles.filter((file) =>
+        file.startsWith("extensions/matrix/src/matrix/sdk/"),
+      ),
       inherited: ["extensions/matrix/**/*.test.ts"],
     },
   ])(
@@ -2822,7 +2881,551 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 });
 
+describe("changed export mock consumers", () => {
+  it.each([
+    {
+      name: "member access cannot invent an export",
+      before: "export const old = 1; const api = { export: 0 }; api.export\nfunction added() {}",
+      after:
+        "export const old = 1; const api = { export: 0 }; api.export\nfunction added() {} export { added };",
+      selected: true,
+    },
+    {
+      name: "a preceding period literal is not member access",
+      before: "export const old = 1;",
+      after: 'export const old = 1; "."\nexport const added = 2;',
+      selected: true,
+    },
+    {
+      name: "empty-string export alias",
+      before: "export const old = 1; const value = 2;",
+      after: 'export const old = 1; const value = 2; export { value as "" };',
+      selected: true,
+    },
+    {
+      name: "quoted closing brace is an export name",
+      before: "export const old = 1;",
+      after: 'export const old = 1; export { "}" as added } from "./other.js";',
+      selected: true,
+    },
+    {
+      name: "erased default becomes a runtime export",
+      before: "export default interface API {}",
+      after: "export default class API {}",
+      selected: true,
+    },
+    {
+      name: "erased namespace gains a runtime member",
+      before: "export namespace API { export type Value = string; }",
+      after: "export namespace API { export const value = 1; }",
+      selected: true,
+    },
+    {
+      name: "const enums retain mock coverage",
+      before: "export const enum Old { Value = 1 }",
+      after: "export const enum Old { Value = 1 } export const enum Added { Value = 2 }",
+      selected: true,
+    },
+    {
+      name: "JSX text cannot hide a later export",
+      before: "function component() { return <div>}</div>; } export const old = 1;",
+      after:
+        "function component() { return <div>}</div>; } export const old = 1; export const added = 2;",
+      selected: true,
+    },
+    {
+      name: "Unicode names retain mock coverage",
+      before: "export function café() {}",
+      after: "export function cafè() {}",
+      selected: true,
+    },
+    {
+      name: "bracket CommonJS exports retain mock coverage",
+      before: 'module["exports"] = { old: 1 };',
+      after: 'module["exports"] = { old: 1, added: 2 };',
+      selected: true,
+    },
+    {
+      name: "CommonJS exports retain mock coverage",
+      before: "exports.old = 1;",
+      after: "exports.old = 1; exports.added = 2;",
+      selected: true,
+    },
+    {
+      name: "implicit statement does not hide a new export",
+      before: "export const old = 1\nconst hidden = 2, added = 3;",
+      after: "export const old = 1\nconst hidden = 2, added = 3; export { added };",
+      selected: true,
+    },
+    {
+      name: "namespace member does not hide a module export",
+      before: "export namespace API { export const added = 1; }",
+      after: "export namespace API { export const added = 1; } export const added = 2;",
+      selected: true,
+    },
+    {
+      name: "generic initializer does not hide a new export",
+      before: "class Handler {}; export const cache = new Map<string, Handler>();",
+      after:
+        "class Handler {}; export const cache = new Map<string, Handler>(); export { Handler };",
+      selected: true,
+    },
+    {
+      name: "added function",
+      before: "export const old = 1;",
+      after: "export const old = 1; export function added() {}",
+      selected: true,
+    },
+    {
+      name: "removed export",
+      before: "export const old = 1;",
+      after: "const old = 1;",
+      selected: true,
+    },
+    {
+      name: "renamed re-export",
+      before: 'export { original as old } from "./value.js";',
+      after: 'export { original as renamed } from "./value.js";',
+      selected: true,
+    },
+    {
+      name: "multiline export list",
+      before: "const old = 1; export { old };",
+      after: "const old = 1, added = 2; export {\n old,\n added\n };",
+      selected: true,
+    },
+    {
+      name: "second variable",
+      before: "export const old = 1;",
+      after: "export const old = 1, added = 2;",
+      selected: true,
+    },
+    {
+      name: "default export",
+      before: "export const old = 1;",
+      after: "export const old = 1; export default () => 2;",
+      selected: true,
+    },
+    {
+      name: "wildcard source",
+      before: 'export * from "./one.js";',
+      after: 'export * from "./two.js";',
+      selected: true,
+    },
+    {
+      name: "implementation only",
+      before: "export function old() { return 1; }",
+      after: "export function old() { return 2; }",
+      selected: false,
+    },
+    {
+      name: "initializer only",
+      before: "export const old = 1;",
+      after: "export const old = call(2, 3);",
+      selected: false,
+    },
+    {
+      name: "type only",
+      before: "export const old = 1;",
+      after: "export const old = 1; export type New = string; export interface Shape {}",
+      selected: false,
+    },
+    {
+      name: "comments and strings",
+      before: "export const old = 1;",
+      after: `export const old = 1; // export const added = 2;\nconst text = 'export { added }';`,
+      selected: false,
+    },
+    {
+      name: "unknown bindings",
+      before: "export const old = 1;",
+      after: "export const { old, added } = value;",
+      selected: true,
+    },
+  ])("selects all mock owners on $name", ({ before, after, selected }) => {
+    const producer = "src/owner/runtime.ts";
+    const consumers = [
+      "test/relative.test.ts",
+      "test/alias.test.ts",
+      "test/package.test.ts",
+      "test/shared.test.ts",
+    ];
+    withTinyGitRepo(
+      {
+        [producer]: before,
+        "src/owner/runtime.test.ts": "export {};",
+        "src/owner/other.ts": 'const value = 1; export { value as "}" };',
+        "tsconfig.json": JSON.stringify({
+          compilerOptions: { paths: { "@runtime/*": ["src/owner/*"] } },
+        }),
+        "package.json": JSON.stringify({
+          name: "example",
+          exports: { "./runtime": "./src/owner/runtime.ts" },
+        }),
+        [consumers[0]!]: 'vi.mock("../src/owner/runtime.js", () => ({ old: 1 }));',
+        [consumers[1]!]: 'vi.mock(import("@runtime/runtime"), () => ({ old: 1 }));',
+        [consumers[2]!]: 'vi.mock("example/runtime", () => ({ old: 1 }));',
+        "test/mock-factory.ts": 'vi.mock("../src/owner/runtime.js", () => ({ old: 1 }));',
+        "test/shared-layer.ts": '"."\nimport "./mock-factory.js";',
+        [consumers[3]!]: 'import "./shared-layer.js";',
+        "test/fixture-text.test.ts": `const fixture = 'vi.mock("../src/owner/runtime.js", () => ({}))';`,
+        "test/comment.test.ts": '// vi.mock("../src/owner/runtime.js", () => ({}));',
+      },
+      (cwd) => {
+        const base = spawnSync("git", ["write-tree"], { cwd, encoding: "utf8" });
+        expect(base.status).toBe(0);
+        fs.writeFileSync(path.join(cwd, producer), after);
+        const reasons: string[] = [];
+        const result = resolveChangedTestTargetPlan([producer], {
+          cwd,
+          baseRef: base.stdout.trim(),
+          boundedOwners: true,
+          resolveAliases: true,
+          runtimeOnly: true,
+          aggressive: { maxDirectImporters: 1, maxDirectoryTests: 1 },
+          onSelection: ({ rule, targets }) => {
+            if (rule === "mock-export-consumer") {
+              reasons.push(...targets);
+            }
+          },
+        });
+        expect(reasons.toSorted()).toEqual(selected ? consumers.toSorted() : []);
+        if (selected) {
+          expect(result.targets).toEqual(expect.arrayContaining(consumers));
+        }
+        expect(result.targets).not.toContain("test/fixture-text.test.ts");
+        expect(result.targets).not.toContain("test/comment.test.ts");
+      },
+    );
+  });
+
+  it.each([
+    {
+      name: "namespace re-export becomes star re-export",
+      before: 'export * as runtime from "./runtime.js";',
+      after: 'export * from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "literal star becomes namespace consumption",
+      before: 'import { "*" as star } from "./runtime.js"; void star;',
+      after: 'import * as runtime from "./runtime.js"; void runtime.existing;',
+      selected: true,
+    },
+    {
+      name: "literal star becomes dynamic consumption",
+      before: 'import { "*" as star } from "./runtime.js"; void star;',
+      after: 'const runtime = await import("./runtime.js"); void runtime.existing;',
+      selected: true,
+    },
+    {
+      name: "literal star becomes re-export consumption",
+      before: 'export { "*" as star } from "./runtime.js";',
+      after: 'export * from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "import after a period literal",
+      before: 'import { old } from "./runtime.js";',
+      after: '"."\nimport { existing } from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "quoted closing brace is a consumed name",
+      before: 'import { old } from "./runtime.js";',
+      after: 'import { "}" as existing } from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "named re-export switches consumed binding",
+      before: 'export { old as run } from "./runtime.js";',
+      after: 'export { existing as run } from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "erased query becomes a runtime namespace import",
+      before: 'type Runtime = typeof import("./runtime.js");',
+      after:
+        'type Runtime = typeof import("./runtime.js"); import * as runtime from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "default binding named type",
+      before: 'import { old } from "./runtime.js";',
+      after: 'import type from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "default binding named type with named imports",
+      before: 'import { old } from "./runtime.js";',
+      after: 'import type, { old } from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "new named import",
+      before: 'import { old } from "./runtime.js";',
+      after: 'import { old, existing } from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "new default import",
+      before: 'import { old } from "./runtime.js";',
+      after: 'import value, { old } from "./runtime.js";',
+      selected: true,
+    },
+    {
+      name: "local rename",
+      before: 'import { old } from "./runtime.js";',
+      after: 'import { old as renamed } from "./runtime.js";',
+      selected: false,
+    },
+    {
+      name: "new erased binding",
+      before: 'import { old } from "./runtime.js";',
+      after: 'import { old, type Shape } from "./runtime.js";',
+      selected: false,
+    },
+  ])("protects existing exports on $name", ({ before, after, selected }) => {
+    const producer = "src/owner/caller.ts";
+    withTinyGitRepo(
+      {
+        [producer]: before,
+        "src/owner/caller.test.ts": "export {};",
+        "src/owner/runtime.ts":
+          'export const old = 1, existing = 2; export default 3; export { existing as "}", existing as "*" };',
+        "test/consumer.test.ts":
+          'import "./layer-one.js"; vi.mock("../src/owner/runtime.js", () => ({ old: 1, "*": 2 }));',
+        "test/layer-one.ts": 'import "./layer-two.js";',
+        "test/layer-two.ts": 'import "../src/owner/caller.js";',
+        "test/unrelated.test.ts": 'vi.mock("../src/owner/runtime.js", () => ({ old: 1, "*": 2 }));',
+      },
+      (cwd) => {
+        const base = spawnSync("git", ["write-tree"], { cwd, encoding: "utf8" });
+        expect(base.status).toBe(0);
+        fs.writeFileSync(path.join(cwd, producer), after);
+        const result = resolveChangedTestTargetPlan([producer], {
+          cwd,
+          baseRef: base.stdout.trim(),
+          boundedOwners: true,
+          aggressive: { maxDirectImporters: 1, maxDirectoryTests: 1 },
+        });
+        expect(result.targets.includes("test/consumer.test.ts")).toBe(selected);
+        expect(result.targets).not.toContain("test/unrelated.test.ts");
+      },
+    );
+  });
+
+  it.each([
+    'vi.mock<{ old: number }>(import("../src/owner/runtime.js"), () => ({ old: 1 }));',
+    'import { vi as mocker } from "vitest"; mocker.doMock("../src/owner/runtime.js", () => ({ old: 1 }));',
+  ])("retains consumers of typed and aliased mock installers: %s", (installer) => {
+    withTinyGitRepo(
+      {
+        "src/owner/runtime.ts": "export const old = 1;",
+        "src/owner/runtime.test.ts": "export {};",
+        "test/installer.ts": installer,
+        "test/layer.ts": 'import "./installer.js";',
+        "test/consumer.test.ts": 'import "./layer.js";',
+      },
+      (cwd) => {
+        const base = spawnSync("git", ["write-tree"], { cwd, encoding: "utf8" });
+        expect(base.status).toBe(0);
+        fs.appendFileSync(path.join(cwd, "src/owner/runtime.ts"), "export const added = 2;");
+        expect(
+          resolveChangedTestTargetPlan(["src/owner/runtime.ts"], {
+            cwd,
+            baseRef: base.stdout.trim(),
+            boundedOwners: true,
+            runtimeOnly: true,
+            aggressive: { maxDirectImporters: 1, maxDirectoryTests: 1 },
+          }).targets,
+        ).toContain("test/consumer.test.ts");
+      },
+    );
+  });
+
+  it("fails closed when current source cannot be read", () => {
+    withTinyGitRepo(
+      {
+        "src/owner/runtime.ts": "export const old = 1;",
+        "src/owner/runtime.test.ts": "export {};",
+        "test/consumer.test.ts": 'vi.mock("../src/owner/runtime.js", () => ({ old: 1 }));',
+      },
+      (cwd) => {
+        const base = spawnSync("git", ["write-tree"], { cwd, encoding: "utf8" });
+        expect(base.status).toBe(0);
+        const read = fs.readFileSync;
+        const denied = Object.assign(new Error("Current source is unreadable"), { code: "EACCES" });
+        const spy = vi.spyOn(fs, "readFileSync").mockImplementation((...args) => {
+          if (args[0] === path.join(cwd, "src/owner/runtime.ts")) {
+            throw denied;
+          }
+          return read(...args);
+        });
+        try {
+          expect(() =>
+            resolveChangedTestTargetPlan(["src/owner/runtime.ts"], {
+              cwd,
+              baseRef: base.stdout.trim(),
+              boundedOwners: true,
+            }),
+          ).toThrow(denied);
+        } finally {
+          spy.mockRestore();
+        }
+      },
+    );
+  });
+
+  it.each([undefined, "missing-base"])(
+    "keeps mock coverage when base %s is unavailable",
+    (baseRef) => {
+      withTinyGitRepo(
+        {
+          "src/owner/runtime.ts": "export const old = 1;",
+          "src/owner/runtime.test.ts": "export {};",
+          "test/consumer.test.ts": 'vi.mock("../src/owner/runtime.js", () => ({ old: 1 }));',
+        },
+        (cwd) => {
+          expect(
+            resolveChangedTestTargetPlan(["src/owner/runtime.ts"], {
+              cwd,
+              baseRef,
+              boundedOwners: true,
+            }).targets,
+          ).toContain("test/consumer.test.ts");
+        },
+      );
+    },
+  );
+});
+
 describe("test selector native source facts", () => {
+  it("classifies runtime-worker descriptors by their declaration and self-reads", () => {
+    const descriptor =
+      '{ currentModuleUrl: import.meta.url, sourceWorkerName: "fixtures/worker", package: { name: "worker" } }';
+    const sources = {
+      "inline.ts": `function run() { return ${descriptor}; }`,
+      "single.ts": `export const worker = ${descriptor} as const;`,
+      "group.ts": `export const workers = {
+        first: ${descriptor},
+        second: { nested: { sourceWorkerName: "fixtures/second", package: {}, currentModuleUrl: import.meta.url } },
+      } as const;`,
+      "array.ts": `export const workers = [${descriptor}];`,
+      "call.ts": `export const workers = register(${descriptor});`,
+      "local.ts": `const worker = ${descriptor}; export { worker };`,
+      "default.ts": `export default ${descriptor};`,
+      "wrong-base.ts":
+        'export const worker = { currentModuleUrl: someVariable, sourceWorkerName: "fixtures/wrong" };',
+      "dynamic.ts":
+        "export const worker = { currentModuleUrl: import.meta.url, sourceWorkerName: workerName };",
+      "nested-base.ts":
+        'const worker = { sourceWorkerName: "fixtures/wrong", nested: { currentModuleUrl: import.meta.url } };',
+      "literal-reference.ts": `export const worker = ${descriptor}; const label = "worker"; unrelated.worker;`,
+      "jsx.tsx":
+        'export const view = <View />; const worker = { currentModuleUrl: otherUrl, sourceWorkerName: "fixtures/conservative" };',
+      ...Object.fromEntries(
+        ["worker", "worker.distWorkerPath", "worker[key]", "({ ...worker })"].map((read, index) => [
+          `self-read-${index}.ts`,
+          `export const worker = ${descriptor}; void ${read};`,
+        ]),
+      ),
+    };
+    withTinyFileTree(sources, (cwd) => {
+      const facts = new Map(
+        readTestSelectorSourceFacts(
+          cwd,
+          Object.keys(sources).map((file) => ({ file, parseImports: true })),
+          [],
+          1024 * 1024,
+        ).map(({ file, imports, typeOnlyImports, workerExports }) => [
+          file,
+          { imports, typeOnlyImports, workerExports },
+        ]),
+      );
+      const inline = { imports: ["./fixtures/worker.js"], typeOnlyImports: [], workerExports: [] };
+      for (const file of [
+        "inline.ts",
+        "local.ts",
+        "default.ts",
+        ...[0, 1, 2, 3].map((index) => `self-read-${index}.ts`),
+      ]) {
+        expect(facts.get(file), file).toEqual(inline);
+      }
+      const expectedExports: Record<string, [string, string][]> = {
+        "single.ts": [["worker", "fixtures/worker"]],
+        "group.ts": [
+          ["workers.first", "fixtures/worker"],
+          ["workers.second", "fixtures/second"],
+        ],
+        "array.ts": [["workers", "fixtures/worker"]],
+        "call.ts": [["workers", "fixtures/worker"]],
+        "literal-reference.ts": [["worker", "fixtures/worker"]],
+      };
+      for (const [file, workerExports] of Object.entries(expectedExports)) {
+        expect(facts.get(file), file).toEqual({
+          imports: [],
+          typeOnlyImports: [],
+          workerExports,
+        });
+      }
+      for (const file of ["wrong-base.ts", "dynamic.ts", "nested-base.ts"]) {
+        expect(facts.get(file), file).toEqual({
+          imports: [],
+          typeOnlyImports: [],
+          workerExports: [],
+        });
+      }
+      expect(facts.get("jsx.tsx")).toEqual({
+        imports: ["./fixtures/conservative.js"],
+        typeOnlyImports: [],
+        workerExports: [],
+      });
+    });
+  });
+
+  const descriptorReads: Array<[string, Array<[string, string[]]>]> = [
+    ['import { group as local } from "source"; void local.member;', [["source", ["group.member"]]]],
+    [
+      'import { group } from "source"; Object.values(group); void group[key];',
+      [["source", ["group"]]],
+    ],
+    ['import { group } from "source"; void { ...group };', [["source", ["group"]]]],
+    [
+      'import { group } from "source"; void { ...group }; void { group }; const { member } = group; typeof group; group?.member;',
+      [["source", ["group"]]],
+    ],
+    [
+      'import * as ns from "source"; void ns.group.member; void ns.single;',
+      [["source", ["group.member", "single"]]],
+    ],
+    ['import * as ns from "source"; void ns[key];', [["source", ["*"]]]],
+    [
+      'import("dynamic"); require("required"); export * from "all";',
+      [
+        ["dynamic", ["*"]],
+        ["required", ["*"]],
+        ["all", ["*"]],
+      ],
+    ],
+    ['export { group as renamed, single } from "source";', [["source", ["group", "single"]]]],
+    [
+      'import type { group } from "types"; import { type single, group as local } from "source"; void group; void single; void local.member;',
+      [["source", ["group.member"]]],
+    ],
+    [
+      'import local from "source"; void local.member; import { unused } from "unused"; const text = "unused"; other.unused;',
+      [],
+    ],
+    ['import { group } from "source"; const view = <View />;', [["source", ["*"]]]],
+  ];
+  it.each(descriptorReads)(
+    "reads runtime-worker descriptor consumption in %s",
+    (source, expected) => {
+      expect([...readRuntimeWorkerDescriptorReads(source)]).toEqual(expected);
+    },
+  );
+
   it("keeps whole-area UI consumers and source readers across graph cache scopes", () => {
     const pluginModule = "extensions/example/browser/view.ts";
     const pluginConsumer = "test/plugin-browser-consumer.test.ts";
@@ -2996,6 +3599,8 @@ describe("test selector native source facts", () => {
         expect(syntaxFacts.find(({ file }) => file === "generic-callback.ts")).toMatchObject({
           imports: [],
           typeOnlyImports: [],
+          mocks: [],
+          workerExports: [],
         });
         expect(syntaxFacts.find(({ file }) => file === "generic-callback-import.ts")).toMatchObject(
           {
@@ -3061,6 +3666,8 @@ describe("test selector native source facts", () => {
           file,
           imports: [],
           typeOnlyImports: [],
+          mocks: [],
+          workerExports: [],
           matches: terms.filter((term) => source.includes(term)),
           references: terms.filter((term) => tokens.has(term)),
         };
@@ -3098,6 +3705,8 @@ describe("test selector native source facts", () => {
             file,
             imports: [dependency],
             typeOnlyImports: [],
+            mocks: [],
+            workerExports: [],
             matches: ["needle"],
             references: ["needle"],
           })),
@@ -3109,6 +3718,8 @@ describe("test selector native source facts", () => {
             file,
             imports: [dependency],
             typeOnlyImports: [],
+            mocks: [],
+            workerExports: [],
             matches: [],
             references: [],
           })),
@@ -3128,7 +3739,14 @@ describe("test selector native source facts", () => {
           { file: "unterminated.ts", parseImports: true },
           { file: "deleted.ts", parseImports: true },
         ];
-        const unterminatedFacts = { imports: [], typeOnlyImports: [], matches: [], references: [] };
+        // Rows omit empty descriptor exports; parsed facts restore them.
+        const unterminatedFacts = {
+          imports: [],
+          typeOnlyImports: [],
+          mocks: [],
+          matches: [],
+          references: [],
+        };
         const expectedFacts = {
           imports: [
             "./barrel.js",
@@ -3139,6 +3757,7 @@ describe("test selector native source facts", () => {
             "other-dependency",
           ],
           typeOnlyImports: ["./barrel.js"],
+          mocks: [],
           matches: ["scripts/tool.mts", "scripts/tool"],
           references: ["scripts/tool.mts"],
         };
@@ -3178,7 +3797,7 @@ describe("test selector native source facts", () => {
               16 * 1024 * 1024,
               { matchingOnly: true },
             ),
-          ).toEqual([{ file: "large.mts", ...expectedFacts }]);
+          ).toEqual([{ file: "large.mts", ...expectedFacts, workerExports: [] }]);
           expect(
             readTestSelectorSourceFacts(
               cwd,
@@ -3187,8 +3806,8 @@ describe("test selector native source facts", () => {
               16 * 1024 * 1024,
             ),
           ).toEqual([
-            { file: "large.mts", ...expectedFacts },
-            { file: "unterminated.ts", ...unterminatedFacts },
+            { file: "large.mts", ...expectedFacts, workerExports: [] },
+            { file: "unterminated.ts", ...unterminatedFacts, workerExports: [] },
           ]);
           expect(
             readTestSelectorSourceFacts(
@@ -3202,6 +3821,8 @@ describe("test selector native source facts", () => {
               file: "large.mts",
               imports: [],
               typeOnlyImports: [],
+              mocks: [],
+              workerExports: [],
               matches: ["scripts/tool.mts"],
               references: ["scripts/tool.mts"],
             },
@@ -3239,63 +3860,46 @@ describe("test selector native source facts", () => {
 });
 
 describe("scripts/test-projects full-suite sharding", () => {
+  const fastTooling = {
+    config: "test/vitest/vitest.tooling.config.ts",
+    includePatterns: ["test/scripts/run-with-env.test.ts"],
+  };
+  const slowTooling = {
+    ...fastTooling,
+    includePatterns: ["test/scripts/vitest-worker-artifacts.test.ts"],
+  };
+  const runtime = {
+    config: "test/vitest/vitest.runtime-config.config.ts",
+    includePatterns: ["src/config/sessions/session-accessor.sqlite-archive.worker.test.ts"],
+  };
   it.each([
-    { label: "null", includePatterns: null },
-    { label: "empty", includePatterns: [] },
-  ])("retains whole-config costs for $label selection", ({ includePatterns }) => {
-    const whole = { config: "test/vitest/vitest.gateway.config.ts", includePatterns };
-    const selected = {
-      config: "test/vitest/vitest.tooling.config.ts",
-      includePatterns: ["test/scripts/run-with-env.test.ts"],
-    };
-
-    expect(orderFullSuiteSpecsForParallelRun([selected, whole])).toEqual([whole, selected]);
-  });
-
-  it("prioritizes expensive selected files over whole-config defaults", () => {
-    const tooling = {
-      config: "test/vitest/vitest.tooling.config.ts",
-      includePatterns: ["test/scripts/vitest-worker-artifacts.test.ts"],
-    };
-    const runtime = {
-      config: "test/vitest/vitest.runtime-config.config.ts",
-      includePatterns: ["src/config/sessions/session-accessor.sqlite-archive.worker.test.ts"],
-    };
-
-    expect(orderFullSuiteSpecsForParallelRun([runtime, tooling])).toEqual([tooling, runtime]);
-  });
-
-  it("prices expanded chunk files without enabling include-file filtering", () => {
-    const chunk = {
-      config: "test/vitest/vitest.tooling.config.ts",
-      includePatterns: null,
-      timingTargets: ["test/scripts/vitest-worker-artifacts.test.ts"],
-    };
-    const whole = { config: "test/vitest/vitest.runtime-config.config.ts", includePatterns: null };
-
-    expect(orderFullSuiteSpecsForParallelRun([whole, chunk])).toEqual([chunk, whole]);
+    [
+      "null whole-config selection",
+      fastTooling,
+      { config: "test/vitest/vitest.gateway.config.ts", includePatterns: null },
+    ],
+    [
+      "empty whole-config selection",
+      fastTooling,
+      { config: "test/vitest/vitest.gateway.config.ts", includePatterns: [] },
+    ],
+    ["expensive selected files", runtime, slowTooling],
+    [
+      "expanded chunks",
+      { ...runtime, includePatterns: null },
+      { ...slowTooling, includePatterns: null, timingTargets: slowTooling.includePatterns },
+    ],
+  ] as const)("prioritizes %s", (_name, cheaper, expensive) => {
+    expect(orderFullSuiteSpecsForParallelRun([cheaper, expensive])).toEqual([expensive, cheaper]);
   });
 
   it("uses observed selection timings without substituting a whole-config sample", () => {
-    const fastTooling = {
-      config: "test/vitest/vitest.tooling.config.ts",
-      includePatterns: ["test/scripts/run-with-env.test.ts"],
-    };
-    const slowTooling = {
-      config: fastTooling.config,
-      includePatterns: ["test/scripts/vitest-worker-artifacts.test.ts"],
-    };
-    const runtime = {
-      config: "test/vitest/vitest.runtime-config.config.ts",
-      includePatterns: ["src/config/sessions/session-accessor.sqlite-archive.worker.test.ts"],
-    };
     const timings = new Map([
       [fastTooling.config, 1_000_000],
       [resolveShardTimingKey(fastTooling), 500],
       [resolveShardTimingKey(slowTooling), 153_000],
       [resolveShardTimingKey(runtime), 35_000],
     ]);
-
     expect(orderFullSuiteSpecsForParallelRun([fastTooling, slowTooling, runtime], timings)).toEqual(
       [slowTooling, fastTooling, runtime],
     );
@@ -3373,6 +3977,11 @@ describe("scripts/test-projects full-suite sharding", () => {
   it("expands untargeted local runs to leaf project configs by default", async () => {
     const infraConfig = "test/vitest/vitest.infra.config.ts";
     const infraFiles = await listVitestConfigTestFiles(infraConfig);
+    const toolingFiles = await listVitestConfigTestFiles("test/vitest/vitest.tooling.config.ts");
+    const uiFiles = await listVitestConfigTestFiles("test/vitest/vitest.ui.config.ts");
+    const gatewayFiles = await listVitestConfigTestFiles(
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+    );
     withEnv(
       {
         OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
@@ -3402,7 +4011,23 @@ describe("scripts/test-projects full-suite sharding", () => {
         expect(unitSrcPlans.every((plan) => plan.forwardedArgs.length <= 150)).toBe(true);
         const toolingPlans = targetedPlans("test/vitest/vitest.tooling.config.ts");
         expect(toolingPlans.length).toBeGreaterThan(1);
-        expect(toolingPlans.every((plan) => plan.forwardedArgs.length <= 2)).toBe(true);
+        expect(toolingPlans.every((plan) => plan.forwardedArgs.length <= 8)).toBe(true);
+        expect(toolingPlans).toHaveLength(Math.ceil(toolingFiles.length / 8));
+        expect(toolingPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
+          [...new Set(toolingFiles)].toSorted(),
+        );
+        const uiPlans = targetedPlans("test/vitest/vitest.ui.config.ts");
+        expect(uiPlans).toHaveLength(Math.ceil(uiFiles.length / 8));
+        expect(uiPlans.every((plan) => plan.forwardedArgs.length <= 8)).toBe(true);
+        expect(uiPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
+          [...new Set(uiFiles)].toSorted(),
+        );
+        const gatewayPlans = targetedPlans("test/vitest/vitest.gateway-database-workers.config.ts");
+        expect(gatewayPlans).toHaveLength(Math.ceil(gatewayFiles.length / 50));
+        expect(gatewayPlans.every((plan) => plan.forwardedArgs.length <= 50)).toBe(true);
+        expect(gatewayPlans.flatMap((plan) => plan.forwardedArgs).toSorted()).toEqual(
+          [...new Set(gatewayFiles)].toSorted(),
+        );
         const infraPlans = plans.filter((plan) => plan.config === infraConfig);
         expect(infraPlans.length).toBeGreaterThan(1);
         expect(
@@ -3479,39 +4104,5 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
     expect(Number(specs[1]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS)).toBeGreaterThan(
       Number(specs[0]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS),
     );
-  });
-});
-
-describe("scripts/test-projects Vitest cache isolation", () => {
-  it("assigns isolated fs-module caches to multi-spec non-watch runs", () => {
-    const specs = applyDefaultVitestCachePaths(
-      [
-        {
-          config: "test/vitest/vitest.unit-fast.config.ts",
-          env: {},
-          includeFilePath: null,
-          includePatterns: null,
-          pnpmArgs: [],
-          watchMode: false,
-        },
-        {
-          config: "test/vitest/vitest.extension-memory.config.ts",
-          env: {},
-          includeFilePath: null,
-          includePatterns: null,
-          pnpmArgs: [],
-          watchMode: false,
-        },
-      ],
-      { cwd: "/repo", env: {} },
-    );
-
-    const paths = specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH);
-    expect(new Set(paths).size).toBe(2);
-    for (const cachePath of paths) {
-      expect(path.relative(path.join("/repo", ".cache", "vitest"), cachePath!)).toMatch(
-        /^slots[/\\][a-f\d]+[/\\]0$/u,
-      );
-    }
   });
 });

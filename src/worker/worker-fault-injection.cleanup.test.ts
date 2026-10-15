@@ -120,7 +120,9 @@ describe("composed worker Gateway fixture cleanup", () => {
       closing = harness.close();
       await expect(closing).rejects.toMatchObject({
         name: "AggregateError",
-        errors: expect.arrayContaining([failure]),
+        errors: expect.arrayContaining([
+          expect.objectContaining({ errors: expect.arrayContaining([failure]) }),
+        ]),
       });
       expect(existsSync(root)).toBe(true);
       expect(harness.database.db.isOpen).toBe(true);

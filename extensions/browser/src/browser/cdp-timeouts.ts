@@ -1,6 +1,4 @@
 /**
- * CDP and Chrome launch timeout constants.
- *
  * Centralizes timing so local loopback probes stay fast while remote/browser
  * node probes retain enough handshake slack for real networks.
  */
@@ -37,7 +35,6 @@ export const PROFILE_ATTACH_RETRY_TIMEOUT_MS = 1200;
 export const CHROME_MCP_ATTACH_READY_WINDOW_MS = 8000;
 export const CHROME_MCP_ATTACH_READY_POLL_MS = 200;
 
-/** Return true when a profile can use the short loopback CDP probe class. */
 export function usesFastLoopbackCdpProbeClass(params: {
   profileIsLoopback: boolean;
   attachOnly?: boolean;
@@ -45,7 +42,6 @@ export function usesFastLoopbackCdpProbeClass(params: {
   return params.profileIsLoopback && params.attachOnly !== true;
 }
 
-/** Resolve HTTP and WebSocket reachability timeouts for a CDP profile. */
 export function resolveCdpReachabilityTimeouts(params: {
   profileIsLoopback: boolean;
   attachOnly?: boolean;

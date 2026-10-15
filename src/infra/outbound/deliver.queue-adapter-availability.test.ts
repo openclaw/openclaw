@@ -6,7 +6,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
 import { OutboundDeliveryError, PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import {

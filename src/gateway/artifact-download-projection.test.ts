@@ -25,33 +25,22 @@ const expectedDigest = prepareArtifactDownload(artifact)!.digest;
 
 describe("artifact download byte projection", () => {
   it.each([
-    { range: "bytes=1-4", expected: [1, 2, 3, 4] },
-    { range: "bytes=2-5", expected: [2, 3, 4, 5] },
-    { range: "bytes=12-12", expected: [12] },
-  ])("returns only independently owned bytes for $range", ({ range, expected }) => {
+    { range: undefined, kind: "full", expected: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] },
+    { range: "bytes=1-4", kind: "partial", expected: [1, 2, 3, 4] },
+  ])("sizes and transfers independently owned $kind bytes", ({ range, kind, expected }) => {
+    expect(prepareArtifactDownload(artifact)!.artifact).not.toHaveProperty("data");
     const result = request({ expectedDigest, method: "GET", headers: { range } });
     expect(result.response).toMatchObject({
-      kind: "partial",
+      kind,
       contentLength: expected.length,
-      size: 13,
+      ...(kind === "partial" ? { size: 13 } : {}),
     });
     expect(Array.from(result.body!)).toEqual(expected);
     expect(result.body!.byteOffset).toBe(0);
     expect(result.body!.buffer.byteLength).toBe(expected.length);
     const transferred = structuredClone(result.body, { transfer: [result.body!.buffer] });
     expect(Array.from(transferred!)).toEqual(expected);
-    expect(result.body!.buffer.byteLength).toBe(0);
-  });
-
-  it("sizes and transfers a full representation using the payload rather than declared size", () => {
-    const prepared = prepareArtifactDownload(artifact)!;
-    expect(prepared.artifact).not.toHaveProperty("data");
-    const result = request({ expectedDigest, method: "GET", headers: {} });
-    expect(result.response).toMatchObject({ kind: "full", contentLength: 13 });
-    expect(Array.from(result.body!)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-    expect(result.body!.buffer.byteLength).toBe(13);
-    const transferred = structuredClone(result.body, { transfer: [result.body!.buffer] });
-    expect(transferred!.byteLength).toBe(13);
+    expect(transferred!.byteLength).toBe(expected.length);
     expect(result.body!.buffer.byteLength).toBe(0);
   });
 

@@ -5,11 +5,11 @@ import {
 } from "./status.gateway-connection.js";
 import { resolveNodeOnlyGatewayInfo } from "./status.node-mode.js";
 
-const mocks = vi.hoisted(() => ({ loadNodeHostConfigReadOnly: vi.fn() }));
+const mocks = vi.hoisted(() => ({ loadNodeHostConfig: vi.fn() }));
 vi.mock("../node-host/config.js", () => ({
-  loadNodeHostConfigReadOnly: mocks.loadNodeHostConfigReadOnly,
+  loadNodeHostConfig: mocks.loadNodeHostConfig,
 }));
-beforeEach(() => mocks.loadNodeHostConfigReadOnly.mockReset());
+beforeEach(() => mocks.loadNodeHostConfig.mockReset());
 const connection = {
   nodeOnlyGateway: null,
   remoteUrlMissing: true,
@@ -37,7 +37,7 @@ it("does not claim node-only mode when the node service is installed but inactiv
 });
 
 it("prefers node-only diagnostics with an unknown target when node config is missing", async () => {
-  mocks.loadNodeHostConfigReadOnly.mockResolvedValueOnce(null);
+  mocks.loadNodeHostConfig.mockResolvedValueOnce(null);
   const nodeOnlyGateway = await resolveNodeOnlyGatewayInfo({
     daemon: { installed: false },
     node: { installed: true, loadState: { status: "loaded" }, externallyManaged: false },

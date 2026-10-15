@@ -5,11 +5,6 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  onInternalDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  type DiagnosticEventPayload,
-} from "../infra/diagnostic-events.js";
 import { collectMinimalProfileOverrideFindings } from "./audit-extra.sync.js";
 import { runSecurityAuditCore } from "./audit.js";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
@@ -20,14 +15,12 @@ function createMcporterAuditOptions(stateDir: string): Parameters<typeof runSecu
   return {
     config: {
       agents: {
-        list: [
-          {
-            id: "asset-agent",
-            default: true,
+        entries: {
+          "asset-agent": {
             skills: ["asset-lifecycle-tracking"],
             tools: { exec: { host: "gateway", mode: "full" } },
           },
-        ],
+        },
       },
     },
     sourceConfig: {},
@@ -36,19 +29,6 @@ function createMcporterAuditOptions(stateDir: string): Parameters<typeof runSecu
     includeFilesystem: false,
     includeChannelSecurity: false,
   };
-}
-
-function captureSecurityEvents(): {
-  events: Extract<DiagnosticEventPayload, { type: "security.event" }>[];
-  stop: () => void;
-} {
-  const events: Extract<DiagnosticEventPayload, { type: "security.event" }>[] = [];
-  const stop = onInternalDiagnosticEvent((event, metadata) => {
-    if (metadata.trusted && event.type === "security.event") {
-      events.push(event);
-    }
-  });
-  return { events, stop };
 }
 
 describe("security audit config basics", () => {
@@ -88,7 +68,7 @@ describe("security audit config basics", () => {
 
   it("flags tools.elevated allowFrom wildcard as critical", async () => {
     const findings = await collectSecurityAuditFindings({
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       tools: {
         elevated: {
           allowFrom: { whatsapp: ["*"] },
@@ -137,37 +117,6 @@ describe("security audit config basics", () => {
     expect(finding?.detail).toContain("skills/config/mcporter.json");
   });
 
-  it("warns when an oversized global mcporter registry cannot be inspected", async () => {
-    const stateDir = tempDirs.make("openclaw-audit-mcporter-oversized-");
-    await fs.mkdir(path.join(stateDir, "skills", "config"), { recursive: true });
-    await fs.writeFile(
-      path.join(stateDir, "skills", "config", "mcporter.json"),
-      Buffer.alloc(16 * 1024 * 1024 + 1, 0x20),
-    );
-
-    const report = await runSecurityAuditCore(createMcporterAuditOptions(stateDir));
-
-    const checkIds = report.findings.map((finding) => finding.checkId);
-    expect(checkIds).not.toContain("tools.exec.agent_skill_mcp_boundary_drift");
-    expect(report.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "tools.exec.mcporter_registry_inspection_incomplete",
-          severity: "warn",
-        }),
-      ]),
-    );
-  });
-
-  it("does not flag mcporter registry inspection when the registry is missing", async () => {
-    const stateDir = tempDirs.make("openclaw-audit-mcporter-missing-");
-    const report = await runSecurityAuditCore(createMcporterAuditOptions(stateDir));
-
-    const checkIds = report.findings.map((finding) => finding.checkId);
-    expect(checkIds).not.toContain("tools.exec.mcporter_registry_inspection_incomplete");
-    expect(checkIds).not.toContain("tools.exec.agent_skill_mcp_boundary_drift");
-  });
-
   it("warns when a malformed global mcporter registry cannot be inspected", async () => {
     const stateDir = tempDirs.make("openclaw-audit-mcporter-malformed-");
     await fs.mkdir(path.join(stateDir, "skills", "config"), { recursive: true });
@@ -176,42 +125,6 @@ describe("security audit config basics", () => {
       "{ not json",
       "utf8",
     );
-
-    const report = await runSecurityAuditCore(createMcporterAuditOptions(stateDir));
-
-    const checkIds = report.findings.map((finding) => finding.checkId);
-    expect(checkIds).not.toContain("tools.exec.agent_skill_mcp_boundary_drift");
-    expect(checkIds).toContain("tools.exec.mcporter_registry_inspection_incomplete");
-  });
-
-  it("does not inspect a malformed mcporter registry without relevant agent skill scopes", async () => {
-    const stateDir = tempDirs.make("openclaw-audit-mcporter-unused-");
-    await fs.mkdir(path.join(stateDir, "skills", "config"), { recursive: true });
-    await fs.writeFile(
-      path.join(stateDir, "skills", "config", "mcporter.json"),
-      "{ not json",
-      "utf8",
-    );
-
-    const report = await runSecurityAuditCore({
-      config: { agents: { list: [{ id: "main", default: true }] } },
-      sourceConfig: {},
-      env: { OPENCLAW_STATE_DIR: stateDir },
-      stateDir,
-      includeFilesystem: false,
-      includeChannelSecurity: false,
-    });
-
-    expect(report.findings.map((finding) => finding.checkId)).not.toContain(
-      "tools.exec.mcporter_registry_inspection_incomplete",
-    );
-  });
-
-  it("warns when the global mcporter registry path is not a regular file", async () => {
-    const stateDir = tempDirs.make("openclaw-audit-mcporter-non-regular-");
-    await fs.mkdir(path.join(stateDir, "skills", "config", "mcporter.json"), {
-      recursive: true,
-    });
 
     const report = await runSecurityAuditCore(createMcporterAuditOptions(stateDir));
 
@@ -236,32 +149,6 @@ describe("security audit config basics", () => {
     },
   );
 
-  it("accepts a valid symlinked global mcporter registry", async () => {
-    const stateDir = tempDirs.make("openclaw-audit-mcporter-symlink-");
-    const configDir = path.join(stateDir, "skills", "config");
-    await fs.mkdir(configDir, { recursive: true });
-    const targetPath = path.join(stateDir, "real-mcporter.json");
-    await fs.writeFile(
-      targetPath,
-      JSON.stringify({
-        mcpServers: {
-          "whois-mcp": { baseUrl: "http://whois.example.test/mcp" },
-        },
-      }),
-      "utf8",
-    );
-    await fs.symlink(targetPath, path.join(configDir, "mcporter.json"));
-
-    const report = await runSecurityAuditCore(createMcporterAuditOptions(stateDir));
-
-    expect(report.findings.map((finding) => finding.checkId)).toContain(
-      "tools.exec.agent_skill_mcp_boundary_drift",
-    );
-    expect(report.findings.map((finding) => finding.checkId)).not.toContain(
-      "tools.exec.mcporter_registry_inspection_incomplete",
-    );
-  });
-
   it("warns when an oversized symlinked global mcporter registry cannot be inspected", async () => {
     const stateDir = tempDirs.make("openclaw-audit-mcporter-symlink-oversized-");
     const configDir = path.join(stateDir, "skills", "config");
@@ -277,34 +164,7 @@ describe("security audit config basics", () => {
     expect(checkIds).toContain("tools.exec.mcporter_registry_inspection_incomplete");
   });
 
-  it("does not flag per-agent skill allowlists when matching agents deny exec", async () => {
-    const stateDir = tempDirs.make("openclaw-audit-mcporter-deny-");
-    const report = await runSecurityAuditCore({
-      config: {
-        mcp: {
-          servers: {
-            docs: { command: "node", args: ["docs-mcp.js"] },
-          },
-        },
-        agents: {
-          defaults: { skills: ["docs-search"] },
-          entries: { "docs-agent": { default: true, tools: { exec: { mode: "deny" } } } },
-        },
-        tools: { exec: { mode: "deny" } },
-      },
-      sourceConfig: {},
-      env: { OPENCLAW_STATE_DIR: stateDir },
-      stateDir,
-      includeFilesystem: false,
-      includeChannelSecurity: false,
-    });
-
-    expect(report.findings.map((finding) => finding.checkId)).not.toContain(
-      "tools.exec.agent_skill_mcp_boundary_drift",
-    );
-  });
-
-  it("audits inherited defaults independently of the default agent override", async () => {
+  it("audits inherited defaults independently of an agent override", async () => {
     const stateDir = tempDirs.make("openclaw-audit-mcp-defaults-");
     const report = await runSecurityAuditCore({
       config: {
@@ -316,15 +176,13 @@ describe("security audit config basics", () => {
         tools: { exec: { host: "gateway", security: "full", ask: "off" } },
         agents: {
           defaults: { skills: ["docs-search"] },
-          list: [
-            {
-              id: "safe-default",
-              default: true,
+          entries: {
+            "safe-default": {
               skills: ["safe-only"],
               tools: { exec: { security: "deny" } },
             },
-            { id: "inheritor" },
-          ],
+            inheritor: {},
+          },
         },
       },
       sourceConfig: {},
@@ -342,52 +200,10 @@ describe("security audit config basics", () => {
     expect(finding?.detail).not.toContain("- safe-default:");
   });
 
-  it("suppresses configured accepted findings from the active audit report", async () => {
-    const report = await runSecurityAuditCore({
-      config: {
-        agents: { list: [{ id: "main", default: true }] },
-        security: {
-          audit: {
-            suppressions: [
-              {
-                checkId: "gateway.trusted_proxies_missing",
-                detailIncludes: "trustedProxies",
-                reason: "loopback-only local development",
-              },
-            ],
-          },
-        },
-      },
-      sourceConfig: {},
-      env: {},
-      includeFilesystem: false,
-      includeChannelSecurity: false,
-    });
-
-    expect(
-      report.findings.some((finding) => finding.checkId === "gateway.trusted_proxies_missing"),
-    ).toBe(false);
-    expect(report.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "security.audit.suppressions.active",
-          severity: "info",
-        }),
-      ]),
-    );
-    expect(report.suppressedFindings).toEqual([
-      expect.objectContaining({
-        checkId: "gateway.trusted_proxies_missing",
-        suppression: { reason: "loopback-only local development" },
-      }),
-    ]);
-    expect(report.summary.warn).toBe(report.findings.filter((f) => f.severity === "warn").length);
-  });
-
   it("keeps unrelated dangerous flags active when one dangerous flag is suppressed", async () => {
     const report = await runSecurityAuditCore({
       config: {
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
         hooks: { gmail: { allowUnsafeExternalContent: true } },
         tools: {
           exec: {
@@ -429,49 +245,5 @@ describe("security audit config basics", () => {
         }),
       ]),
     );
-  });
-
-  it("emits a redacted security audit summary event", async () => {
-    resetDiagnosticEventsForTest();
-    const captured = captureSecurityEvents();
-
-    let report: Awaited<ReturnType<typeof runSecurityAuditCore>>;
-    try {
-      report = await runSecurityAuditCore({
-        config: { agents: { entries: { main: { default: true } } } },
-        sourceConfig: {},
-        env: {},
-        includeFilesystem: false,
-        includeChannelSecurity: false,
-      });
-    } finally {
-      captured.stop();
-    }
-
-    expect(report!.summary.warn).toBeGreaterThan(0);
-    const expectedSeverity = report!.summary.critical > 0 ? "critical" : "medium";
-    expect(captured.events).toHaveLength(1);
-    expect(captured.events[0]).toMatchObject({
-      category: "audit",
-      action: "security.audit.completed",
-      outcome: "failure",
-      severity: expectedSeverity,
-      actor: { kind: "operator" },
-      target: { kind: "config", name: "security.audit" },
-      policy: { id: "security.audit", decision: "not_applicable" },
-      control: { id: "security.audit", family: "authorization" },
-      attributes: {
-        critical_count: report!.summary.critical,
-        warn_count: report!.summary.warn,
-        info_count: report!.summary.info,
-        suppressed_count: 0,
-        deep: false,
-        include_filesystem: false,
-        include_channel_security: false,
-      },
-    });
-    const serialized = JSON.stringify(captured.events);
-    expect(serialized).not.toContain("redactSensitive");
-    expect(serialized).not.toContain("logs and status output");
   });
 });

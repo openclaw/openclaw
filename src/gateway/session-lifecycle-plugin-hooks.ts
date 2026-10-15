@@ -77,17 +77,20 @@ export function emitGatewaySessionEndPluginHook(params: {
     agentId: params.agentId,
     archivedTranscripts: endedArchive ? [endedArchive] : params.archivedTranscripts,
   });
+  const hookParams = {
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    reason: params.reason,
+    sessionFile: transcript.sessionFile,
+    transcriptArchived: transcript.transcriptArchived,
+    nextSessionId: params.nextSessionId,
+    nextSessionKey: params.nextSessionKey,
+  };
   if (shouldEmitAutoReset) {
     emitSessionAutoResetHook({
       cfg: params.cfg,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      reason: params.reason,
-      sessionFile: transcript.sessionFile,
-      transcriptArchived: transcript.transcriptArchived,
-      nextSessionId: params.nextSessionId,
-      nextSessionKey: params.nextSessionKey,
-      agentId: params.agentId,
+      ...hookParams,
       workspaceDir: params.workspaceDir,
       storePath: params.storePath,
     });
@@ -109,17 +112,7 @@ export function emitGatewaySessionEndPluginHook(params: {
       : params.reason === "new"
         ? { available: false as const, reason: "no-stable-cutoff" as const }
         : { available: false as const, reason: "unsupported-source" as const });
-  const payload = buildSessionEndHookPayload({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    reason: params.reason,
-    sessionFile: transcript.sessionFile,
-    transcriptArchived: transcript.transcriptArchived,
-    nextSessionId: params.nextSessionId,
-    nextSessionKey: params.nextSessionKey,
-    endedTranscript,
-  });
+  const payload = buildSessionEndHookPayload({ ...hookParams, endedTranscript });
   void runWithGatewayDetachedWorkContinuation(async () => {
     await hookRunner.runSessionEnd(payload.event, payload.context);
   }, "hooks:session-end").catch((err: unknown) => {
@@ -153,12 +146,7 @@ export function emitGatewaySessionStartPluginHook(params: {
   if (!hookRunner?.hasHooks("session_start")) {
     return;
   }
-  const payload = buildSessionStartHookPayload({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    resumedFrom: params.resumedFrom,
-  });
+  const payload = buildSessionStartHookPayload({ ...params, sessionId: params.sessionId });
   void runWithGatewayDetachedWorkContinuation(async () => {
     await hookRunner.runSessionStart(payload.event, payload.context);
   }, "hooks:session-start").catch((err: unknown) => {

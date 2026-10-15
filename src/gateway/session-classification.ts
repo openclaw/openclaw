@@ -36,6 +36,7 @@ type GatewaySessionClassification = {
   accountId?: string;
   peerKind?: SessionPeerKind;
   isMain: boolean;
+  isDock: boolean;
   // Classification only: this does not change session visibility, sharing,
   // retention, or authorization semantics.
   isBackground: boolean;
@@ -132,6 +133,7 @@ export function sessionClassificationForRow(
     ...(route?.accountId ? { accountId: route.accountId } : {}),
     ...(peerKind ? { peerKind } : {}),
     isMain,
+    isDock: entry?.createdSurface === "plugin-dock",
     isBackground: BACKGROUND_CLASSIFICATIONS.has(classification),
   };
 }

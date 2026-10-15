@@ -43,8 +43,6 @@ export function parseMd(raw: string): ParseResult {
   };
 }
 
-// ---------- Frontmatter ---------------------------------------------------
-
 interface FrontmatterRange {
   readonly entries: readonly FrontmatterEntry[];
   /** 0-based line index of the closing `---`. */
@@ -97,8 +95,6 @@ function unquote(value: string): string {
   return value;
 }
 
-// ---------- H2 block walker -----------------------------------------------
-
 function walkBlocks(
   tokens: readonly Token[],
   bodyLines: readonly string[],
@@ -145,8 +141,6 @@ function walkBlocks(
 
   return { preamble, blocks };
 }
-
-// ---------- Item extraction ----------------------------------------------
 
 // Every list_item_open becomes an item (bullets, numbered, nested
 // sub-bullets); lint rules flag depth / duplicate-slug collisions.

@@ -28,6 +28,22 @@ function host(): Parameters<typeof resetIdentityDraft>[0] {
   };
 }
 
+function saveOptions(
+  state: ReturnType<typeof host>,
+  expectedClient = { request: vi.fn() } as unknown as GatewayBrowserClient,
+) {
+  return {
+    host: state,
+    expectedClient,
+    agentId: "main",
+    agents: {} as ApplicationContext["agents"],
+    agentIdentity: {} as ApplicationContext["agentIdentity"],
+    canDispatch: () => true,
+    isCurrent: () => true,
+    onSaved: vi.fn(),
+  };
+}
+
 describe("agent identity actions", () => {
   it("rejects disabled avatar reads and results finishing after policy changes", async () => {
     const base = createApplicationConfigCapability({ resourceBasePath: "" });
@@ -59,16 +75,9 @@ describe("agent identity actions", () => {
     state.identityDraft.avatar = "data:image/png;base64,aA==";
     const runExternalMutation = vi.fn();
     await saveIdentityDraft({
-      host: state,
+      ...saveOptions(state),
       config,
-      expectedClient: { request: vi.fn() } as unknown as GatewayBrowserClient,
-      agentId: "main",
-      agents: {} as ApplicationContext["agents"],
-      agentIdentity: {} as ApplicationContext["agentIdentity"],
       runtimeConfig: { runExternalMutation } as unknown as ApplicationContext["runtimeConfig"],
-      canDispatch: () => true,
-      isCurrent: () => true,
-      onSaved: vi.fn(),
     });
     expect(runExternalMutation).not.toHaveBeenCalled();
     expect(state.identityError).toBe(uploadsDisabledMessage());
@@ -77,20 +86,9 @@ describe("agent identity actions", () => {
     const state = host();
     state.identityDraft.name = "  ";
     const runExternalMutation = vi.fn();
-    const expectedClient = { request: vi.fn() } as unknown as GatewayBrowserClient;
-
     await saveIdentityDraft({
-      host: state,
-      expectedClient,
-      agentId: "main",
-      agents: {} as ApplicationContext["agents"],
-      agentIdentity: {} as ApplicationContext["agentIdentity"],
-      runtimeConfig: {
-        runExternalMutation,
-      } as unknown as ApplicationContext["runtimeConfig"],
-      canDispatch: () => true,
-      isCurrent: () => true,
-      onSaved: vi.fn(),
+      ...saveOptions(state),
+      runtimeConfig: { runExternalMutation } as unknown as ApplicationContext["runtimeConfig"],
     });
 
     expect(runExternalMutation).not.toHaveBeenCalled();
@@ -184,15 +182,10 @@ describe("agent identity actions", () => {
     } as unknown as ApplicationContext["agentIdentity"];
 
     await saveIdentityDraft({
-      host: state,
-      expectedClient: client,
-      agentId: "main",
+      ...saveOptions(state, client),
       agents,
       agentIdentity,
       runtimeConfig,
-      canDispatch: () => true,
-      isCurrent: () => true,
-      onSaved: vi.fn(),
     });
 
     expect(order).toEqual(["config.set", "agents.update", "config.get"]);
@@ -204,20 +197,28 @@ describe("agent identity actions", () => {
     runtimeConfig.dispose();
   });
 
-  it("does not send a stale identity draft through a replacement connection", async () => {
+  it.each(["Connection", "Access"])("does not dispatch after %s changes", async (changed) => {
     const expectedClient = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const replacementRequest = vi.fn();
-    const replacementClient = {
-      request: replacementRequest,
-    } as unknown as GatewayBrowserClient;
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
     const state = host();
     state.identityDraft.name = "Agent Smith";
     const runtimeConfig = {
-      runExternalMutation: vi.fn(async (task) => {
+      runExternalMutation: vi.fn(async (task, options) => {
+        if (changed === "Access") {
+          if (options?.canDispatch?.()) {
+            throw new Error("Expected identity access to be revoked.");
+          }
+          return {
+            ok: false as const,
+            reason: "unavailable" as const,
+            error: options?.dispatchError ?? "Access changed.",
+          };
+        }
         try {
           return {
             ok: true as const,
-            value: await task(replacementClient),
+            value: await task(client),
             refresh: { ok: true as const },
           };
         } catch (error) {
@@ -227,61 +228,18 @@ describe("agent identity actions", () => {
     } as unknown as ApplicationContext["runtimeConfig"];
 
     await saveIdentityDraft({
-      host: state,
-      expectedClient,
-      agentId: "main",
-      agents: {} as ApplicationContext["agents"],
-      agentIdentity: {} as ApplicationContext["agentIdentity"],
+      ...saveOptions(state, changed === "Connection" ? expectedClient : client),
       runtimeConfig,
-      canDispatch: () => true,
-      isCurrent: () => true,
-      onSaved: vi.fn(),
-    });
-
-    expect(replacementRequest).not.toHaveBeenCalled();
-    expect(state.identityError).toContain(
-      "Connection changed before the agent identity update started.",
-    );
-  });
-
-  it("does not send a queued identity update after access changes", async () => {
-    const request = vi.fn();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const state = host();
-    state.identityDraft.name = "Agent Smith";
-    const runExternalMutation = vi.fn(async (_task, options) => {
-      if (options?.canDispatch?.()) {
-        throw new Error("Expected identity access to be revoked.");
-      }
-      return {
-        ok: false as const,
-        reason: "unavailable" as const,
-        error: options?.dispatchError ?? "Access changed.",
-      };
-    });
-
-    await saveIdentityDraft({
-      host: state,
-      expectedClient: client,
-      agentId: "main",
-      agents: {} as ApplicationContext["agents"],
-      agentIdentity: {} as ApplicationContext["agentIdentity"],
-      runtimeConfig: {
-        runExternalMutation,
-      } as unknown as ApplicationContext["runtimeConfig"],
-      canDispatch: () => false,
-      isCurrent: () => true,
-      onSaved: vi.fn(),
+      canDispatch: () => changed !== "Access",
     });
 
     expect(request).not.toHaveBeenCalled();
     expect(state.identityError).toContain(
-      "Access changed before the agent identity update started.",
+      `${changed} changed before the agent identity update started.`,
     );
   });
 
   it("clears a committed identity draft while surfacing a config refresh warning", async () => {
-    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const state = host();
     state.identityDraft.name = "Agent Smith";
     const runExternalMutation = vi.fn(async () => ({
@@ -291,9 +249,7 @@ describe("agent identity actions", () => {
     }));
 
     await saveIdentityDraft({
-      host: state,
-      expectedClient: client,
-      agentId: "main",
+      ...saveOptions(state),
       agents: {
         refreshList: vi.fn(async () => undefined),
       } as unknown as ApplicationContext["agents"],
@@ -301,12 +257,7 @@ describe("agent identity actions", () => {
         invalidate: vi.fn(),
         ensure: vi.fn(async () => undefined),
       } as unknown as ApplicationContext["agentIdentity"],
-      runtimeConfig: {
-        runExternalMutation,
-      } as unknown as ApplicationContext["runtimeConfig"],
-      canDispatch: () => true,
-      isCurrent: () => true,
-      onSaved: vi.fn(),
+      runtimeConfig: { runExternalMutation } as unknown as ApplicationContext["runtimeConfig"],
     });
 
     expect(runExternalMutation).toHaveBeenCalledOnce();

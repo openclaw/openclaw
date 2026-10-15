@@ -56,12 +56,7 @@ export type AcpLedgerOptions = {
   now?: () => number;
 };
 
-export type AcpMutableLedgerState = {
-  maxSessions: number;
-  maxEventsPerSession: number;
-  maxSerializedBytes: number;
-  now: () => number;
-};
+export type AcpMutableLedgerState = ReturnType<typeof normalizeAcpLedgerOptions>;
 
 export function normalizeAcpLedgerOptions(options: AcpLedgerOptions = {}) {
   return {

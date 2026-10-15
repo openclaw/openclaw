@@ -21,6 +21,8 @@ export function modelCatalogRowToEntry(
     ...(isCatalogModelApi(row.api) ? { api: row.api } : {}),
     ...(row.baseUrl ? { baseUrl: row.baseUrl } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(row.contextWindowSource ? { contextWindowSource: row.contextWindowSource } : {}),
+    ...(row.contextCapacitySource ? { contextCapacitySource: row.contextCapacitySource } : {}),
     ...(row.contextWindows
       ? { contextWindows: row.contextWindows.map((option) => ({ ...option })) }
       : {}),
@@ -80,7 +82,7 @@ export function enrichHarnessRows(
   let donorsPrepared = false;
   return rows.map((entry) => {
     // Native discovery owns these capabilities; host donors cannot invent its transport.
-    if (entry.nativeRuntime) {
+    if (entry.nativeRuntime && entry.name !== entry.id) {
       return entry;
     }
     if (!donorsPrepared) {
@@ -113,6 +115,9 @@ export function enrichHarnessRows(
         : undefined);
     if (!donor) {
       return entry;
+    }
+    if (entry.nativeRuntime) {
+      return { ...entry, name: donor.name };
     }
     const compat = mergeHarnessCompat(entry.compat, donor.compat);
     const mergedParams =

@@ -10,7 +10,7 @@ const sharedOwners = [
   /^packages\/mermaid-renderer\//u,
   /^apps\/ios\/(?:project\.yml|[^/]+\.plist|[^/]+\.xcconfig|Config\/|Tests\/Info\.plist)/u,
   /^apps\/(?:shared\/OpenClawKit|swabble)\/Package\.(?:swift|resolved)$/u,
-  /^apps\/macos\/Tests\/OpenClawIPCTests\/GatewayWebSocketTestSupport\.swift$/u,
+  /^apps\/macos\/Tests\/OpenClawIPCTests\/(?:AsyncTestGate|DashboardHTTPFixture|GatewayWebSocketTestSupport|TestWait)\.swift$/u,
   /^apps\/shared\/OpenClawKit\/Tests\/OpenClawKitTests\/(?:NativeGatewayWebSocketFixture|ChatMermaidRenderModelTests|ChatSelectableTextViewTests|ChatPasteboardTests)\.swift$/u,
 ];
 
@@ -19,8 +19,9 @@ const buildOwners = [
   /^\.github\/(?:workflows\/ci\.yml|actions\/)/u,
   /^config\/swift(?:lint\.yml|format)$/u,
   /^scripts\/(?:ci-build-manifest\.mjs|ci-changed-scope\.mjs|prepare-apple-mermaid\.mjs|select-ios-simulator\.mjs)$/u,
+  /^scripts\/ci-xcodebuild\.py$/u,
   /^scripts\/lib\/(?:ci-ios-smoke-plan\.mjs|swift-toolchain\.sh|(?:ios|mobile)-version\.ts|release-version\.mjs|version-script-args\.ts)$/u,
-  /^scripts\/(?:check-swift-tools|format-swift|install-simslim|install-swift-tools|install-xcodegen|lint-swift|ios-configure-signing|ios-simulator-prepare|ios-team-id|ios-write-version-xcconfig)\.sh$/u,
+  /^scripts\/(?:check-swift-tools|format-swift|install-simslim|install-swift-tools|install-xcodegen|lint-swift|ios-configure-signing|ios-generate-test-tls-identity|ios-simulator-prepare|ios-team-id|ios-write-version-xcconfig)\.sh$/u,
   /^scripts\/(?:ios-write-swift-filelist\.m[jt]s|ios-version\.ts)$/u,
 ];
 
@@ -32,7 +33,8 @@ const voiceOwners = [
 ];
 
 const lifecycleOwners = [
-  /^apps\/ios\/Tests\/(?:CloudflareAccessClientTests|CloudflareAccessTransferTests|CloudflareAccessSessionStoreTests|CloudflareAccessTestTokens|ChatTypingFocusTests|ChatSendHydrationTests)\.swift$/u,
+  /^scripts\/ios-access-restart-proof\.py$/u,
+  /^apps\/ios\/Tests\/(?:CloudflareAccessClientTests|CloudflareAccessBrowserPresenterTests|CloudflareAccessTransferTests|CloudflareAccessSessionStoreTests|CloudflareAccessTestTokens|ChatTypingFocusTests|ChatSendHydrationTests|GatewayIngressControllerTests|GatewayIngressActivationTests|GatewayIngressWireTests|GatewayIngressLoginPreparationTests|GatewayAccessRestartTests|GatewayOperatorFleetTests|GatewayConnectionControllerTests|GatewayConnectionSecurityTests|GatewaySettingsStoreTests|IOSMediaArtifactLoaderTests|OpenClawTypographyTests)\.swift$/u,
 ];
 
 /** Select simulator execution only; the app and test products still compile. */

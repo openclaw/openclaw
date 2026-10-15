@@ -1,4 +1,5 @@
 import { getDeferredPluginMigrationConfigFacts } from "../../../config/deferred-plugin-migration-config.js";
+import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
 // Validating legacy config migration wrapper used by doctor config flow.
 import type { OpenClawConfig } from "../../../config/types.js";
 import { validateConfigObjectRawWithPlugins } from "../../../config/validation.js";
@@ -24,9 +25,10 @@ export function migrateLegacyConfig(
   if (!next) {
     return { config: null, ...diagnostics };
   }
-  const resolvedCandidate = context
-    ? (applyLegacyDoctorMigrations(context.resolvedRaw, options).next ?? context.resolvedRaw)
-    : next;
+  const resolvedCandidate =
+    context && context.resolvedRaw !== raw
+      ? (applyLegacyDoctorMigrations(context.resolvedRaw, options).next ?? context.resolvedRaw)
+      : next;
   // Runtime defaults create unrelated plugin entries that Doctor would then load
   // and persist. Validate repair candidates without materializing those defaults.
   const validated = validateConfigObjectRawWithPlugins(resolvedCandidate, {
@@ -36,5 +38,9 @@ export function migrateLegacyConfig(
     changes.push("Migration applied; other validation issues remain — run doctor to review.");
     return { config: next as OpenClawConfig, ...diagnostics, partiallyValid: true };
   }
-  return { config: validated.config, sourceConfig: next as OpenClawConfig, ...diagnostics };
+  return {
+    config: inheritLegacyDefaultAgentId(resolvedCandidate, validated.config),
+    sourceConfig: next as OpenClawConfig,
+    ...diagnostics,
+  };
 }

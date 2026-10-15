@@ -61,10 +61,50 @@ the adapter retains responsibility for cancellation and terminal settlement.
     The shared factory always supplies the client's `model` and the original
     `input` array after those fields, preserving response-count validation.
 
+    Clients returned by `resolveRemoteEmbeddingClient` resolve OAuth authorization
+    through the auth-profile owner before each HTTP request. API keys and explicit
+    authorization headers remain static. Pass the client's optional
+    `resolveRequestHeaders` callback through batch helpers too: it receives
+    `{ forceRefresh, signal }` and returns request headers. `withRemoteHttpResponse`
+    applies those headers before guarded dispatch and supplies the actual headers
+    as the second `onResponse` argument for error redaction. If that handler throws
+    a provider HTTP error for `401 token_expired`, the helper releases the response,
+    resolves headers once with `forceRefresh: true`, and retries only that request.
+    Uploads must use a replayable body such as the batch helper's `FormData`.
+
+    Embedding adapters can use `resolveEmbeddingProviderSsrFPolicy` from
+    `openclaw/plugin-sdk/memory-core-host-engine-embeddings` to apply the shared model
+    provider network policy. Pass the embedding provider ID, API, effective base URL,
+    and configured `request.allowPrivateNetwork` value; reuse the returned policy for
+    embedding requests and batch upload, status, and download requests.
+
+    If an endpoint documents an input-array limit, set the optional
+    `maxInputsPerRequest` field on the created provider instance. Use a positive
+    safe integer for the selected endpoint and model; omit it when unknown.
+    Memory caps inline embedding requests at that number before sending them,
+    alongside its existing byte budget. Undeclared or stale limits still use
+    reactive splitting when the endpoint reports a supported limit error.
+    Invalid declarations are ignored. Provider batch jobs keep their own limits.
+
+    The native OpenAI adapter declares [2048 inputs](https://developers.openai.com/api/reference/resources/embeddings/methods/create).
+    A plugin serving Zhipu [embedding-3](https://docs.bigmodel.cn/cn/guide/models/embedding/embedding-3)
+    can declare 64; do not apply that limit to other models without documentation.
+    Custom OpenAI-compatible endpoints stay undeclared. Bundled adapters using
+    `createRemoteEmbeddingProvider` can pass the same field to that factory.
+    This optional field preserves existing plugin contracts, index contents,
+    and embedding-cache identities.
+
+    `embed` and `embedBatch` accept an optional `onUsage` call option. A provider
+    that reports usage calls it once per successful upstream request, before
+    resolving, with `{ promptTokens, totalTokens }` or `undefined` when that
+    response has no valid counts. Callers can sum these reports and treat any
+    unavailable response as incomplete usage. The shared remote factory reports
+    OpenAI-style usage; vector return values and existing plugins stay unchanged.
+
     Providers that accept model aliases can expose
     `normalizeModel(options): string`. Memory uses this synchronous hook for
     both creation options and cold index identity checks. Keep it configuration-only:
-    do not authenticate or access the network. Make normalization idempotent and
+    do not authenticate or access the network. Make repeated normalization leave an already-normalized value unchanged, and
     reuse it in `create`, which may receive an already-normalized model or be
     called outside memory. Return an empty string only when the
     model remains unknown until discovery; do not turn an invalid explicit

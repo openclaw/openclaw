@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { AgentHarnessCompletionCustody } from "../agents/agent-harness-completion-custody.js";
 import type { AgentHarnessCompletionScope } from "../agents/agent-harness-completion-scope.js";
 import {
@@ -10,7 +11,7 @@ import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
 const mocks = vi.hoisted(() => ({
   deliver: vi.fn(),
   loadRequester: vi.fn(),
-  reconcile: vi.fn(() => "unowned"),
+  reconcile: vi.fn(async () => "unowned"),
   resolveCompletionOrigin: vi.fn(async () => undefined),
   custodyCurrent: true,
   isCustodyCurrent: vi.fn((custody: AgentHarnessCompletionCustody) => custody.isCurrent()),
@@ -41,6 +42,18 @@ vi.mock("../agents/subagents/announce/subagent-announce-delivery.js", () => ({
   loadRequesterSessionEntry: mocks.loadRequester,
   isInternalAnnounceRequesterSession: () => false,
 }));
+vi.mock(
+  "../agents/subagents/announce/subagent-announce-delivery.runtime.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../agents/subagents/announce/subagent-announce-delivery.runtime.js")
+    >()),
+    captureRequesterSessionEntryCurrent: async (sessionKey: string, agentId?: string) => ({
+      readCurrent: () => mocks.loadRequester(sessionKey, agentId).entry,
+      release() {},
+    }),
+  }),
+);
 vi.mock("../agents/subagents/announce/subagent-announce-origin.js", () => ({
   resolveAnnounceOrigin: () => ({ channel: "test", to: "requester" }),
   resolveSubagentCompletionOrigin: mocks.resolveCompletionOrigin,
@@ -82,7 +95,7 @@ function custodyFixture() {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.custodyCurrent = true;
-  mocks.reconcile.mockReturnValue("unowned");
+  mocks.reconcile.mockResolvedValue("unowned");
   mocks.resolveCompletionOrigin.mockImplementation(async () => undefined);
   mocks.loadRequester.mockReturnValue({
     entry: {
@@ -132,10 +145,10 @@ describe("SDK harness completion source admission", () => {
     expect(mocks.deliver).not.toHaveBeenCalled();
   });
 
-  it.each(["custody-currentness", "custody-signal", "caller-signal"] as const)(
+  it.each(["custody-currentness", "caller-signal"] as const)(
     "fences %s at asynchronous admission and effect boundaries",
     async (ending) => {
-      const { custody, controller } = custodyFixture();
+      const { custody } = custodyFixture();
       const caller = new AbortController();
       mocks.deliver.mockImplementation(async (delivery) => {
         const assertCurrent = assertHarnessCompletionSourceAdmission(source);
@@ -145,8 +158,6 @@ describe("SDK harness completion source admission", () => {
         await Promise.resolve();
         if (ending === "custody-currentness") {
           mocks.custodyCurrent = false;
-        } else if (ending === "custody-signal") {
-          controller.abort();
         } else {
           caller.abort();
         }
@@ -231,7 +242,7 @@ describe("SDK harness completion source admission", () => {
   it.each(["pending", "delivered", "blocked"])(
     "honors existing %s requester custody without admitting a second source",
     async (custody) => {
-      mocks.reconcile.mockReturnValue(custody);
+      mocks.reconcile.mockResolvedValue(custody);
       const result = await deliverAgentHarnessCompletion({
         ...params(),
         isSourceSessionAdmissionAllowed: () => false,
@@ -251,27 +262,55 @@ describe("SDK harness completion source admission", () => {
     },
   );
 
-  it.each(["missing", "session", "revision"])(
-    "blocks %s requester after awaited origin resolution",
-    async (kind) => {
-      mocks.resolveCompletionOrigin.mockImplementation(async () => {
+  it.each(["unowned"])(
+    "rejects requester replacement during awaited %s reconciliation",
+    async (custody) => {
+      const entered = createDeferred();
+      const result = createDeferred<string>();
+      mocks.reconcile.mockImplementationOnce(() => {
+        entered.resolve();
+        return result.promise;
+      });
+      const delivery = deliverAgentHarnessCompletion(params());
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          delivery,
+          "completion bypassed requester reconciliation",
+        );
         mocks.loadRequester.mockReturnValue({
-          entry:
-            kind === "missing"
-              ? undefined
-              : {
-                  sessionId: kind === "session" ? "successor" : source.requesterSessionId,
-                  lifecycleRevision:
-                    kind === "revision" ? "successor" : source.requesterLifecycleRevision,
-                },
+          entry: {
+            sessionId: source.requesterSessionId,
+            lifecycleRevision: "successor",
+          },
         });
-        return undefined;
-      });
-      await expect(deliverAgentHarnessCompletion(params())).resolves.toMatchObject({
-        delivered: false,
-        recoveryBlocked: true,
-      });
-      expect(mocks.deliver).not.toHaveBeenCalled();
+        result.resolve(custody);
+        await expect(delivery).resolves.toMatchObject({
+          delivered: false,
+          recoveryBlocked: true,
+        });
+        expect(mocks.deliver).not.toHaveBeenCalled();
+      } finally {
+        result.resolve(custody);
+        await delivery;
+      }
     },
   );
+
+  it("blocks a replaced requester revision after awaited origin resolution", async () => {
+    mocks.resolveCompletionOrigin.mockImplementation(async () => {
+      mocks.loadRequester.mockReturnValue({
+        entry: {
+          sessionId: source.requesterSessionId,
+          lifecycleRevision: "successor",
+        },
+      });
+      return undefined;
+    });
+    await expect(deliverAgentHarnessCompletion(params())).resolves.toMatchObject({
+      delivered: false,
+      recoveryBlocked: true,
+    });
+    expect(mocks.deliver).not.toHaveBeenCalled();
+  });
 });

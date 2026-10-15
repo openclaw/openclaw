@@ -8,25 +8,15 @@ const PORTAL_REACHABILITY_TIMEOUT_MS = 4_000;
  */
 export type PortalReachability = "reachable" | "unreachable" | "blocked";
 
-function isProbeViolation(event: SecurityPolicyViolationEvent, target: URL): boolean {
-  try {
-    return new URL(event.blockedURI).origin === target.origin;
-  } catch {
-    // Keyword blockedURI values ("inline", "eval") never describe this fetch.
-    return false;
-  }
-}
-
 export async function probePortalReachable(url: string): Promise<PortalReachability> {
-  let target: URL;
-  try {
-    target = new URL(url);
-  } catch {
+  const target = URL.parse(url);
+  if (!target) {
     return "unreachable";
   }
   let blocked = false;
   const onViolation = (event: Event) => {
-    if (isProbeViolation(event as SecurityPolicyViolationEvent, target)) {
+    // Keyword blockedURI values ("inline", "eval") never describe this fetch.
+    if (URL.parse((event as SecurityPolicyViolationEvent).blockedURI)?.origin === target.origin) {
       blocked = true;
     }
   };

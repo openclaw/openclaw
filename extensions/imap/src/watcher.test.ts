@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { createServer, type Server, type Socket } from "node:net";
-import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveImapConfig, type ImapAccountConfig } from "./config.js";
@@ -199,7 +200,8 @@ async function startWatcher(
     withTimeout(waitForAccountCursor("inbox", { uidValidity, lastSeenUid }), timeoutMs, {
       message: `IMAP inbox cursor did not reach UIDVALIDITY ${uidValidity}, UID ${lastSeenUid}`,
     });
-  const context: OpenClawPluginServiceContext = {
+  const context: OpenClawPluginServiceContextV2 = {
+    scheduler: createTestPluginServiceScheduler(),
     config: {},
     stateDir: "/unused-imap-test-state",
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },

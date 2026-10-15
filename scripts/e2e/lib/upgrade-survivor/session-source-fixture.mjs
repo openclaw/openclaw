@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 function captureLegacySessionSources(stateDir) {
-  const directory = path.join(stateDir, "sessions");
+  const directory = path.join(stateDir, "agents", "main", "sessions");
   const sources = Object.fromEntries(
     fs.readdirSync(directory).map((name) => [
       name,

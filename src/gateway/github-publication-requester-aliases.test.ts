@@ -1,7 +1,6 @@
 // Register shared transport mocks before production publication owners load.
 // oxfmt-ignore
 import {
-  createGitHubPublicationRequesterFixture,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
@@ -9,6 +8,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
 import * as userProfileList from "../state/user-profile-list.js";
 import {
   ensureCanonicalUserProfileForEmail,
@@ -20,14 +20,13 @@ import {
   setDisplayName,
   setUserProfileRole,
 } from "../state/user-profile-writes.worker.js";
-import * as userProfiles from "../state/user-profiles.js";
-import { getUserProfileListItem } from "../state/user-profiles.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import {
-  captureGitHubPublicationRequester,
+  prepareGitHubPublicationRequesterV2,
   restoreGitHubPublicationRequester,
 } from "./github-publication-requester.js";
 import {
+  createGitHubPublicationRequesterFixture,
   createRequesterPolicyFixture,
   createRequesterPublicationFixture,
   guestScopes,
@@ -100,13 +99,10 @@ describe("shared GitHub publication requester alias bindings", () => {
         }
         const resume = policy.resume;
         const observed = vi.spyOn(policy, "resume");
-        const protocolProfile = vi.spyOn(userProfiles, "getUserProfileListItem");
         const native = vi.spyOn(f.database.db, "prepare");
         const assertWithoutProfileSql = () => {
-          protocolProfile.mockClear();
           native.mockClear();
           restored.assertCurrent();
-          expect(protocolProfile).not.toHaveBeenCalled();
           expect(
             native.mock.calls.filter(([sql]) =>
               /user_profiles|user_profile_emails|user_profile_identities/u.test(sql),
@@ -168,10 +164,10 @@ describe("shared GitHub publication requester alias bindings", () => {
         const original = await captureGuest(f);
         const claim = await holdWorkerTurn(f);
         const input = f.request("interrupted-visitor-identity", original.requester);
-        const queued = await f.coordinator.requestForSession(input);
+        const queued = await f.coordinator.requestForSessionV2(input);
         const staff =
           change === "captured alias"
-            ? await f.coordinator.requestForSession(
+            ? await f.coordinator.requestForSessionV2(
                 f.request("independent-maintainer", f.maintainer),
               )
             : undefined;
@@ -184,6 +180,7 @@ describe("shared GitHub publication requester alias bindings", () => {
         expect(JSON.stringify(f.readRequester(queued.requestId))).not.toContain(email);
         if (change === "captured alias") {
           await linkCanonicalUserProfileEmail(email, other.id);
+          expect(original.requester.signal.aborted).toBe(true);
           expect(original.requester.assertCurrent).toThrow(
             GitHubPublicationRequesterUnavailableError,
           );
@@ -198,7 +195,7 @@ describe("shared GitHub publication requester alias bindings", () => {
           const retry = await captureGuest(f);
           expect(retry.requester.snapshot.grant?.aliasBindingIds).toHaveLength(3);
           expect(
-            (await f.coordinator.requestForSession({ ...input, requester: retry.requester }))
+            (await f.coordinator.requestForSessionV2({ ...input, requester: retry.requester }))
               .requestId,
           ).toBe(queued.requestId);
           expect(f.readRequester(queued.requestId)).toEqual(original.requester.snapshot);
@@ -218,13 +215,13 @@ describe("shared GitHub publication requester alias bindings", () => {
         await visitors.start();
         const restarted = f.restart();
         await restarted.resumeSessionRequests();
-        expect(restarted.read(queued.requestId)).toMatchObject(
+        expect(await restarted.readAsync(queued.requestId)).toMatchObject(
           change === "captured alias"
             ? { status: "failed", code: "identity_changed" }
             : { status: "published" },
         );
         if (staff) {
-          expect(restarted.read(staff.requestId)).toMatchObject({ status: "published" });
+          expect(await restarted.readAsync(staff.requestId)).toMatchObject({ status: "published" });
         }
         expect(f.publishedTitles.toSorted()).toEqual(
           change === "captured alias"
@@ -264,13 +261,13 @@ describe("shared GitHub publication requester alias bindings", () => {
                 runId: "immediate-alias-retry-run",
               });
         const input = f.request("immediate-alias-retry", original.requester);
-        const queued = await f.coordinator.requestForClaim({ ...input, claim });
+        const queued = await f.coordinator.requestForClaimV2({ ...input, claim });
         expect(queued.status).toBe("requested");
         expect(f.externalWrites).toEqual([]);
         if (backend === "repository") {
-          f.placements.markWorkspaceResultPending(claim);
+          await f.placements.markWorkspaceResultPending(claim);
           await f.coordinator.prepareClaimWorkspace(claim);
-          f.placements.acceptWorkspaceResult(claim);
+          await f.placements.acceptWorkspaceResult(claim);
         }
         const accepted = f.readReceipt(queued.requestId)!;
         if (backend === "repository") {
@@ -283,7 +280,7 @@ describe("shared GitHub publication requester alias bindings", () => {
 
         await linkCanonicalUserProfileEmail(later, f.guestProfile);
         const controller = new AbortController();
-        const retry = await captureGitHubPublicationRequester(
+        const retry = await prepareGitHubPublicationRequesterV2(
           {
             client: original.client,
             context: original.context,
@@ -294,7 +291,7 @@ describe("shared GitHub publication requester alias bindings", () => {
         onTestFinished(retry.release);
         expect(retry.requester.snapshot.grant?.aliasBindingIds).toHaveLength(2);
         if (backend === "repository") {
-          f.placements.completeWorkspaceResultAndReleaseTurn(claim);
+          await f.placements.completeWorkspaceResultAndReleaseTurn(claim);
         } else {
           await f.placements.releaseTurn(claim);
         }
@@ -314,7 +311,7 @@ describe("shared GitHub publication requester alias bindings", () => {
           }
           return identity;
         });
-        const result = await f.coordinator.requestForSession({
+        const result = await f.coordinator.requestForSessionV2({
           ...input,
           requester: retry.requester,
         });
@@ -348,14 +345,14 @@ describe("shared GitHub publication requester alias bindings", () => {
       await withVisitors(f, async () => {
         const original = await captureGuest(f);
         const claim = await holdWorkerTurn(f);
-        const queued = await f.coordinator.requestForSession(
+        const queued = await f.coordinator.requestForSessionV2(
           f.request("profile-preparation-recovery", original.requester),
         );
         expect(queued.status).toBe("requested");
         if (backend === "repository") {
-          f.placements.markWorkspaceResultPending(claim);
+          await f.placements.markWorkspaceResultPending(claim);
           await f.coordinator.prepareClaimWorkspace(claim);
-          f.placements.acceptWorkspaceResult(claim);
+          await f.placements.acceptWorkspaceResult(claim);
         }
         const accepted = f.readReceipt(queued.requestId)!;
         if (backend === "repository") {
@@ -363,7 +360,7 @@ describe("shared GitHub publication requester alias bindings", () => {
             checkpoint_ref: expect.any(String),
             checkpoint_digest: expect.any(String),
           });
-          f.placements.completeWorkspaceResultAndReleaseTurn(claim);
+          await f.placements.completeWorkspaceResultAndReleaseTurn(claim);
         } else {
           await f.placements.releaseTurn(claim);
         }
@@ -421,7 +418,7 @@ describe("shared GitHub publication requester alias bindings", () => {
           if (availability === "a profile mutation is unsettled") {
             expect(mutation).toBeDefined();
           }
-          expect(restarted.read(queued.requestId)).toMatchObject({
+          expect(await restarted.readAsync(queued.requestId)).toMatchObject({
             status: backend === "local" ? "publishing" : "requested",
           });
           expect(f.readRequester(queued.requestId)).toEqual(original.requester.snapshot);
@@ -434,7 +431,7 @@ describe("shared GitHub publication requester alias bindings", () => {
           await mutation;
         }
         await restarted.resumeSessionRequests();
-        expect(restarted.read(queued.requestId)).toMatchObject({ status: "published" });
+        expect(await restarted.readAsync(queued.requestId)).toMatchObject({ status: "published" });
         expect(f.readRequester(queued.requestId)).toEqual(original.requester.snapshot);
         expect(f.readReceipt(queued.requestId)?.request_digest).toBe(accepted.request_digest);
         expect(f.publishedTitles).toEqual(["profile-preparation-recovery"]);
@@ -449,7 +446,7 @@ describe("shared GitHub publication requester alias bindings", () => {
       const claim = await holdWorkerTurn(f);
       const input = f.request("concurrent-alias-retry", original.requester);
       const later = "publication-later-alias@example.test";
-      let winner: Awaited<ReturnType<typeof f.coordinator.requestForSession>> | undefined;
+      let winner: Awaited<ReturnType<typeof f.coordinator.requestForSessionV2>> | undefined;
       let winningSnapshot: typeof original.requester.snapshot | undefined;
       const prepare = mocks.prepareIdentity.getMockImplementation()!;
       mocks.prepareIdentity.mockImplementationOnce(async (...args) => {
@@ -457,10 +454,10 @@ describe("shared GitHub publication requester alias bindings", () => {
         await linkCanonicalUserProfileEmail(later, f.guestProfile);
         const retry = await captureGuest(f);
         winningSnapshot = retry.requester.snapshot;
-        winner = await f.coordinator.requestForSession({ ...input, requester: retry.requester });
+        winner = await f.coordinator.requestForSessionV2({ ...input, requester: retry.requester });
         return identity;
       });
-      const admitted = await f.coordinator.requestForSession(input);
+      const admitted = await f.coordinator.requestForSessionV2(input);
       expect(admitted.requestId).toBe(winner?.requestId);
       expect(admitted.status).toBe("requested");
       expect(original.requester.snapshot.grant?.aliasBindingIds).toHaveLength(1);
@@ -475,7 +472,7 @@ describe("shared GitHub publication requester alias bindings", () => {
       original.release();
       const restarted = f.restart();
       await restarted.resumeSessionRequests();
-      expect(restarted.read(admitted.requestId)).toMatchObject({
+      expect(await restarted.readAsync(admitted.requestId)).toMatchObject({
         status: "failed",
         code: "identity_changed",
       });

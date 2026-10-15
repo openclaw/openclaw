@@ -1,4 +1,3 @@
-// Gateway usage methods validate requests and assemble owner-scoped usage reports.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -11,25 +10,41 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveUsageCostWorkerDayBucket } from "../../infra/session-cost-usage-worker-runtime.js";
 import { loadSessionLogs, loadSessionUsageTimeSeries } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { readSessionRowChangeRevision } from "../../sessions/session-row-changes.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import {
   createUsageAggregateAccumulator,
   UNKNOWN_USAGE_CREATOR_KEY,
 } from "../../shared/usage-aggregates.js";
+import { buildUsageOverview, selectUsageOverviewPage } from "../../shared/usage-overview.js";
+import { extractQueryTerms } from "../../shared/usage-query.js";
 import type {
   SessionUsageEntry,
   SessionUsageCreator,
   SessionsUsageAggregates,
   SessionsUsageResult,
+  UsageOverviewOptions,
 } from "../../shared/usage-types.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.read.js";
+import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { projectSessionActor } from "../session-identity-projection.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  prepareSessionMutationFacts,
+  SessionMutationFactsUnavailableError,
+} from "../session-sharing-preparation.js";
+import {
+  prepareProjectedSessionSharing,
+  prepareSessionSharingProfiles,
+} from "../session-sharing-read.js";
 import { createSessionListEntryFilter, isGatewayAdmin } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
@@ -42,8 +57,11 @@ import {
   type DateInterpretation,
   type DateRange,
 } from "./usage-date-range.js";
-import { loadCostUsageSummaryCached, loadSessionsUsageResultCached } from "./usage-result-cache.js";
-import { loadUsageSessionSummaries } from "./usage-session-loading.js";
+import {
+  loadCostUsageSummaryCached,
+  loadSessionsUsageSnapshotCached,
+} from "./usage-result-cache.js";
+import { loadUsageSessionSummaries, withUsageRequestBudget } from "./usage-session-loading.js";
 import {
   loadUsageSessionContext,
   resolveSessionUsageTarget,
@@ -54,7 +72,7 @@ import {
 } from "./usage-session-selection.js";
 import { assertValidParams } from "./validation.js";
 
-function resolveSessionUsageFileOrRespond(
+async function resolveSessionUsageFileOrRespond(
   params: { key?: unknown; agentId?: unknown } | undefined,
   detail: "timeseries" | "logs",
   respond: RespondFn,
@@ -78,10 +96,11 @@ function resolveSessionUsageFileOrRespond(
     respond(false, undefined, sessionOwner.error);
     return null;
   }
-  let resolved: NonNullable<ReturnType<typeof resolveSessionUsageTarget>> | undefined;
+  let resolved: Awaited<ReturnType<typeof resolveSessionUsageTarget>>;
   try {
-    resolved = resolveSessionUsageTarget(key, config, sessionOwner.agentId);
+    resolved = await resolveSessionUsageTarget(key, config, sessionOwner.agentId);
   } catch {
+    getAsyncWorkSignal()?.throwIfAborted();
     resolved = undefined;
   }
   if (!resolved) {
@@ -225,7 +244,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     });
     respond(true, summary, undefined);
   },
-  "sessions.usage": async ({ respond, params, context, client }) => {
+  "sessions.usage": withUsageRequestBudget(async ({ respond, params, context, client }, budget) => {
     if (!assertValidParams(params, validateSessionsUsageParams, "sessions.usage", respond)) {
       return;
     }
@@ -246,7 +265,30 @@ export const usageHandlers: GatewayRequestHandlers = {
     const visibilityIdentity = sessionCap && profileId ? `${profileId}:${sessionCap}` : undefined;
     const { startMs, endMs, includeUntimestamped } = range;
     const dayBucket = resolveDayBucket(dateInterpretation);
-    const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
+    const limit = p.projection === "overview" ? 50 : (p.limit ?? 50);
+    const hasOverviewOptions =
+      p.projection === "overview" ||
+      p.query !== undefined ||
+      p.selectedDays !== undefined ||
+      p.selectedHours !== undefined ||
+      p.selectedSessions !== undefined ||
+      p.recentKeys !== undefined ||
+      p.sort !== undefined ||
+      p.sortDirection !== undefined ||
+      p.offset !== undefined;
+    const overviewOptions: UsageOverviewOptions | undefined = hasOverviewOptions
+      ? {
+          limit,
+          offset: p.offset,
+          query: p.query,
+          selectedDays: p.selectedDays,
+          selectedHours: p.selectedHours,
+          selectedSessions: p.selectedSessions,
+          recentKeys: p.recentKeys,
+          sort: p.sort,
+          sortDirection: p.sortDirection,
+        }
+      : undefined;
     const includeContextWeight = p.includeContextWeight ?? false;
     const creatorKey = normalizeOptionalString(p.creatorKey);
     const specificKey = normalizeOptionalString(p.key) ?? null;
@@ -286,9 +328,9 @@ export const usageHandlers: GatewayRequestHandlers = {
     const groupingMode: UsageGroupingMode =
       p.groupBy === "family" || p.includeHistorical === true ? "family" : "instance";
 
-    let result: SessionsUsageResult;
+    let result: Awaited<ReturnType<typeof loadSessionsUsageSnapshotCached>>;
     try {
-      result = await loadSessionsUsageResultCached({
+      result = await loadSessionsUsageSnapshotCached({
         configRef: config,
         ...(effectiveAgentId ? { agentId: effectiveAgentId } : { agentScope: "all" }),
         startMs,
@@ -300,93 +342,116 @@ export const usageHandlers: GatewayRequestHandlers = {
         specificKey,
         includeContextWeight,
         creatorKey,
+        ...(overviewOptions
+          ? { overviewKey: JSON.stringify([p.projection, overviewOptions]) }
+          : {}),
         ...(visibilityIdentity ? { visibilityIdentity } : {}),
         load: async () => {
           const now = Date.now();
-          const visibleEntries = await selectUsageSessions({
-            config,
-            agentId: effectiveAgentId,
-            specificKey,
-            groupingMode,
-            startMs,
-            endMs,
-            visibilityFilter,
-          });
+          const loadedAccessRevision = readGatewayAccessRevision();
+          const loadedSessionRevision = readSessionRowChangeRevision();
+          const visibleEntries = await budget.read(
+            () =>
+              selectUsageSessions({
+                config,
+                agentId: effectiveAgentId,
+                specificKey,
+                groupingMode,
+                startMs,
+                endMs,
+                visibilityFilter,
+              }),
+            () => [],
+          );
           const profiles: Parameters<typeof projectSessionActor>[1] = new Map();
-          const creatorOptions = new Map<string, SessionUsageCreator>();
-          const matchedEntries = visibleEntries.flatMap((entry) => {
-            const creator = projectUsageCreator(entry, profiles, config);
-            creatorOptions.set(creator.key, creator);
-            return !creatorKey || creator.key === creatorKey ? [{ entry, creator }] : [];
-          });
-          const mergedEntries = matchedEntries.map(({ entry }) => entry);
+          const matchedEntries = visibleEntries.map((entry) => ({
+            entry,
+            creator: projectUsageCreator(entry, profiles, config),
+          }));
+          const mergedEntries = matchedEntries
+            .filter(({ creator }) => !creatorKey || creator.key === creatorKey)
+            .map(({ entry }) => entry);
+          if (mergedEntries.reduce((count, entry) => count + entry.instances.length, 0) > 20_000) {
+            throw new UsageSessionInvalidRequestError(
+              "Usage includes more than 20,000 session instances; narrow the date range or select a session.",
+            );
+          }
 
-          // Load usage for each session
+          // Context queries need the saved report for every candidate; ordinary reads hydrate the page.
+          if (
+            extractQueryTerms(overviewOptions?.query ?? "").some(
+              (term) => term.key?.toLowerCase() === "has" && term.value.toLowerCase() === "context",
+            )
+          ) {
+            await budget.read(
+              () => loadUsageSessionContext(mergedEntries, visibilityFilter),
+              () => undefined,
+            );
+          }
           const sessions: SessionUsageEntry[] = [];
-          const accumulator = createUsageAggregateAccumulator();
-          const { summaries: usageByEntryIndex, cacheStatus } = await loadUsageSessionSummaries({
+          const { summaries, computing, cacheStatus } = await loadUsageSessionSummaries({
             entries: mergedEntries,
+            read: budget.read,
             config,
             startMs,
             endMs,
             includeUntimestamped,
             dayBucket,
           });
-          loadUsageSessionContext(mergedEntries.slice(0, limit), visibilityFilter);
 
-          for (const [entryIndex, { entry: merged, creator }] of matchedEntries.entries()) {
-            const agentId = merged.agentId;
-            const usage = usageByEntryIndex[entryIndex] ?? null;
+          const usageByEntry = new Map(
+            mergedEntries.map((entry, index) => [
+              entry,
+              { usage: summaries[index], computing: computing[index] },
+            ]),
+          );
+          for (const { entry: merged, creator } of matchedEntries) {
+            const loaded = usageByEntry.get(merged);
+            const usage = loaded?.usage ?? null;
             const channel = sessionDeliveryChannel(merged.storeEntry);
             const origin = sessionDeliveryOrigin(merged.storeEntry);
-            const chatType = merged.storeEntry?.chatType ?? origin?.chatType;
-            // Aggregate every matched row before limiting the visible list.
-            accumulator.add({
-              usage,
-              agentId,
-              channel,
+            sessions.push({
+              key: merged.key,
+              label: merged.label,
+              sessionId: merged.sessionId,
+              scope: merged.scope ?? "instance",
+              sessionFamilyKey: merged.sessionFamilyKey,
+              currentSessionId: merged.currentSessionId,
+              includedSessionIds: merged.includedSessionIds,
+              historicalInstanceCount: merged.includedSessionIds?.length,
+              updatedAt: merged.updatedAt,
+              agentId: merged.agentId,
               creatorKey: creator.key,
               createdActor: creator.actor,
+              channel,
+              chatType: merged.storeEntry?.chatType ?? origin?.chatType,
+              origin,
+              modelOverride: merged.storeEntry?.modelOverride,
+              providerOverride: merged.storeEntry?.providerOverride,
+              modelProvider: merged.storeEntry?.modelProvider,
+              model: merged.storeEntry?.model,
+              usage,
+              ...(!usage || loaded?.computing ? { computing: true } : {}),
+              hasContextWeight: Boolean(merged.contextWeight),
+              contextWeight: includeContextWeight ? (merged.contextWeight ?? null) : undefined,
             });
-
-            if (entryIndex < limit) {
-              sessions.push({
-                key: merged.key,
-                label: merged.label,
-                sessionId: merged.sessionId,
-                scope: merged.scope ?? "instance",
-                sessionFamilyKey: merged.sessionFamilyKey,
-                currentSessionId: merged.currentSessionId,
-                includedSessionIds: merged.includedSessionIds,
-                historicalInstanceCount: merged.includedSessionIds?.length,
-                updatedAt: merged.updatedAt,
-                agentId,
-                creatorKey: creator.key,
-                createdActor: creator.actor,
-                channel,
-                chatType,
-                origin,
-                modelOverride: merged.storeEntry?.modelOverride,
-                providerOverride: merged.storeEntry?.providerOverride,
-                modelProvider: merged.storeEntry?.modelProvider,
-                model: merged.storeEntry?.model,
-                usage,
-                ...(!usage ? { computing: true } : {}),
-                hasContextWeight: Boolean(merged.contextWeight),
-                contextWeight: includeContextWeight ? (merged.contextWeight ?? null) : undefined,
-              });
-            }
           }
 
           return {
             updatedAt: now,
-            startDate: formatDateLabel(startMs, dateInterpretation),
-            endDate: formatDateLabel(endMs, dateInterpretation),
             sessions,
-            totals: accumulator.totals,
-            aggregates: accumulator.finish(),
-            creatorOptions: Array.from(creatorOptions.values()),
-            cacheStatus,
+            cacheStatus: budget.exhausted()
+              ? {
+                  cachedFiles: 0,
+                  pendingFiles: 0,
+                  staleFiles: 0,
+                  ...cacheStatus,
+                  status: "partial" as const,
+                }
+              : cacheStatus,
+            sources: visibleEntries,
+            accessRevision: loadedAccessRevision,
+            sessionRevision: loadedSessionRevision,
           };
         },
       });
@@ -397,10 +462,224 @@ export const usageHandlers: GatewayRequestHandlers = {
       }
       throw err;
     }
-    respond(true, result, undefined);
-  },
+    const sourcesByAgent = new Map<string, Map<string, UsageSessionSelection>>();
+    for (const source of result.sources) {
+      const sources =
+        sourcesByAgent.get(source.agentId) ?? new Map<string, UsageSessionSelection>();
+      sources.set(source.key, source);
+      sourcesByAgent.set(source.agentId, sources);
+    }
+    const contextReads = new Map<
+      UsageSessionSelection,
+      Awaited<ReturnType<typeof prepareSessionMutationFacts>> | undefined
+    >();
+    const hydratedSources = new Set<UsageSessionSelection>();
+    const sourceFor = ({ agentId, key }: SessionUsageEntry) =>
+      agentId === undefined ? undefined : sourcesByAgent.get(agentId)?.get(key);
+    const committedEntry = (source: UsageSessionSelection) =>
+      source.contextTarget && !source.storeEntry?.incognito
+        ? getSessionRowProjection(context)?.readCapabilityEntry({
+            agentId: source.agentId,
+            storePath: source.contextTarget.storeTarget.storePath,
+            key: source.key,
+          })
+        : undefined;
+    const snapshotIsCurrent = () =>
+      result.sessionRevision === readSessionRowChangeRevision() &&
+      result.accessRevision === readGatewayAccessRevision() &&
+      config === context.getRuntimeConfig();
+    try {
+      const profiles = await prepareSessionSharingProfiles(client ?? null);
+      const prepareUnavailableSources = async () => {
+        const signal = getAsyncWorkSignal();
+        for (const session of result.sessions) {
+          const source = sourceFor(session);
+          if (
+            !source ||
+            !session.agentId ||
+            contextReads.has(source) ||
+            (!session.hasContextWeight && snapshotIsCurrent()) ||
+            committedEntry(source) !== undefined
+          ) {
+            continue;
+          }
+          signal?.throwIfAborted();
+          contextReads.set(source, undefined);
+          try {
+            const prepared = await prepareSessionMutationFacts({
+              cfg: context.getRuntimeConfig(),
+              sessionKey: session.key,
+              agentId: session.agentId,
+            });
+            if (signal?.aborted) {
+              prepared.release();
+              signal.throwIfAborted();
+            }
+            contextReads.set(source, prepared);
+          } catch (error) {
+            if (!(error instanceof SessionMutationFactsUnavailableError)) {
+              throw error;
+            }
+          }
+        }
+      };
+      const readVisibleRows = () => {
+        const currentConfig = context.getRuntimeConfig();
+        const { entryFilter: currentFilter, sessionCap: currentSessionCap } =
+          prepareProjectedSessionSharing({
+            cfg: currentConfig,
+            client: client ?? null,
+            profiles,
+            isMember: () => false,
+          });
+        return result.sessions.flatMap((session): SessionUsageEntry[] => {
+          const source = sourceFor(session);
+          const committed = source && committedEntry(source);
+          let current = committed?.entry;
+          if (committed === undefined && source) {
+            const prepared = contextReads.get(source);
+            if (prepared) {
+              try {
+                current = prepared.readCurrent(currentConfig).target?.entry;
+              } catch (error) {
+                if (!(error instanceof SessionMutationFactsUnavailableError)) {
+                  throw error;
+                }
+              }
+            } else if (!contextReads.has(source) && snapshotIsCurrent()) {
+              current = source.storeEntry;
+            }
+          }
+          // Cached reports are data; current receipt metadata owns publication authority.
+          if (
+            source?.storeEntry
+              ? !current || (currentFilter && !currentFilter(session.key, current))
+              : currentSessionCap === "none"
+          ) {
+            return [];
+          }
+          return session.hasContextWeight && current?.sessionId !== session.sessionId
+            ? [
+                {
+                  ...session,
+                  hasContextWeight: false,
+                  contextWeight: includeContextWeight ? null : undefined,
+                },
+              ]
+            : [session];
+        });
+      };
+      // Refill once after an access change. Continued churn may shorten the page, never extend the scan.
+      let visible: SessionUsageEntry[] | undefined;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await budget.read(prepareUnavailableSources, () => undefined);
+        visible = readVisibleRows();
+        const selected = visible.filter((row) => !creatorKey || row.creatorKey === creatorKey);
+        const pageSources = (
+          overviewOptions
+            ? selectUsageOverviewPage({
+                rows: selected,
+                options: overviewOptions,
+                dayBucket: resolveUsageCostWorkerDayBucket(dayBucket),
+              })
+            : selected.slice(0, limit)
+        ).flatMap((row) => {
+          const source = sourceFor(row);
+          return source && !hydratedSources.has(source) ? [source] : [];
+        });
+        if (pageSources.length === 0) {
+          break;
+        }
+        visible = undefined;
+        const hydrated = await budget.read(
+          async () => {
+            await loadUsageSessionContext(pageSources, visibilityFilter);
+            return true;
+          },
+          () => false,
+        );
+        if (hydrated) {
+          pageSources.forEach((source) => hydratedSources.add(source));
+        } else {
+          break;
+        }
+        result = {
+          ...result,
+          sessions: result.sessions.map((row) => {
+            const source = sourceFor(row);
+            return source && hydratedSources.has(source)
+              ? {
+                  ...row,
+                  hasContextWeight: Boolean(source.contextWeight),
+                  contextWeight: includeContextWeight ? (source.contextWeight ?? null) : undefined,
+                }
+              : row;
+          }),
+        };
+      }
+      if (!visible) {
+        await budget.read(prepareUnavailableSources, () => undefined);
+        visible = readVisibleRows();
+      }
+      const creatorOptions = new Map<string, SessionUsageCreator>();
+      for (const row of visible) {
+        if (row.creatorKey) {
+          creatorOptions.set(row.creatorKey, { key: row.creatorKey, actor: row.createdActor });
+        }
+      }
+      const selected = visible.filter((row) => !creatorKey || row.creatorKey === creatorKey);
+      const accumulator = createUsageAggregateAccumulator();
+      if (!overviewOptions) {
+        selected.forEach((row) => accumulator.add(row));
+      }
+      const slice = overviewOptions
+        ? buildUsageOverview({
+            rows: selected,
+            options: overviewOptions,
+            dayBucket: resolveUsageCostWorkerDayBucket(dayBucket),
+            compact: p.projection === "overview",
+          })
+        : {
+            sessions: selected.slice(0, limit),
+            totals: accumulator.totals,
+            aggregates: accumulator.finish(),
+          };
+      const partial = budget.exhausted()
+        ? { reason: "time-budget" as const, message: budget.hint }
+        : undefined;
+      if (partial && "overview" in slice) {
+        slice.overview.queryWarnings.push(partial.message);
+      }
+      getAsyncWorkSignal()?.throwIfAborted();
+      respond(true, {
+        ...slice,
+        sessions: slice.sessions.map((row) => {
+          const source = sourceFor(row);
+          return source && hydratedSources.has(source)
+            ? row
+            : Object.assign({}, row, { hasContextWeight: false, contextWeight: undefined });
+        }),
+        updatedAt: result.updatedAt,
+        startDate: formatDateLabel(startMs, dateInterpretation),
+        endDate: formatDateLabel(endMs, dateInterpretation),
+        creatorOptions: [...creatorOptions.values()],
+        cacheStatus: partial
+          ? {
+              cachedFiles: 0,
+              pendingFiles: 0,
+              staleFiles: 0,
+              ...result.cacheStatus,
+              status: "partial",
+            }
+          : result.cacheStatus,
+        ...(partial ? { partial } : {}),
+      });
+    } finally {
+      contextReads.forEach((read) => read?.release());
+    }
+  }),
   "sessions.usage.timeseries": async ({ respond, params, context }) => {
-    const resolved = resolveSessionUsageFileOrRespond(
+    const resolved = await resolveSessionUsageFileOrRespond(
       params,
       "timeseries",
       respond,
@@ -409,14 +688,8 @@ export const usageHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { config, key, entry, agentId, sessionId, sessionFile } = resolved;
-
     const timeseries = await loadSessionUsageTimeSeries({
-      sessionId,
-      sessionEntry: entry,
-      sessionFile,
-      config,
-      agentId,
+      ...resolved,
       maxPoints: 200,
     });
 
@@ -424,7 +697,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `No transcript found for session: ${key}`),
+        errorShape(ErrorCodes.INVALID_REQUEST, `No transcript found for session: ${resolved.key}`),
       );
       return;
     }
@@ -437,7 +710,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         ? Math.min(params.limit, 1000)
         : 200;
 
-    const resolved = resolveSessionUsageFileOrRespond(
+    const resolved = await resolveSessionUsageFileOrRespond(
       params,
       "logs",
       respond,
@@ -446,16 +719,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { config, entry, agentId, sessionId, sessionFile } = resolved;
-
-    const logs = await loadSessionLogs({
-      sessionId,
-      sessionEntry: entry,
-      sessionFile,
-      config,
-      agentId,
-      limit,
-    });
+    const logs = await loadSessionLogs({ ...resolved, limit });
 
     respond(true, { logs: logs ?? [] }, undefined);
   },

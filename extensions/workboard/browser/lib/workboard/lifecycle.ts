@@ -1,6 +1,6 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { normalizeSessionKeyForUiComparison } from "../sessions/session-key.ts";
-import { isFailedSessionStatus, staleSessionState, workboardCardSessionKey } from "./card-state.ts";
+import { workboardHost } from "../../host.ts";
+import { workboardCardSessionKey } from "./card-state.ts";
 import { isReservedSessionKey } from "./session-links.ts";
 import type { WorkboardSessionResolution } from "./session-resolution.ts";
 import type { WorkboardCard, WorkboardLifecycle } from "./types.ts";
@@ -14,13 +14,13 @@ export function findWorkboardSession(
   if (!sessionKey || isReservedSessionKey(sessionKey)) {
     return null;
   }
-  const key = normalizeSessionKeyForUiComparison(sessionKey);
+  const key = workboardHost().sessions.normalizeKey(sessionKey);
   if (resolution?.key === key) {
     return resolution.status === "resolved" ? resolution.session : null;
   }
   // A filtered roster proves exact positive matches, never provisional uniqueness.
   return (
-    sessions.find((session) => normalizeSessionKeyForUiComparison(session.key) === key) ?? null
+    sessions.find((session) => workboardHost().sessions.normalizeKey(session.key) === key) ?? null
   );
 }
 
@@ -35,7 +35,8 @@ export function getWorkboardLifecycle(
   }
   if (!session) {
     const current =
-      resolution?.key === normalizeSessionKeyForUiComparison(workboardCardSessionKey(card) ?? "");
+      resolution?.key ===
+      workboardHost().sessions.normalizeKey(workboardCardSessionKey(card) ?? "");
     return {
       session: null,
       state:
@@ -47,13 +48,23 @@ export function getWorkboardLifecycle(
   if (session.status === "queued") {
     return { session, state: "queued" };
   }
-  if (staleSessionState(session)) {
+  if (
+    session.status === "running" &&
+    session.hasActiveRun === false &&
+    typeof session.updatedAt === "number" &&
+    !(Date.now() - session.updatedAt < 30 * 60 * 1000)
+  ) {
     return { session, state: "stale" };
   }
   if (session.hasActiveRun === true || session.status === "running") {
     return { session, state: "running" };
   }
-  if (session.abortedLastRun || isFailedSessionStatus(session.status)) {
+  if (
+    session.abortedLastRun ||
+    session.status === "failed" ||
+    session.status === "killed" ||
+    session.status === "timeout"
+  ) {
     return { session, state: "failed" };
   }
   if (session.status === "done") {

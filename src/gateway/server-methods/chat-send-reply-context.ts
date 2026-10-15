@@ -112,7 +112,10 @@ export async function resolveChatSendReplyContext(
     // Hydrate only what webchat displays: project the stored message through the
     // same chat.history display normalization so envelope wrappers, runtime
     // context, tool payloads, and reasoning-only content stay out of the prompt.
-    const displayMessage = projectChatDisplayMessage(resolved.message);
+    const displayMessage = projectChatDisplayMessage(resolved.message, {
+      // Reply context uses the assistant identity below and discards forwarded sender labels.
+      resolveCronJobName: () => undefined,
+    });
     if (!displayMessage) {
       return fields;
     }

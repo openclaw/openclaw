@@ -19,14 +19,25 @@ vi.mock(import("../plugin-sdk/facade-loader.js"), async (importOriginal) => ({
   ...(await importOriginal()),
   loadBundledPluginPublicSurfaceModuleSyncCore: capture.load,
 }));
+vi.mock("openclaw/plugin-sdk/text-utility-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-utility-runtime")>();
+  return {
+    ...actual,
+    get CONFIG_DIR() {
+      return process.env.OPENCLAW_STATE_DIR ?? actual.CONFIG_DIR;
+    },
+  };
+});
 // Load the real public artifact through the shared test loader, keeping plugin
 // implementation types out of the core typecheck graph.
 const browserDoctor = await loadBundledPluginFacade<typeof import("../commands/doctor-browser.js")>(
   { pluginId: "browser", artifactBasename: "browser-doctor.js" },
 );
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
 
 afterEach(() => {
+  Object.defineProperty(process, "platform", platformDescriptor);
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
@@ -47,6 +58,7 @@ beforeEach(() => {
   vi.spyOn(os, "homedir").mockReturnValue(home);
   vi.stubEnv("HOME", home);
   vi.stubEnv("OPENCLAW_STATE_DIR", configDir);
+  Object.defineProperty(process, "platform", { ...platformDescriptor, value: "darwin" });
   accesses = [];
   const deny = (target: unknown) => {
     if (
@@ -68,19 +80,7 @@ beforeEach(() => {
     deny(args[0]);
     return await asyncRead(...args);
   });
-  capture.surface = {
-    ...browserDoctor,
-    noteChromeMcpBrowserReadiness: (
-      cfg: Parameters<typeof browserDoctor.noteChromeMcpBrowserReadiness>[0],
-      deps?: Parameters<typeof browserDoctor.noteChromeMcpBrowserReadiness>[1],
-    ) =>
-      browserDoctor.noteChromeMcpBrowserReadiness(cfg, {
-        platform: "darwin",
-        configDir,
-        env: { HOME: home },
-        ...deps,
-      }),
-  };
+  capture.surface = browserDoctor;
   const readdir = fsp.readdir;
   vi.spyOn(fsp, "readdir").mockImplementation(async (...args) => {
     if (String(args[0]) === profileRoot) {

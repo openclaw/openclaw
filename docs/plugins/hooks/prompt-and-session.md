@@ -29,7 +29,11 @@ provider payloads, start the Gateway with `--raw-stream` and
 Use the phase-specific hooks for new plugins:
 
 - `before_model_resolve`: receives only the current prompt and attachment
-  metadata. Return `providerOverride` or `modelOverride`.
+  metadata. Return `providerOverride`, `modelOverride`, or `fallbacksOverride`.
+  When provided, `fallbacksOverride` replaces the fallback chain for this run;
+  `[]` disables model fallback, so a failed primary fails the run. A value that
+  is not an array of strings is treated as `[]`. Omit it to preserve configured
+  fallback behavior.
 - `agent_turn_prepare`: receives the current prompt, prepared session
   messages, and queued injections consumed for this session.
   Return `prependContext` or `appendContext`.
@@ -65,19 +69,44 @@ Use the phase-specific hooks for new plugins:
   `prependContext` or `appendContext`. Intended for background monitors that
   need to summarize current state without changing user-initiated turns.
 
-On the embedded and CLI prompt-preparation paths, ordering is: drain queued
-injections → `agent_turn_prepare` → heartbeat contribution (if applicable) →
-ordinary `before_prompt_build` → finalized tool policy → authorized prompt
-enrichment. `agent_turn_prepare` and queued-injection draining are not wired
-into the Codex or Copilot prompt paths.
+On embedded, CLI, and harness runtime prompt-preparation paths (including
+ACPX, Agents API, Codex, and Copilot), ordering is: drain queued injections →
+`agent_turn_prepare` → heartbeat contribution (if applicable) → ordinary
+`before_prompt_build` → finalized tool policy → authorized prompt enrichment.
 
-For multiple registrations, the first defined provider/model override and
+For multiple registrations, the first defined provider/model/fallback override and
 `systemPrompt` win. Context additions concatenate in priority order, and tool
 restrictions intersect. A nested ordinary `before_prompt_build` dispatch on
 the same runner is skipped while its outer dispatch is active; other hook
 families and independent turns remain available.
 
 Message-consuming prompt hooks receive a detached model-context snapshot. Mutating nested messages does not change the caller's history, including when a handler retains its input after returning. Registrations within one dispatch share that snapshot in priority order; prepare, ordinary prompt-build, authorized enrichment, and subsequent prompt rebuilds receive separate snapshots. Storage-only native prompt text and tool-result details are excluded from these snapshots.
+
+### Restrict a run to local models
+
+Return an explicit fallback list when the routing decision must survive a model
+failure. Provider and model overrides alone leave configured fallbacks available.
+
+```typescript
+api.on("before_model_resolve", () => ({
+  providerOverride: "ollama",
+  modelOverride: "qwen3:8b",
+  fallbacksOverride: ["ollama/qwen3:4b"],
+}));
+```
+
+Use `fallbacksOverride: []` to allow only the selected primary. Lists replace each
+other; they are never concatenated. Hooks run in descending priority order, with
+registration order breaking ties. The first defined list wins, including an empty
+list; provider and model overrides are selected independently by the same rule.
+
+The initial routing hook runs before the logical run selects its candidate chain.
+An explicit list stays fixed across attempts, so later candidates are not redirected
+back to the primary by another invocation of the same hook. Each eligible candidate
+keeps its own configured attempt timeout. Session model locks and operator model
+restrictions still apply. These overrides are run-scoped and do not change saved
+configuration or the session's selected model.
+Installation repair retains its separately admitted model list.
 
 ### Handler lifetime
 
@@ -125,7 +154,7 @@ runtime cannot prove the authority, it skips the handler.
 
 Treat `toolAuthority` as an ephemeral capability:
 
-- `allows(toolName)` checks a canonical tool id against the finalized surface
+- `allows(toolName)` checks a standard tool id against the finalized surface
   and also verifies that the capability is still active.
 - `assertActive()` rejects after abort, cancellation, run replacement,
   lifecycle rotation, or hook dispatch completion. Call it after awaited work
@@ -136,7 +165,7 @@ Treat `toolAuthority` as an ephemeral capability:
   replace the system prompt or change `toolsAllow` after policy has settled.
 
 The host revalidates authority after each awaited handler and discards stale
-enrichment. A retained `toolAuthority` object fails closed after dispatch.
+enrichment. A retained `toolAuthority` object rejects use after dispatch.
 
 This option requires a host that implements the post-policy phase. Published
 plugins must set `package.json` `openclaw.compat.pluginApi` to a range beginning
@@ -153,7 +182,7 @@ the current user input as `prompt`, plus loaded session history in `messages`
 and the active system prompt. Return `{ outcome: "block", reason, message? }`
 to stop the run before the model reads the prompt. `reason` is internal;
 `message` is the user-facing replacement. Only `pass` and `block` outcomes are
-supported; unsupported decision shapes fail closed.
+supported; unsupported decision shapes are rejected.
 
 When a run is blocked, OpenClaw stores only the replacement text in
 `message.content` plus non-sensitive block metadata such as the blocking
@@ -316,13 +345,14 @@ the `api.session.state` namespace.
 Use `api.session.workflow.enqueueNextTurnInjection(...)` when a plugin needs
 durable context queued for the next prompt build (the top-level
 `api.enqueueNextTurnInjection(...)` is a deprecated alias with the same
-behavior). On the embedded and CLI prompt-preparation paths, OpenClaw drains
-queued injections before prompt hooks. It drops expired entries and entries
+behavior). OpenClaw drains queued injections before prompt hooks on embedded,
+CLI, and harness runtime paths, even when no prompt hooks are registered.
+It drops expired entries and entries
 whose plugin is inactive or has prompt injection disabled. `idempotencyKey`
 deduplicates unexpired pending entries for the same plugin and session; the
 key can be reused after consumption. Drained entries are reused across retries
 within the active run, but consuming an entry is not a receipt that the model
-saw it: a later failure can prevent submission. This is the right seam for
+saw it: a later failure can prevent submission. This is the right hook for
 approval resumes, policy summaries, background monitor
 deltas, and command continuations that should be visible to the model on the
 next turn but should not become permanent system prompt text.
@@ -335,6 +365,44 @@ Consumption stays bound to the selected stored session. A reset or a conflicting
 legacy and qualified identity prevents the drain from consuming another
 conversation's queue. Reading or consuming a legacy alias does not rename its
 stored session key.
+
+Use `api.session.workflow.steerActiveRun({ sessionKey, text, idempotencyKey? })`
+to deliver guidance to the session's active run without starting a new turn.
+It returns `{ steered: true, runId? }` when the run accepts the text, or
+`{ steered: false, reason }` when no run is active, the run is not accepting
+steering, or the runtime rejects it. Acceptance does not wait for transcript
+commitment. The optional `idempotencyKey` is carried by the transcript recorder
+for duplicate correlation.
+
+Active steering requires a guarded (V2) runtime, such as the built-in OpenClaw
+runtime or Codex. Legacy V1 runtimes, including Copilot, return
+`{ steered: false, reason: "active runtime does not support guarded steering" }`
+without queueing the guidance. The API does not automatically enqueue a later
+turn; use the explicit fallback below when needed.
+
+Steering requires `plugins.entries.<id>.hooks.allowPromptInjection` (enabled
+unless explicitly set to `false`) and a live plugin instance. Disabled prompt
+injection returns `steered: false`; an expired plugin instance cannot dispatch.
+The host and guarded runtime recheck the plugin instance before dispatch,
+including after transcript persistence. Disabling or disposing the plugin while
+guidance is pending rejects the steer rather than silently dropping it.
+The input is hidden, plugin-authored internal context, with provenance
+`{ kind: "internal_system", sourceTool: "plugin:<id>" }`. It carries no sender or
+owner authority and never answers a pending user question.
+
+If the guidance should survive until another turn, fall back to the durable
+injection queue when steering is unavailable:
+
+```typescript
+const guidance = { sessionKey, text, idempotencyKey: "review-1" };
+const result = await api.session.workflow.steerActiveRun(guidance);
+if (!result.steered) {
+  await api.session.workflow.enqueueNextTurnInjection({
+    ...guidance,
+    ttlMs: 24 * 60 * 60 * 1000,
+  });
+}
+```
 
 Cleanup semantics are part of the contract. Session extension cleanup and
 runtime lifecycle cleanup callbacks receive `reset`, `delete`, `disable`, or

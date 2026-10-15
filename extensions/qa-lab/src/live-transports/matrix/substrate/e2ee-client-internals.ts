@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { inheritMatrixQaReplacementRelation, type MatrixQaObservedEvent } from "./events.js";
 
 export type MatrixQaE2eeActorId = "driver" | "observer" | `driver-${string}` | `cli-${string}`;
@@ -16,22 +17,15 @@ async function withMatrixQaE2eeTimeout<T>(
   message: string,
   onTimeout?: () => void,
 ): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
+  return await raceWithTimeout(
+    promise,
+    timeoutMs,
+    () => {
       onTimeout?.();
-      reject(new Error(message));
-    }, timeoutMs);
-    timer.unref();
-  });
-
-  try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+      throw new Error(message);
+    },
+    { ref: false },
+  );
 }
 
 export function createMatrixQaE2eeClientLifecycle(params: {

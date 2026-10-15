@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentEntries } from "../../agents/agent-scope.js";
-import { readClawStatus } from "../../claws/lifecycle-status.js";
+import { readClawPackageRemovalStatus } from "../../claws/lifecycle-status.js";
 import { resolveClawMonitorCleanupBinding } from "../../claws/monitor-cleanup-binding.js";
 import { clawPackageRemovalRequestSchema } from "../../claws/package-remove-contract.js";
 import {
@@ -12,10 +12,9 @@ import {
 } from "../../claws/package-remove-plan.js";
 import { applyClawPackageRemovals, planClawPackageRemovals } from "../../claws/package-remove.js";
 import { claimClawPackageRefStatus } from "../../claws/provenance-write.js";
-import { readClawInstallRecord } from "../../claws/provenance.js";
 import { projectPluginRuntimeFailure } from "../../plugins/lifecycle.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
-import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
+import { prepareAgentDeletionJournalObservation } from "../../state/agent-deletion-journal.js";
 import {
   captureGatewayPluginRuntimeApplications,
   pluginLifecycleError,
@@ -56,27 +55,24 @@ export const clawsPackageHandlers = {
     const input = parsed.data;
     let captured: ReturnType<typeof captureGatewayPluginRuntimeApplications> | undefined;
     let entered = false;
+    let releaseObservation: (() => void) | undefined;
     try {
       const applyRuntime = context.applyPluginLifecycleChange;
       if (!applyRuntime) {
         throw new Error("Claw plugin cleanup requires a running plugin lifecycle owner.");
       }
+      const observation = await prepareAgentDeletionJournalObservation(input.agentId);
+      releaseObservation = observation.release;
       const assertCurrent = () => {
         signal?.throwIfAborted();
         sessionMutationCommitGuard?.();
-        const journal = readAgentDeletionJournal(input.agentId);
+        observation.assertCurrent(input.operationId);
         if (
           !isDeepStrictEqual(
             input.binding,
             resolveClawMonitorCleanupBinding(context.cronStorePath),
           ) ||
-          journal?.operationId !== input.operationId ||
-          journal.cleanupCompleted ||
-          listAgentEntries(context.getRuntimeConfig()).some(
-            (agent) => agent.id === input.agentId,
-          ) ||
-          digestClawRemovalInstall(readClawInstallRecord(input.agentId)) !==
-            input.expectedInstallDigest
+          listAgentEntries(context.getRuntimeConfig()).some((agent) => agent.id === input.agentId)
         ) {
           throw new Error("Claw package cleanup no longer owns the current removal state.");
         }
@@ -93,11 +89,17 @@ export const clawsPackageHandlers = {
             lease.assertOwned();
           };
           beforePersistentApply();
-          const status = await readClawStatus(input.agentId);
+          const record = await readClawPackageRemovalStatus(input.agentId, { signal });
           beforePersistentApply();
-          const record = status.records[0];
-          if (!record || status.records.length !== 1) {
+          if (!record) {
             throw new Error("Claw package cleanup has no unique current owner.");
+          }
+          // The current journal operation freezes the entire install record.
+          if (
+            digestClawRemovalInstall(record.orphaned ? undefined : record.install) !==
+            input.expectedInstallDigest
+          ) {
+            throw new Error("Claw package cleanup no longer owns the current removal state.");
           }
           const decisions = await planClawPackageRemovals(record.install, record.packages, {
             referencedCleanup: input.cleanup,
@@ -155,6 +157,8 @@ export const clawsPackageHandlers = {
         undefined,
         pluginLifecycleError(error, { application: captured?.application, entered, signal }),
       );
+    } finally {
+      releaseObservation?.();
     }
   },
 } satisfies GatewayRequestHandlers;

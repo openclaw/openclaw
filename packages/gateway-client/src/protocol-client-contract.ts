@@ -55,6 +55,7 @@ type GatewayProtocolConnectDecision = {
   closeReason: string;
   reconnectDelayMs?: number;
   stop?: boolean;
+  keepOpen?: boolean;
   error?: Error;
 };
 type GatewayProtocolCloseDecision = {

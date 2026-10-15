@@ -46,8 +46,5 @@ export async function formatAuthDoctorHint(params: FormatAuthDoctorHintParams): 
       profileId: params.profileId,
     },
   });
-  if (typeof pluginHint === "string" && pluginHint.trim()) {
-    return pluginHint;
-  }
-  return "";
+  return typeof pluginHint === "string" && pluginHint.trim() ? pluginHint : "";
 }

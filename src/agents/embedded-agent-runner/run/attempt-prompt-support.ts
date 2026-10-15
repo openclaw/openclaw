@@ -219,7 +219,7 @@ type AttemptPromptObservabilityParams = Pick<
 type CacheTrace = Pick<NonNullable<ReturnType<typeof createCacheTrace>>, "recordStage"> | null;
 type PromptHookRunner = Pick<HookRunner, "hasHooks" | "runLlmInput"> | null;
 type TrajectoryRecorder = Pick<
-  NonNullable<ReturnType<typeof createTrajectoryRuntimeRecorder>>,
+  NonNullable<Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>>,
   "recordEvent"
 > | null;
 type TrajectoryTool = Parameters<typeof toTrajectoryToolDefinitions>[0][number];

@@ -35,6 +35,7 @@ function performanceRun(
     fetchResults: [],
     performance: { mode },
     ...options,
+    env: { QUALIFICATION_DISPATCH: "false", ...options.env },
   });
 }
 
@@ -45,7 +46,9 @@ posixIt.for(Object.keys(steps) as PerformanceFixtureOptions["mode"][])(
   "Performance %s drains Git trees before every continuation",
   { timeout: 55_000 },
   async (mode, { signal }) => {
-    const report = await performanceRun(signal, mode);
+    const report = await performanceRun(signal, mode, {
+      performance: { mode, successfulGitTrees: true },
+    });
     expect(report.code, report.output).toBe(0);
     expect(report.readyAttempts.length).toBeGreaterThan(0);
     if (mode === "prepare") {
@@ -187,6 +190,7 @@ posixIt(
       performance: { mode: "prepare", duplicate: true },
     });
     expect(report.code, report.output).toBe(0);
+    expect(report.readyAttempts).toHaveLength(0);
     expect(report.githubOutput).toContain("already_published=true\n");
     expect(report.githubOutput).toContain("ready=true\n");
     expect(report.githubOutput).not.toContain("report_commit=");

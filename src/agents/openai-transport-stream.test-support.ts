@@ -5,14 +5,13 @@ import { buildOpenAIResponsesReasoningReplayMetadata } from "../../packages/ai/s
 import {
   normalizeResponsesFailedEvent,
   summarizeResponsesPayload,
-  stringifyRedactedEvent,
 } from "../../packages/ai/src/transports/openai-responses-debug.js";
 import {
   buildOpenAIResponsesParams,
   sanitizeOpenAICodexResponsesParams,
 } from "../../packages/ai/src/transports/openai-responses-params-internal.js";
 import {
-  createResponsesStreamWithEncryptedContentRetry,
+  createResponsesStreamWithRecovery,
   isInvalidEncryptedContentError,
   resolveAzureOpenAIApiVersion,
 } from "../../packages/ai/src/transports/openai-responses-replay-internal.js";
@@ -39,8 +38,7 @@ export const testing = {
   buildOpenAIResponsesReasoningReplayMetadata,
   isInvalidEncryptedContentError,
   normalizeResponsesFailedEvent,
-  createResponsesStreamWithEncryptedContentRetry,
+  createResponsesStreamWithRecovery,
   resolveAzureOpenAIApiVersion,
   summarizeResponsesPayload,
-  stringifyRedactedEvent,
 };

@@ -1,13 +1,17 @@
 #if os(macOS)
+import AppKit
 import Foundation
 import OpenClawKit
 import OpenClawProtocol
+import SwiftUI
 import Testing
 @testable import OpenClawChatUI
 
 @MainActor
 func sidebarMenuConnection(
-    current: @escaping () -> Bool = { true }, local: Bool = false, selfProfileID: String? = nil,
+    current: @escaping () -> Bool = { true },
+    local: Bool = false,
+    selfProfileID: String? = nil,
     scopes: [String] = ["operator.admin"],
     request: @escaping (OpenClawChatGatewayRequest) async throws -> Data) throws -> OpenClawSessionMenuConnection
 {
@@ -49,6 +53,69 @@ struct ChatSessionSidebarMenuTests {
         owner.mode = .web
         owner.openSessionActions = nil
         #expect(owner.sessionActions(for: context) == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func `rendered snooze and wake menus patch the observed session through the window connection`(
+        snoozed: Bool) async throws
+    {
+        let fixture = try SidebarSnoozeMenuFixture()
+        defer { fixture.close() }
+        var row = fixture.row
+        if snoozed { row.snoozedUntil = fixture.now.addingTimeInterval(3600).timeIntervalSince1970 * 1000 }
+        let menu = fixture.menu(row)
+        var requests = fixture.requests.stream.makeAsyncIterator()
+        if snoozed {
+            #expect(menu.items.allSatisfy { $0.title != "Snooze" })
+            let index = try #require(menu.items.firstIndex { $0.title.hasPrefix("Wake session · ") })
+            #expect(menu.items[index].isEnabled)
+            #expect(menu.items[index].title == "Wake session · " +
+                OpenClawChatSessionSnooze.wakeDescription(fixture.now.addingTimeInterval(3600), now: fixture.now))
+            try fixture.select(menu.items[index])
+        } else {
+            #expect(menu.items.allSatisfy { !$0.title.hasPrefix("Wake session · ") })
+            let submenu = try #require(menu.items.first { $0.title == "Snooze" }?.submenu)
+            submenu.update()
+            let preset = try #require(submenu.items.firstIndex { $0.title.hasPrefix("In 1 hour · ") })
+            #expect(submenu.items[preset].isEnabled)
+            let nextWeek = try #require(submenu.items.first { $0.title.hasPrefix("Next week · ") })
+            let wakeAt = try #require(OpenClawChatSessionSnooze.presets(now: fixture.now).last?.wakeAt)
+            #expect(nextWeek.title == "Next week · " + OpenClawChatSessionSnooze.wakeDescription(
+                wakeAt,
+                now: fixture.now))
+            try fixture.select(submenu.items[preset])
+        }
+        let request = try #require(await requests.next())
+        #expect(request.method == "sessions.patch")
+        #expect(request.params["key"]?.value as? String == "agent:research:work")
+        #expect(request.params["agentId"]?.value as? String == "research")
+        #expect(request.params["expectedSessionId"]?.value as? String == "work-id")
+        #expect(request.params["pinned"] == nil)
+        if snoozed {
+            #expect(request.params["snoozedUntil"]?.value is NSNull)
+        } else {
+            #expect(request.params["snoozedUntil"]?.value as? Int == 2_000_003_600_000)
+        }
+    }
+
+    @Test(arguments: ["root", "child", "spawned", "archived", "main", "unknown", "read-only"])
+    func `rendered snooze menu follows root lifecycle eligibility and write authority`(kind: String) throws {
+        let fixture = try SidebarSnoozeMenuFixture(scopes: kind == "read-only" ? ["operator.read"] : ["operator.admin"])
+        defer { fixture.close() }
+        var row = fixture.row
+        if kind == "spawned" { row.spawnedBy = "agent:research:parent" }
+        if kind == "archived" { row.archived = true }
+        if kind == "main" { row.key = "agent:research:main" }
+        if kind == "unknown" { row.kind = "unknown" }
+        let menu = fixture.menu(row, isChild: kind == "child")
+        let snooze = menu.items.first { $0.title == "Snooze" }
+        #expect((snooze != nil) == ["root", "read-only"].contains(kind))
+        if let snooze {
+            let submenu = try #require(snooze.submenu)
+            submenu.update()
+            #expect(!submenu.items.isEmpty)
+            #expect(submenu.items.allSatisfy { $0.isEnabled == (kind == "root") })
+        }
     }
 
     @Test func `appearance reset and involvement address the row incarnation and agent`() async throws {
@@ -205,14 +272,15 @@ struct ChatSessionSidebarMenuTests {
         #expect(commands.sessionMenuActions.connection == nil)
     }
 
-    @Test func `retired connections reject mutations before dispatch and directory replies after dispatch`() async throws {
+    @Test
+    func `retired connections reject mutations before dispatch and directory replies after dispatch`() async throws {
         var current = false
         var calls = 0
-        let connection = try sidebarMenuConnection(current: { current }) { _ in
+        let connection = try sidebarMenuConnection(current: { current }, request: { _ in
             calls += 1
             current = false
             return Data(#"{"profiles":[]}"#.utf8)
-        }
+        })
         await #expect(throws: CancellationError.self) {
             try await connection.request(.init(method: "sessions.patch", timeoutMs: 15000))
         }
@@ -325,6 +393,86 @@ struct ChatSessionSidebarMenuTests {
 }
 
 @MainActor
+private final class SidebarSnoozeMenuFixture {
+    let now = Date(timeIntervalSince1970: 2_000_000_000)
+    let row: OpenClawChatSessionEntry
+    let model: OpenClawChatViewModel
+    let actions: ChatSessionSidebarActions
+    let requests = AsyncStream<OpenClawChatGatewayRequest>.makeStream()
+    private let suite = "SidebarSnoozeMenuTests.\(UUID().uuidString)"
+    private let defaults: UserDefaults
+
+    init(scopes: [String] = ["operator.admin"]) throws {
+        self.defaults = try #require(UserDefaults(suiteName: self.suite))
+        self.row = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(
+            #"{"key":"agent:research:work","sessionId":"work-id","agentId":"research","pinned":true,"pinnedAt":10}"#
+                .utf8))
+        self.model = OpenClawChatViewModel(
+            sessionKey: "agent:research:work",
+            transport: SidebarSnoozeMenuTransport(),
+            activeAgentId: "research",
+            modelPickerStore: ChatModelPickerStore(defaults: self.defaults))
+        let requests = self.requests
+        self.actions = try ChatSessionSidebarActions(connection: sidebarMenuConnection(scopes: scopes) { request in
+            if request.method == "sessions.patch" {
+                requests.continuation.yield(request)
+                return Data(#"{"key":"agent:research:work","entry":{"sessionId":"work-id","updatedAt":2000000000000}}"#
+                    .utf8)
+            }
+            throw URLError(.unsupportedURL)
+        })
+    }
+
+    func menu(_ row: OpenClawChatSessionEntry, isChild: Bool = false) -> NSMenu {
+        let sidebar = ChatSessionSidebar(
+            viewModel: self.model,
+            query: .constant(""),
+            groups: .constant([]),
+            previews: ChatSessionSidebarPreviews(),
+            menuActions: self.actions)
+        let menu = NSHostingMenu(rootView: sidebar.contextMenu(for: row, isChild: isChild, now: self.now))
+        menu.update()
+        return menu
+    }
+
+    func close() {
+        self.model.detachTransport()
+        self.actions.refreshTask?.cancel()
+        self.requests.continuation.finish()
+        self.defaults.removePersistentDomain(forName: self.suite)
+    }
+
+    func select(_ item: NSMenuItem) throws {
+        let action = try #require(item.action)
+        try #require(NSApplication.shared.sendAction(action, to: item.target, from: item))
+    }
+}
+
+private struct SidebarSnoozeMenuTransport: OpenClawChatTransport {
+    func requestHistory(sessionKey _: String) async throws -> OpenClawChatHistoryPayload {
+        throw CancellationError()
+    }
+
+    func requestHealth(timeoutMs _: Int) async throws -> Bool {
+        false
+    }
+
+    func events() -> AsyncStream<OpenClawChatTransportEvent> {
+        AsyncStream { $0.finish() }
+    }
+
+    func sendMessage(
+        sessionKey _: String,
+        message _: String,
+        thinking _: String,
+        idempotencyKey _: String,
+        attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+    {
+        throw CancellationError()
+    }
+}
+
+@MainActor
 private final class SidebarMenuCacheFixture {
     var current = true
     var failing = false
@@ -336,29 +484,33 @@ private final class SidebarMenuCacheFixture {
     var connection: OpenClawSessionMenuConnection!
 
     init() throws {
-        self.connection = try sidebarMenuConnection(current: { [unowned self] in self.current }, local: true) {
-            [unowned self] request in
-            self.methods.append(request.method)
-            if request.method == "users.list", self.holdDirectory {
-                await withCheckedContinuation { continuation in
-                    self.directoryWaiter = continuation
-                    self.directoryStarted.continuation.yield(())
+        self.connection = try sidebarMenuConnection(
+            current: { [unowned self] in self.current },
+            local: true,
+            request: { [unowned self] request in
+                self.methods.append(request.method)
+                if request.method == "users.list", self.holdDirectory {
+                    await withCheckedContinuation { continuation in
+                        self.directoryWaiter = continuation
+                        self.directoryStarted.continuation.yield(())
+                    }
                 }
-            }
-            if self.failing { throw URLError(.networkConnectionLost) }
-            switch request.method {
-            case "users.self": return Data(#"{"profile":{"id":"me","emails":[]}}"#.utf8)
-            case "users.list":
-                let id = self.version == 1 ? "ada" : "grace"
-                return Data(#"{"profiles":[{"id":"\#(id)","emails":[]}]}"#.utf8)
-            case "worktrees.list":
-                let path = self.version == 1 ? "/work/first" : "/work/second"
-                return Data(
-                    #"{"worktrees":[{"id":"copy","name":"copy","repoFingerprint":"repo","repoRoot":"/work/repo","path":"\#(path)","branch":"feature","baseRef":"main","ownerKind":"session","createdAt":1,"lastActiveAt":2}]}"#
-                        .utf8)
-            default: throw URLError(.unsupportedURL)
-            }
-        }
+                if self.failing { throw URLError(.networkConnectionLost) }
+                switch request.method {
+                case "users.self": return Data(#"{"profile":{"id":"me","emails":[]}}"#.utf8)
+                case "users.list":
+                    let id = self.version == 1 ? "ada" : "grace"
+                    return Data(#"{"profiles":[{"id":"\#(id)","emails":[]}]}"#.utf8)
+                case "worktrees.list":
+                    let path = self.version == 1 ? "/work/first" : "/work/second"
+                    return Data(#"""
+                    {"worktrees":[{"id":"copy","name":"copy","repoFingerprint":"repo","repoRoot":"/work/repo",\#
+                    "path":"\#(path)","branch":"feature","baseRef":"main","ownerKind":"session",\#
+                    "createdAt":1,"lastActiveAt":2}]}
+                    """#.utf8)
+                default: throw URLError(.unsupportedURL)
+                }
+            })
     }
 
     func row() throws -> OpenClawChatSessionEntry {

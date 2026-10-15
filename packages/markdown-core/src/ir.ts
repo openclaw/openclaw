@@ -30,14 +30,12 @@ import {
 import { sliceMarkdownIR, sliceMarkdownIRRanges } from "./ir-slice.js";
 import { computeNextMappedBlockStarts, sourceBlockNewlineCount } from "./ir-source-spacing.js";
 import {
-  clampAnnotationSpans,
-  clampLinkSpans,
-  clampStyleSpans,
   copyMarkdownLinkSpan,
   createMarkdownLinkSpan,
   createStyleSpan,
-  mergeAnnotationSpans,
-  mergeStyleSpans,
+  sliceAnnotationSpans,
+  sliceLinkSpans,
+  sliceStyleSpans,
   type MarkdownAnnotationSpan,
   type MarkdownLinkSpan,
   type MarkdownStyle,
@@ -581,21 +579,14 @@ function openStyle(state: RenderState, style: MarkdownStyle) {
   target.openStyles.push({ style, start: target.text.length });
 }
 
-function closeStyle(
-  state: RenderState,
-  style: MarkdownStyle,
-  options?: { trimTrailingParagraphSeparator?: boolean },
-) {
+function closeStyle(state: RenderState, style: MarkdownStyle, rangeEnd?: number) {
   const target = resolveRenderTarget(state);
   for (let i = target.openStyles.length - 1; i >= 0; i -= 1) {
     const open = target.openStyles.at(i);
     if (open?.style === style) {
       const start = open.start;
       target.openStyles.splice(i, 1);
-      const end =
-        options?.trimTrailingParagraphSeparator && target.text.endsWith("\n\n")
-          ? target.text.length - 2
-          : target.text.length;
+      const end = rangeEnd ?? target.text.length;
       if (end > start) {
         target.styles.push({ start, end, style });
       }
@@ -906,6 +897,8 @@ function renderTable(state: RenderState) {
   const rows = table.rows.map((row) => row.map(trimCell));
   if (state.tableMode === "block") {
     collectTableBlock(state, table, headers, rows);
+    // Reserve a coordinate so later siblings cannot share this table's container boundary.
+    state.text += "\n";
     return;
   }
   if (state.tableMode === "bullets") {
@@ -1059,12 +1052,13 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         openStyle(state, "blockquote");
         break;
       case "blockquote_close": {
-        closeStyle(state, "blockquote", { trimTrailingParagraphSeparator: true });
         const blockquote = state.blockquoteStack.pop();
         const end = Math.max(
           blockquote?.start ?? 0,
           state.text.endsWith("\n\n") ? state.text.length - 2 : state.text.length,
+          (state.collectedTables.at(-1)?.placeholderOffset ?? -1) + 1,
         );
+        closeStyle(state, "blockquote", end);
         if (blockquote) {
           state.blocks.push({ kind: "blockquote", ...blockquote, end });
         }
@@ -1376,7 +1370,7 @@ export function markdownToIRWithMeta(
   renderTokens(tokens as MarkdownToken[], state);
   closeRemainingStyles(state);
 
-  // Preserve trailing whitespace inside code; trim generated trailing separators.
+  // Keep code whitespace and native-table coordinates; trim generated separators.
   const trimmedText = state.text.trimEnd();
   const trimmedLength = trimmedText.length;
   let codeEnd = 0;
@@ -1386,10 +1380,14 @@ export function markdownToIRWithMeta(
     }
     codeEnd = Math.max(codeEnd, span.end);
   }
-  const finalLength = Math.max(trimmedLength, codeEnd);
+  const finalLength = Math.max(
+    trimmedLength,
+    codeEnd,
+    (state.collectedTables.at(-1)?.placeholderOffset ?? -1) + 1,
+  );
   const finalText =
     finalLength === state.text.length ? state.text : state.text.slice(0, finalLength);
-  const annotations = mergeAnnotationSpans(clampAnnotationSpans(state.annotations, finalLength));
+  const annotations = sliceAnnotationSpans(state.annotations, 0, finalLength);
   const listItems = state.listItems.flatMap((item) => {
     const listMarker = item.listMarker
       ? sliceListMarker(item.listMarker, 0, finalLength)
@@ -1431,8 +1429,8 @@ export function markdownToIRWithMeta(
 
   const ir: MarkdownIR = {
     text: finalText,
-    styles: mergeStyleSpans(clampStyleSpans(state.styles, finalLength)),
-    links: clampLinkSpans(state.links, finalLength),
+    styles: sliceStyleSpans(state.styles, 0, finalLength),
+    links: sliceLinkSpans(state.links, 0, finalLength),
     ...(annotations.length > 0 ? { annotations } : {}),
     ...(listItems.length > 0 ? { listItems } : {}),
   };

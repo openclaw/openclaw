@@ -207,7 +207,6 @@ export type DiscordChannel = APIChannel & {
 export function channelFactory(
   clientForTest: StructureClient,
   channelData: APIChannel,
-  _partial?: boolean,
 ): DiscordChannel {
   return {
     ...channelData,

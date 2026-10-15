@@ -61,65 +61,6 @@ vi.mock("./channel-legacy-config-migrate.js", () => ({
   }),
 }));
 
-vi.mock("../../../secrets/target-registry.js", async () => {
-  const { asNullableRecord: readRecord } =
-    await import("@openclaw/normalization-core/record-coerce");
-  const entry = {
-    id: "channels.discord.token",
-    targetType: "channels.discord.token",
-    configFile: "openclaw.json",
-    pathPattern: "channels.discord.token",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  };
-
-  return {
-    discoverConfigSecretTargets: (cfg: OpenClawConfig) => {
-      const targets: Array<{
-        entry: typeof entry;
-        path: string;
-        pathSegments: string[];
-        value: unknown;
-        accountId?: string;
-      }> = [];
-      const channels = readRecord(cfg.channels);
-      const discord = readRecord(channels?.discord);
-      if (!discord) {
-        return targets;
-      }
-      targets.push({
-        entry,
-        path: "channels.discord.token",
-        pathSegments: ["channels", "discord", "token"],
-        value: discord.token,
-      });
-
-      const accounts = readRecord(discord.accounts);
-      for (const [accountId, accountConfig] of Object.entries(accounts ?? {})) {
-        const account = readRecord(accountConfig);
-        if (!account) {
-          continue;
-        }
-        targets.push({
-          entry,
-          path: `channels.discord.accounts.${accountId}.token`,
-          pathSegments: ["channels", "discord", "accounts", accountId, "token"],
-          value: account.token,
-          accountId,
-        });
-      }
-      return targets;
-    },
-  };
-});
-
-export function legacyConfig(value: unknown): OpenClawConfig {
-  return value as OpenClawConfig;
-}
-
 export function useDoctorLegacyConfigFixture() {
   let previousOauthDir: string | undefined;
   let tempOauthDir = "";

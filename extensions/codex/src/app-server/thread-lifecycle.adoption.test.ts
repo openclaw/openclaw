@@ -8,7 +8,6 @@ import {
   ensureCodexAppServerClientRuntime,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
-import { CodexAppServerClient } from "./client.js";
 import { threadStartResult as createThreadStartResult } from "./codex-app-server.test-fixtures.js";
 import { sessionBindingIdentity } from "./session-binding.js";
 import {
@@ -20,7 +19,7 @@ import {
   createLeasedCodexLifecycleHarness,
   createParams as createThreadLifecycleParams,
   resetThreadLifecycleTestFixtures,
-  startOrResumeThread,
+  startOrResumeThreadWithoutSkills as startOrResumeThread,
 } from "./thread-lifecycle.test-fixtures.js";
 
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-thread-adoption-");
@@ -34,7 +33,6 @@ function createThreadLifecycleAppServerOptions(): ReturnType<typeof createAppSer
   return {
     ...createAppServerOptions(),
     connectionClass: "local-loopback",
-    remoteAppsSubstrate: "preconfigured",
   };
 }
 
@@ -142,152 +140,61 @@ describe("Codex app-server adopted thread lifecycle", () => {
     },
   );
 
-  it.each([false, true])(
-    "preserves the cold native thread after host rotation with changed tools=%s",
-    async (changedTools) => {
-      const workspaceDir = path.join(tempDir, "workspace");
-      const params = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-      const storePath = path.join(tempDir, "sessions.json");
-      params.config = { session: { store: storePath } };
-      const scope = { agentId: "main", sessionKey: params.sessionKey!, storePath };
-      await upsertSessionEntry({ ...scope, entry: { sessionId: params.sessionId, updatedAt: 1 } });
-      const { identity, threadId } = await seedAdoptedThreadBinding(params, workspaceDir);
-      const nativeModel = threadStartResult(threadId);
-      await testCodexAppServerBindingStore.mutate(identity, {
-        kind: "patch",
-        threadId,
-        patch: { model: nativeModel.model, modelProvider: nativeModel.modelProvider },
-      });
-      params.expectedSessionRuntimeOwnership = {
-        model: "native",
-        auth: "host",
-        modelRef: { model: nativeModel.model, provider: nativeModel.modelProvider },
-      };
-      const before = testCodexAppServerBindingStore.read(identity);
-      await patchSessionEntry({ ...scope, update: () => ({ sessionId: "compacted-successor" }) });
-      params.sessionId = "compacted-successor";
-      const successor = { ...identity, sessionId: params.sessionId };
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
-        persistedThreads: [threadId],
-        respond: (method) => {
-          if (method === "thread/resume") {
-            return nativeModel;
-          }
-          return readEmptyNativeConfig(method);
-        },
-      });
-      const resuming = startOrResumeThread({
-        client: fixture.client,
-        signal: new AbortController().signal,
-        params,
-        cwd: workspaceDir,
-        dynamicTools: changedTools
-          ? [{ type: "function", name: "new_tool", description: "New tool", inputSchema: {} }]
-          : [],
-        appServer: createThreadLifecycleAppServerOptions(),
-      });
-      if (changedTools) {
-        await expect(resuming).rejects.toMatchObject({
-          name: "AgentHarnessPreflightError",
-          message: expect.stringContaining("changing the dynamic tool catalog"),
-        });
-        expect(fixture.request.mock.calls.some(([method]) => method === "thread/resume")).toBe(
-          false,
-        );
-        expect(testCodexAppServerBindingStore.read(successor)).toEqual(before);
-      } else {
-        await expect(resuming).resolves.toMatchObject({ threadId });
-        expect(fixture.request.mock.calls.filter(([method]) => method === "thread/resume")).toEqual(
-          [["thread/resume", expect.objectContaining({ threadId }), expect.anything()]],
-        );
-        expect(testCodexAppServerBindingStore.read(successor)).toMatchObject({
-          threadId,
-          preserveNativeModel: true,
-        });
-      }
-      expect(fixture.request.mock.calls.some(([method]) => method === "thread/start")).toBe(false);
-    },
-  );
-
-  it("keeps OpenClaw from overriding App Server model selection across resumes", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
+  it("preserves the cold native thread after host rotation with changed tools", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
-    const params = createThreadLifecycleParams(sessionFile, workspaceDir);
+    const params = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const storePath = path.join(tempDir, "sessions.json");
+    params.config = { session: { store: storePath } };
+    const scope = { agentId: "main", sessionKey: params.sessionKey!, storePath };
+    await upsertSessionEntry({ ...scope, entry: { sessionId: params.sessionId, updatedAt: 1 } });
     const { identity, threadId } = await seedAdoptedThreadBinding(params, workspaceDir);
-    let resumeCount = 0;
-    const respond = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "thread/resume") {
-        resumeCount += 1;
-        return {
-          ...threadStartResult(threadId),
-          model: `native-model-${resumeCount}`,
-          modelProvider: resumeCount === 1 ? "lmstudio" : "ollama",
-        };
-      }
-      return readEmptyNativeConfig(method);
+    const nativeModel = threadStartResult(threadId);
+    await testCodexAppServerBindingStore.mutate(identity, {
+      kind: "patch",
+      threadId,
+      patch: { model: nativeModel.model, modelProvider: nativeModel.modelProvider },
     });
-
+    params.expectedSessionRuntimeOwnership = {
+      model: "native",
+      auth: "host",
+      modelRef: { model: nativeModel.model, provider: nativeModel.modelProvider },
+    };
+    const before = testCodexAppServerBindingStore.read(identity);
+    await patchSessionEntry({ ...scope, update: () => ({ sessionId: "compacted-successor" }) });
+    params.sessionId = "compacted-successor";
+    const successor = { ...identity, sessionId: params.sessionId };
     const fixture = await createLeasedCodexLifecycleHarness({
       agentDir: path.join(tempDir, "agent"),
-      respond,
       persistedThreads: [threadId],
+      respond: (method) => {
+        if (method === "thread/resume") {
+          return nativeModel;
+        }
+        return readEmptyNativeConfig(method);
+      },
     });
-    const { client, request } = fixture;
-    const commonParams = {
-      client,
+    const resuming = startOrResumeThread({
+      client: fixture.client,
       signal: new AbortController().signal,
       params,
       cwd: workspaceDir,
-      dynamicTools: [],
+      dynamicTools: [
+        { type: "function", name: "new_tool", description: "New tool", inputSchema: {} },
+      ],
       appServer: createThreadLifecycleAppServerOptions(),
-    };
-    const firstBinding = await startOrResumeThread(commonParams);
-    await fixture.endTurn(threadId);
-    const secondBinding = await startOrResumeThread(commonParams);
-
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/read",
-      "thread/resume",
-      "thread/inject_items",
-      "thread/unsubscribe",
-      "config/read",
-      "configRequirements/read",
-      "thread/read",
-      "thread/resume",
-      "thread/inject_items",
-    ]);
-    expect(request.mock.calls[2]?.[1]).toEqual({ threadId, includeTurns: false });
-    expect(request.mock.calls[8]?.[1]).toEqual({ threadId, includeTurns: false });
-    expect(request.mock.calls[3]?.[1]).not.toHaveProperty("model");
-    expect(request.mock.calls[3]?.[1]).not.toHaveProperty("modelProvider");
-    expect(request.mock.calls[9]?.[1]).not.toHaveProperty("model");
-    expect(request.mock.calls[9]?.[1]).not.toHaveProperty("modelProvider");
-    expect(firstBinding).toMatchObject({
-      model: "native-model-1",
-      modelProvider: "lmstudio",
-      preserveNativeModel: true,
     });
-    expect(secondBinding).toMatchObject({
-      model: "native-model-2",
-      modelProvider: "ollama",
-      preserveNativeModel: true,
+    await expect(resuming).rejects.toMatchObject({
+      name: "AgentHarnessPreflightError",
+      message: expect.stringContaining("changing the dynamic tool catalog"),
     });
-
-    const persisted = testCodexAppServerBindingStore.read(identity);
-    expect(persisted).toMatchObject({
-      model: "native-model-2",
-      modelProvider: "ollama",
-      preserveNativeModel: true,
-    });
+    expect(fixture.request.mock.calls.some(([method]) => method === "thread/resume")).toBe(false);
+    expect(testCodexAppServerBindingStore.read(successor)).toEqual(before);
+    expect(fixture.request.mock.calls.some(([method]) => method === "thread/start")).toBe(false);
   });
 
   it.each([
     { status: "active", canAcceptDirectInput: true, error: "active in another runner" },
     { status: "idle", canAcceptDirectInput: false, error: "controlled by its parent" },
-    { status: "idle", canAcceptDirectInput: true, error: "native status read unavailable" },
   ])(
     "preserves retained adopted ownership when native preflight rejects: $error",
     async ({ status, canAcceptDirectInput, error }) => {
@@ -316,15 +223,6 @@ describe("Codex app-server adopted thread lifecycle", () => {
         threadId,
         patch: { clientId: harness.client.getInstanceId() },
       });
-      if (error === "native status read unavailable") {
-        const request = CodexAppServerClient.prototype.request.bind(harness.client);
-        harness.request.mockImplementation((method, requestParams, options) => {
-          if (method === "thread/read") {
-            return Promise.reject(new Error(error));
-          }
-          return request(method, requestParams, options);
-        });
-      }
       const release = vi.fn();
       await retainCodexAppServerLiveThread(harness.client, threadId, release);
       const reserveResumeThread = vi.fn(() => ({ release: vi.fn() }));

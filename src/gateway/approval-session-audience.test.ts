@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   resolveApprovalSessionAudienceWithFallback,
   resolveApprovalSourceStreamKey,
@@ -39,9 +41,10 @@ vi.mock("../agents/subagents/registry/subagent-registry-state.js", () => ({
   prepareOptionalSubagentSessionListReadCache: () => prepareRegistryMock(),
   getSubagentSessionListReadSnapshotIdentity: () => registrySnapshotMock(),
 }));
-vi.mock("../config/sessions/session-accessor.js", () => ({
-  loadSessionEntry: (scope: { sessionKey: string }) => loadSessionEntryMock(scope),
-  loadSessionEntryReadOnly: (scope: { sessionKey: string }) => loadSessionEntryMock(scope),
+// mock-isolation: Audience tests compare fixture-owned persisted rows with the synthetic run registry.
+vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async (scope: { sessionKey: string }) =>
+    loadSessionEntryMock(scope),
 }));
 
 beforeEach(() => {
@@ -60,116 +63,165 @@ beforeEach(() => {
   registrySnapshotMock.mockReset().mockReturnValue(registrySnapshot);
 });
 
+afterEach(() => {
+  memorySessionActorOwners.reset();
+  vi.unstubAllEnvs();
+});
+
 describe("resolveApprovalSessionAudienceWithFallback", () => {
-  it("keeps the canonical source first when it has no ancestors", async () => {
-    expect(await resolveApprovalSessionAudienceWithFallback(" Child ", "work")).toEqual([
-      "agent:work:child",
-    ]);
-  });
-
-  it("walks registry controller and requester branches breadth-first", async () => {
-    graph = {
-      "agent:work:child": {
-        registry: {
-          controllerSessionKey: "controller",
-          requesterSessionKey: "requester",
-        },
-        stored: { parentSessionKey: "stale-parent" },
-      },
-      "agent:work:controller": { stored: { parentSessionKey: "controller-root" } },
-      "agent:work:requester": { stored: { parentSessionKey: "requester-root" } },
+  it("reads current memory lineage without creating a missing owner and refuses a closed source", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/approval-memory");
+    const sessionKey = "agent:work:dashboard:incognito-child";
+    const location = {
+      agentId: "work",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "work" }),
     };
-
-    expect(await resolveApprovalSessionAudienceWithFallback("child", "work")).toEqual([
-      "agent:work:child",
-      "agent:work:controller",
-      "agent:work:requester",
-      "agent:work:controller-root",
-      "agent:work:requester-root",
+    expect(await resolveApprovalSessionAudienceWithFallback(sessionKey, "work")).toEqual([
+      sessionKey,
     ]);
-  });
-
-  it("falls back to stored lineage when registry lineage is unusable", async () => {
-    graph = {
-      "agent:work:child": {
-        registry: { controllerSessionKey: " ", requesterSessionKey: null },
-        stored: { parentSessionKey: "dashboard-parent", spawnedBy: "spawn-parent" },
-      },
-      "agent:work:dashboard-parent": { stored: { spawnedBy: "root" } },
-    };
-
-    expect(await resolveApprovalSessionAudienceWithFallback("child", "work")).toEqual([
-      "agent:work:child",
-      "agent:work:dashboard-parent",
-      "agent:work:root",
-    ]);
-  });
-
-  it("scopes relative aliases while preserving explicit cross-agent parents", async () => {
-    graph = {
-      "agent:work:child": {
-        registry: {
-          controllerSessionKey: "main",
-          requesterSessionKey: "agent:ops:main",
-        },
-      },
-    };
-
-    expect(await resolveApprovalSessionAudienceWithFallback("agent:work:child", "work")).toEqual([
-      "agent:work:child",
-      "agent:work:main",
-      "agent:ops:main",
-    ]);
-  });
-
-  it("guards cycles and includes each session once", async () => {
-    graph = {
-      "agent:work:child": {
-        registry: { controllerSessionKey: "parent", requesterSessionKey: "child" },
-      },
-      "agent:work:parent": { stored: { parentSessionKey: "child" } },
-    };
-
-    expect(await resolveApprovalSessionAudienceWithFallback("child", "work")).toEqual([
-      "agent:work:child",
-      "agent:work:parent",
-    ]);
-  });
-
-  it("caps a malformed lineage graph at 64 sessions", async () => {
-    graph = Object.fromEntries(
-      Array.from({ length: 70 }, (_, index) => [
-        `agent:work:session-${index}`,
-        { stored: { parentSessionKey: `session-${index + 1}` } },
-      ]),
+    expect(memorySessionActorOwners.read(location)).toBeUndefined();
+    const owner = memorySessionActorOwners.get(location);
+    const actor = await owner.acquire(
+      { sessionKey, database: owner.identity },
+      { assertCurrent() {}, assertReadable() {} },
     );
-
-    const audience = await resolveApprovalSessionAudienceWithFallback("session-0", "work");
-
-    expect(audience).toHaveLength(64);
-    expect(audience[0]).toBe("agent:work:session-0");
-    expect(audience.at(-1)).toBe("agent:work:session-63");
+    const authority = { assertCurrent() {}, authorize() {} };
+    try {
+      expect(
+        (
+          await actor.storage!.mutate(
+            {
+              type: "session.entry.create",
+              input: {
+                entry: {
+                  sessionId: "private-child",
+                  updatedAt: 1,
+                  incognito: true,
+                  parentSessionKey: "parent",
+                },
+              },
+            },
+            authority,
+          )
+        ).kind,
+      ).toBe("committed");
+      graph = { "agent:work:parent": { stored: { parentSessionKey: "root" } } };
+      expect(await resolveApprovalSessionAudienceWithFallback(sessionKey, "work")).toEqual([
+        sessionKey,
+        "agent:work:parent",
+        "agent:work:root",
+      ]);
+      expect(
+        (
+          await actor.storage!.mutate(
+            {
+              type: "session.entry.patch",
+              input: { operation: { kind: "fields", patch: { parentSessionKey: "next-parent" } } },
+            },
+            authority,
+          )
+        ).kind,
+      ).toBe("committed");
+      expect(await resolveApprovalSessionAudienceWithFallback(sessionKey, "work")).toEqual([
+        sessionKey,
+        "agent:work:next-parent",
+      ]);
+      prepareRegistryMock.mockImplementationOnce(async () => {
+        memorySessionActorOwners.closeDatabase(location);
+        return true;
+      });
+      await expect(
+        resolveApprovalSessionAudienceWithFallback(sessionKey, "work"),
+      ).rejects.toThrow();
+    } finally {
+      await actor.release();
+    }
   });
 
-  it("canonicalizes configured main-key aliases when lineage lookup throws", async () => {
+  it("canonicalizes and bounds the breadth-first audience using current lineage", async () => {
+    const cases: { source: string; nodes: Record<string, GraphNode>; expected: string[] }[] = [
+      { source: " Child ", nodes: {}, expected: ["agent:work:child"] },
+      {
+        source: "child",
+        nodes: {
+          "agent:work:child": {
+            registry: { controllerSessionKey: "controller", requesterSessionKey: "requester" },
+            stored: { parentSessionKey: "stale-parent" },
+          },
+          "agent:work:controller": { stored: { parentSessionKey: "controller-root" } },
+          "agent:work:requester": { stored: { parentSessionKey: "requester-root" } },
+        },
+        expected: [
+          "agent:work:child",
+          "agent:work:controller",
+          "agent:work:requester",
+          "agent:work:controller-root",
+          "agent:work:requester-root",
+        ],
+      },
+      {
+        source: "child",
+        nodes: {
+          "agent:work:child": {
+            registry: { controllerSessionKey: " ", requesterSessionKey: null },
+            stored: { parentSessionKey: "dashboard-parent", spawnedBy: "spawn-parent" },
+          },
+          "agent:work:dashboard-parent": { stored: { spawnedBy: "root" } },
+        },
+        expected: ["agent:work:child", "agent:work:dashboard-parent", "agent:work:root"],
+      },
+      {
+        source: "agent:work:child",
+        nodes: {
+          "agent:work:child": {
+            registry: { controllerSessionKey: "main", requesterSessionKey: "agent:ops:main" },
+          },
+        },
+        expected: ["agent:work:child", "agent:work:main", "agent:ops:main"],
+      },
+      {
+        source: "child",
+        nodes: {
+          "agent:work:child": {
+            registry: { controllerSessionKey: "parent", requesterSessionKey: "child" },
+          },
+          "agent:work:parent": { stored: { parentSessionKey: "child" } },
+        },
+        expected: ["agent:work:child", "agent:work:parent"],
+      },
+      {
+        source: "session-0",
+        nodes: Object.fromEntries(
+          Array.from({ length: 70 }, (_, index) => [
+            `agent:work:session-${index}`,
+            { stored: { parentSessionKey: `session-${index + 1}` } },
+          ]),
+        ),
+        expected: Array.from({ length: 64 }, (_, index) => `agent:work:session-${index}`),
+      },
+    ];
+    for (const { source, nodes, expected } of cases) {
+      graph = nodes;
+      expect(await resolveApprovalSessionAudienceWithFallback(source, "work"), source).toEqual(
+        expected,
+      );
+    }
+  });
+
+  it.each([
+    { failure: "lineage", source: "main", expected: "agent:work:boss" },
+    { failure: "config", source: "child", expected: "agent:work:child" },
+  ])("scopes the source after $failure lookup fails", async ({ failure, source, expected }) => {
     getRuntimeConfigMock.mockReturnValue({ session: { mainKey: "boss" } });
-    loadSessionEntryMock.mockImplementationOnce(() => {
-      throw new Error("session lineage unavailable");
-    });
-
-    expect(await resolveApprovalSessionAudienceWithFallback("main", "work")).toEqual([
-      "agent:work:boss",
-    ]);
-  });
-
-  it("scopes unscoped aliases even when config loading throws", async () => {
-    getRuntimeConfigMock.mockImplementation(() => {
-      throw new Error("config unavailable");
-    });
-
-    expect(await resolveApprovalSessionAudienceWithFallback("child", "work")).toEqual([
-      "agent:work:child",
-    ]);
+    const fail = () => {
+      throw new Error(`${failure} unavailable`);
+    };
+    if (failure === "lineage") {
+      loadSessionEntryMock.mockImplementationOnce(fail);
+    } else {
+      getRuntimeConfigMock.mockImplementation(fail);
+    }
+    expect(await resolveApprovalSessionAudienceWithFallback(source, "work")).toEqual([expected]);
   });
 
   it("retains live and stored ancestors when the optional registry query is unavailable", async () => {
@@ -213,15 +265,14 @@ describe("resolveApprovalSessionAudienceWithFallback", () => {
   });
 });
 
-describe("resolveApprovalSourceStreamKey fallback scoping", () => {
-  it("scopes raw fallback aliases to the raising agent", () => {
-    expect(resolveApprovalSourceStreamKey("child", "work")).toBe("agent:work:child");
-    expect(resolveApprovalSourceStreamKey("GLOBAL", "work")).toBe("agent:work:global");
-  });
-
-  it("keeps agent-scoped, unknown, and agent-less keys exact", () => {
-    expect(resolveApprovalSourceStreamKey("agent:other:child", "work")).toBe("agent:other:child");
-    expect(resolveApprovalSourceStreamKey("unknown", "work")).toBe("unknown");
-    expect(resolveApprovalSourceStreamKey("child", null)).toBe("child");
-  });
+it("scopes raw fallback aliases without changing explicit, unknown, or agent-less keys", () => {
+  for (const [key, agent, expected] of [
+    ["child", "work", "agent:work:child"],
+    ["GLOBAL", "work", "agent:work:global"],
+    ["agent:other:child", "work", "agent:other:child"],
+    ["unknown", "work", "unknown"],
+    ["child", null, "child"],
+  ] as const) {
+    expect(resolveApprovalSourceStreamKey(key, agent), key).toBe(expected);
+  }
 });

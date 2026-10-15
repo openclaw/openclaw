@@ -1,6 +1,9 @@
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { buildLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import {
+  buildLiveModelProviderConfig,
+  readLiveModelCatalogStringField,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import {
@@ -12,7 +15,6 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const HUGGINGFACE_MANIFEST_CATALOG = manifest.modelCatalog.providers.huggingface;
 export const HUGGINGFACE_BASE_URL = HUGGINGFACE_MANIFEST_CATALOG.baseUrl;
-export const HUGGINGFACE_POLICY_SUFFIXES = ["cheapest", "fastest"] as const;
 const HUGGINGFACE_DISCOVERY_TIMEOUT_MS = 30_000;
 
 const HUGGINGFACE_DEFAULT_COST = {
@@ -46,27 +48,20 @@ export const HUGGINGFACE_MODEL_CATALOG: ModelDefinitionConfig[] = buildManifestM
   catalog: HUGGINGFACE_MANIFEST_CATALOG,
 }).models;
 
-export function isHuggingfacePolicyLocked(modelRef: string): boolean {
-  const ref = modelRef.trim();
-  return HUGGINGFACE_POLICY_SUFFIXES.some((suffix) => ref.endsWith(`:${suffix}`) || ref === suffix);
-}
-
 function isReasoningModelHeuristic(modelId: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(modelId);
   return ["r1", "reason", "thinking", "grok", "qwq"].some((hint) => lower.includes(hint));
 }
 
 function displayNameFromApiEntry(entry: HFModelEntry): string {
-  const fromApi =
-    (typeof entry.name === "string" && entry.name.trim()) ||
-    (typeof entry.title === "string" && entry.title.trim()) ||
-    (typeof entry.display_name === "string" && entry.display_name.trim());
+  const fromApi = readLiveModelCatalogStringField(entry, ["name", "title", "display_name"]);
   if (fromApi) {
     return fromApi;
   }
   const base = entry.id.split("/").pop() ?? entry.id;
-  if (typeof entry.owned_by === "string" && entry.owned_by.trim()) {
-    return `${entry.owned_by.trim()}/${base}`;
+  const owner = readLiveModelCatalogStringField(entry, "owned_by");
+  if (owner) {
+    return `${owner}/${base}`;
   }
   return base.replace(/-/g, " ").replace(/\b(\w)/g, (c) => c.toUpperCase());
 }

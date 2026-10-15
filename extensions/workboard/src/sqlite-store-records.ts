@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import type {
   WorkboardAttachment,
   WorkboardCard,
@@ -17,6 +16,10 @@ import {
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { definedFields } from "../record-fields.js";
+import type { WorkboardSqlConnection } from "./sqlite-store-schema.js";
+import { normalizeLaunchState } from "./store-normalizers.js";
 export type Row = Record<string, unknown>;
 
 export function jsonValue(value: unknown): string | null {
@@ -64,15 +67,6 @@ export function requiredNumber(row: Row, key: string): number {
 
 function optional<T extends object>(value: T): T | undefined {
   return Object.keys(value).length > 0 ? value : undefined;
-}
-
-export function definedFields<T extends object>(fields: T): T {
-  for (const key in fields) {
-    if (fields[key] === undefined) {
-      delete fields[key];
-    }
-  }
-  return fields;
 }
 
 export function blobToBase64(value: unknown): string {
@@ -135,7 +129,7 @@ function groupByCardId(rows: Iterable<Row>): Map<string, Row[]> {
   return grouped;
 }
 
-export function loadCardChildRows(db: DatabaseSync, cardIds?: string[]): CardChildRows {
+export function loadCardChildRows(db: WorkboardSqlConnection, cardIds?: string[]): CardChildRows {
   // Group raw rows only: every preload must finish before card decoding can fail.
   const query = getNodeSqliteKysely<WorkboardCardDatabase>(db);
   // Scope to captured IDs so a concurrent board move cannot discard a selected card's children.
@@ -168,7 +162,7 @@ export function loadCardChildRows(db: DatabaseSync, cardIds?: string[]): CardChi
 }
 
 function childRows(
-  db: DatabaseSync,
+  db: WorkboardSqlConnection,
   table: string,
   cardId: string,
   preloaded?: CardChildRows,
@@ -186,7 +180,7 @@ function childRows(
 }
 
 function workerProtocolRow(
-  db: DatabaseSync,
+  db: WorkboardSqlConnection,
   cardId: string,
   preloaded?: CardChildRows,
 ): Row | undefined {
@@ -198,7 +192,11 @@ function workerProtocolRow(
   return db.prepare("SELECT * FROM workboard_worker_protocol WHERE card_id = ?").get(cardId);
 }
 
-function readLabels(db: DatabaseSync, cardId: string, preloaded?: CardChildRows): string[] {
+function readLabels(
+  db: WorkboardSqlConnection,
+  cardId: string,
+  preloaded?: CardChildRows,
+): string[] {
   return childRows(db, "workboard_card_labels", cardId, preloaded).flatMap((row) => {
     const label = stringValue(row, "label");
     return label ? [label] : [];
@@ -206,7 +204,7 @@ function readLabels(db: DatabaseSync, cardId: string, preloaded?: CardChildRows)
 }
 
 function readEvents(
-  db: DatabaseSync,
+  db: WorkboardSqlConnection,
   cardId: string,
   preloaded?: CardChildRows,
 ): WorkboardEvent[] | undefined {
@@ -261,127 +259,126 @@ export function readAttachment(row: Row): WorkboardAttachment {
 }
 
 function readMetadata(
-  db: DatabaseSync,
+  db: WorkboardSqlConnection,
   row: Row,
   preloaded?: CardChildRows,
 ): WorkboardMetadata | undefined {
   const cardId = requiredString(row, "id");
-  const attempts = childRows(db, "workboard_card_attempts", cardId, preloaded).map((child) => {
-    return definedFields({
-      id: requiredString(child, "id"),
-      // SAFETY: Attempt rows preserve WorkboardRunAttempt.status.
-      status: requiredString(child, "status") as WorkboardRunAttempt["status"],
-      startedAt: requiredNumber(child, "started_at"),
-      endedAt: numberValue(child, "ended_at"),
-      engine: stringValue(child, "engine"),
-      // SAFETY: Attempt rows preserve WorkboardRunAttempt.mode.
-      mode: stringValue(child, "mode") as WorkboardRunAttempt["mode"],
-      model: stringValue(child, "model"),
-      sessionKey: stringValue(child, "session_key"),
-      runId: stringValue(child, "run_id"),
-      error: stringValue(child, "error"),
-    });
-  });
-  const comments = childRows(db, "workboard_card_comments", cardId, preloaded).map((child) => {
-    return definedFields({
-      id: requiredString(child, "id"),
-      body: requiredString(child, "body"),
-      createdAt: requiredNumber(child, "created_at"),
-      updatedAt: numberValue(child, "updated_at"),
-    });
-  });
-  const links = childRows(db, "workboard_card_links", cardId, preloaded).map((child) => {
-    return definedFields({
-      id: requiredString(child, "id"),
-      // SAFETY: Link rows preserve WorkboardLink.type.
-      type: requiredString(child, "type") as WorkboardLink["type"],
-      createdAt: requiredNumber(child, "created_at"),
-      targetCardId: stringValue(child, "target_card_id"),
-      title: stringValue(child, "title"),
-      url: stringValue(child, "url"),
-    });
-  });
-  const proof = childRows(db, "workboard_card_proof", cardId, preloaded).map((child) => {
-    return definedFields({
-      id: requiredString(child, "id"),
-      // SAFETY: Proof rows preserve WorkboardProof.status.
-      status: requiredString(child, "status") as WorkboardProof["status"],
-      createdAt: requiredNumber(child, "created_at"),
-      label: stringValue(child, "label"),
-      command: stringValue(child, "command"),
-      url: stringValue(child, "url"),
-      note: stringValue(child, "note"),
-    });
-  });
-  const artifacts = childRows(db, "workboard_card_artifacts", cardId, preloaded).map((child) => {
-    return definedFields({
-      id: requiredString(child, "id"),
-      createdAt: requiredNumber(child, "created_at"),
-      label: stringValue(child, "label"),
-      url: stringValue(child, "url"),
-      path: stringValue(child, "path"),
-      mimeType: stringValue(child, "mime_type"),
-    });
-  });
+  const readChildren = <T extends object>(
+    table: (typeof CARD_CHILD_TABLES)[number],
+    decode: (child: Row) => T,
+  ): T[] | undefined => {
+    const rows = childRows(db, table, cardId, preloaded).map((child) =>
+      definedFields(decode(child)),
+    );
+    return rows.length ? rows : undefined;
+  };
+  const attempts = readChildren("workboard_card_attempts", (child) => ({
+    id: requiredString(child, "id"),
+    // SAFETY: Attempt rows preserve WorkboardRunAttempt.status.
+    status: requiredString(child, "status") as WorkboardRunAttempt["status"],
+    startedAt: requiredNumber(child, "started_at"),
+    endedAt: numberValue(child, "ended_at"),
+    engine: stringValue(child, "engine"),
+    // SAFETY: Attempt rows preserve WorkboardRunAttempt.mode.
+    mode: stringValue(child, "mode") as WorkboardRunAttempt["mode"],
+    model: stringValue(child, "model"),
+    sessionKey: stringValue(child, "session_key"),
+    runId: stringValue(child, "run_id"),
+    error: stringValue(child, "error"),
+  }));
+  const comments = readChildren("workboard_card_comments", (child) => ({
+    id: requiredString(child, "id"),
+    body: requiredString(child, "body"),
+    createdAt: requiredNumber(child, "created_at"),
+    updatedAt: numberValue(child, "updated_at"),
+  }));
+  const links = readChildren("workboard_card_links", (child) => ({
+    id: requiredString(child, "id"),
+    // SAFETY: Link rows preserve WorkboardLink.type.
+    type: requiredString(child, "type") as WorkboardLink["type"],
+    createdAt: requiredNumber(child, "created_at"),
+    targetCardId: stringValue(child, "target_card_id"),
+    title: stringValue(child, "title"),
+    url: stringValue(child, "url"),
+  }));
+  const proof = readChildren("workboard_card_proof", (child) => ({
+    id: requiredString(child, "id"),
+    // SAFETY: Proof rows preserve WorkboardProof.status.
+    status: requiredString(child, "status") as WorkboardProof["status"],
+    createdAt: requiredNumber(child, "created_at"),
+    label: stringValue(child, "label"),
+    command: stringValue(child, "command"),
+    url: stringValue(child, "url"),
+    note: stringValue(child, "note"),
+  }));
+  const artifacts = readChildren("workboard_card_artifacts", (child) => ({
+    id: requiredString(child, "id"),
+    createdAt: requiredNumber(child, "created_at"),
+    label: stringValue(child, "label"),
+    url: stringValue(child, "url"),
+    path: stringValue(child, "path"),
+    mimeType: stringValue(child, "mime_type"),
+  }));
   const attachments = childRows(db, "workboard_card_attachments", cardId, preloaded).map(
     readAttachment,
   );
-  const workerLogs = childRows(db, "workboard_worker_logs", cardId, preloaded).map((child) => {
-    return definedFields({
-      id: requiredString(child, "id"),
-      createdAt: requiredNumber(child, "created_at"),
-      // SAFETY: Worker log rows preserve WorkboardWorkerLog.level.
-      level: requiredString(child, "level") as WorkboardWorkerLog["level"],
-      message: requiredString(child, "message"),
-      sessionKey: stringValue(child, "session_key"),
-      runId: stringValue(child, "run_id"),
-    });
-  });
-  const diagnostics = childRows(db, "workboard_card_diagnostics", cardId, preloaded).map(
-    (child) => ({
-      // SAFETY: Diagnostic rows preserve WorkboardDiagnostic.kind.
-      kind: requiredString(child, "kind") as WorkboardDiagnostic["kind"],
-      // SAFETY: Diagnostic rows preserve WorkboardDiagnostic.severity.
-      severity: requiredString(child, "severity") as WorkboardDiagnostic["severity"],
-      title: requiredString(child, "title"),
-      detail: requiredString(child, "detail"),
-      firstSeenAt: requiredNumber(child, "first_seen_at"),
-      lastSeenAt: requiredNumber(child, "last_seen_at"),
-      count: requiredNumber(child, "count"),
-      // SAFETY: insertChildren serializes the diagnostic actions unchanged.
-      actions: (parseJson(child.actions_json) as WorkboardDiagnostic["actions"] | undefined) ?? [],
-    }),
-  );
-  const notifications = childRows(db, "workboard_card_notifications", cardId, preloaded).map(
-    (child) => {
-      return definedFields({
-        id: requiredString(child, "id"),
-        // SAFETY: Notification rows preserve WorkboardNotification.kind.
-        kind: requiredString(child, "kind") as WorkboardNotification["kind"],
-        createdAt: requiredNumber(child, "created_at"),
-        message: requiredString(child, "message"),
-        sequence: numberValue(child, "sequence"),
-        sessionKey: stringValue(child, "session_key"),
-        runId: stringValue(child, "run_id"),
-      });
-    },
-  );
+  const workerLogs = readChildren("workboard_worker_logs", (child) => ({
+    id: requiredString(child, "id"),
+    createdAt: requiredNumber(child, "created_at"),
+    // SAFETY: Worker log rows preserve WorkboardWorkerLog.level.
+    level: requiredString(child, "level") as WorkboardWorkerLog["level"],
+    message: requiredString(child, "message"),
+    sessionKey: stringValue(child, "session_key"),
+    runId: stringValue(child, "run_id"),
+  }));
+  const diagnostics = readChildren("workboard_card_diagnostics", (child) => ({
+    // SAFETY: Diagnostic rows preserve WorkboardDiagnostic.kind.
+    kind: requiredString(child, "kind") as WorkboardDiagnostic["kind"],
+    // SAFETY: Diagnostic rows preserve WorkboardDiagnostic.severity.
+    severity: requiredString(child, "severity") as WorkboardDiagnostic["severity"],
+    title: requiredString(child, "title"),
+    detail: requiredString(child, "detail"),
+    firstSeenAt: requiredNumber(child, "first_seen_at"),
+    lastSeenAt: requiredNumber(child, "last_seen_at"),
+    count: requiredNumber(child, "count"),
+    // SAFETY: insertChildren serializes the diagnostic actions unchanged.
+    actions: (parseJson(child.actions_json) as WorkboardDiagnostic["actions"] | undefined) ?? [],
+  }));
+  const notifications = readChildren("workboard_card_notifications", (child) => ({
+    id: requiredString(child, "id"),
+    // SAFETY: Notification rows preserve WorkboardNotification.kind.
+    kind: requiredString(child, "kind") as WorkboardNotification["kind"],
+    createdAt: requiredNumber(child, "created_at"),
+    message: requiredString(child, "message"),
+    sequence: numberValue(child, "sequence"),
+    sessionKey: stringValue(child, "session_key"),
+    runId: stringValue(child, "run_id"),
+  }));
   const protocol = workerProtocolRow(db, cardId, preloaded);
   // SAFETY: insertCard serializes WorkboardMetadata.automation unchanged.
   const automation = parseJson(row.automation_json) as WorkboardMetadata["automation"] | undefined;
+  if (isRecord(automation)) {
+    const launch = normalizeLaunchState(automation.launch);
+    if (launch) {
+      automation.launch = launch;
+    } else {
+      delete automation.launch;
+    }
+  }
   // SAFETY: insertCard serializes WorkboardMetadata.claim unchanged.
   const claim = parseJson(row.claim_json) as WorkboardMetadata["claim"] | undefined;
   // SAFETY: insertCard serializes WorkboardMetadata.stale unchanged.
   const stale = parseJson(row.stale_json) as WorkboardMetadata["stale"] | undefined;
   return optional(
     definedFields({
-      attempts: attempts.length > 0 ? attempts : undefined,
-      comments: comments.length > 0 ? comments : undefined,
-      links: links.length > 0 ? links : undefined,
-      proof: proof.length > 0 ? proof : undefined,
-      artifacts: artifacts.length > 0 ? artifacts : undefined,
+      attempts,
+      comments,
+      links,
+      proof,
+      artifacts,
       attachments: attachments.length > 0 ? attachments : undefined,
-      workerLogs: workerLogs.length > 0 ? workerLogs : undefined,
+      workerLogs,
       workerProtocol: protocol
         ? definedFields({
             // SAFETY: Protocol rows preserve WorkboardMetadata.workerProtocol.state.
@@ -394,8 +391,8 @@ function readMetadata(
         : undefined,
       automation: automation || undefined,
       claim: claim || undefined,
-      diagnostics: diagnostics.length > 0 ? diagnostics : undefined,
-      notifications: notifications.length > 0 ? notifications : undefined,
+      diagnostics,
+      notifications,
       // SAFETY: insertCard persists the WorkboardMetadata template identifier.
       templateId: stringValue(row, "template_id") as WorkboardMetadata["templateId"],
       archivedAt: numberValue(row, "archived_at"),
@@ -406,7 +403,11 @@ function readMetadata(
   );
 }
 
-export function readCard(db: DatabaseSync, row: Row, preloaded?: CardChildRows): WorkboardCard {
+export function readCard(
+  db: WorkboardSqlConnection,
+  row: Row,
+  preloaded?: CardChildRows,
+): WorkboardCard {
   const card: WorkboardCard = {
     id: requiredString(row, "id"),
     title: requiredString(row, "title"),

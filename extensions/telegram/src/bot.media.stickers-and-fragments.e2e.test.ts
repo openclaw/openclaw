@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { holdTelegramMediaTimeouts } from "./bot-media-timers.test-support.js";
 import { telegramBotDepsForTest } from "./bot.media.e2e.test-harness.js";
 import { TELEGRAM_TEST_TIMINGS, createBotHandlerWithOptions } from "./bot.media.test-utils.js";
@@ -33,14 +33,24 @@ function resolveScheduledTimerForDelay(
   return flushTimer;
 }
 
+type CreateBuffersSpy = MockInstance<
+  typeof import("./bot-handlers.inbound-buffer.js").createTelegramInboundBuffers
+>;
+
 async function flushScheduledTimerForDelay(
   setTimeoutSpy: ReturnType<typeof vi.spyOn>,
   clearTimeoutSpy: ReturnType<typeof vi.spyOn>,
   delayMs: number,
+  createBuffers: CreateBuffersSpy,
 ) {
   const flushTimer = resolveScheduledTimerForDelay(setTimeoutSpy, clearTimeoutSpy, delayMs);
   expect(flushTimer).toBeTypeOf("function");
   await flushTimer?.();
+  const buffers = createBuffers.mock.results[0];
+  if (buffers?.type !== "return") {
+    throw new Error("Expected the bot's inbound buffers");
+  }
+  await buffers.value.inboundDebouncer.drain();
 }
 
 type ScheduledTimer = {
@@ -119,6 +129,8 @@ describe("telegram text fragments", () => {
   it(
     "buffers slash-prefixed near-limit text with its selected reply quote",
     async () => {
+      const bufferRuntime = await import("./bot-handlers.inbound-buffer.js");
+      const createBuffers = vi.spyOn(bufferRuntime, "createTelegramInboundBuffers");
       const prefix = "/not_a_command ";
       const { handler, replySpy } = await createBotHandlerWithOptions({});
       const quote = "FRAGMENT_REPLY_QUOTE";
@@ -156,15 +168,17 @@ describe("telegram text fragments", () => {
           setTimeoutSpy,
           clearTimeoutSpy,
           TELEGRAM_TEST_TIMINGS.textFragmentGapMs,
+          createBuffers,
         );
 
-        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
+        expect(replySpy).toHaveBeenCalledTimes(1);
         const payload = replySpy.mock.calls.at(0)?.[0] as { Body?: string; RawBody?: string };
         expect(payload.RawBody).toContain(part1.slice(0, 32));
         expect(payload.RawBody).toContain(part2.slice(0, 32));
         expect(payload.Body).toContain(`[1. Ada id:10]\n"${quote}"`);
       } finally {
         restore();
+        createBuffers.mockRestore();
       }
     },
     TEXT_FRAGMENT_TEST_TIMEOUT_MS,
@@ -195,6 +209,8 @@ describe("telegram text fragments", () => {
   it(
     "keeps per-DM pairing store authorization when flushing text fragments",
     async () => {
+      const bufferRuntime = await import("./bot-handlers.inbound-buffer.js");
+      const createBuffers = vi.spyOn(bufferRuntime, "createTelegramInboundBuffers");
       const originalLoadConfig = telegramBotDepsForTest.getRuntimeConfig;
       telegramBotDepsForTest.getRuntimeConfig = (() => ({
         messages: { inbound: { debounceMs: 0 } },
@@ -257,15 +273,17 @@ describe("telegram text fragments", () => {
           setTimeoutSpy,
           clearTimeoutSpy,
           TELEGRAM_TEST_TIMINGS.textFragmentGapMs,
+          createBuffers,
         );
 
-        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
+        expect(replySpy).toHaveBeenCalledTimes(1);
         expect(readAllowFromStore).toHaveBeenCalledWith("telegram", process.env, "default");
         expect(upsertPairingRequest).not.toHaveBeenCalled();
         expect(runtimeError).not.toHaveBeenCalled();
       } finally {
         restore();
         hostClock.mockRestore();
+        createBuffers.mockRestore();
         telegramBotDepsForTest.getRuntimeConfig = originalLoadConfig;
         readAllowFromStore.mockReset();
         readAllowFromStore.mockResolvedValue([]);

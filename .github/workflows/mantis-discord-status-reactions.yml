@@ -325,7 +325,7 @@ jobs:
               ? first.status
               : null;
           }
-          console.log(status);
+          console.log(String(status));
           NODE
               return
             fi

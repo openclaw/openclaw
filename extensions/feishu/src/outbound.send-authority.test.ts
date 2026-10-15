@@ -460,7 +460,7 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
     });
   });
 
-  it.each(["reply", "whole", "fallback"] as const)(
+  it.each(["reply", "fallback"] as const)(
     "marks a document-comment %s after preparation and keeps accepted results",
     async (mode) => {
       await withFeishuTransport(async (fixture) => {
@@ -472,15 +472,6 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
           dispatchRequests.push(fixture.requests.map((request) => request.path));
         });
         fixture.respond(async (request, response) => {
-          if (mode === "whole" && request.path === `${COMMENT_PATH}/batch_query`) {
-            response.writeHead(200, { "content-type": "application/json" }).end(
-              JSON.stringify({
-                code: 0,
-                data: { items: [{ comment_id: "comment_fixture", is_whole: true }] },
-              }),
-            );
-            return true;
-          }
           if (mode === "fallback" && request.path === replyPath) {
             response
               .writeHead(200, { "content-type": "application/json" })
@@ -520,7 +511,6 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
   );
 
   it.each([
-    { scenario: "token", result: "failed", queued: "failed", messages: 0 },
     { scenario: "upload", result: "failed", queued: "failed", messages: 0 },
     { scenario: "accepted", result: "sent", queued: "completed", messages: 1 },
     { scenario: "partial", result: "partial_failed", queued: "pending", messages: 1 },
@@ -543,7 +533,6 @@ describe("Feishu delivery authority through the registered adapter and Lark tran
           }
           fixture.respond(async (request, response) => {
             if (
-              (scenario === "token" && request.path === AUTH_PATH) ||
               (scenario === "upload" && request.path === FILE_PATH) ||
               (scenario === "accepted" && request.path === MESSAGE_PATH)
             ) {

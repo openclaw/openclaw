@@ -1,6 +1,12 @@
 // Shared types for grouped OpenClaw Claw manifests and read-only add plans.
 import type { AgentConfig } from "../config/types.agents.js";
-import type { CLAW_SCHEMA_VERSION, ClawDiagnostic } from "./manifest-contract.js";
+import type {
+  CLAW_SCHEMA_VERSION,
+  ClawAppliedExtension,
+  ClawDiagnostic,
+  ClawExtensionFormat,
+  ClawSourceIdentity,
+} from "./manifest-contract.js";
 import type {
   ClawManifest,
   ClawOpenClawExtension,
@@ -11,7 +17,9 @@ import type {
 export {
   CLAW_BOOTSTRAP_FILE_NAMES,
   CLAW_SCHEMA_VERSION,
+  type ClawAppliedExtension,
   type ClawDiagnostic,
+  type ClawSourceIdentity,
 } from "./manifest-contract.js";
 
 export type {
@@ -26,17 +34,6 @@ export type {
 export const CLAW_ADD_PLAN_SCHEMA_VERSION = "openclaw.clawAddPlan.v1" as const;
 export const CLAW_INSPECT_RESULT_SCHEMA_VERSION = "openclaw.clawInspect.v1" as const;
 export const CLAW_OUTPUT_STABILITY = "experimental" as const;
-
-type ClawExtensionFormat = ClawOpenClawExtension["format"];
-
-export type ClawAppliedExtension = {
-  id: string;
-  format: ClawExtensionFormat;
-  detectedFormat: ClawExtensionFormat;
-  mapped: string[];
-  unavailable: string[];
-  adapterIdentity: string;
-};
 
 export type ResolvedClawPackage = ClawPackage & {
   integrity: string;
@@ -65,17 +62,6 @@ export type ClawPackagePreflight = (
   pkg: ClawPackage,
   workspace: string,
 ) => Promise<ClawPackagePreflightResult>;
-
-export type ClawSourceIdentity = {
-  kind: "package" | "development";
-  name: string;
-  version: string;
-  packageRoot: string;
-  manifestPath: string;
-  integrityKind: "artifact" | "development-snapshot";
-  integrity: string;
-  byteLength: number;
-};
 
 export type ClawWorkspaceSourceSnapshot = {
   sourcePath: string;

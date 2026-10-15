@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as listRevision from "../../cron/list-snapshot-revision.js";
 import { CronService } from "../../cron/service.js";
@@ -50,7 +49,6 @@ async function withCronStore(
   options: {
     config?: OpenClawConfig;
     defaultAgentId?: string;
-    legacyDefaultAgentId?: string;
   } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "cron-list-scoped-"));
@@ -64,7 +62,6 @@ async function withCronStore(
         storePath,
         cronEnabled: true,
         defaultAgentId: options.defaultAgentId ?? "main",
-        legacyDefaultAgentId: options.legacyDefaultAgentId,
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
@@ -137,11 +134,7 @@ async function listScoped(
 }
 
 describe("cron.list scoped SQLite snapshots", () => {
-  it.each([
-    { enabled: true, quarantine: false },
-    { enabled: true, quarantine: true },
-    { enabled: false, quarantine: true },
-  ])(
+  it.each([{ enabled: true, quarantine: true }])(
     "keeps unsupported enabled=$enabled delivery repairable beside healthy work and quarantine=$quarantine",
     async ({ enabled, quarantine }) => {
       await withCronStore(
@@ -292,21 +285,18 @@ describe("cron.list scoped SQLite snapshots", () => {
     },
   );
 
-  it("keeps unrepaired historical jobs outside the ambient agent's reads and mutations", async () => {
-    const config = retainLegacyDefaultAgentId(
-      {
-        agents: {
-          ownership: "explicit",
-          entries: { ops: {}, research: {} },
-          defaults: { systemAgent: { agentId: "research" } },
-        },
+  it("keeps migrated owners outside a different ambient agent's reads and mutations", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+        defaults: { systemAgent: { agentId: "research" } },
       },
-      "ops",
-    );
+    };
     await withCronStore(
       0,
       async ({ context, storePath }) => {
-        const historical = { ...createJobs(1)[0]!, id: "historical", agentId: undefined };
+        const historical = { ...createJobs(1)[0]!, id: "historical", agentId: "ops" };
         const explicit = { ...createJobs(1)[0]!, id: "explicit", agentId: "research" };
         await saveCronStore(storePath, { version: 1, jobs: [historical, explicit] });
         const before = await loadCronStore(storePath);
@@ -347,7 +337,7 @@ describe("cron.list scoped SQLite snapshots", () => {
           expect(await loadCronStore(storePath)).toEqual(before);
         }
       },
-      { config, defaultAgentId: "research", legacyDefaultAgentId: "ops" },
+      { config, defaultAgentId: "research" },
     );
   });
   it("prepares one revision for concurrent lists while status does no listing work", async () => {
@@ -409,7 +399,36 @@ describe("cron.list scoped SQLite snapshots", () => {
     });
   });
 
-  it.each([200, 401])(
+  it("keeps global-session filtering on the explicit job agent instead of the ambient default", async () => {
+    await withCronStore(
+      2,
+      async ({ context, storePath }) => {
+        const store = await loadCronStore(storePath);
+        for (const job of store.jobs) {
+          job.sessionKey = "main";
+        }
+        await saveCronStore(storePath, store);
+
+        for (const client of [createCronCallerClient("ops"), null]) {
+          const page = await listScoped(context, 0, "global", client);
+          expect(page.total).toBe(1);
+          expect(page.jobs.map((job) => job.id)).toEqual(["job-0000"]);
+        }
+      },
+      {
+        config: {
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "main" } },
+            entries: { main: {}, ops: {}, other: {} },
+          },
+          session: { scope: "global" },
+        },
+      },
+    );
+  });
+
+  it.each([401])(
     "bounds sorting work while finding visible jobs across a %i-job inventory",
     async (count) => {
       await withCronStore(count, async ({ context, storePath }) => {

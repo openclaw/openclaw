@@ -86,12 +86,12 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  OCM_VERSION: v0.2.47
-  OCM_LINUX_X64_SHA256: 05e0bb598fe391c75fe7668e159d7eb09168b4298b5d8d0999786e79e97d0642
+  OCM_VERSION: v0.2.48
+  OCM_LINUX_X64_SHA256: d0bdb49d69fa8bf3c3487ff04f4be82126828876f81690afdc002c427e22c1ac
   KOVA_REPOSITORY: openclaw/Kova
-  KOVA_CANONICAL_CONFIG_REF: 4b8b1681446b868a44193ed6e97253a6c8bcbbbf
+  KOVA_CANONICAL_CONFIG_REF: 88d9a7efa5e6569f902bf8d298fd6a21c6be2e7b
   KOVA_LEGACY_LIST_CONFIG_REF: d69b2209905195bea06980721a92ad8b70808c5d
-  KOVA_TRUSTED_LIVE_REF: 4b8b1681446b868a44193ed6e97253a6c8bcbbbf
+  KOVA_TRUSTED_LIVE_REF: 88d9a7efa5e6569f902bf8d298fd6a21c6be2e7b
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
   KOVA_SCENARIO_TIMEOUT_MS: ${{ inputs.profile == 'release' && '900000' || '300000' }}
@@ -173,11 +173,6 @@ jobs:
               if (typeof version !== "string") process.exit(1);
               process.stdout.write(version);
             ' "$TARGET_CHECKOUT_DIR/package.json")"
-            if [[ "$target_version" == "2026.7.33" || "$target_version" == "2026.7.34" ]]; then
-              # This compatibility ref keeps Kova #116's historical 250% status CLI calibration
-              # while backporting #118-#120's complete CPU-accounting fixes for this release only.
-              kova_ref="18c9eb8c3950a35794d196f4e40ad471e9308e27"
-            fi
           fi
           if [[ "$kova_ref" == *$'\n'* || "$kova_ref" == *$'\r'* ]]; then
             echo "::error::kova_ref must be a single line."
@@ -817,6 +812,7 @@ jobs:
       - name: Fetch previous source performance baseline
         env:
           GH_TOKEN: ${{ github.token }}
+          QUALIFICATION_DISPATCH: ${{ startsWith(inputs.dispatch_id, 'full-release-validation-') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -827,6 +823,12 @@ jobs:
           import subprocess
           from pathlib import Path
           from ci_git_owner import run_git, git_output, GitFailure, FetchTimeout, check_cancelled, checkout_environment, fetch, git_auth_environment
+
+          if os.environ.get("QUALIFICATION_DISPATCH") == "true":
+              # Historical report deltas are advisory; qualification gates use the pinned Kova fixture.
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+                  output.write("Source report baseline: advisory-not-compared (frozen qualification does not read the moving reports branch).\n")
+              raise SystemExit(0)
 
           reports = ".artifacts/clawgrit-baseline"
           Path(reports).mkdir(parents=True, exist_ok=True)
@@ -1816,9 +1818,9 @@ jobs:
           set -euo pipefail
           pnpm_prefix="$RUNNER_TEMP/vitest-pair-pnpm"
           npm_config_cache="$RUNNER_TEMP/vitest-pair-npm-cache" \
-            npm install --global --prefix "$pnpm_prefix" pnpm@12.5.1
+            npm install --global --prefix "$pnpm_prefix" pnpm@12.9.0
           pnpm_bin="$pnpm_prefix/bin/pnpm"
-          [[ "$("$pnpm_bin" --version)" == "12.5.1" ]]
+          [[ "$("$pnpm_bin" --version)" == "12.9.0" ]]
           echo "VITEST_PAIR_PNPM_BIN=$pnpm_bin" >> "$GITHUB_ENV"
 
       - name: Run Vitest pair benchmark

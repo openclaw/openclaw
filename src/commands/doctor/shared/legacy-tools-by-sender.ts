@@ -89,7 +89,6 @@ export function collectLegacyToolsBySenderIssues(raw: unknown): ConfigValidation
 
 export const LEGACY_CONFIG_MIGRATION_TOOLS_BY_SENDER: LegacyConfigMigrationSpec = {
   id: "toolsBySender.typed-keys",
-  describe: "Migrate untyped sender tool policies before config validation",
   legacyRules: [
     { path: [], match: (raw) => !legacySenderMaps(raw).next().done, message: migrationMessage },
   ],

@@ -17,14 +17,6 @@ export type VoiceReceiveRecoveryState = {
   decryptRecoveryInFlight: boolean;
 };
 
-type VoiceReceiveErrorAnalysis = {
-  message: string;
-  isAbortLike: boolean;
-  isDecodeCorruption: boolean;
-  shouldAttemptPassthrough: boolean;
-  countsAsDecryptFailure: boolean;
-};
-
 type DavePassthroughTarget = {
   guildId: string;
   channelId: string;
@@ -57,14 +49,6 @@ type DavePassthroughSdk = {
     Resuming: unknown;
   };
 };
-
-export function createVoiceReceiveRecoveryState(): VoiceReceiveRecoveryState {
-  return {
-    decryptFailureCount: 0,
-    lastDecryptFailureAt: 0,
-    decryptRecoveryInFlight: false,
-  };
-}
 
 function isAbortLikeReceiveError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
@@ -101,7 +85,7 @@ function isOpusDecodeInvalidPacketError(err: unknown): boolean {
   );
 }
 
-export function analyzeVoiceReceiveError(err: unknown): VoiceReceiveErrorAnalysis {
+export function analyzeVoiceReceiveError(err: unknown) {
   const message = formatErrorMessage(err);
   const normalizedMessage = message.toLowerCase();
   const shouldAttemptPassthrough = message.includes(DAVE_PASSTHROUGH_DISABLED_MARKER);
@@ -121,10 +105,7 @@ export function analyzeVoiceReceiveError(err: unknown): VoiceReceiveErrorAnalysi
 export function noteVoiceDecryptFailure(
   state: VoiceReceiveRecoveryState,
   now: number = Date.now(),
-): {
-  firstFailure: boolean;
-  shouldRecover: boolean;
-} {
+) {
   if (now - state.lastDecryptFailureAt > DECRYPT_FAILURE_WINDOW_MS) {
     state.decryptFailureCount = 0;
   }

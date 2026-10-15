@@ -673,7 +673,7 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
           config: {
             agents: {
               defaults: { model: "fixture-provider/fixture-model" },
-              entries: { main: { default: true } },
+              entries: { main: {} },
             },
             session: { scope: "per-sender", mainKey: "main" },
           },

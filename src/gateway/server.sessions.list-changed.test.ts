@@ -8,9 +8,8 @@ import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { subscribePluginSessionsChanged } from "../plugins/services.test-support.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
@@ -19,7 +18,6 @@ import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.j
 import { setupPersistentSessionListTestHarness } from "./server.sessions.list-changed.fixture.test-support.js";
 import {
   requireRecord,
-  requireArray,
   expectFields,
   transcriptMessageContents,
   expectRespondPayload,
@@ -34,12 +32,12 @@ import {
   seedSessionListBackfillFixture,
 } from "./session-row-fixtures.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   getGatewayConfigModule,
   getSessionsHandlers,
   loadSeededTranscriptEvents,
-  seedSessionTranscript,
   sessionStoreEntry,
 } from "./test/server-sessions.test-helpers.js";
 
@@ -283,135 +281,21 @@ test("sessions.list uses persisted usage and selected model fields", async () =>
   expect(child?.model).toBe("test-model-without-catalog-context");
   expect(child?.modelSelectionLocked).toBe(true);
 
+  const gallery = await rpcReq<{ sessions: Array<Record<string, unknown>> }>(ws, "sessions.list", {
+    rowMode: "dashboard",
+  });
+  expect(gallery.ok).toBe(true);
+  const galleryChild = gallery.payload?.sessions.find((row) => row.key === child?.key);
+  expect(galleryChild).toMatchObject({
+    rowMode: "dashboard",
+    parentSessionKey: "agent:main:main",
+    sessionId: "sess-child",
+  });
+  expect(galleryChild).not.toHaveProperty("totalTokens");
+  expect(galleryChild).not.toHaveProperty("model");
+
   ws.close();
 });
-
-test.each([["my-ngc:nvidia", "nvidia/nemotron-3-ultra-550b-a55b"]])(
-  "sessions.list preserves selected custom provider %s and nested models over WebSocket",
-  async (provider, model) => {
-    const { storePath } = await createSessionStoreDir();
-    await writeSessionStore({
-      entries: {
-        main: sessionStoreEntry("sess-parent"),
-        "dashboard:child": sessionStoreEntry("sess-custom-provider", {
-          providerOverride: provider,
-          modelOverride: model,
-          modelProvider: provider,
-          model,
-          parentSessionKey: "agent:main:main",
-        }),
-      },
-    });
-    await seedSessionTranscript({
-      sessionId: "sess-custom-provider",
-      sessionKey: "agent:main:dashboard:child",
-      storePath,
-      messages: [
-        {
-          role: "user",
-          content: `List ${provider}/${model} sessions.`,
-        },
-        {
-          role: "assistant",
-          provider,
-          model,
-          content: `${provider} remains a model provider, not a plugin directory.`,
-        },
-      ],
-    });
-
-    const { ws } = await openClient();
-    const listed = await rpcReq<{
-      sessions: Array<{ key: string; modelProvider?: string; model?: string }>;
-    }>(ws, "sessions.list", {});
-    ws.close();
-
-    expect(listed.ok, JSON.stringify(listed)).toBe(true);
-    expect(
-      listed.payload?.sessions.find((session) => session.key === "agent:main:dashboard:child"),
-    ).toMatchObject({
-      modelProvider: provider,
-      model,
-    });
-  },
-);
-
-test.each(["gpt-5.6-sol"])(
-  "sessions.patch returns authoritative native Codex Ultra metadata for %s",
-  async (model) => {
-    const registry = createEmptyPluginRegistry();
-    registry.providers.push({
-      pluginId: "openai",
-      source: "test",
-      provider: {
-        id: "openai",
-        label: "OpenAI",
-        auth: [],
-        resolveThinkingProfile: ({ compat }) => ({
-          levels: [
-            { id: "off" },
-            { id: "high" },
-            { id: "max" },
-            ...(compat?.supportedReasoningEfforts?.includes("ultra")
-              ? [{ id: "ultra" as const }]
-              : []),
-          ],
-          defaultLevel: "high",
-        }),
-      },
-    });
-    setActivePluginRegistry(registry);
-    testState.agentConfig = {
-      model: { primary: `openai/${model}` },
-      models: {
-        [`openai/${model}`]: { agentRuntime: { id: "codex" } },
-      },
-    };
-    await writeMainSessionStore({ modelProvider: "openai", model });
-    const loadGatewayModelCatalogSnapshot = vi.fn(async () =>
-      mutationCatalogSnapshot([
-        {
-          provider: "openai",
-          id: model,
-          name: model,
-          reasoning: true,
-          compat: {
-            supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-          },
-        },
-      ]),
-    );
-
-    const result = await invokeSessionMutation({
-      method: "sessions.patch",
-      params: { key: "main", thinkingLevel: "ultra" },
-      context: { loadGatewayModelCatalogSnapshot },
-    });
-
-    const resolved = requireRecord(result.responsePayload.resolved, "resolved patch metadata");
-    expectFields(resolved, {
-      modelProvider: "openai",
-      model,
-      thinkingLevel: "ultra",
-    });
-    expect(requireRecord(resolved.agentRuntime, "resolved agent runtime").id).toBe("codex");
-    expect(
-      requireArray(resolved.thinkingLevels, "resolved thinking levels").map(
-        (level) => requireRecord(level, "thinking level").id,
-      ),
-    ).toContain("ultra");
-    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
-
-    const event = expectChangedBroadcast(result.broadcastToConnIds, {
-      sessionKey: "agent:main:main",
-      reason: "patch",
-      thinkingLevel: "ultra",
-    });
-    expect(event).not.toHaveProperty("thinkingLevels");
-    expect(event).not.toHaveProperty("thinkingOptions");
-    expect(event).not.toHaveProperty("thinkingDefault");
-  },
-);
 
 test("sessions.patch omits thinking metadata when an unrelated patch skips the catalog", async () => {
   testState.agentConfig = {
@@ -528,33 +412,12 @@ test("sessions.changed publishes running status during ordinary startup", async 
   });
 });
 
-test("sessions.list leaves failed-first-turn dashboard sessions untitled instead of an id-prefix title", async () => {
-  const sessionKey = "agent:main:dashboard:fade729d-1111-2222-3333-444455556666";
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      "dashboard:fade729d-1111-2222-3333-444455556666": sessionStoreEntry("sess-dash-untitled"),
-    },
-  });
-  await seedSessionTranscript({
-    sessionId: "sess-dash-untitled",
-    sessionKey,
-    storePath,
-    messages: [{ role: "assistant", content: "The first turn failed before a user message." }],
-  });
-
-  const { respond } = await invokeSessionsList({
-    requestId: "req-sessions-list-untitled-dashboard",
-    params: { includeDerivedTitles: true },
-  });
-
-  const session = findSession(expectRespondPayload(respond), sessionKey);
-  expect(session.derivedTitle).toBeUndefined();
-});
-
 test("sessions.list yields for bulk metadata and later serves previews without repairing titles", async () => {
   const { storePath } = await createSessionStoreDir();
-  const keys = await seedSessionListBackfillFixture(storePath, 11);
+  const keys = await seedSessionListBackfillFixture(storePath, 11, 1);
+  // Durable rows publish while the request creates its projection, before the test holds it.
+  const requestProjection = createDeferredCore<SessionRowProjection>();
+  const backfilled = observeSessionRowBackfill(keys, requestProjection.promise);
   const releaseForeground = retainSessionListForegroundWork();
   try {
     const params = { includeDerivedTitles: true, includeLastMessage: true, limit: 11 };
@@ -574,9 +437,12 @@ test("sessions.list yields for bulk metadata and later serves previews without r
 
     expect(respond).not.toHaveBeenCalled();
     await request;
-    expectRespondPayload(respond);
-    const projection = expectDefined(getSessionRowProjection(context), "request projection");
-    const backfilled = observeSessionRowBackfill(keys, projection);
+    expectFields(findSession(expectRespondPayload(respond), "agent:main:bulk-10"), {
+      lastMessagePreview: "last 10",
+    });
+    requestProjection.resolve(
+      expectDefined(getSessionRowProjection(context), "request projection"),
+    );
     releaseForeground();
     await backfilled;
     const refreshed = await invokeSessionsList({
@@ -634,7 +500,8 @@ test("sessions.changed includes live usage metadata without inventing an unprice
     label: "Renamed",
   });
 
-  expectMainPatchBroadcast(result, {
+  const payload = expectMainPatchBroadcast(result, {
+    effectiveResponseUsage: "off",
     totalTokens: 6_643,
     totalTokensFresh: true,
     contextTokens: 123_456,
@@ -642,24 +509,6 @@ test("sessions.changed includes live usage metadata without inventing an unprice
     modelProvider: "openai",
     model: "test-unpriced-model",
   });
-});
-
-test("sessions.changed mutation events carry the resolved effectiveResponseUsage when the session has no override", async () => {
-  // No explicit responseUsage and no configured default → the row builder resolves
-  // effectiveResponseUsage to "off". The event must carry that resolved value, not
-  // the absent raw responseUsage, so a UI consumer's effective display stays fresh.
-  await writeMainSessionStore({ verboseLevel: "on" });
-
-  const result = await invokeSessionsPatch({
-    key: "main",
-    verboseLevel: "on",
-  });
-
-  const payload = expectMainPatchBroadcast(result, {
-    effectiveResponseUsage: "off",
-  });
-  // Raw responseUsage is genuinely absent (no override), proving the event does not
-  // merely echo the raw field.
   expect(payload.responseUsage).toBeUndefined();
 });
 

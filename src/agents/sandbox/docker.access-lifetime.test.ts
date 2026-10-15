@@ -179,6 +179,7 @@ function source(params?: {
 
 function provision(owner: ReturnType<typeof source> | undefined, scopeKey = "guest") {
   return {
+    engine: DOCKER_SANDBOX_ENGINE,
     operatorAuthority: owner?.authority,
     scopeKey,
     workspaceDir: "/workspace",

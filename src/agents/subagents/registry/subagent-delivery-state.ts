@@ -45,7 +45,10 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
     ...(entry.taskRunId !== undefined ? { taskRunId: entry.taskRunId } : {}),
     ...(entry.pauseReason ? { pauseReason: entry.pauseReason } : {}),
     ...(entry.swarmRunId ? { swarmRunId: entry.swarmRunId } : {}),
+    ...(entry.schedulerSlotId ? { schedulerSlotId: entry.schedulerSlotId } : {}),
+    ...(entry.swarmLaunchReplayKey ? { swarmLaunchReplayKey: entry.swarmLaunchReplayKey } : {}),
     childSessionKey: entry.childSessionKey,
+    ...(entry.childAgentId ? { childAgentId: entry.childAgentId } : {}),
     ...(entry.controllerSessionKey ? { controllerSessionKey: entry.controllerSessionKey } : {}),
     requesterSessionKey: entry.requesterSessionKey,
     requesterStorePath: entry.requesterStorePath,
@@ -107,6 +110,7 @@ export function projectSubagentRunForMaintenance(
   return {
     runId: entry.runId,
     childSessionKey: entry.childSessionKey,
+    ...(entry.childAgentId ? { childAgentId: entry.childAgentId } : {}),
     requesterSessionKey: entry.requesterSessionKey,
     createdAt: entry.createdAt,
     cleanupCompletedAt: entry.cleanupCompletedAt,

@@ -4,12 +4,15 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
+import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";
 import type {
+  ConfigWriteOptions,
   ReadConfigFileSnapshotForWriteResult,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/io.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { finalizeRuntimeSnapshotWrite } from "../config/runtime-snapshot.js";
+import { getRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { validateConfigObjectWithPlugins } from "../config/validation.js";
@@ -58,16 +61,9 @@ const composeTestConfig = (baseConfig: Record<string, unknown>) => {
     ...testState.agentConfig,
   };
   const testAgents = testState.agentsConfig;
-  const retainedFileAgents = { ...fileAgents };
-  if (testAgents && Object.hasOwn(testAgents, "list")) {
-    delete retainedFileAgents.entries;
-  }
-  if (testAgents && Object.hasOwn(testAgents, "entries")) {
-    delete retainedFileAgents.list;
-  }
   const agents = testAgents
-    ? { ...retainedFileAgents, ...testAgents, defaults }
-    : { ...retainedFileAgents, defaults };
+    ? { ...fileAgents, ...testAgents, defaults }
+    : { ...fileAgents, defaults };
 
   const fileBindings = Array.isArray(baseConfig.bindings)
     ? (baseConfig.bindings as AgentBinding[])
@@ -168,7 +164,7 @@ const composeTestConfig = (baseConfig: Record<string, unknown>) => {
     hooks,
     cron,
   } as OpenClawConfig;
-  return migratePersistedImplicitMainRoster(composed).config as OpenClawConfig;
+  return applyImplicitAgentRosterDefaults(composed) as OpenClawConfig;
 };
 
 export function loadGatewayTestConfig(): OpenClawConfig {
@@ -249,15 +245,30 @@ export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): Gate
     }
   };
 
-  const writeConfigFile = vi.fn(async (cfg: Record<string, unknown>) => {
-    const configPath = resolveConfigPath();
-    await writeJsonAtomic(configPath, cfg, { durable: false, trailingNewline: true });
-    actual.setRuntimeConfigSnapshot(loadGatewayTestConfig());
-    return {
-      persistedHash: "test-config-hash",
-      persistedConfig: composeTestConfig(cfg),
-    };
-  });
+  const writeConfigFile = vi.fn(
+    async (cfg: Record<string, unknown>, options?: ConfigWriteOptions) => {
+      const configPath = resolveConfigPath();
+      await writeJsonAtomic(configPath, cfg, { durable: false, trailingNewline: true });
+      const config = loadGatewayTestConfig();
+      await finalizeRuntimeSnapshotWrite({
+        nextSourceConfig: config,
+        freshConfig: config,
+        hadBothSnapshots: true,
+        refreshOptions: options?.runtimeRefresh,
+        createRefreshError: (detail, cause) => new Error(detail, { cause }),
+        formatRefreshError: String,
+        notifyCommittedWrite: () => {
+          if (options) {
+            getRuntimeConfigWriteApplication(options)?.claim()?.settle("applied");
+          }
+        },
+      });
+      return {
+        persistedHash: "test-config-hash",
+        persistedConfig: composeTestConfig(cfg),
+      };
+    },
+  );
 
   const readConfigFileSnapshotForWrite =
     async (): Promise<ReadConfigFileSnapshotForWriteResult> => ({

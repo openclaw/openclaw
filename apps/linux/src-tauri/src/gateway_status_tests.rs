@@ -1,3 +1,4 @@
+#[cfg(not(target_os = "linux"))]
 use super::ensure_ready;
 use crate::cli::OpenClawCli;
 use serde_json::{json, Value};
@@ -51,6 +52,7 @@ enum Expected {
         install: bool,
         start: bool,
         recover: bool,
+        initial_phase: &'static str,
     },
     Unknown {
         inspection: bool,
@@ -76,6 +78,16 @@ fn cli_service_status_lifecycle_contract() {
     // observe a temporary override or share this test's service-call recorder.
     if let Some(root) = std::env::var_os(CHILD) {
         let cli = OpenClawCli::discover().expect("discover isolated fixture CLI");
+        #[cfg(target_os = "linux")]
+        let result = match super::status(&cli) {
+            Ok(snapshot) => json!({
+                "ok": true,
+                "reachable": snapshot.reachable,
+                "phase": snapshot.phase,
+            }),
+            Err(error) => json!({"ok": false, "error": error}),
+        };
+        #[cfg(not(target_os = "linux"))]
         let result = match ensure_ready(&cli) {
             Ok(ready) => json!({
                 "ok": true,
@@ -89,7 +101,7 @@ fn cli_service_status_lifecycle_contract() {
             PathBuf::from(root).join("result.json"),
             serde_json::to_vec(&result).unwrap(),
         )
-        .expect("record ensure_ready result");
+        .expect("record Gateway connection result");
         return;
     }
 
@@ -121,6 +133,7 @@ fn cli_service_status_lifecycle_contract() {
                 install: false,
                 start: false,
                 recover: false,
+                initial_phase: "connected",
             },
         ),
         (
@@ -130,6 +143,7 @@ fn cli_service_status_lifecycle_contract() {
                 install: false,
                 start: false,
                 recover: true,
+                initial_phase: "reconnecting",
             },
         ),
         (
@@ -139,6 +153,7 @@ fn cli_service_status_lifecycle_contract() {
                 install: false,
                 start: false,
                 recover: true,
+                initial_phase: "reconnecting",
             },
         ),
         (
@@ -164,6 +179,7 @@ fn cli_service_status_lifecycle_contract() {
                 install: true,
                 start: true,
                 recover: false,
+                initial_phase: "notInstalled",
             },
         ),
         (
@@ -173,6 +189,7 @@ fn cli_service_status_lifecycle_contract() {
                 install: false,
                 start: true,
                 recover: false,
+                initial_phase: "stopped",
             },
         ),
         (
@@ -182,6 +199,7 @@ fn cli_service_status_lifecycle_contract() {
                 install: false,
                 start: false,
                 recover: false,
+                initial_phase: "connected",
             },
         ),
         (
@@ -191,6 +209,7 @@ fn cli_service_status_lifecycle_contract() {
                 install: false,
                 start: false,
                 recover: false,
+                initial_phase: "connected",
             },
         ),
         (
@@ -257,7 +276,7 @@ fn cli_service_status_lifecycle_contract() {
             .env("PATH", "/usr/bin:/bin")
             .env("OPENCLAW_DESKTOP_CLI", &executable)
             .output()
-            .expect("run isolated ensure_ready contract");
+            .expect("run isolated Gateway connection contract");
         assert!(
             output.status.success(),
             "{name}: fixture child failed: {}{}",
@@ -271,20 +290,41 @@ fn cli_service_status_lifecycle_contract() {
             .lines()
             .filter(|call| *call != "--version" && *call != "gateway status --json")
             .collect();
+        #[cfg(not(target_os = "linux"))]
         let mut expected_calls = Vec::new();
+        #[cfg(target_os = "linux")]
+        let expected_calls: Vec<&str> = Vec::new();
         let valid = match expected {
-            Expected::Ready { install, start, .. } => {
-                if install {
-                    expected_calls.push("gateway install --json");
+            Expected::Ready {
+                install,
+                start,
+                initial_phase,
+                ..
+            } => {
+                #[cfg(target_os = "linux")]
+                {
+                    // The same statuses that macOS may install/start must stay
+                    // untouched when Linux startup and reconnects observe them.
+                    let _ = (install, start);
+                    result["ok"] == true
+                        && result["reachable"] == (initial_phase == "connected")
+                        && result["phase"] == initial_phase
                 }
-                if start {
-                    expected_calls.push("gateway start --json");
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let _ = initial_phase;
+                    if install {
+                        expected_calls.push("gateway install --json");
+                    }
+                    if start {
+                        expected_calls.push("gateway start --json");
+                    }
+                    expected_calls.push("dashboard --json --no-open");
+                    result["ok"] == true
+                        && result["reachable"] == true
+                        && result["phase"] == "connected"
+                        && result["dashboardUrl"] == BROWSER_URL
                 }
-                expected_calls.push("dashboard --json --no-open");
-                result["ok"] == true
-                    && result["reachable"] == true
-                    && result["phase"] == "connected"
-                    && result["dashboardUrl"] == BROWSER_URL
             }
             Expected::Unknown { inspection, auth } => {
                 let error = result["error"].as_str().unwrap_or("");

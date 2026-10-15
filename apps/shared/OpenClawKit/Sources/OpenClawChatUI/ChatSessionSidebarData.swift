@@ -10,10 +10,10 @@ public final class OpenClawChatSessionSidebarData {
         let revision: Int
     }
 
-    enum Field: String, CaseIterable { case label, pinned, archived, unread, category, color }
+    enum Field: String, CaseIterable { case label, pinned, archived, snoozed, unread, category, color }
     private struct Pending {
         let target: OpenClawChatSessionEntry
-        let field: Field
+        let fields: [Field]
         let update: (inout OpenClawChatSessionEntry) -> Void
     }
 
@@ -63,12 +63,13 @@ public final class OpenClawChatSessionSidebarData {
     private func project(_ entry: OpenClawChatSessionEntry) -> OpenClawChatSessionEntry {
         var row = entry
         for (id, intent) in self.pending.sorted(by: { $0.key < $1.key }) where
-            self.latest[Self.identity(intent.target) + "\u{0}" + intent.field.rawValue] == id &&
             Self.identity(intent.target) == Self.identity(row) && intent.target.sessionId == row.sessionId
         {
             var proposed = row
             intent.update(&proposed)
-            Self.copy(intent.field, from: proposed, to: &row)
+            for field in intent.fields where self.latest[Self.identity(row) + "\u{0}" + field.rawValue] == id {
+                Self.copy(field, from: proposed, to: &row)
+            }
         }
         return row
     }
@@ -113,19 +114,18 @@ public final class OpenClawChatSessionSidebarData {
     {
         guard read.scope == self.scopeRevision else { return [] }
         if let agentID, read.revision < self.rosterRevisions[agentID, default: 0] { return [] }
-        var entries = self.entries
         for incoming in rows {
             let id = Self.identity(incoming)
             guard read.revision >= self.revisions[id, default: 0] else { continue }
-            if let held = entries[id], held.sessionId == incoming.sessionId,
+            if let held = self.entries[id], held.sessionId == incoming.sessionId,
                let offeredDate = incoming.updatedAt, let heldDate = held.updatedAt, offeredDate < heldDate { continue }
             var row = incoming
-            if !enriched, let held = entries[id], held.sessionId == row.sessionId, row.sessionId != nil {
+            if !enriched, let held = self.entries[id], held.sessionId == row.sessionId, row.sessionId != nil {
                 // Existing metadata/palette requests omit enrichment; absence is not a clearing receipt.
                 row.derivedTitle = row.derivedTitle ?? held.derivedTitle
                 row.lastMessagePreview = row.lastMessagePreview ?? held.lastMessagePreview
             }
-            if let held = entries[id], held.sessionId == row.sessionId, row.sessionId != nil,
+            if let held = self.entries[id], held.sessionId == row.sessionId, row.sessionId != nil,
                ChatSessionSidebarModel.isRunning(row), let digest = held.observerDigest,
                let runID = digest.runId, row.activeRunIds?.contains(runID) == true,
                row.observerDigest.map({ ChatSessionSidebarModel.isNewer(digest, than: $0) }) ?? true
@@ -143,8 +143,8 @@ public final class OpenClawChatSessionSidebarData {
                     row = receipt.ack.applying(field: field, to: row)
                 }
             }
-            self.recordFieldChanges(row, previous: entries[id], at: row.updatedAt ?? 0)
-            entries[id] = row
+            self.recordFieldChanges(row, previous: self.entries[id], at: row.updatedAt ?? 0)
+            self.entries[id] = row
             self.revisions[id] = read.revision
         }
         let ids = rows.map(Self.identity)
@@ -152,14 +152,12 @@ public final class OpenClawChatSessionSidebarData {
             self.rosters[agentID] = ids
             self.rosterRevisions[agentID] = read.revision
         }
-        self.entries = entries
         self.didChange()
         return ids
     }
 
     func replaceConversationRows(_ rows: [OpenClawChatSessionEntry], agentID: String?) {
         let read = self.beginRead()
-        var entries = self.entries
         let ids = rows.filter {
             ChatSessionSidebarModel.isSessionInActiveAgentScope(
                 key: $0.key,
@@ -169,28 +167,29 @@ public final class OpenClawChatSessionSidebarData {
         let hidden = (self.rosters[agentID ?? ""] ?? [])
             .filter { self.entries[$0].map(self.project)?.isArchived == true }
         for old in self.conversationRows(agentID: agentID) where !ids.contains(Self.identity(old)) {
-            entries.removeValue(forKey: Self.identity(old))
+            self.entries.removeValue(forKey: Self.identity(old))
             self.revisions[Self.identity(old)] = read.revision
         }
         for incoming in rows {
             let id = Self.identity(incoming)
             var row = incoming
-            if let canonical = entries[id] {
+            if let canonical = self.entries[id] {
                 let visible = self.project(canonical)
                 for intent in self.pending.values where Self.identity(intent.target) == id &&
                     intent.target.sessionId == row.sessionId
                 {
                     // A writer changing run/settings facts must not commit another field's optimistic overlay.
-                    if Self.same(intent.field, incoming, visible) { Self.copy(intent.field, from: canonical, to: &row) }
+                    for field in intent.fields where Self.same(field, incoming, visible) {
+                        Self.copy(field, from: canonical, to: &row)
+                    }
                 }
             }
-            if entries[id] != row {
-                self.recordFieldChanges(row, previous: entries[id], at: row.updatedAt ?? 0)
-                entries[id] = row
+            if self.entries[id] != row {
+                self.recordFieldChanges(row, previous: self.entries[id], at: row.updatedAt ?? 0)
+                self.entries[id] = row
                 self.revisions[id] = read.revision
             }
         }
-        self.entries = entries
         let nextIDs = ids + hidden.filter { !ids.contains($0) }
         // Field writes fence row facts without superseding an in-flight membership read.
         if Set(self.rosters[agentID ?? ""] ?? []) != Set(nextIDs) {
@@ -215,9 +214,19 @@ public final class OpenClawChatSessionSidebarData {
     {
         guard let current = self.entries[Self.identity(target)],
               current.sessionId == target.sessionId else { return nil }
+        var proposed = self.project(current)
+        update(&proposed)
+        // Pin and archive also own a wake; fence each field even when it was already clear.
+        let fields: [Field] = switch field {
+        case .pinned where proposed.pinned == true: [.pinned, .snoozed]
+        case .archived where proposed.isArchived: [.archived, .pinned, .snoozed]
+        default: [field]
+        }
         self.revision += 1
-        self.pending[self.revision] = Pending(target: target, field: field, update: update)
-        self.latest[Self.identity(target) + "\u{0}" + field.rawValue] = self.revision
+        self.pending[self.revision] = Pending(target: target, fields: fields, update: update)
+        for field in fields {
+            self.latest[Self.identity(target) + "\u{0}" + field.rawValue] = self.revision
+        }
         self.didChange()
         return self.revision
     }
@@ -227,8 +236,14 @@ public final class OpenClawChatSessionSidebarData {
         return self.beginMutation(target: target, field: action == .archive ? .archived : .pinned) {
             if action == .archive {
                 $0.archived = true
+                $0.pinned = false
+                $0.pinnedAt = nil
             } else {
                 $0.pinned = action == .pin
+            }
+            if action == .archive || action == .pin {
+                $0.snoozedUntil = nil
+                $0.snoozedAt = nil
             }
         }
     }
@@ -236,7 +251,7 @@ public final class OpenClawChatSessionSidebarData {
     func finishMutation(_ token: Int?, receipt: OpenClawChatSessionPatchReceipt?) {
         guard let token, let intent = self.pending.removeValue(forKey: token) else { return }
         if let receipt {
-            self.confirmFields(receipt, target: intent.target, field: intent.field, order: token)
+            self.confirmFields(receipt, target: intent.target, fields: intent.fields, order: token)
         } else {
             self.didChange()
         }
@@ -245,19 +260,35 @@ public final class OpenClawChatSessionSidebarData {
     func confirmFields(
         _ receipt: OpenClawChatSessionPatchReceipt,
         target: OpenClawChatSessionEntry,
-        field: Field,
+        fields: [Field],
         order: Int? = nil)
     {
         defer { self.didChange() }
         let id = Self.identity(target)
-        guard receipt.matches(target), let current = self.entries[id], receipt.matches(current),
-              (self.receipts[id]?[field]?.order ?? 0) <= (order ?? self.revision),
-              self.fieldDates[id]?[field] ?? 0 <= receipt.entry.updatedAt ?? 0 else { return }
-        // ui/src/lib/sessions/session-mutations.ts:328 retains acknowledged fields across older reads.
-        self.receipts[id, default: [:]][field] = (receipt, self.revision, order ?? self.revision)
-        let accepted = receipt.applying(field: field, to: current)
-        self.recordFieldChanges(accepted, previous: current, at: receipt.entry.updatedAt ?? 0)
-        self.entries[id] = accepted
+        guard receipt.matches(target), var current = self.entries[id], receipt.matches(current) else { return }
+        for field in fields where
+            (self.receipts[id]?[field]?.order ?? 0) <= (order ?? self.revision) &&
+            self.fieldDates[id]?[field] ?? 0 <= receipt.entry.updatedAt ?? 0
+        {
+            // ui/src/lib/sessions/session-mutations.ts:328 retains acknowledged fields across older reads.
+            self.receipts[id, default: [:]][field] = (receipt, self.revision, order ?? self.revision)
+            let accepted = receipt.applying(field: field, to: current)
+            self.recordFieldChanges(accepted, previous: current, at: receipt.entry.updatedAt ?? 0)
+            self.fieldDates[id, default: [:]][field] = receipt.entry.updatedAt ?? 0
+            current = accepted
+        }
+        self.entries[id] = current
+    }
+
+    func restoredIDs(after readRevision: Int) -> [String] {
+        // A confirmed restore outranks membership read before its ACK, just as its row fields do.
+        // A later authoritative list can retire this temporary membership without a second cache.
+        self.receipts.compactMap { id, fields -> (String, Int)? in
+            guard let receipt = fields[.archived], receipt.cutoff >= readRevision,
+                  receipt.ack.entry.archivedAt == nil, let row = self.entries[id],
+                  receipt.ack.matches(row), !row.isArchived else { return nil }
+            return (id, receipt.order)
+        }.sorted { ($0.1, $0.0) < ($1.1, $1.0) }.map(\.0)
     }
 
     func remove(_ target: OpenClawChatSessionEntry) {
@@ -324,6 +355,9 @@ public final class OpenClawChatSessionSidebarData {
             row.archivedAt = source.archivedAt
             row.archivedBy = source.archivedBy
             row.archiveReason = source.archiveReason
+        case .snoozed:
+            row.snoozedUntil = source.snoozedUntil
+            row.snoozedAt = source.snoozedAt
         case .unread:
             row.unread = source.unread
             row.lastReadAt = source.lastReadAt

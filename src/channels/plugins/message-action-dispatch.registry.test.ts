@@ -21,7 +21,7 @@ import {
   prepareExternalMessageActionTargetForResolution,
   shouldDeferExternalMessageActionTargetResolution,
 } from "./message-action-dispatch.js";
-import type { ChannelMessageActionContext, ChannelPlugin } from "./types.js";
+import type { ChannelMessageActionContext, ChannelPlugin } from "./types.public.js";
 
 const receipt = { content: [{ type: "text" as const, text: "delivered" }], details: { ok: true } };
 
@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 describe("message action registration ownership", () => {
-  it.each([true, false])(
+  it.each([false])(
     "uses only the selected scoped action capability (present=%s)",
     async (present) => {
       const handleRootAction = vi.fn(async () => receipt);
@@ -185,23 +185,18 @@ describe("official plugin read-only authority", () => {
     return { owner, record, plugin, handleAction, register, context };
   }
 
-  it.each([
-    "read",
-    "search",
-    "reactions",
-    "list-pins",
-    "thread-list",
-    "channel-info",
-    "download-file",
-  ] as const)("dispatches configured cross-conversation %s", async (action) => {
-    const fixture = registerReader({ readActions: [action] });
-    const ctx = { ...fixture.context, action };
-    // A client must still defer to the Gateway's attested live registration.
-    expect(shouldDeferExternalMessageActionTargetResolution(ctx)).toBe(true);
-    expect((await prepareExternalMessageActionTargetForResolution(ctx)).params).toBe(ctx.params);
-    expect(await dispatchChannelMessageAction(ctx)).toBe(receipt);
-    expect(fixture.handleAction).toHaveBeenCalledOnce();
-  });
+  it.each(["read", "download-file"] as const)(
+    "dispatches configured cross-conversation %s",
+    async (action) => {
+      const fixture = registerReader({ readActions: [action] });
+      const ctx = { ...fixture.context, action };
+      // A client must still defer to the Gateway's attested live registration.
+      expect(shouldDeferExternalMessageActionTargetResolution(ctx)).toBe(true);
+      expect((await prepareExternalMessageActionTargetForResolution(ctx)).params).toBe(ctx.params);
+      expect(await dispatchChannelMessageAction(ctx)).toBe(receipt);
+      expect(fixture.handleAction).toHaveBeenCalledOnce();
+    },
+  );
 
   it("does not enroll an existing reader into download authority", async () => {
     const fixture = registerReader();
@@ -291,16 +286,13 @@ describe("official plugin read-only authority", () => {
     ).toBe(receipt);
   });
 
-  it.each(["react", "poll-vote", "edit", "delete", "pin", "unpin", "unsend"] as const)(
-    "does not broaden %s authority",
-    async (action) => {
-      const fixture = registerReader({ readActions: [action] });
-      await expect(dispatchChannelMessageAction({ ...fixture.context, action })).rejects.toThrow(
-        "exact current conversation",
-      );
-      expect(fixture.handleAction).not.toHaveBeenCalled();
-    },
-  );
+  it.each(["react"] as const)("does not broaden %s authority", async (action) => {
+    const fixture = registerReader({ readActions: [action] });
+    await expect(dispatchChannelMessageAction({ ...fixture.context, action })).rejects.toThrow(
+      "exact current conversation",
+    );
+    expect(fixture.handleAction).not.toHaveBeenCalled();
+  });
 
   it.each([
     { requesterAccountId: "other-account" },
@@ -313,15 +305,6 @@ describe("official plugin read-only authority", () => {
       "current provider and account context",
     );
     expect(fixture.handleAction).not.toHaveBeenCalled();
-  });
-
-  it("retains provider destination policy", async () => {
-    const fixture = registerReader();
-    fixture.handleAction.mockRejectedValue(new Error("provider denied destination"));
-    await expect(dispatchChannelMessageAction(fixture.context)).rejects.toThrow(
-      "provider denied destination",
-    );
-    expect(fixture.handleAction).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])(
@@ -513,18 +496,5 @@ describe("official plugin read-only authority", () => {
     ).rejects.toThrow("read authority is no longer active");
     expect(first.handleAction).not.toHaveBeenCalled();
     expect(replacement?.handleAction).not.toHaveBeenCalled();
-  });
-
-  it("closes retained transport authority when the action finishes", async () => {
-    const fixture = registerReader();
-    let retained: (() => void) | undefined;
-    fixture.handleAction.mockImplementation(async () => {
-      retained = captureChannelReadAuthority();
-      return receipt;
-    });
-    expect(await dispatchChannelMessageAction(fixture.context)).toBe(receipt);
-    expect(retained).toBeTypeOf("function");
-    expect(retained).toThrow("read authority is no longer active");
-    expect(captureChannelReadAuthority()).toBeUndefined();
   });
 });

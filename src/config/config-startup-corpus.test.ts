@@ -119,6 +119,14 @@ describe("operator config startup corpus", () => {
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
       OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
     };
+    for (const key of [
+      "OPENCLAW_STATE_DIR",
+      "DISCORD_BOT_TOKEN",
+      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+    ] as const) {
+      vi.stubEnv(key, env[key]);
+    }
     const snapshot = await createConfigIO({
       configPath,
       env,

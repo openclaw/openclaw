@@ -4,7 +4,12 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vite
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import * as workspaceOwner from "../../agents/workspace.js";
 import * as configBackup from "../../config/backup-rotation.js";
-import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  registerRuntimeConfigWriteListener,
+} from "../../config/runtime-snapshot.js";
+import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as fsSafe from "../../infra/fs-safe.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -23,6 +28,7 @@ let config: OpenClawConfig;
 let workspace: string;
 let identityPath: string;
 let serial = 0;
+let releaseConfigWriteListener: () => void;
 const context = createDirectChatContext({
   getRuntimeConfig: () => config,
   getCommittedRuntimeConfig: () => config,
@@ -72,8 +78,18 @@ function expectDisabled(respond: ReturnType<typeof vi.fn>) {
 
 beforeAll(async () => {
   state = await createOpenClawTestState({ layout: "state-only", label: "agent-avatar-policy" });
+  // Standalone IO publishes its runtime snapshot before this notification. Upload
+  // authority stays separately injected so a concurrent revocation remains current.
+  releaseConfigWriteListener = registerRuntimeConfigWriteListener((event) => {
+    if (event.configPath === state.configPath) {
+      getRuntimeConfigWriteApplication(event)
+        ?.claim()
+        ?.settle(getRuntimeConfigSnapshot() === event.runtimeConfig ? "applied" : "failed");
+    }
+  });
 });
 afterAll(async () => {
+  releaseConfigWriteListener();
   await state.cleanup();
 });
 afterEach(() => {
@@ -101,117 +117,114 @@ beforeEach(async () => {
   }));
 });
 
-it.each(["agents.create", "agents.update"] as const)(
-  "%s refuses inline avatar bytes after asynchronous identity write preparation",
-  async (method) => {
+it.each([
+  { method: "agents.create", stage: "identity-write" },
+  { method: "agents.update", stage: "identity-write" },
+  { method: "agents.create", stage: "config" },
+  { method: "agents.update", stage: "config" },
+  { method: "agents.create", stage: "unpublished-config" },
+  { method: "agents.update", stage: "remote-read" },
+  { method: "agents.update", stage: "remote-write" },
+] as const)(
+  "$method rechecks upload admission at $stage and settles accepted bytes",
+  async ({ method, stage }) => {
     const entered = createDeferredCore();
     const resume = createDeferredCore();
-    const realRoot = fsSafe.root;
-    vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
-      const handle = await realRoot(...args);
-      if (args[0] !== workspace) {
-        return handle;
-      }
-      const write = handle.write.bind(handle);
-      vi.spyOn(handle, "write").mockImplementation(async (...writeArgs) => {
-        entered.resolve();
-        await resume.promise;
-        return await write(...writeArgs);
-      });
-      return handle;
+    const pause = async () => {
+      entered.resolve();
+      await resume.promise;
+    };
+    let release: (() => void) | undefined;
+    const writeFile = vi.fn(async (params: { data: string | Uint8Array }) => {
+      await fs.writeFile(identityPath, params.data);
+      await pause();
     });
+    if (stage === "identity-write") {
+      const realRoot = fsSafe.root;
+      vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
+        const handle = await realRoot(...args);
+        if (args[0] === workspace) {
+          const write = handle.write.bind(handle);
+          vi.spyOn(handle, "write").mockImplementation(async (...writeArgs) => {
+            await pause();
+            return await write(...writeArgs);
+          });
+        }
+        return handle;
+      });
+    } else if (stage === "config" || stage === "unpublished-config") {
+      if (stage === "unpublished-config") {
+        vi.mocked(workspaceOwner.ensureAgentWorkspace).mockResolvedValue({
+          dir: workspace,
+          identityPathCreated: false,
+          bootstrapPending: true,
+        });
+      }
+      const prepare = configBackup.prepareConfigFileWrite;
+      vi.spyOn(configBackup, "prepareConfigFileWrite").mockImplementation(async (params) => {
+        await pause();
+        return await prepare(params);
+      });
+    } else {
+      release = registerAgentWorkspaceAccess(workspace, {
+        bridge: {
+          readFile: async () => {
+            if (stage === "remote-read") {
+              await pause();
+              return Buffer.from(originalIdentity);
+            }
+            return await fs.readFile(identityPath);
+          },
+          writeFile,
+          stat: vi.fn(),
+        },
+      });
+    }
     const originalConfig = await fs.readFile(state.configPath, "utf8");
     const pending = call(method);
     try {
       await Promise.race([
         entered.promise,
         pending.then(() => {
-          throw new Error("handler did not reach identity write");
+          throw new Error(`handler did not reach ${stage}`);
         }),
       ]);
-      disableUploads();
-      resume.resolve();
-      expectDisabled(await pending);
-      expect.soft(await fs.readFile(identityPath, "utf8")).toBe(originalIdentity);
-      expect.soft(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
-    } finally {
-      resume.resolve();
-      await pending;
-    }
-  },
-);
-
-it.each(["agents.create", "agents.update"] as const)(
-  "%s settles an accepted avatar at native config preparation",
-  async (method) => {
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
-    const prepare = configBackup.prepareConfigFileWrite;
-    vi.spyOn(configBackup, "prepareConfigFileWrite").mockImplementation(async (params) => {
-      entered.resolve();
-      await resume.promise;
-      return await prepare(params);
-    });
-    const pending = call(method);
-    try {
-      await Promise.race([
-        entered.promise,
-        pending.then(() => {
-          throw new Error("handler did not reach config preparation");
-        }),
-      ]);
-      // These exact bytes already passed publication admission. Finish their config
-      // projection instead of reporting a denial with a hidden durable identity write.
+      const accepted = stage === "config" || stage === "remote-write";
       const admittedIdentity = await fs.readFile(identityPath, "utf8");
-      expect(admittedIdentity).toContain(inlineAvatar);
+      if (accepted) {
+        expect(admittedIdentity).toContain(inlineAvatar);
+      } else if (stage === "unpublished-config") {
+        expect(admittedIdentity).toBe(originalIdentity);
+      }
       disableUploads();
       resume.resolve();
-      expect(await pending).toHaveBeenCalledExactlyOnceWith(true, expect.anything(), undefined);
-      expect(await fs.readFile(state.configPath, "utf8")).toContain(inlineAvatar);
-      expect(await fs.readFile(identityPath, "utf8")).toBe(admittedIdentity);
+      const respond = await pending;
+      if (accepted) {
+        expect(respond).toHaveBeenCalledExactlyOnceWith(
+          true,
+          method === "agents.update" ? { ok: true, agentId: "existing" } : expect.anything(),
+          undefined,
+        );
+        expect(await fs.readFile(state.configPath, "utf8")).toContain(inlineAvatar);
+        expect(await fs.readFile(identityPath, "utf8")).toBe(admittedIdentity);
+        if (stage === "remote-write") {
+          expect(writeFile).toHaveBeenCalledTimes(1);
+        }
+      } else {
+        expectDisabled(respond);
+        expect.soft(await fs.readFile(identityPath, "utf8")).toBe(originalIdentity);
+        expect.soft(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+        if (stage === "remote-read") {
+          expect.soft(writeFile).not.toHaveBeenCalled();
+        }
+      }
     } finally {
       resume.resolve();
       await pending;
+      release?.();
     }
   },
 );
-
-it("agents.update refuses remote avatar dispatch after its identity read yields", async () => {
-  const entered = createDeferredCore();
-  const resume = createDeferredCore();
-  const writeFile = vi.fn(async () => {});
-  const release = registerAgentWorkspaceAccess(workspace, {
-    bridge: {
-      readFile: async () => {
-        entered.resolve();
-        await resume.promise;
-        return Buffer.from(originalIdentity);
-      },
-      writeFile,
-      stat: vi.fn(),
-    },
-  });
-  const originalConfig = await fs.readFile(state.configPath, "utf8");
-  const pending = call("agents.update");
-  try {
-    await Promise.race([
-      entered.promise,
-      pending.then(() => {
-        throw new Error("handler did not reach remote read");
-      }),
-    ]);
-    disableUploads();
-    resume.resolve();
-    expectDisabled(await pending);
-    expect.soft(writeFile).not.toHaveBeenCalled();
-    expect.soft(await fs.readFile(identityPath, "utf8")).toBe(originalIdentity);
-    expect.soft(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
-  } finally {
-    resume.resolve();
-    await pending;
-    release();
-  }
-});
 
 it.each(["agents.create", "agents.update"] as const)(
   "%s preserves non-upload identity edits and trusted internal avatar creation",
@@ -249,48 +262,4 @@ it("allows text-only edits to an existing inline avatar while uploads are disabl
   expect(await fs.readFile(identityPath, "utf8")).toContain("- Name: Text Only");
   expect(await fs.readFile(identityPath, "utf8")).toContain(inlineAvatar);
   expect(await fs.readFile(state.configPath, "utf8")).toContain(inlineAvatar);
-});
-
-it("agents.create still rejects at config preparation when no identity was published", async () => {
-  vi.mocked(workspaceOwner.ensureAgentWorkspace).mockResolvedValue({
-    dir: workspace,
-    identityPathCreated: false,
-    bootstrapPending: true,
-  });
-  const prepare = configBackup.prepareConfigFileWrite;
-  vi.spyOn(configBackup, "prepareConfigFileWrite").mockImplementation(async (params) => {
-    expect(await fs.readFile(identityPath, "utf8")).toBe(originalIdentity);
-    disableUploads();
-    return await prepare(params);
-  });
-  const originalConfig = await fs.readFile(state.configPath, "utf8");
-  expectDisabled(await call("agents.create"));
-  expect(await fs.readFile(identityPath, "utf8")).toBe(originalIdentity);
-  expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
-});
-
-it("agents.update settles an accepted remote avatar when its write acknowledgment yields", async () => {
-  const writeFile = vi.fn(async (params: { data: string | Uint8Array }) => {
-    await fs.writeFile(identityPath, params.data);
-    disableUploads();
-  });
-  const release = registerAgentWorkspaceAccess(workspace, {
-    bridge: {
-      readFile: async () => await fs.readFile(identityPath),
-      writeFile,
-      stat: vi.fn(),
-    },
-  });
-  try {
-    expect(await call("agents.update")).toHaveBeenCalledExactlyOnceWith(
-      true,
-      { ok: true, agentId: "existing" },
-      undefined,
-    );
-    expect(writeFile).toHaveBeenCalledTimes(1);
-    expect(await fs.readFile(identityPath, "utf8")).toContain(inlineAvatar);
-    expect(await fs.readFile(state.configPath, "utf8")).toContain(inlineAvatar);
-  } finally {
-    release();
-  }
 });

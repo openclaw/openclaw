@@ -147,15 +147,7 @@ export function resolveProtectionFastPath(
       if (probe.paragraphAmbiguous || probe.structuralUnknown) {
         return undefined;
       }
-      const opened = probe.fenceChar ? FENCE_OPEN.exec(line) : null;
-      if (opened?.[1]) {
-        // The region starts at the delimiter run, so an indented fence leaves its own
-        // leading whitespace outside the region.
-        lineStarts.push([lineStartAbsolute, false]);
-        lineStarts.push([lineStartAbsolute + (opened[0].length - opened[1].length), true]);
-      } else {
-        lineStarts.push([lineStartAbsolute, false]);
-      }
+      lineStarts.push([lineStartAbsolute, Boolean(probe.fenceChar)]);
     }
     if (!complete) {
       break;

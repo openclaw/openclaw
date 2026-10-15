@@ -1,4 +1,3 @@
-// Builds npm environment overrides for safe project-local installs.
 import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import os from "node:os";
@@ -10,7 +9,6 @@ import { resolveNpmCommand } from "./npm-command.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 
-/** Options that scope npm config and cache paths for project-local installs. */
 export type NpmProjectInstallEnvOptions = NpmConfigScope & {
   cacheDir?: string;
 };
@@ -62,12 +60,8 @@ const NPM_GLOBAL_CONFIG_PATH_CACHE_ENV_KEYS = [
   "USERPROFILE",
 ] as const;
 
-function resolveEnvPath(
-  env: NodeJS.ProcessEnv,
-  primaryKey: string,
-  fallbackKey: string,
-): string | null {
-  const raw = env[primaryKey]?.trim() || env[fallbackKey]?.trim();
+function resolveEnvPath(env: NodeJS.ProcessEnv, name: string): string | null {
+  const raw = env[`NPM_CONFIG_${name}`]?.trim() || env[`npm_config_${name.toLowerCase()}`]?.trim();
   return raw ? resolveNpmConfigPath(raw, env) : null;
 }
 
@@ -99,7 +93,10 @@ function resolveNpmConfigPath(rawPath: string, env: NodeJS.ProcessEnv): string {
     : path.resolve(expanded);
 }
 
-function createNpmConfigPathProbeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function createNpmConfigPathProbeEnv(
+  env: NodeJS.ProcessEnv,
+  scope: NpmConfigScope,
+): NodeJS.ProcessEnv {
   const probeEnv = { ...env };
   for (const key of NPM_FRESHNESS_BYPASS_KEYS) {
     delete probeEnv[key];
@@ -108,6 +105,9 @@ function createNpmConfigPathProbeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv 
     if (probeEnv[key] == null && process.env[key] != null) {
       probeEnv[key] = process.env[key];
     }
+  }
+  if (scope.npmConfigPrefix) {
+    probeEnv.npm_config_prefix = scope.npmConfigPrefix;
   }
   return probeEnv;
 }
@@ -136,7 +136,7 @@ function runNpmConfigProbe(params: {
     throw result.error;
   }
   if (result.status !== 0) {
-    throw new Error(`npm config probe exited with status ${result.status ?? "unknown"}`);
+    throw new Error(`npm config check exited with status ${result.status ?? "unknown"}`);
   }
   return result.stdout;
 }
@@ -146,15 +146,11 @@ function readNpmGlobalConfigPath(env: NodeJS.ProcessEnv, scope: NpmConfigScope):
   if (scopedGlobalConfig) {
     return scopedGlobalConfig;
   }
-  const configuredGlobalConfig = resolveEnvPath(
-    env,
-    "NPM_CONFIG_GLOBALCONFIG",
-    "npm_config_globalconfig",
-  );
+  const configuredGlobalConfig = resolveEnvPath(env, "GLOBALCONFIG");
   if (configuredGlobalConfig) {
     return configuredGlobalConfig;
   }
-  const configuredPrefix = resolveEnvPath(env, "NPM_CONFIG_PREFIX", "npm_config_prefix");
+  const configuredPrefix = resolveEnvPath(env, "PREFIX");
   if (configuredPrefix) {
     return path.join(configuredPrefix, "etc", "npmrc");
   }
@@ -165,10 +161,7 @@ function readNpmGlobalConfigPath(env: NodeJS.ProcessEnv, scope: NpmConfigScope):
   try {
     const raw = runNpmConfigProbe({
       args: ["config", "get", "globalconfig"],
-      env: {
-        ...createNpmConfigPathProbeEnv(env),
-        ...(scope.npmConfigPrefix ? { npm_config_prefix: scope.npmConfigPrefix } : {}),
-      },
+      env: createNpmConfigPathProbeEnv(env, scope),
       timeoutMs: 2_000,
     }).trim();
     const resolved = raw && raw !== "null" && raw !== "undefined" ? raw : null;
@@ -181,31 +174,18 @@ function readNpmGlobalConfigPath(env: NodeJS.ProcessEnv, scope: NpmConfigScope):
 }
 
 function buildNpmGlobalConfigPathCacheKey(env: NodeJS.ProcessEnv, scope: NpmConfigScope): string {
-  const configFiles = uniqueStrings(
-    [
-      resolveScopedProjectNpmrc(scope),
-      resolveEnvPath(env, "NPM_CONFIG_USERCONFIG", "npm_config_userconfig") ??
-        resolveHomeNpmrc(env),
-      resolveEnvPath(env, "NPM_CONFIG_GLOBALCONFIG", "npm_config_globalconfig"),
-      resolveScopedGlobalNpmrc(scope),
-    ].filter((file): file is string => Boolean(file)),
-  );
+  const configFiles = resolveNpmConfigFiles(env, scope);
   return JSON.stringify({
     cwd: scope.npmConfigCwd?.trim() || tryProcessCwd() || "",
     prefix: scope.npmConfigPrefix?.trim() ?? "",
     env: Object.fromEntries(
       NPM_GLOBAL_CONFIG_PATH_CACHE_ENV_KEYS.map((key) => [key, env[key] ?? process.env[key] ?? ""]),
     ),
-    configFiles: configFiles.map((filePath) => ({
-      path: filePath,
-      signature: readFileSignature(filePath),
-    })),
+    configFiles: configFiles.map((filePath) => {
+      const stat = safeStatSync(filePath);
+      return { path: filePath, signature: stat ? `${stat.mtimeMs}:${stat.size}` : "missing" };
+    }),
   });
-}
-
-function readFileSignature(filePath: string): string {
-  const stat = safeStatSync(filePath);
-  return stat ? `${stat.mtimeMs}:${stat.size}` : "missing";
 }
 
 function resolveScopedProjectNpmrc(scope: NpmConfigScope): string | null {
@@ -220,16 +200,15 @@ function resolveScopedGlobalNpmrc(scope: NpmConfigScope): string | null {
 
 function resolveNpmConfigFiles(
   env: NodeJS.ProcessEnv,
-  scope: NpmConfigScope = {},
-  userNpmrc = resolveEnvPath(env, "NPM_CONFIG_USERCONFIG", "npm_config_userconfig") ??
-    resolveHomeNpmrc(env),
+  scope: NpmConfigScope,
+  includeProbedGlobal = false,
 ): string[] {
   const files = [
     resolveScopedProjectNpmrc(scope),
-    userNpmrc,
-    resolveEnvPath(env, "NPM_CONFIG_GLOBALCONFIG", "npm_config_globalconfig"),
+    resolveEnvPath(env, "USERCONFIG") ?? resolveHomeNpmrc(env),
+    resolveEnvPath(env, "GLOBALCONFIG"),
     resolveScopedGlobalNpmrc(scope),
-    readNpmGlobalConfigPath(env, scope),
+    ...(includeProbedGlobal ? [readNpmGlobalConfigPath(env, scope)] : []),
   ];
   return uniqueStrings(files.filter((file): file is string => Boolean(file)));
 }
@@ -243,14 +222,6 @@ function hasNpmrcConfigKey(filePath: string, key: string): boolean {
   } catch {
     return false;
   }
-}
-
-function hasRawNpmConfigKey(
-  env: NodeJS.ProcessEnv,
-  key: string,
-  scope: NpmConfigScope = {},
-): boolean {
-  return resolveNpmConfigFiles(env, scope).some((file) => hasNpmrcConfigKey(file, key));
 }
 
 function hasNpmEnvConfigKey(env: NodeJS.ProcessEnv, key: string): boolean {
@@ -279,10 +250,7 @@ export function findExplicitNpmConfigKeys(
   }
 
   const cwd = scope.npmConfigCwd?.trim() || tryProcessCwd() || undefined;
-  const probeEnv = {
-    ...createNpmConfigPathProbeEnv(env),
-    ...(scope.npmConfigPrefix ? { npm_config_prefix: scope.npmConfigPrefix } : {}),
-  };
+  const probeEnv = createNpmConfigPathProbeEnv(env, scope);
   try {
     const raw = runNpmConfigProbe({
       args: ["config", "list", "--location=project", "--json=false", "--long=false"],
@@ -312,10 +280,12 @@ function resolveNpmFreshnessBypassMode(
   if (process.platform === "win32") {
     return "before";
   }
-  if (hasRawNpmConfigKey(env, "min-release-age", scope)) {
+  const hasRawKey = (key: string) =>
+    resolveNpmConfigFiles(env, scope, true).some((file) => hasNpmrcConfigKey(file, key));
+  if (hasRawKey("min-release-age")) {
     return "min-release-age";
   }
-  return hasRawNpmConfigKey(env, "before", scope) ? "before" : "min-release-age";
+  return hasRawKey("before") ? "before" : "min-release-age";
 }
 
 /**
@@ -333,13 +303,13 @@ export function createNpmFreshnessBypassArgs(
   return [`--before=${now.toISOString()}`];
 }
 
-/** Applies the same npm freshness bypass policy through environment variables. */
 export function applyNpmFreshnessBypassEnv(
   env: NodeJS.ProcessEnv,
   now = new Date(),
   scope: NpmConfigScope = {},
 ): void {
-  const [arg] = createNpmFreshnessBypassArgs(env, now, scope);
+  const before =
+    resolveNpmFreshnessBypassMode(env, scope) === "before" ? now.toISOString() : undefined;
   for (const key of NPM_FRESHNESS_BYPASS_KEYS) {
     if (process.platform === "win32" && key.includes("-")) {
       delete env[key];
@@ -347,9 +317,9 @@ export function applyNpmFreshnessBypassEnv(
     }
     env[key] = "";
   }
-  if (arg?.startsWith("--before=")) {
-    env.npm_config_before = arg.slice("--before=".length);
-  } else if (arg === "--min-release-age=0") {
+  if (before !== undefined) {
+    env.npm_config_before = before;
+  } else {
     env.npm_config_min_release_age = "0";
   }
 }
@@ -369,13 +339,24 @@ export function createNpmProjectInstallEnv(
       delete nextEnv[key];
     }
   }
+  // npm accepts every casing; a new lowercase key can shadow an explicit setting.
+  for (const [key, fallback] of Object.entries({
+    npm_config_fetch_retries: "5",
+    npm_config_fetch_retry_maxtimeout: "120000",
+    npm_config_fetch_retry_mintimeout: "10000",
+    npm_config_fetch_timeout: String(UPDATE_NETWORK_TIMEOUT_MS),
+  })) {
+    if (
+      !Object.entries(nextEnv).some(
+        ([name, value]) => name.toLowerCase() === key && value !== undefined,
+      )
+    ) {
+      nextEnv[key] = fallback;
+    }
+  }
   const installEnv: NodeJS.ProcessEnv = {
     ...nextEnv,
     npm_config_dry_run: "false",
-    npm_config_fetch_retries: nextEnv.npm_config_fetch_retries ?? "5",
-    npm_config_fetch_retry_maxtimeout: nextEnv.npm_config_fetch_retry_maxtimeout ?? "120000",
-    npm_config_fetch_retry_mintimeout: nextEnv.npm_config_fetch_retry_mintimeout ?? "10000",
-    npm_config_fetch_timeout: nextEnv.npm_config_fetch_timeout ?? String(UPDATE_NETWORK_TIMEOUT_MS),
     npm_config_global: "false",
     npm_config_location: "project",
     npm_config_package_lock: "false",
@@ -387,25 +368,20 @@ export function createNpmProjectInstallEnv(
   return installEnv;
 }
 
-/** Resolves an absolute POSIX shell for npm lifecycle scripts when one is available. */
-function resolvePosixNpmScriptShell(env: NodeJS.ProcessEnv): string | null {
-  if (process.platform === "win32") {
-    return null;
-  }
-  if (fsSync.existsSync("/bin/sh")) {
-    return "/bin/sh";
-  }
-  const shell = env.SHELL?.trim();
-  return shell && path.isAbsolute(shell) && fsSync.existsSync(shell) ? shell : null;
-}
-
 /** Sets npm's script-shell env only when the caller has not configured one. */
 export function applyPosixNpmScriptShellEnv(env: NodeJS.ProcessEnv): void {
-  if (NPM_CONFIG_SCRIPT_SHELL_KEYS.some((key) => Boolean(env[key]?.trim()))) {
+  if (
+    NPM_CONFIG_SCRIPT_SHELL_KEYS.some((key) => Boolean(env[key]?.trim())) ||
+    process.platform === "win32"
+  ) {
     return;
   }
-  const scriptShell = resolvePosixNpmScriptShell(env);
-  if (scriptShell) {
-    env.NPM_CONFIG_SCRIPT_SHELL = scriptShell;
+  if (fsSync.existsSync("/bin/sh")) {
+    env.NPM_CONFIG_SCRIPT_SHELL = "/bin/sh";
+  } else {
+    const shell = env.SHELL?.trim();
+    if (shell && path.isAbsolute(shell) && fsSync.existsSync(shell)) {
+      env.NPM_CONFIG_SCRIPT_SHELL = shell;
+    }
   }
 }

@@ -2,7 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
-import { resolveChannelAccount } from "../channels/account-resolution.js";
+import { resolveChannelAccount, resolvePluginDmPolicy } from "../channels/account-resolution.js";
 import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
@@ -10,7 +10,7 @@ import {
 import { parseAccessGroupAllowFromEntry } from "../channels/allow-from.js";
 import { resolveDmAllowAuditState } from "../channels/message-access/dm-allow-state.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
@@ -48,17 +48,6 @@ function hasExplicitProviderAccountConfig(
   return Object.hasOwn(accounts, accountId);
 }
 
-function formatChannelAccountNote(params: {
-  orderedAccountIds: string[];
-  hasExplicitAccountPath: boolean;
-  accountId: string;
-}): string {
-  return params.orderedAccountIds.length > 1 || params.hasExplicitAccountPath
-    ? ` (account: ${params.accountId})`
-    : "";
-}
-
-/** Collect channel-specific security findings across active channel plugins/accounts. */
 export async function collectChannelSecurityFindingsCore(params: {
   cfg: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
@@ -242,7 +231,7 @@ export async function collectChannelSecurityFindingsCore(params: {
         severity: "critical",
         title: `${input.label} DMs are open`,
         detail: `${policyPath}="open" allows anyone to DM the bot.`,
-        remediation: `Use pairing/allowlist; if you really need open DMs, ensure ${allowFromKey} includes "*".`,
+        remediation: `Use pairing/allowlist; if you really need open DMs, check that ${allowFromKey} includes "*".`,
       });
       if (!hasWildcard) {
         findings.push({
@@ -305,21 +294,19 @@ export async function collectChannelSecurityFindingsCore(params: {
           title: `[secrets] ${plugin.meta.label ?? plugin.id} account could not be fully resolved`,
           detail: diagnostic,
           remediation:
-            "Ensure referenced secrets are available in this shell or run with a running gateway snapshot so security audit can inspect the full channel configuration.",
+            "Make the referenced secrets available in this shell or run with a running gateway snapshot so security audit can inspect the full channel configuration.",
         });
       }
       if (!enabled || !configured) {
         continue;
       }
 
-      const accountNote = formatChannelAccountNote({
-        orderedAccountIds,
-        hasExplicitAccountPath,
-        accountId,
-      });
+      const accountNote =
+        orderedAccountIds.length > 1 || hasExplicitAccountPath ? ` (account: ${accountId})` : "";
       const accountConfig = (account as { config?: Record<string, unknown> } | null | undefined)
         ?.config;
-      const dmPolicy = plugin.security.resolveDmPolicy?.({
+      const dmPolicy = await resolvePluginDmPolicy({
+        plugin,
         cfg: params.cfg,
         accountId,
         account,

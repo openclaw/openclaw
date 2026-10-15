@@ -1,5 +1,5 @@
 import { boundSessionDiagnosticText } from "../config/sessions/session-diagnostic-text.js";
-import { withSessionDiagnosticTextInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { withSessionDiagnosticTextInWorker } from "../config/sessions/session-entry-diagnostic-read.js";
 import { prepareCronJobNameResolver } from "../cron/store/job-name.js";
 import { areDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
 import {
@@ -69,19 +69,20 @@ async function withSessionDiagnosticContext(
     }
   };
   let consumed = false;
+  let resolveName: ((jobId: string) => string | undefined) | undefined;
   const publish = (value: SessionDiagnosticContext) => {
     assertCurrent();
+    if (value.cronJobId) {
+      value.cronJobName = resolveName?.(value.cronJobId);
+    }
     consumed = true;
     consume(value);
   };
   try {
     assertCurrent();
     if (context.cronJobId) {
-      const resolveName = await prepareCronJobNameResolver([context.cronJobId]).catch(
-        () => undefined,
-      );
+      resolveName = await prepareCronJobNameResolver([context.cronJobId]).catch(() => undefined);
       assertCurrent();
-      context.cronJobName = resolveName?.(context.cronJobId);
     }
     if (sessionId) {
       await withSessionDiagnosticTextInWorker(

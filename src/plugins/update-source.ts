@@ -29,7 +29,6 @@ import {
   resolveDefaultNpmSpec,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
-import { resolveTrustedOfficialPrereleaseResolution } from "./install-npm-metadata.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import type { OperatorManagedPluginUpdate } from "./installed-plugin-package-ownership.js";
 import { checkMinHostVersion } from "./min-host-version.js";
@@ -50,7 +49,7 @@ export type PluginUpdateLogger = {
 
 type PluginUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
 
-export type PluginUpdateChannelFallback = {
+type PluginUpdateChannelFallback = {
   requestedSpec: string;
   usedSpec: string;
   requestedLabel: string;
@@ -340,42 +339,6 @@ export async function resolveNewerExactPinnedClawHubDefaultLine(params: {
   return { packageName: parsed.name, registryLine, version };
 }
 
-export async function resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate(params: {
-  metadata: NpmSpecResolution;
-  spec: string;
-  timeoutMs?: number;
-}): Promise<
-  | {
-      kind: "stable" | "prerelease-only";
-      metadata: NpmSpecResolution;
-    }
-  | undefined
-> {
-  const parsedSpec = parseRegistryNpmSpec(params.spec);
-  if (
-    !parsedSpec ||
-    !parsedSpec.name.startsWith("@openclaw/") ||
-    !params.metadata.version ||
-    isPrereleaseResolutionAllowed({
-      spec: parsedSpec,
-      resolvedVersion: params.metadata.version,
-    })
-  ) {
-    return undefined;
-  }
-  const fallback = await resolveTrustedOfficialPrereleaseResolution({
-    spec: parsedSpec,
-    resolvedPrereleaseVersion: params.metadata.version,
-    timeoutMs: params.timeoutMs,
-  });
-  if (!fallback) {
-    return undefined;
-  }
-  return fallback.kind === "allow-prerelease-only"
-    ? { kind: "prerelease-only", metadata: params.metadata }
-    : { kind: fallback.kind, metadata: fallback.resolution };
-}
-
 export function isNpmMetadataCompatibleWithCurrentHost(
   metadata: NpmSpecResolution,
   options: { hostVersion?: string; allowLegacyBareSemver?: boolean } = {},
@@ -574,6 +537,36 @@ export function resolveClawHubUpdateSpecs(params: {
     coreVersion: params.coreVersion,
     versionBoundToCore: params.versionBoundToCore,
   });
+}
+
+/** Only a catalog-declared alternate may satisfy an implicit exact ClawHub target. */
+export function resolveClawHubNpmUpdateFallback(
+  officialInstall: ReturnType<
+    typeof officialInstallRecords.resolveTrustedSourceLinkedOfficialClawHubInstall
+  >,
+  clawhubSpecs: { installSpec?: string; recordSpec?: string } | undefined,
+) {
+  const { npmSpec, expectedIntegrity } = officialInstall ?? {};
+  const target = parseClawHubPluginSpec(clawhubSpecs?.installSpec ?? "");
+  if (
+    !npmSpec ||
+    clawhubSpecs?.installSpec === clawhubSpecs?.recordSpec ||
+    !target?.version ||
+    !isExactSemverVersion(target.version)
+  ) {
+    return undefined;
+  }
+  const installSpec = resolveDefaultNpmSpec(npmSpec)
+    ? `${resolveNpmSpecPackageName(npmSpec)}@${target.version}`
+    : npmSpec;
+  if (resolveExactNpmSpecVersion(installSpec) !== target.version) {
+    return undefined;
+  }
+  return {
+    installSpec,
+    recordSpec: npmSpec,
+    expectedIntegrity: installSpec === npmSpec ? expectedIntegrity : undefined,
+  };
 }
 
 /** Identity matching permits id/path cleanup, never an implicit registry-source switch. */

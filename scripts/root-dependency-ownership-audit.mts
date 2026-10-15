@@ -64,14 +64,6 @@ function readJson(filePath: string): JsonObject {
   return value;
 }
 
-function isScannableSourceFile(fileName: string) {
-  return SCANNED_EXTENSIONS.has(path.extname(fileName));
-}
-
-function shouldSkipDir(dirName: string) {
-  return dirName === "dist" || dirName === "node_modules" || dirName === ".git";
-}
-
 function walkFiles(rootDir: string): string[] {
   if (!fs.existsSync(rootDir)) {
     return [];
@@ -86,13 +78,13 @@ function walkFiles(rootDir: string): string[] {
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const fullPath = path.join(current, entry.name);
       if (entry.isDirectory()) {
-        if (shouldSkipDir(entry.name)) {
+        if (entry.name === "dist" || entry.name === "node_modules" || entry.name === ".git") {
           continue;
         }
         queue.push(fullPath);
         continue;
       }
-      if (entry.isFile() && isScannableSourceFile(entry.name)) {
+      if (entry.isFile() && SCANNED_EXTENSIONS.has(path.extname(entry.name))) {
         files.push(fullPath);
       }
     }
@@ -188,44 +180,28 @@ function collectExtensionDependencyDeclarations(repoRoot: string, rootPackageJso
   return { declarations, internalized };
 }
 
-function sectionSetContainsCore(sectionSet: Set<string>) {
-  return sectionSet.has("src") || sectionSet.has("packages") || sectionSet.has("ui");
-}
-
-function sectionSetIsSubsetOf(sectionSet: Set<string>, allowed: Set<string>) {
-  for (const value of sectionSet) {
-    if (!allowed.has(value)) {
-      return false;
-    }
-  }
-  return sectionSet.size > 0;
-}
-
-/**
- * Classifies whether a root dependency is core-owned, shared, or extension-local.
- */
 export function classifyRootDependencyOwnership(record: OwnershipClassificationInput): {
   category: string;
   recommendation: string;
 } {
-  const sections = new Set(record.sections);
+  const sections = [...record.sections];
 
-  if (sections.size === 0) {
+  if (sections.length === 0) {
     return {
       category: "unreferenced",
       recommendation: "investigate removal; no direct source imports found in scanned files",
     };
   }
 
-  if (sectionSetIsSubsetOf(sections, new Set(["scripts", "test"]))) {
+  if (sections.every((section) => section === "scripts" || section === "test")) {
     return {
       category: "script_or_test_only",
       recommendation: "consider moving from dependencies to devDependencies",
     };
   }
 
-  if (sectionSetContainsCore(sections)) {
-    if (sections.has("extensions")) {
+  if (sections.some((section) => section === "src" || section === "packages" || section === "ui")) {
+    if (sections.includes("extensions")) {
       return {
         category: "shared_core_and_extension",
         recommendation:
@@ -238,31 +214,19 @@ export function classifyRootDependencyOwnership(record: OwnershipClassificationI
     };
   }
 
-  const rootOwnedExtensionRuntime = record.depName
-    ? ROOT_OWNED_EXTENSION_RUNTIME_DEPENDENCIES.get(record.depName)
-    : undefined;
-  const internalizedOwners = record.internalizedBundledRuntimeOwners ?? [];
-  if (
-    rootOwnedExtensionRuntime &&
-    sectionSetIsSubsetOf(sections, new Set(["extensions", "test"]))
-  ) {
-    return {
-      category: "root_owned_extension_runtime",
-      recommendation: rootOwnedExtensionRuntime,
-    };
-  }
-
-  if (
-    internalizedOwners.length > 0 &&
-    sectionSetIsSubsetOf(sections, new Set(["extensions", "test"]))
-  ) {
-    return {
-      category: "root_owned_extension_runtime",
-      recommendation: `keep at root while bundled plugin runtime dependencies are internalized; owners: ${internalizedOwners.join(", ")}`,
-    };
-  }
-
-  if (sectionSetIsSubsetOf(sections, new Set(["extensions", "test"]))) {
+  if (sections.every((section) => section === "extensions" || section === "test")) {
+    const rootOwnedExtensionRuntime = record.depName
+      ? ROOT_OWNED_EXTENSION_RUNTIME_DEPENDENCIES.get(record.depName)
+      : undefined;
+    const internalizedOwners = record.internalizedBundledRuntimeOwners ?? [];
+    if (rootOwnedExtensionRuntime || internalizedOwners.length > 0) {
+      return {
+        category: "root_owned_extension_runtime",
+        recommendation:
+          rootOwnedExtensionRuntime ??
+          `keep at root while bundled plugin runtime dependencies are internalized; owners: ${internalizedOwners.join(", ")}`,
+      };
+    }
     return {
       category: "extension_only_localizable",
       recommendation:
@@ -276,9 +240,6 @@ export function classifyRootDependencyOwnership(record: OwnershipClassificationI
   };
 }
 
-/**
- * Builds dependency ownership records from root package.json and scanned imports.
- */
 export function collectRootDependencyOwnershipAudit(
   params: { repoRoot?: string; scanRoots?: string[] } = {},
 ) {
@@ -355,9 +316,6 @@ export function collectRootDependencyOwnershipAudit(
 
 type AuditRecord = ReturnType<typeof collectRootDependencyOwnershipAudit>[number];
 
-/**
- * Returns actionable errors for dependencies that should not remain root-owned.
- */
 export function collectRootDependencyOwnershipCheckErrors(
   records: OwnershipCheckRecord[],
 ): string[] {

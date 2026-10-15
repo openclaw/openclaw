@@ -1,17 +1,13 @@
 // Control UI adapter for Carapace's framework-neutral Sensitive Input pattern.
 import { html, nothing, type TemplateResult } from "lit";
+import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
 import "./tooltip.ts";
 
 type SensitiveInputProps = {
   id: string;
-  name?: string;
   value: string;
   revealed: boolean;
-  revealLabel: string;
-  hideLabel: string;
-  className?: string;
-  inputClassName?: string;
   placeholder?: string;
   disabled?: boolean;
   invalid?: boolean;
@@ -38,10 +34,7 @@ function syncMask(input: HTMLInputElement): void {
 }
 
 export function renderSensitiveInput(props: SensitiveInputProps): TemplateResult {
-  const visibilityLabel = props.revealed ? props.hideLabel : props.revealLabel;
-  const className = props.className
-    ? `oc-sensitive-input ${props.className}`
-    : "oc-sensitive-input";
+  const visibilityLabel = t(props.revealed ? "configForm.hideValue" : "configForm.revealValue");
   const handleInput = (event: Event) => {
     const input = event.currentTarget as HTMLInputElement;
     syncMask(input);
@@ -53,7 +46,7 @@ export function renderSensitiveInput(props: SensitiveInputProps): TemplateResult
 
   return html`
     <span
-      class=${className}
+      class="oc-sensitive-input"
       data-sensitive-input
       data-sensitive-mask-ready="true"
       data-revealed=${String(props.revealed)}
@@ -71,8 +64,8 @@ export function renderSensitiveInput(props: SensitiveInputProps): TemplateResult
       </span>
       <input
         id=${props.id}
-        class=${props.inputClassName ?? nothing}
-        name=${props.name ?? nothing}
+        class="input"
+        name="wizard-text"
         type=${props.revealed ? "text" : "password"}
         autocomplete="off"
         spellcheck="false"

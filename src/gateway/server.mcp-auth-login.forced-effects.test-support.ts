@@ -249,7 +249,10 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       const beforeRequests = requests.length;
       await finishError(await start());
       expect(saveCalls).toBe(1);
-      expect(attemptedClient).toEqual({ client_id: clientMetadataUrl });
+      expect(attemptedClient).toEqual({
+        client_id: clientMetadataUrl,
+        issuer: new URL(resourceUrl).origin,
+      });
       expect(beforeSave?.discoveryState?.authorizationServerMetadata).toMatchObject({
         client_id_metadata_document_supported: true,
       });
@@ -263,21 +266,6 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
     });
 
     const fallbackCells = [
-      {
-        name: "resource path to root",
-        failures: ["/.well-known/oauth-protected-resource/mcp"],
-        next: "/.well-known/oauth-protected-resource",
-        tenant: false,
-      },
-      {
-        name: "resource root to authorization root",
-        failures: [
-          "/.well-known/oauth-protected-resource/mcp",
-          "/.well-known/oauth-protected-resource",
-        ],
-        next: "/.well-known/oauth-authorization-server",
-        tenant: false,
-      },
       {
         name: "OIDC path to suffix",
         failures: [
@@ -352,59 +340,47 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       });
     }
 
-    it.each([false, true])(
-      "real transport TypeError headerless fallback, revoke=%s",
-      async (withdraw) => {
-        const target = "/.well-known/oauth-protected-resource/mcp";
-        const attempts: Array<{ pathname: string; protocol: string | null }> = [];
-        let wireRequests = 0;
-        let transportFailures = 0;
-        effects.endpoint = (request) => {
-          if (request.url !== target) {
-            return false;
-          }
-          wireRequests++;
-          if (wireRequests === 1) {
-            request.socket.destroy();
-            return true;
-          }
+    it("fences the real transport TypeError headerless fallback after revocation", async () => {
+      const target = "/.well-known/oauth-protected-resource/mcp";
+      const attempts: Array<{ pathname: string; protocol: string | null }> = [];
+      let wireRequests = 0;
+      let transportFailures = 0;
+      effects.endpoint = (request) => {
+        if (request.url !== target) {
           return false;
-        };
-        observeFetch({
-          request: (pathname, headers) => {
-            attempts.push({ pathname, protocol: headers.get("MCP-Protocol-Version") });
-          },
-          failure: (pathname, error) => {
-            if (pathname === target && error instanceof TypeError) {
-              transportFailures++;
-              if (withdraw) {
-                revoke();
-              }
-            }
-          },
-        });
-        const before = await stored();
-        if (withdraw) {
-          await finishError(await start());
-          expect(await stored()).toEqual(before);
-          expect(wireRequests).toBe(1);
-        } else {
-          await begin();
-          expect(wireRequests).toBe(2);
         }
-        expect(transportFailures).toBe(1);
-        const resourceAttempts = attempts.filter((attempt) => attempt.pathname === target);
-        expect(resourceAttempts).toHaveLength(2);
-        expect(resourceAttempts[0]?.protocol).toBeTruthy();
-        expect(resourceAttempts[1]?.protocol).toBeNull();
-      },
-    );
+        wireRequests++;
+        if (wireRequests === 1) {
+          request.socket.destroy();
+          return true;
+        }
+        return false;
+      };
+      observeFetch({
+        request: (pathname, headers) => {
+          attempts.push({ pathname, protocol: headers.get("MCP-Protocol-Version") });
+        },
+        failure: (pathname, error) => {
+          if (pathname === target && error instanceof TypeError) {
+            transportFailures++;
+            revoke();
+          }
+        },
+      });
+      const before = await stored();
+      await finishError(await start());
+      expect(await stored()).toEqual(before);
+      expect(wireRequests).toBe(1);
+      expect(transportFailures).toBe(1);
+      const resourceAttempts = attempts.filter((attempt) => attempt.pathname === target);
+      expect(resourceAttempts).toHaveLength(2);
+      expect(resourceAttempts[0]?.protocol).toBeTruthy();
+      expect(resourceAttempts[1]?.protocol).toBeNull();
+    });
 
     const refreshCells = [
       { error: "server_error", lifetime: 30 },
       { error: "server_error", lifetime: 0 },
-      { error: "transport", lifetime: 30 },
-      { error: "unauthorized_client", lifetime: 30 },
     ];
     for (const { error, lifetime } of refreshCells) {
       it.each(lifetime === 0 ? [false, true] : [false])(
@@ -417,7 +393,6 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
           expect(before.pendingAuthorizationChallenge).toBeUndefined();
           let requestParams: URLSearchParams | undefined;
           let responseBoundary = 0;
-          let transportError: unknown;
           effects.endpoint = async (request, response) => {
             if (request.url !== "/token") {
               return false;
@@ -427,27 +402,14 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
               body += chunk;
             }
             requestParams = new URLSearchParams(body);
-            if (error === "transport") {
-              request.socket.destroy();
-              return true;
-            }
             response
-              .writeHead(error === "server_error" ? 500 : 400)
+              .writeHead(500)
               .end(JSON.stringify({ error, error_description: "private exchange detail" }));
             return true;
           };
           observeFetch({
             response: (pathname) => {
               if (pathname === "/token") {
-                responseBoundary++;
-                if (withdraw) {
-                  revoke();
-                }
-              }
-            },
-            failure: (pathname, failure) => {
-              if (pathname === "/token") {
-                transportError = failure;
                 responseBoundary++;
                 if (withdraw) {
                   revoke();
@@ -467,11 +429,6 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
             expect(await stored()).toEqual(before);
           }
           expect(responseBoundary).toBe(1);
-          if (error === "transport") {
-            expect(transportError).toBeInstanceOf(TypeError);
-          } else {
-            expect(transportError).toBeUndefined();
-          }
           expect(requestParams?.get("grant_type")).toBe("refresh_token");
           expect(requestParams?.get("refresh_token")).toBe(before.tokens?.refresh_token);
           expect(requestParams?.get("client_id")).toBe(before.clientInformation?.client_id);

@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import type { StatementSync } from "node:sqlite";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { buildEmbeddedRunPayloads } from "../agents/embedded-agent-runner/run/payloads.js";
 import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { setRuntimeConfigSnapshot } from "../config/io.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
@@ -12,10 +14,6 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
-import {
-  resolveSqliteScope,
-  toDatabaseOptions,
-} from "../config/sessions/session-accessor.sqlite-scope.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import { persistInternalSourceReply } from "../gateway/internal-source-reply-persistence.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
@@ -57,6 +55,8 @@ async function withTarget(
         sessionId: "original-session",
         storePath: path.join(state.sessionsDir("main"), "sessions.json"),
       };
+      const cfg = { session: { store: scope.storePath } };
+      setRuntimeConfigSnapshot(cfg);
       const lifecycleRevision = "original-generation";
       const entry = {
         sessionId: scope.sessionId,
@@ -67,7 +67,7 @@ async function withTarget(
       await replaceSessionEntry(scope, entry);
       const params: PublicationParams = {
         ...scope,
-        cfg: { session: { store: scope.storePath } },
+        cfg,
         expectedGeneration: { sessionId: scope.sessionId, lifecycleRevision },
         occurrenceIds: ["occurrence-b", "occurrence-a"],
         payload: createHeartbeatToolResponsePayload({
@@ -89,16 +89,61 @@ async function withTarget(
 }
 
 describe("publishHeartbeatSessionReply", () => {
+  it("publishes through worker reads and observes a later committed reset", async () => {
+    await withTarget(async ({ params, scope, entry }) => {
+      const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
+      const prototype: StatementSync = Object.getPrototypeOf(db.prepare("SELECT 1"));
+      const reads: string[] = [];
+      const observers = (["all", "get", "iterate", "run"] as const).map((method) => {
+        const original = prototype[method];
+        return vi.spyOn(prototype, method).mockImplementation(
+          new Proxy(original, {
+            apply(read, receiver: StatementSync, args) {
+              if (/\b(?:session_nodes|session_windows)\b/iu.test(receiver.sourceSQL)) {
+                reads.push(receiver.sourceSQL);
+              }
+              return Reflect.apply(read, receiver, args);
+            },
+          }),
+        );
+      });
+      try {
+        expect(await publishHeartbeatSessionReply(params)).toMatchObject({ ok: true });
+        expect(reads).toEqual([]);
+        await replaceSessionEntry(scope, { ...entry, lifecycleRevision: "reset-generation" });
+        reads.length = 0;
+        expect(
+          await publishHeartbeatSessionReply({ ...params, occurrenceIds: ["after-reset"] }),
+        ).toMatchObject({ ok: false });
+        expect(reads).toEqual([]);
+      } finally {
+        observers.forEach((observer) => observer.mockRestore());
+      }
+    });
+  });
+
   it.each(["abort", "authority"] as const)(
     "accepts the committed occurrence before queued %s and publishes a later occurrence once",
     async (change) => {
       await withTarget(async ({ params, scope, events }) => {
-        const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
         const controller = new AbortController();
         let ownerActive = true;
         let cancellationQueued = false;
         const updates: InternalSessionTranscriptUpdate[] = [];
-        const unsubscribe = onInternalSessionTranscriptUpdate((update) => updates.push(update));
+        const unsubscribe = onInternalSessionTranscriptUpdate((update) => {
+          updates.push(update);
+          if (update.messageId && !cancellationQueued) {
+            cancellationQueued = true;
+            // Queue cancellation from the real committed publication, after worker settlement.
+            queueMicrotask(() => {
+              if (change === "abort") {
+                controller.abort();
+              } else {
+                ownerActive = false;
+              }
+            });
+          }
+        });
         try {
           const first = await withOwnedSessionTranscriptWrites(
             {
@@ -108,17 +153,6 @@ describe("publishHeartbeatSessionReply", () => {
               assertCommitAllowed: () => {
                 if (!ownerActive) {
                   throw new Error("commit owner released");
-                }
-                if (database.db.isTransaction && !cancellationQueued) {
-                  cancellationQueued = true;
-                  // Use the real commit guard; do not replace persistence or the emitter.
-                  queueMicrotask(() => {
-                    if (change === "abort") {
-                      controller.abort();
-                    } else {
-                      ownerActive = false;
-                    }
-                  });
                 }
               },
               withTranscriptWrite: async (run) => await run(),

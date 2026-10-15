@@ -62,7 +62,7 @@ function normalizeProducer(value) {
       Number.isSafeInteger(value.runAttempt) &&
       value.runAttempt > 0 &&
       typeof value.workflowHeadBranch === "string" &&
-      /^(?:main|release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33|release-publish\/[a-f0-9]{12}-[1-9][0-9]*)$/u.test(
+      /^(?:main|release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33|release-ci\/[a-f0-9]{12}-[1-9][0-9]*|release-publish\/[a-f0-9]{12}-[1-9][0-9]*)$/u.test(
         value.workflowHeadBranch,
       ),
     "Prepared npm producer must bind an exact trusted workflow run and attempt.",
@@ -137,6 +137,25 @@ export function preparedNpmArtifactName(sourceSha, producer) {
   requireValue(SHA.test(sourceSha), "Prepared npm source must be a full lowercase SHA.");
   const identity = normalizeProducer(producer);
   return `plugin-npm-prepared-${sourceSha}-${identity.runId}-${identity.runAttempt}`;
+}
+
+export function validatePreparedNpmArtifactDescriptor(value, expected) {
+  const producer = normalizeProducer(value);
+  requireValue(
+    producer.repository === expected.repository &&
+      producer.workflowSha === expected.workflowSha &&
+      value.artifactName === preparedNpmArtifactName(expected.sourceSha, producer),
+    "Prepared npm artifact descriptor differs from the approved source or tooling.",
+  );
+  return artifactTuple(
+    {
+      id: value.artifactId,
+      name: value.artifactName,
+      digest: value.artifactDigest,
+      size_in_bytes: value.artifactSizeBytes,
+    },
+    producer,
+  );
 }
 
 function sourcePackageRoster(sourceRoot, npmDistTag, selectedNames) {

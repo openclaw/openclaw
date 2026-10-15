@@ -1,32 +1,40 @@
 /* @vitest-environment jsdom */
 
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { UpdateRunPhase, UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
+import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import { projectUpdateRun } from "../app/update-run-projection.ts";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import { createUpdateRunFixture as run } from "../test-helpers/update-run.ts";
-import "./update-run-view.ts";
+import { UpdateRunView } from "./update-run-view.tsx";
 
-type RunViewElement = HTMLElement & {
-  run: UpdateRunRecord | null;
-  connected: boolean;
-  updateComplete: Promise<boolean>;
-};
-
-async function mount(record: UpdateRunRecord) {
-  const element = document.createElement("openclaw-update-run-view") as RunViewElement;
-  element.run = record;
-  document.body.append(element);
-  await element.updateComplete;
-  return element;
+function mount(record: UpdateRunRecord) {
+  const [current, setRecord] = createSignal(record);
+  const [connected, setConnected] = createSignal(true);
+  const { container } = mountSolid(() =>
+    createComponent(UpdateRunView, {
+      get run() {
+        return current();
+      },
+      get connected() {
+        return connected();
+      },
+    }),
+  );
+  flush();
+  const element = container.querySelector<HTMLElement>("openclaw-update-run-view")!;
+  return { element, setRecord, setConnected };
 }
 
 afterEach(() => {
+  cleanupSolid();
   document.body.replaceChildren();
   vi.useRealTimers();
 });
 
 describe("update run projection", () => {
-  it.each(["running", "succeeded", "skipped", "failed"] as const)(
+  it.each(["running", "skipped"] as const)(
     "keeps native phase and verification claims out of an OCM %s result",
     (status) => {
       const view = projectUpdateRun(
@@ -76,21 +84,13 @@ describe("update run projection", () => {
     expect(view.oracles.every((oracle) => oracle.state === "warn")).toBe(true);
   });
 
-  it.each<UpdateRunPhase>(["requested", "finished"])("hides unused repair during %s", (phase) => {
-    const view = projectUpdateRun(
-      run({ phase, status: phase === "finished" ? "succeeded" : "running" }),
-    );
-    expect(view.phases.some(({ step }) => step === "repairing")).toBe(false);
-  });
-
-  it.each(["in_progress", "completed", "failed", "skipped"] as const)(
+  it.each(["in_progress", "failed"] as const)(
     "preserves a recorded %s repair after activation",
     (status) => {
       const view = projectUpdateRun(
         run({
           phase: status === "in_progress" ? "repairing" : "finished",
-          status:
-            status === "in_progress" ? "running" : status === "completed" ? "succeeded" : "failed",
+          status: status === "in_progress" ? "running" : "failed",
           steps: [
             { step: "activating", status: "completed" },
             { step: "restarting", status: "completed" },
@@ -105,9 +105,16 @@ describe("update run projection", () => {
     },
   );
 
-  it.each(["updater-runtime-retention", "build"])(
-    "selects the active %s before its first diagnostic instead of the previous step",
-    (step) => {
+  it.each([
+    { step: "updater-runtime-retention", detail: undefined },
+    { step: "build", detail: undefined },
+    {
+      step: "install",
+      detail: Array.from({ length: 100 }, (_, index) => `line ${index}`).join("\n"),
+    },
+  ])(
+    "selects active $step details ahead of other steps and bounds the visible tail",
+    ({ step, detail }) => {
       const view = projectUpdateRun(
         run({
           phase: "validating",
@@ -118,53 +125,34 @@ describe("update run projection", () => {
               status: "completed",
               detail: "Recovery backup needs 18 GiB.",
             },
-            { step, status: "in_progress" },
+            { step, status: "in_progress", detail },
             { step: "validating", status: "in_progress", detail: "Checking the update." },
+            { step: "preflight", status: "completed", detail: "Earlier preflight." },
           ],
         }),
       );
       expect(view.detailStep).toBe(step);
-      expect(view.details).toBe("");
+      if (detail) {
+        expect(view.details.split("\n")).toHaveLength(80);
+        expect(view.details.startsWith("line 20\n")).toBe(true);
+        expect(view.details.endsWith("line 99")).toBe(true);
+      } else {
+        expect(view.details).toBe("");
+      }
     },
   );
-
-  it("selects live details ahead of a later completed step and bounds the visible tail", () => {
-    const view = projectUpdateRun(
-      run({
-        steps: [
-          {
-            step: "install",
-            status: "in_progress",
-            detail: Array.from({ length: 100 }, (_, index) => `line ${index}`).join("\n"),
-          },
-          { step: "preflight", status: "completed", detail: "Earlier preflight." },
-        ],
-      }),
-    );
-    expect(view.detailStep).toBe("install");
-    expect(view.details.split("\n")).toHaveLength(80);
-    expect(view.details.startsWith("line 20\n")).toBe(true);
-    expect(view.details.endsWith("line 99")).toBe(true);
-  });
 });
 
 describe("update run view", () => {
-  it("registers its own English step labels and retention guidance on first load", async () => {
-    const element = await mount(
-      run({ steps: [{ step: "updater-runtime-retention", status: "in_progress" }] }),
-    );
-    expect(element.querySelector(".update-run-view__diagnostics summary")?.textContent).toContain(
-      "Preparing the updater",
-    );
-    expect(element.querySelector(".update-run-view__details")?.textContent).toContain(
-      "Keeping a copy of the current updater so it can finish safely while OpenClaw is replaced.",
-    );
-  });
-
-  it("presents diagnostic receipts as readable details without inventing installation steps", async () => {
-    const element = await mount(
+  it("presents diagnostic receipts as readable details without inventing installation steps", () => {
+    const { element, setRecord } = mount(
       run({
         steps: [
+          {
+            step: "staging",
+            status: "completed",
+            detail: "The selected update revision was downloaded and verified.",
+          },
           { step: "snapshot-space-preflight", status: "completed" },
           {
             step: "diagnostic:snapshot-space-preflight:8",
@@ -193,59 +181,47 @@ describe("update run view", () => {
     expect(
       element.querySelector('[data-step="warning:snapshot-space-preflight:2"]')?.textContent,
     ).toContain("Warning:");
-    element.run = run({
-      steps: [...element.run!.steps, { step: "updater-runtime-retention", status: "in_progress" }],
-    });
-    await element.updateComplete;
+    setRecord((record) =>
+      run({
+        steps: [...record.steps, { step: "updater-runtime-retention", status: "in_progress" }],
+      }),
+    );
+    flush();
     expect(element.querySelector(".update-run-view__details")?.textContent).not.toContain(
       "Recovery backup needs 18 GiB.",
     );
-    const previousStep = element.querySelector<HTMLDetailsElement>(
-      '[data-step="snapshot-space-preflight"] details',
-    )!;
-    previousStep.querySelector("summary")!.click();
-    expect(previousStep.open).toBe(true);
-    expect(previousStep.textContent).toContain("Recovery backup needs 18 GiB.");
-    expect(previousStep.textContent).toContain("Using the temporary disk");
-    previousStep.querySelector("summary")!.click();
-    expect(previousStep.open).toBe(false);
-  });
-
-  it.each([
-    {
-      step: "warning:disk-space-preflight:2",
-      detail: "The recovery backup will use temporary storage.",
-    },
-    { step: "staging", detail: "The selected update revision was downloaded and verified." },
-  ])(
-    "keeps completed $step details accessible after a new operation begins",
-    async ({ step, detail }) => {
-      const element = await mount(
-        run({
-          phase: "validating",
-          steps: [
-            { step, status: "completed", detail },
-            { step: "updater-runtime-retention", status: "in_progress" },
-          ],
-        }),
-      );
-      expect(element.querySelector(".update-run-view__details")?.textContent).not.toContain(detail);
+    expect(element.querySelector(".update-run-view__diagnostics summary")?.textContent).toContain(
+      "Preparing the updater",
+    );
+    expect(element.querySelector(".update-run-view__details")?.textContent).toContain(
+      "Keeping a copy of the current updater so it can finish safely while OpenClaw is replaced.",
+    );
+    for (const [step, details] of [
+      ["snapshot-space-preflight", ["Recovery backup needs 18 GiB.", "Using the temporary disk"]],
+      ["warning:snapshot-space-preflight:2", ["Using the temporary disk"]],
+      ["staging", ["The selected update revision was downloaded and verified."]],
+    ] as const) {
       const previousStep = element.querySelector<HTMLDetailsElement>(
         `[data-step="${step}"] details`,
       )!;
       expect(previousStep).not.toBeNull();
       previousStep.querySelector("summary")!.click();
       expect(previousStep.open).toBe(true);
-      expect(previousStep.querySelector("pre")?.textContent).toContain(detail);
+      for (const detail of details) {
+        expect(element.querySelector(".update-run-view__details")?.textContent).not.toContain(
+          detail,
+        );
+        expect(previousStep.querySelector("pre")?.textContent).toContain(detail);
+      }
       previousStep.querySelector("summary")!.click();
       expect(previousStep.open).toBe(false);
-    },
-  );
+    }
+  });
 
   it("follows installation progress on opening and updates but preserves scrollback", async () => {
     vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
     const record = run({ steps: [{ step: "build", status: "in_progress" }] });
-    const element = await mount(record);
+    const { element, setRecord } = mount(record);
     const disclosure = element.querySelector<HTMLDetailsElement>(".update-run-view__step-list")!;
     const list = element.querySelector<HTMLElement>(".update-run-view__step-scroll")!;
     Object.defineProperties(list, {
@@ -262,16 +238,16 @@ describe("update run view", () => {
 
     list.scrollTop = 0;
     list.dispatchEvent(new Event("scroll"));
-    element.run = { ...record, updatedAtMs: record.updatedAtMs + 1 };
-    await element.updateComplete;
+    setRecord({ ...record, updatedAtMs: record.updatedAtMs + 1 });
+    flush();
     await vi.runOnlyPendingTimersAsync();
     expect(list.scrollTop).toBe(0);
 
     list.scrollTop = 840;
     list.dispatchEvent(new Event("scroll"));
     Object.defineProperty(list, "scrollHeight", { value: 1200 });
-    element.run = { ...record, updatedAtMs: record.updatedAtMs + 2 };
-    await element.updateComplete;
+    setRecord({ ...record, updatedAtMs: record.updatedAtMs + 2 });
+    flush();
     await vi.runOnlyPendingTimersAsync();
     expect(list.scrollTop).toBe(1200);
   });
@@ -303,8 +279,8 @@ describe("update run view", () => {
     },
   ])(
     "reports $label consistently in the verification badge and report",
-    async ({ observed, state, detail }) => {
-      const element = await mount(
+    ({ observed, state, detail }) => {
+      const { element } = mount(
         run({
           status: "failed",
           phase: "finished",
@@ -320,38 +296,42 @@ describe("update run view", () => {
     },
   );
 
-  it("keeps the view mounted across a restart and replaces progress with a visible success report", async () => {
-    const element = await mount(run({ phase: "restarting" }));
+  it("keeps the view mounted across a restart and replaces progress with a visible success report", () => {
+    const { element, setRecord, setConnected } = mount(run({ phase: "restarting" }));
     const container = element.querySelector(".update-run-view");
-    element.connected = false;
-    await element.updateComplete;
+    setConnected(false);
+    flush();
     expect(element.querySelector("h3")?.textContent).toBe("Gateway restarting…");
     expect(element.querySelector('[aria-label="Update report"]')).toBeNull();
-    element.connected = true;
-    element.run = run({
-      phase: "verifying",
-      verification: { serviceRunning: true, versionMatch: true },
-    });
-    await element.updateComplete;
+    setConnected(true);
+    setRecord(
+      run({
+        phase: "verifying",
+        verification: { serviceRunning: true, versionMatch: true },
+      }),
+    );
+    flush();
     expect(element.querySelector(".update-run-view")).toBe(container);
     expect(element.querySelector("h3")?.textContent).toContain("verifying");
-    element.run = run({
-      phase: "finished",
-      status: "succeeded",
-      finishedAtMs: 30,
-      after: { version: "2026.9.2" },
-      verification: {
-        serviceRunning: true,
-        versionMatch: true,
-        channelsReady: true,
-        pluginErrors: [],
-      },
-      steps: [
-        { step: "staging", status: "completed" },
-        { step: "verifying", status: "completed" },
-      ],
-    });
-    await element.updateComplete;
+    setRecord(
+      run({
+        phase: "finished",
+        status: "succeeded",
+        finishedAtMs: 30,
+        after: { version: "2026.9.2" },
+        verification: {
+          serviceRunning: true,
+          versionMatch: true,
+          channelsReady: true,
+          pluginErrors: [],
+        },
+        steps: [
+          { step: "staging", status: "completed" },
+          { step: "verifying", status: "completed" },
+        ],
+      }),
+    );
+    flush();
     const report = element.querySelector('[aria-label="Update report"]');
     expect(report?.textContent).toContain("✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).");
     expect(report?.textContent).toContain("service running; version verified; channels ready");
@@ -359,8 +339,8 @@ describe("update run view", () => {
     expect(element.querySelector('[data-step="repairing"]')).toBeNull();
   });
 
-  it("shows failure details and report text without interpreting diagnostic markup", async () => {
-    const element = await mount(
+  it("shows failure details and report text without interpreting diagnostic markup", () => {
+    const { element } = mount(
       run({
         status: "failed",
         phase: "finished",

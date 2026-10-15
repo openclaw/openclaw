@@ -8,6 +8,29 @@ import {
   resetRegistryJitiMocks,
 } from "./test-helpers/registry-jiti-mocks.js";
 
+// Script modern contracts; legacy setup fixtures keep their real source loader.
+vi.mock("./plugin-instance-module-loader.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-instance-module-loader.js")>();
+  const { getCachedPluginModuleLoader } = await import("./plugin-module-loader-cache.js");
+  return {
+    ...actual,
+    bindPluginInstanceModuleLoader: (
+      params: Parameters<typeof actual.bindPluginInstanceModuleLoader>[0],
+    ) => {
+      if (!/^(?:doctor-)?contract-api\./.test(path.basename(params.source))) {
+        return actual.bindPluginInstanceModuleLoader(params);
+      }
+      params.instance.bindModuleLoader(
+        getCachedPluginModuleLoader({
+          modulePath: params.source,
+          importerUrl: import.meta.url,
+          createLoader: getRegistryJitiMocks().createJiti,
+        }),
+      );
+    },
+  };
+});
+
 const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
 const doctorContractWarnMock = vi.hoisted(() => vi.fn());
@@ -28,9 +51,6 @@ let listPluginDoctorStateMigrationEntries: typeof import("./doctor-contract-regi
 let resolveLivePluginDoctorStateMigrationInventory: typeof import("./doctor-contract-registry.js").resolveLivePluginDoctorStateMigrationInventory;
 let waitForPluginCacheRetirement:
   | typeof import("./plugin-cache.js").waitForPluginCacheRetirement
-  | undefined;
-let setPluginDoctorContractRegistryModuleLoaderFactoryForTest:
-  | typeof import("./doctor-contract-registry.test-fixtures.js").setPluginDoctorContractRegistryModuleLoaderFactoryForTest
   | undefined;
 
 function mockDoctorPlugins(...plugins: Record<string, unknown>[]): void {
@@ -67,7 +87,7 @@ function writeLegacySetupEntry(
 }
 
 afterEach(async () => {
-  setPluginDoctorContractRegistryModuleLoaderFactoryForTest?.(undefined);
+  clearPluginDoctorContractRegistryCache?.();
   try {
     await waitForPluginCacheRetirement?.();
   } finally {
@@ -83,23 +103,14 @@ describe("doctor-contract-registry state migrations", () => {
       listPluginDoctorStateMigrationEntries,
       resolveLivePluginDoctorStateMigrationInventory,
     } = await import("./doctor-contract-registry.js"));
-    ({
-      clearPluginDoctorContractRegistryCache,
-      setPluginDoctorContractRegistryModuleLoaderFactoryForTest,
-    } = await import("./doctor-contract-registry.test-fixtures.js"));
+    ({ clearPluginDoctorContractRegistryCache } =
+      await import("./doctor-contract-registry.test-fixtures.js"));
     ({ waitForPluginCacheRetirement } = await import("./plugin-cache.js"));
   });
 
   beforeEach(() => {
     resetRegistryJitiMocks();
     doctorContractWarnMock.mockReset();
-    // Loaded once in beforeAll; afterEach guards the same binding optionally because it
-    // can fire when that import never completed. Fail loudly here instead of silently
-    // running a case against the real module loader.
-    if (!setPluginDoctorContractRegistryModuleLoaderFactoryForTest) {
-      throw new Error("doctor contract registry test fixtures were not loaded");
-    }
-    setPluginDoctorContractRegistryModuleLoaderFactoryForTest(mocks.createJiti);
     clearPluginDoctorContractRegistryCache();
   });
 
@@ -274,6 +285,39 @@ describe("doctor-contract-registry state migrations", () => {
     expect(events()).toEqual(["module", "detector", "detect"]);
     expect(doctorContractWarnMock).not.toHaveBeenCalled();
   });
+
+  it.each(["stateless", "detector", "invalid-detector", "foreign-owner"] as const)(
+    "inspects the public setup entry without dropping %s migration obligations",
+    (kind) => {
+      const pluginRoot = makeTempDir();
+      const { setupSource } = writeLegacySetupEntry(
+        pluginRoot,
+        `module.exports = { plugin: {
+          id: ${JSON.stringify(kind === "foreign-owner" ? "other-channel" : "legacy-channel")},
+          ${kind === "detector" ? "lifecycle: { detectLegacyStateMigrations: () => [] }," : ""}
+          ${kind === "invalid-detector" ? "lifecycle: { detectLegacyStateMigrations: true }," : ""}
+        } };`,
+      );
+      mockDoctorPlugins({
+        id: "legacy-channel",
+        origin: "global",
+        rootDir: pluginRoot,
+        setupSource,
+        channels: ["legacy-channel"],
+        providers: [],
+      });
+      const stateless = vi.fn();
+      const entries = listPluginDoctorStateMigrationEntries({
+        config: {},
+        env: {},
+        pluginIds: ["legacy-channel"],
+        onInspectedStatelessPlugin: stateless,
+      });
+      expect(entries).toHaveLength(kind === "detector" ? 1 : 0);
+      expect(stateless).not.toHaveBeenCalled();
+      expect(doctorContractWarnMock).toHaveBeenCalledTimes(kind === "invalid-detector" ? 1 : 0);
+    },
+  );
 
   it.each([
     { name: "entry feature present", entryFeature: true, expectedCount: 1 },

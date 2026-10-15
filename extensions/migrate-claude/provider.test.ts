@@ -172,10 +172,10 @@ describe("Claude migration provider", () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: { workspace: defaultWorkspace },
-        list: [
-          { id: "main", default: true },
-          { id: "research", workspace: targetWorkspace },
-        ],
+        entries: {
+          main: {},
+          research: { workspace: targetWorkspace },
+        },
       },
     };
     const context = contextFor(source, {

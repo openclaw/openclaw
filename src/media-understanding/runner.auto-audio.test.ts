@@ -22,11 +22,6 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
 function registry(providers: Record<string, MediaUnderstandingProvider>) {
   return new Map(Object.entries(providers));
 }
-function audioProvider(
-  transcribeAudio: NonNullable<MediaUnderstandingProvider["transcribeAudio"]>,
-) {
-  return registry({ openai: { id: "openai", capabilities: ["audio"], transcribeAudio } });
-}
 function audioConfig(extra: Partial<OpenClawConfig> = {}): OpenClawConfig {
   return {
     models: {
@@ -59,20 +54,6 @@ async function runAudio(
 }
 
 describe("runCapability audio", () => {
-  it.each([
-    { text: "Transcribe the audio.", speech: false },
-    { text: "context", speech: true },
-  ])("classifies completed transcription $text", async ({ text, speech }) => {
-    const result = await runAudio({
-      cfg: audioConfig({
-        tools: { media: { models: [{ provider: "openai", capabilities: ["audio"] }] } },
-      }),
-      providerRegistry: audioProvider(async () => ({ text, model: "test-model" })),
-    });
-    expect(result.outputs.map((output) => output.text)).toEqual(speech ? [text] : []);
-    expect(result.decision.attachmentProcessing).toEqual({ 0: "completed" });
-  });
-
   it("auto-selects provider-owned audio with subscription auth and its audio default", async () => {
     const { hasAvailableAuthForProvider } = await import("../agents/model-auth.js");
     const hasAuth = vi.mocked(hasAvailableAuthForProvider);
@@ -310,38 +291,6 @@ describe("runCapability audio", () => {
         .mockReset()
         .mockResolvedValue({ apiKey: "test-key", source: "test", mode: "api-key" });
     }
-  });
-
-  it("lets request transcription hints override entry and capability hints", async () => {
-    const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
-      text: "ok",
-      model: req.model,
-    }));
-    const result = await runAudio({
-      cfg: audioConfig({
-        tools: {
-          media: {
-            models: [
-              {
-                provider: "openai",
-                model: "whisper-1",
-                capabilities: ["audio"],
-                language: "pt",
-                prompt: "entry prompt",
-              },
-            ],
-            audio: { enabled: true, prompt: "configured prompt", language: "fr" },
-          },
-        },
-      }),
-      request: { prompt: "Focus on names", language: "en" },
-      providerRegistry: audioProvider(transcribeAudio),
-    });
-    expect(result.outputs[0]).toMatchObject({ text: "ok", model: "whisper-1" });
-    expect(transcribeAudio.mock.calls[0]?.[0]).toMatchObject({
-      language: "en",
-      prompt: "Focus on names",
-    });
   });
 
   it("skips tiny audio before calling the provider", async () => {

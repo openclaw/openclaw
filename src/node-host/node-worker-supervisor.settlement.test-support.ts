@@ -35,7 +35,6 @@ export async function fixture(
   const firstRemoval = createDeferred();
   const removalEntered = createDeferred();
   const retryRemoval = createDeferred();
-  const retryEntered = createDeferred();
   const snapshots: number[] = [];
   const onPersist: { call?: () => void } = {};
   let launch: NodeWorkerLaunchReceipt | undefined;
@@ -153,7 +152,6 @@ export async function fixture(
       removalEntered.resolve();
       await firstRemoval.promise;
     } else {
-      retryEntered.resolve();
       await retryRemoval.promise;
     }
   });
@@ -240,7 +238,6 @@ export async function fixture(
     firstRemoval,
     removalEntered,
     retryRemoval,
-    retryEntered,
     snapshots,
     onPersist,
     readTurn: () => turn,
@@ -296,11 +293,7 @@ export function recoveryFixture(container = false) {
   mocks.launchGet.mockImplementation(async () => receipt);
   mocks.launchMatching.mockImplementation(async () => receipt);
   mocks.launchCount.mockImplementation(async () => (receipt.state === "running" ? 1 : 0));
-  const finish: InstanceType<typeof NodeWorkerLaunchStore>["finish"] = async (
-    params,
-    authority,
-  ) => {
-    authority?.assertCurrent();
+  const finish: InstanceType<typeof NodeWorkerLaunchStore>["finish"] = async (params) => {
     receipt = { ...receipt, state: params.state };
     return receipt;
   };

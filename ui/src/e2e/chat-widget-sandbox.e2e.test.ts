@@ -14,6 +14,7 @@ import {
 } from "../../../src/gateway/control-ui-csp.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -368,7 +369,7 @@ suite.define(() => {
           await note.fill("State survives rerenders");
           await boardNote.fill("Dashboard state survives swaps");
           for (const region of ["main", "side"]) {
-            await page.locator(".chat-panel-swap").click();
+            await selectChatLayoutAction(page, /^Swap /);
             await expect
               .poll(() => page.locator('[data-panel-slot="dashboard"]').getAttribute("data-region"))
               .toBe(region);
@@ -516,25 +517,27 @@ suite.define(() => {
               return event.defaultPrevented;
             }),
           ).toBe(false);
-          await page.keyboard.press("ControlOrMeta+K");
           const paletteInput = page.locator(".cmd-palette__input");
-          await paletteInput.waitFor();
-          await page.keyboard.type("Settings");
-          expect(await paletteInput.inputValue()).toBe("Settings");
-          await page.keyboard.press("Escape");
-          await paletteInput.waitFor({ state: "hidden" });
-          await expect
-            .poll(() =>
-              savedNote.evaluate(
-                (element) => document.hasFocus() && document.activeElement === element,
-              ),
-            )
-            .toBe(true);
+          for (const chord of ["ControlOrMeta+K", "ControlOrMeta+P", "ControlOrMeta+Shift+P"]) {
+            await page.keyboard.press(chord);
+            await paletteInput.waitFor();
+            await page.keyboard.type("Settings");
+            expect(await paletteInput.inputValue()).toBe("Settings");
+            await page.keyboard.press("Escape");
+            await paletteInput.waitFor({ state: "hidden" });
+            await expect
+              .poll(() =>
+                savedNote.evaluate(
+                  (element) => document.hasFocus() && document.activeElement === element,
+                ),
+              )
+              .toBe(true);
+          }
           await page.keyboard.type("!");
           expect(await savedNote.inputValue()).toBe("Saved draft!");
-          await expect
-            .poll(() => savedNote.evaluate(() => Boolean(Reflect.get(window, "scrollNonce"))))
-            .toBe(true);
+          expect(await savedNote.evaluate(() => Boolean(Reflect.get(window, "scrollNonce")))).toBe(
+            false,
+          );
           await page.evaluate(() => {
             window.addEventListener("message", function settle(event) {
               if (event.data?.type === "fixture-shortcut-attempted") {

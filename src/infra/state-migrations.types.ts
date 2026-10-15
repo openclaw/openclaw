@@ -1,22 +1,21 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { SessionScope } from "../config/sessions/types.js";
 import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationInventory,
 } from "../plugins/doctor-contract-registry.js";
+import type { EngineConnection } from "./sql-connection.js";
 import type { LegacyAuditLogsDetection } from "./state-migrations.audit-logs.types.js";
 import type { LegacyChannelPairingStateDetection } from "./state-migrations.channel-pairing.js";
 import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
 import type { LegacyExecApprovalsDetection } from "./state-migrations.exec-approvals.types.js";
 import type { LegacyMcpOAuthDetection } from "./state-migrations.mcp-oauth.types.js";
 import type { LegacyMeetingTranscriptsDetection } from "./state-migrations.meeting-transcripts.types.js";
-import type { LegacyRestartSentinelDetection } from "./state-migrations.restart-sentinel.types.js";
 import type { SharedAuthStoreMigrationDetection } from "./state-migrations.shared-auth-store.types.js";
 import type { LegacyWorkspaceStateDetection } from "./state-migrations.workspace-setup.types.js";
 
 export type PluginDoctorRepairAuthority = {
   assertCurrent(): void;
-  assertOwnedInTransaction(database: DatabaseSync): void;
+  assertOwnedInTransaction(database: EngineConnection): void;
 };
 
 export type LegacyRescuePendingDetection = {
@@ -77,25 +76,11 @@ export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" 
     legacyIds: string[];
     pathRewrites: Array<{ id: string; fromPath: string; toPath: string }>;
   };
-  deliveryQueues: {
-    outboundPath: string;
-    sessionPath: string;
-    hasLegacy: boolean;
-  };
   pairingStores: { sourcePaths: string[]; hasLegacy: boolean };
-  voiceWake: {
-    triggersPath: string;
-    routingPath: string;
-    hasLegacy: boolean;
-  };
-  updateCheck: LegacyFileDetection;
   configHealth: LegacyFileDetection;
-  pluginBindingApprovals: LegacyFileDetection;
-  currentConversationBindings: LegacyFileDetection;
   tuiLastSessions: LegacyFileDetection;
   commitments?: LegacyFileDetection;
   auditLogs: LegacyAuditLogsDetection;
-  acpReplayLedger: LegacyFileDetection;
   managedOutgoingImages: {
     sourceDir: string;
     hasLegacy: boolean;
@@ -110,7 +95,6 @@ export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" 
   execApprovals: LegacyExecApprovalsDetection;
   mcpOauth: LegacyMcpOAuthDetection;
   meetingTranscripts?: LegacyMeetingTranscriptsDetection;
-  restartSentinel?: LegacyRestartSentinelDetection;
   workspace: LegacyWorkspaceStateDetection;
   webPush: {
     subscriptionsPath: string;

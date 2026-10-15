@@ -12,6 +12,44 @@ describe("memory index", () => {
   const { provider: providerFixture } = fixture;
   const { createConfig: createCfg, getFreshManager, getPersistentManager } = fixture;
 
+  it("returns to the primary after a query outage without rebuilding its index", async () => {
+    const cfg = createCfg({ fallback: "fallback-provider" });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+    const initial = await manager.search("alpha");
+    expect(initial).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+    );
+    const indexedInputs = [...providerFixture.embeddedBatchTexts];
+
+    providerFixture.beforeEmbedQuery = async () => {
+      throw providerFixture.createLocalWorkerExitError();
+    };
+    expect(await manager.search("alpha outage")).toEqual([]);
+    expect(manager.status().provider).toBe("fallback-provider");
+    expect(await manager.search("alpha still offline")).toEqual([]);
+    expect(manager.status().provider).toBe("fallback-provider");
+
+    providerFixture.beforeEmbedQuery = null;
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
+    try {
+      const recovered = await Promise.all([
+        manager.search("alpha recovered"),
+        manager.search("alpha concurrent recovery"),
+      ]);
+      for (const results of recovered) {
+        expect(results).toEqual(
+          expect.arrayContaining([expect.objectContaining({ path: "memory/2026-01-12.md" })]),
+        );
+      }
+      expect(manager.status().provider).toBe("mock");
+      expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      expect(providerFixture.embeddedBatchTexts).toEqual(indexedInputs);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("does not activate fallback during search when index identity is already mismatched", async () => {
     const cfg = createCfg({
       fallback: "fallback-provider",

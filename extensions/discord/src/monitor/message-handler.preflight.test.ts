@@ -358,7 +358,7 @@ describe("preflightDiscordMessage", () => {
         author: ALICE,
       }),
       cfg: {
-        agents: { list: [{ id: "newagent" }] },
+        agents: { entries: { newagent: {} } },
         bindings: [
           {
             agentId: "newagent",

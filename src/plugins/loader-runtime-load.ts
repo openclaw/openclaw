@@ -1,17 +1,19 @@
 /** Native composition entry for ordinary, restricted, and cold provider-hook loading. */
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { createExternalAuthRuntime } from "../agents/auth-profiles/external-auth.js";
 import { createAuthProfileStoreRuntime } from "../agents/auth-profiles/store.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import { resolveAllowedModelRefCore } from "../agents/model-selection-resolve.js";
+import { resolveCompatibleRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { createPluginCapabilityCatalogContext } from "./capability-catalog-context.js";
 import { isPluginRegistryLoadInFlight } from "./loader-cache.js";
 import {
   loadOpenClawPluginsCore,
+  loadOpenClawPluginsSteps,
   type InternalPluginLoadOverrides,
   type NativePluginLoadBindings,
 } from "./loader-runtime-core.js";
-import { createPluginRuntimeRegistryResolver } from "./loader-runtime-registry.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import {
   createPluginCache,
@@ -35,8 +37,18 @@ import type { PluginRuntime } from "./runtime/types.js";
 
 // Construction only binds callbacks. No profile reads, plugin loads, or network work occur here.
 // Hoisted entry functions let cold auth discovery re-enter this same binding without a module cycle.
-export const resolveRuntimePluginRegistry =
-  createPluginRuntimeRegistryResolver(loadOpenClawPlugins);
+export function resolveRuntimePluginRegistry(
+  options?: PluginLoadOptions,
+): PluginRegistry | undefined {
+  const activeRegistry = resolveCompatibleRuntimePluginRegistry(options);
+  if (activeRegistry) {
+    return activeRegistry;
+  }
+  // Runtime helpers must not recurse while this exact snapshot is registering.
+  return isPluginRegistryLoadInFlight(options)
+    ? undefined
+    : loadOpenClawPlugins({ ...options, activate: false });
+}
 const providerRegistry = Object.freeze(
   createProviderRegistryResolver({
     loadOpenClawPlugins,
@@ -61,7 +73,9 @@ const loaderBindings: NativePluginLoadBindings = Object.freeze({
     return (modelAuth ??= Object.freeze(
       createRuntimeModelAuth({
         ensureAuthProfileStore: authStore.ensureAuthProfileStore,
+        ensureAuthProfileStoreAsync: authStore.ensureAuthProfileStoreAsync,
         isProviderApiKeyConfigured: authAvailability.isProviderApiKeyConfigured,
+        isProviderApiKeyConfiguredAsync: authAvailability.isProviderApiKeyConfiguredAsync,
       }),
     ));
   },
@@ -91,6 +105,19 @@ export function resolvePluginCapabilityCatalogContext() {
 }
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   return loadOpenClawPluginsCore(options, loaderBindings);
+}
+
+/** Keep network callbacks responsive without publishing a partially registered generation. */
+export async function loadOpenClawPluginsAsync(
+  options: PluginLoadOptions = {},
+): Promise<PluginRegistry> {
+  const steps = loadOpenClawPluginsSteps(options, loaderBindings);
+  let step = steps.next();
+  while (!step.done) {
+    await nextTurn();
+    step = steps.next();
+  }
+  return step.value;
 }
 
 /** Publishes synchronously, then joins every accepted health write before returning to its host. */

@@ -4,9 +4,9 @@ import { html, render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { createAsyncQuestionPresentation } from "./components/chat-async-question.ts";
-import { resolveComposerQuestionPanel } from "./components/chat-composer-question.ts";
+import { resolveComposerQuestionPanel } from "./components/chat-composer-question.tsx";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import "./components/chat-question-card.ts";
+import "./components/chat-question-panel.tsx";
 
 afterEach(() => resetComposerFixture());
 
@@ -59,7 +59,7 @@ it.each(["draft", "focus"])(
     );
     await (container.firstElementChild as HTMLElement & { updateComplete: Promise<unknown> })
       .updateComplete;
-    expect(container.textContent).toContain("Optional · work can continue");
+    expect(container.textContent).not.toContain("Optional · work can continue");
     expect(container.textContent).toContain("1 unanswered question");
     if (editing === "focus") {
       expect(document.activeElement).toBe(textarea);

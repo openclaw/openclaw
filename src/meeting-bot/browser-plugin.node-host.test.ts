@@ -1,5 +1,6 @@
 import type { SpawnSyncReturns } from "node:child_process";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { loadBrowserMeetingPlugins } from "./browser-plugin.test-support.js";
 
 const spawnSync = vi.hoisted(() =>

@@ -848,9 +848,7 @@ func TestMaskMarkdownDocSyntaxPreservesCanonicalNestedBackticks(t *testing.T) {
 		"",
 	}, "\n")
 	state := NewPlaceholderState(source)
-	placeholders := []string{}
-	mapping := map[string]string{}
-	masked := maskMarkdownDocSyntax(source, state.Next, &placeholders, mapping)
+	masked := maskMarkdownDocSyntax(source, state)
 
 	wantLiterals := []string{"`command`", "`` label: `command` ``", "`callback`", "`value`", "`C:\\`"}
 	for _, literal := range wantLiterals {
@@ -864,7 +862,7 @@ func TestMaskMarkdownDocSyntaxPreservesCanonicalNestedBackticks(t *testing.T) {
 		}
 	}
 	maskedLiterals := []string{}
-	for _, value := range mapping {
+	for _, value := range state.mapping {
 		if strings.HasPrefix(value, "`") {
 			maskedLiterals = append(maskedLiterals, value)
 		}
@@ -872,7 +870,7 @@ func TestMaskMarkdownDocSyntaxPreservesCanonicalNestedBackticks(t *testing.T) {
 	if !sameStringMultiset(wantLiterals, maskedLiterals) {
 		t.Fatalf("masked inline literals = %v, want %v", maskedLiterals, wantLiterals)
 	}
-	if restored := unmaskMarkdown(masked, placeholders, mapping); restored != source {
+	if restored := unmaskMarkdown(masked, state.placeholders, state.mapping); restored != source {
 		t.Fatalf("inline-code round trip changed source:\n%s\nwant:\n%s", restored, source)
 	}
 }
@@ -890,9 +888,7 @@ func TestMaskMarkdownDocSyntaxProtectsProductLinksInsideRawHTML(t *testing.T) {
 		"",
 	}, "\n")
 	state := NewPlaceholderState(source)
-	placeholders := []string{}
-	mapping := map[string]string{}
-	masked := maskMarkdownDocSyntax(source, state.Next, &placeholders, mapping)
+	masked := maskMarkdownDocSyntax(source, state)
 
 	if strings.Contains(masked, "[Discord](/channels/discord)") {
 		t.Fatalf("expected protected link %q to be masked:\n%s", "Discord", masked)
@@ -906,7 +902,7 @@ func TestMaskMarkdownDocSyntaxProtectsProductLinksInsideRawHTML(t *testing.T) {
 	if !strings.Contains(masked, "[Render](/guides/pre-render)") {
 		t.Fatalf("expected contextual ordinary-word label to remain translatable:\n%s", masked)
 	}
-	if restored := unmaskMarkdown(masked, placeholders, mapping); restored != source {
+	if restored := unmaskMarkdown(masked, state.placeholders, state.mapping); restored != source {
 		t.Fatalf("protected-link round trip changed source:\n%s\nwant:\n%s", restored, source)
 	}
 }
@@ -916,9 +912,7 @@ func TestMaskMarkdownDocSyntaxKeepsProtectedLinkAssociationOpaque(t *testing.T) 
 
 	source := "Read [Slack](/channels/slack) and nearby Slack setup notes.\n"
 	state := NewPlaceholderState(source)
-	placeholders := []string{}
-	mapping := map[string]string{}
-	masked := maskMarkdownDocSyntax(source, state.Next, &placeholders, mapping)
+	masked := maskMarkdownDocSyntax(source, state)
 
 	if strings.Contains(masked, "[Slack]") || strings.Contains(masked, "/channels/slack") {
 		t.Fatalf("expected protected link label and destination to share one opaque placeholder:\n%s", masked)
@@ -926,10 +920,10 @@ func TestMaskMarkdownDocSyntaxKeepsProtectedLinkAssociationOpaque(t *testing.T) 
 	if !strings.Contains(masked, "nearby Slack setup notes") {
 		t.Fatalf("expected ordinary surrounding product prose to remain visible:\n%s", masked)
 	}
-	if len(placeholders) != 1 || mapping[placeholders[0]] != "[Slack](/channels/slack)" {
-		t.Fatalf("unexpected protected-link placeholder mapping: placeholders=%v mapping=%v", placeholders, mapping)
+	if len(state.placeholders) != 1 || state.mapping[state.placeholders[0]] != "[Slack](/channels/slack)" {
+		t.Fatalf("unexpected protected-link placeholder mapping: placeholders=%v mapping=%v", state.placeholders, state.mapping)
 	}
-	if restored := unmaskMarkdown(masked, placeholders, mapping); restored != source {
+	if restored := unmaskMarkdown(masked, state.placeholders, state.mapping); restored != source {
 		t.Fatalf("protected-link round trip changed source:\n%s\nwant:\n%s", restored, source)
 	}
 }

@@ -1,15 +1,10 @@
 import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
+import pLimit from "p-limit";
 import { WebSocket } from "ws";
 import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import type {
-  WorkerHeartbeatParams,
-  WorkerHeartbeatResponseFrame,
   WorkerHelloOk,
-  WorkerLiveEventParams,
-  WorkerLiveEventResponseFrame,
   WorkerProtocolCloseReason,
-  WorkerTranscriptCommitParams,
-  WorkerTranscriptCommitResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerComputerParams,
@@ -22,17 +17,10 @@ import type {
   WorkerGatewayToolResponseFrame,
   WorkerGatewayToolCancelResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
-import type {
-  WorkerInferenceCancelParams,
-  WorkerInferenceCancelResponseFrame,
-  WorkerInferenceEventFrame,
-  WorkerInferenceStartParams,
-  WorkerInferenceStartResponseFrame,
-  WorkerInferenceTerminalFrame,
-} from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import {
   connectWorkerConnectionAttempt,
@@ -66,20 +54,19 @@ const DEFAULT_RECONNECT_BACKOFF: BackoffPolicy = {
   jitter: 0.1,
 };
 
-const DEFAULT_ADMISSION_TIMEOUT_MS = DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
-type ReadyWaiter = {
-  resolve: (hello: WorkerHelloOk) => void;
-  reject: (error: Error) => void;
-};
-
 export class WorkerConnection {
+  readonly rpc: Pick<
+    WorkerConnectionFrameDispatcher,
+    "request" | "onInferenceEvent" | "onInferenceTerminal"
+  >;
   private stateValue: WorkerConnectionState = { kind: "idle" };
-  private readonly readyWaiters = new Set<ReadyWaiter>();
+  private readiness: Deferred<WorkerHelloOk> | undefined;
   private readonly readyListeners = new Set<(hello: WorkerHelloOk) => void>();
   private readonly stateListeners = new Set<(state: WorkerConnectionState) => void>();
   private readonly frames: WorkerConnectionFrameDispatcher;
+  private readonly gatewayToolSlots = pLimit(WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS);
   private readonly reconnectAbort = new AbortController();
   private readonly exit = createDeferredCore<WorkerConnectionExit>();
   private generation = 0;
@@ -94,7 +81,7 @@ export class WorkerConnection {
   constructor(private readonly options: WorkerConnectionOptions) {
     this.admissionTimeoutMs = resolvePositiveTimeout(
       options.admissionTimeoutMs,
-      DEFAULT_ADMISSION_TIMEOUT_MS,
+      DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
     );
     this.admissionDeadlineMs = resolvePositiveTimeout(
       options.admissionDeadlineMs,
@@ -113,6 +100,7 @@ export class WorkerConnection {
       terminalError: () => this.terminalError(),
       interruptReadySocket: (socket) => this.interruptReadySocket(socket),
     });
+    this.rpc = this.frames;
   }
 
   get state(): WorkerConnectionState {
@@ -144,9 +132,7 @@ export class WorkerConnection {
     if (this.isTerminal()) {
       return Promise.reject(this.terminalError());
     }
-    return new Promise((resolve, reject) => {
-      this.readyWaiters.add({ resolve, reject });
-    });
+    return (this.readiness ??= createDeferredCore<WorkerHelloOk>()).promise;
   }
 
   onReady(listener: (hello: WorkerHelloOk) => void): () => void {
@@ -165,34 +151,12 @@ export class WorkerConnection {
     });
   }
 
-  onInferenceEvent(listener: (frame: WorkerInferenceEventFrame) => void): () => void {
-    return this.frames.onInferenceEvent(listener);
-  }
-
-  onInferenceTerminal(listener: (frame: WorkerInferenceTerminalFrame) => void): () => void {
-    return this.frames.onInferenceTerminal(listener);
-  }
-
   async stop(): Promise<void> {
     this.finishTerminal({ kind: "stopped" });
   }
 
   fence(reason: WorkerFencedReason): void {
     this.finishTerminal({ kind: "fenced", reason });
-  }
-
-  requestHeartbeat(params: WorkerHeartbeatParams): Promise<WorkerHeartbeatResponseFrame> {
-    return this.frames.request("heartbeat", params);
-  }
-
-  requestTranscriptCommit(
-    params: WorkerTranscriptCommitParams,
-  ): Promise<WorkerTranscriptCommitResponseFrame> {
-    return this.frames.request("transcript", params);
-  }
-
-  requestLiveEvent(params: WorkerLiveEventParams): Promise<WorkerLiveEventResponseFrame> {
-    return this.frames.request("live-event", params);
   }
 
   async invokeGatewayTool(
@@ -215,15 +179,16 @@ export class WorkerConnection {
         options.onUpdate?.(payload.result);
       }
     });
-    const request = () => {
-      options.signal?.throwIfAborted();
-      return this.frames.request(
-        "gateway-tool",
-        params,
-        undefined,
-        Math.max(this.requestTimeoutMs, options.timeoutMs ?? 0),
-      );
-    };
+    const request = () =>
+      this.gatewayToolSlots(() => {
+        options.signal?.throwIfAborted();
+        return this.frames.request(
+          "gateway-tool",
+          params,
+          undefined,
+          Math.max(this.requestTimeoutMs, options.timeoutMs ?? 0),
+        );
+      });
     try {
       return await (options.replay
         ? this.requestReplayableOperation(request, options.signal)
@@ -265,19 +230,6 @@ export class WorkerConnection {
         await racePromiseWithAbortSignal(this.waitForReady(), signal);
       }
     }
-  }
-
-  requestInferenceStart(
-    params: WorkerInferenceStartParams,
-    beforeResolve?: (frame: WorkerInferenceStartResponseFrame) => void,
-  ): Promise<WorkerInferenceStartResponseFrame> {
-    return this.frames.request("inference-start", params, beforeResolve);
-  }
-
-  requestInferenceCancel(
-    params: WorkerInferenceCancelParams,
-  ): Promise<WorkerInferenceCancelResponseFrame> {
-    return this.frames.request("inference-cancel", params);
   }
 
   private async connectUntilReady(): Promise<WorkerHelloOk> {
@@ -330,7 +282,11 @@ export class WorkerConnection {
             attempt += 1;
             continue;
           }
-          this.handleAdmissionFailure(error);
+          this.finishTerminal(
+            isFencedCloseReason(error.reason)
+              ? { kind: "fenced", reason: error.reason }
+              : { kind: "failed", error },
+          );
           throw error;
         }
         if (error instanceof WorkerConnectionEndpointError) {
@@ -361,7 +317,9 @@ export class WorkerConnection {
         // Arm before notifying owners so a synchronous stop cancels the heartbeat.
         this.startHeartbeat(hello.policy.heartbeatIntervalMs);
         this.transition({ kind: "ready", hello });
-        this.notifyReady(hello);
+        this.readiness?.resolve(hello);
+        this.readiness = undefined;
+        notifyListeners(this.readyListeners, hello);
       },
       onReadyFrame: (frame, socket) => {
         this.frames.dispatchReadyFrame(frame, socket);
@@ -405,14 +363,6 @@ export class WorkerConnection {
     }
   }
 
-  private handleAdmissionFailure(error: WorkerAdmissionError): void {
-    if (isFencedCloseReason(error.reason)) {
-      this.finishTerminal({ kind: "fenced", reason: error.reason });
-      return;
-    }
-    this.finishTerminal({ kind: "failed", error });
-  }
-
   private startHeartbeat(intervalMs: number): void {
     this.stopHeartbeat();
     this.heartbeatTimer = setTimeout(() => {
@@ -428,9 +378,9 @@ export class WorkerConnection {
     }
     const intervalMs = this.stateValue.hello.policy.heartbeatIntervalMs;
     try {
-      const response = await this.requestHeartbeat({
+      const response = await this.frames.request("heartbeat", {
         sentAtMs: Date.now(),
-        status: this.options.heartbeatStatus?.() ?? "ready",
+        status: "ready",
       });
       if (response.ok) {
         if (response.payload.ownerEpoch !== this.options.connectParams.admission.ownerEpoch) {
@@ -472,15 +422,6 @@ export class WorkerConnection {
     socket.terminate();
   }
 
-  private notifyReady(hello: WorkerHelloOk): void {
-    const waiters = [...this.readyWaiters];
-    this.readyWaiters.clear();
-    for (const waiter of waiters) {
-      waiter.resolve(hello);
-    }
-    notifyListeners(this.readyListeners, hello);
-  }
-
   private transition(state: WorkerConnectionState): void {
     this.stateValue = state;
     notifyListeners(this.stateListeners, state);
@@ -509,7 +450,8 @@ export class WorkerConnection {
     this.reconnectAbort.abort(error);
     this.stopHeartbeat();
     this.frames.rejectPending(error);
-    this.rejectReadyWaiters(error);
+    this.readiness?.reject(error);
+    this.readiness = undefined;
     const code = state.kind === "stopped" ? 1000 : 1008;
     const reason =
       state.kind === "fenced"
@@ -518,14 +460,6 @@ export class WorkerConnection {
           ? "worker stopped"
           : "invalid-frame";
     socket?.close(code, reason);
-  }
-
-  private rejectReadyWaiters(error: Error): void {
-    const waiters = [...this.readyWaiters];
-    this.readyWaiters.clear();
-    for (const waiter of waiters) {
-      waiter.reject(error);
-    }
   }
 
   private failAdmissionDeadline(attempts: number, lastFailure: Error | undefined): Error {

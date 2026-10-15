@@ -10,7 +10,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import { discoverConfiguredPluginLoadPaths, discoverOpenClawPlugins } from "./discovery.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
@@ -35,7 +34,6 @@ import {
   withPluginCache,
 } from "./plugin-cache.js";
 import { PluginInstance } from "./plugin-instance.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { preparePluginModule } from "./plugin-module-loader-cache.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -154,10 +152,9 @@ function createRetargetedWindowsRootFixture(prefix: string, basename: string) {
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
   const observedRoot = path.join(observedParent, "plugin");
-  const originalLstat = fs.lstatSync;
-  let rootObservations = 0;
-  vi.spyOn(fs, "lstatSync").mockImplementation(((filePath, options) => {
-    if (filePath === observedRoot && ++rootObservations === 2) {
+  const originalRealpath = fs.realpathSync;
+  vi.spyOn(fs, "realpathSync").mockImplementation(((filePath, options) => {
+    if (filePath === observedRoot) {
       fs.unlinkSync(observedParent);
       fs.symlinkSync(
         replacementContainer,
@@ -165,8 +162,8 @@ function createRetargetedWindowsRootFixture(prefix: string, basename: string) {
         process.platform === "win32" ? "junction" : "dir",
       );
     }
-    return originalLstat(filePath, options as never);
-  }) as typeof fs.lstatSync);
+    return originalRealpath(filePath, options as never);
+  }) as typeof fs.realpathSync);
   return {
     trustedAlias,
     observedPath: path.join(observedRoot, basename),
@@ -175,6 +172,80 @@ function createRetargetedWindowsRootFixture(prefix: string, basename: string) {
 }
 
 describe("plugin package facts", () => {
+  it.skipIf(process.platform === "win32")(
+    "reuses checked entry canonical paths until metadata invalidation",
+    () => {
+      const root = fs.realpathSync(tempDirs.make("plugin-checked-realpath-"));
+      const source = path.join(root, "index.js");
+      fs.writeFileSync(source, "export default {};\n");
+      const nativeRealpath = vi.spyOn(fs.realpathSync, "native");
+      const cache = createPluginCache();
+      withPluginCache(cache, () => {
+        expect(
+          checkPluginCacheEntry({
+            rootDir: root,
+            relativePath: "index.js",
+            rejectHardlinks: true,
+          }),
+        ).toMatchObject({ ok: true, path: source, exists: true });
+        nativeRealpath.mockClear();
+        expect(pluginCacheRealpathSync(source)).toBe(source);
+        expect(pluginCacheRealpathSync(source, true)).toBe(source);
+        expect(nativeRealpath).not.toHaveBeenCalled();
+
+        fs.unlinkSync(source);
+        invalidatePluginCacheMetadata(cache);
+        expect(pluginCacheRealpathSync(source, true)).toBeNull();
+        expect(pluginCacheRealpathSync(source)).toBeNull();
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "shares metadata ancestors without trusting them at the file-open boundary",
+    () => {
+      const root = fs.realpathSync(tempDirs.make("plugin-metadata-ancestors-"));
+      const icons = path.join(root, "assets");
+      const firstSource = path.join(icons, "0.svg");
+      const outside = fs.realpathSync(tempDirs.make("plugin-metadata-outside-"));
+      fs.mkdirSync(icons);
+      const sources = Array.from({ length: 8 }, (_, i) => path.join(icons, `${i}.svg`));
+      for (const source of sources) {
+        fs.writeFileSync(source, "<svg/>\n");
+      }
+      fs.writeFileSync(path.join(outside, "0.svg"), "outside\n");
+      const nativeRealpath = vi.spyOn(fs.realpathSync, "native");
+      const realpath = vi.spyOn(fs, "realpathSync");
+      const lstat = vi.spyOn(fs, "lstatSync");
+      const cache = createPluginCache();
+      withPluginCache(cache, () => {
+        for (const source of sources) {
+          expect(pluginCacheRealpathSync(source)).toBe(source);
+          expect(pluginCacheRealpathSync(source)).toBe(source);
+          expect(lstat.mock.calls.filter(([filePath]) => filePath === source)).toHaveLength(1);
+        }
+        // A common ancestor needs filesystem resolution; each sibling must not walk it again.
+        expect(realpath.mock.calls.length + nativeRealpath.mock.calls.length).toBeLessThanOrEqual(
+          1,
+        );
+
+        fs.renameSync(icons, path.join(root, "previous-assets"));
+        fs.symlinkSync(outside, icons, "dir");
+        expect(pluginCacheRealpathSync(firstSource)).toBe(firstSource);
+        expect(
+          readPluginCacheFile({
+            rootDir: root,
+            relativePath: "assets/0.svg",
+            rejectHardlinks: true,
+          }).ok,
+        ).toBe(false);
+
+        invalidatePluginCacheMetadata(cache);
+        expect(pluginCacheRealpathSync(firstSource)).toBe(path.join(outside, "0.svg"));
+      });
+    },
+  );
+
   it("preserves JavaScript realpath identities for canonical paths, aliases, and traversal", () => {
     const root = fs.realpathSync(tempDirs.make("plugin-realpath-"));
     const packageDir = path.join(root, "package");
@@ -228,61 +299,28 @@ describe("plugin package facts", () => {
     });
   });
 
-  it("proves aliased root containment by physical directory identity", () => {
-    const { parent, alias, source } = createWindowsRootAliasFixture(
-      "plugin-identity-containment-",
-      path.join("nested", "plugin.js"),
+  it("rejects a retargeted observed root during plugin cache entry check", () => {
+    const { trustedAlias, observedPath, openSync } = createRetargetedWindowsRootFixture(
+      "plugin-cache-alias-race-",
+      "package.json",
     );
-    const external = path.join(parent, "external.js");
-    fs.writeFileSync(external, "export default {};\n");
+    const relativePath = path.relative(trustedAlias, observedPath);
 
-    expect(isPathInside(alias, source)).toBe(true);
-    expect(isPathInside(alias, external)).toBe(false);
-  });
+    const result = withPluginCache(createPluginCache(), () =>
+      checkPluginCacheEntry({
+        rootDir: trustedAlias,
+        relativePath,
+        rejectHardlinks: true,
+      }),
+    );
 
-  it("opens a runtime entry when Windows reports the child through another root alias", () => {
-    const { alias, source } = createWindowsRootAliasFixture("plugin-runtime-alias-open-");
-
-    const opened = openPluginRootFileSync({
-      rootPath: alias,
-      filePath: source,
-      rejectHardlinks: false,
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "validation",
+      error: { code: "path-mismatch" },
     });
-
-    expect(opened.ok).toBe(true);
-    if (opened.ok) {
-      expect(opened.path).toBe(source);
-      fs.closeSync(opened.fd);
-    }
+    expect(openSync).not.toHaveBeenCalled();
   });
-
-  it.each(["entry check", "file read"] as const)(
-    "rejects a retargeted observed root during plugin cache %s",
-    (operation) => {
-      const { trustedAlias, observedPath, openSync } = createRetargetedWindowsRootFixture(
-        "plugin-cache-alias-race-",
-        "package.json",
-      );
-      const relativePath = path.relative(trustedAlias, observedPath);
-
-      const result = withPluginCache(createPluginCache(), () =>
-        operation === "entry check"
-          ? checkPluginCacheEntry({
-              rootDir: trustedAlias,
-              relativePath,
-              rejectHardlinks: true,
-            })
-          : readPluginCacheFile({
-              rootDir: trustedAlias,
-              relativePath,
-              rejectHardlinks: true,
-            }),
-      );
-
-      expect(result.ok).toBe(false);
-      expect(openSync).not.toHaveBeenCalled();
-    },
-  );
   it("reads an aliased Windows plugin root through the descriptor boundary", () => {
     const { parent, root, alias, source } = createWindowsRootAliasFixture(
       "plugin-identity-read-",
@@ -291,6 +329,18 @@ describe("plugin package facts", () => {
     const external = path.join(parent, "external.js");
     fs.writeFileSync(external, "external\n");
     fs.symlinkSync(external, path.join(root, "external-link.js"));
+    expect(isPathInside(alias, source)).toBe(true);
+    expect(isPathInside(alias, external)).toBe(false);
+    const opened = openPluginRootFileSync({
+      rootPath: alias,
+      filePath: source,
+      rejectHardlinks: false,
+    });
+    expect(opened.ok).toBe(true);
+    if (opened.ok) {
+      expect(opened.path).toBe(source);
+      fs.closeSync(opened.fd);
+    }
 
     withPluginCache(createPluginCache(), () => {
       const file = readPluginCacheFile({
@@ -310,41 +360,26 @@ describe("plugin package facts", () => {
     });
   });
 
-  it("preserves a trusted Windows junction at the plugin root", () => {
-    const { root, alias } = createWindowsRootAliasFixture("plugin-junction-root-");
+  it.each(["junction", "short root"] as const)(
+    "checks a Windows entry with an admitted %s alias",
+    (kind) => {
+      const { root, alias } = createWindowsRootAliasFixture("plugin-root-alias-entry-");
+      withPluginCache(createPluginCache(), () => {
+        expect(
+          checkPluginCacheEntry({
+            rootDir: kind === "junction" ? alias : root,
+            rootRealPath: kind === "junction" ? root : alias,
+            relativePath: "plugin.js",
+            rejectHardlinks: true,
+          }),
+        ).toMatchObject({ ok: true, exists: true });
+      });
+    },
+  );
 
-    withPluginCache(createPluginCache(), () => {
-      expect(
-        checkPluginCacheEntry({
-          rootDir: alias,
-          rootRealPath: root,
-          relativePath: "plugin.js",
-          rejectHardlinks: true,
-        }),
-      ).toMatchObject({ ok: true, exists: true });
-    });
-  });
-
-  it("reopens a long-spelled child beneath an admitted short Windows root", () => {
-    const { root, alias } = createWindowsRootAliasFixture("plugin-short-root-entry-");
-
-    withPluginCache(createPluginCache(), () => {
-      expect(
-        checkPluginCacheEntry({
-          // Mirrors Windows discovery retaining the long child spelling while
-          // native realpath preserves the trusted root's 8.3 alias.
-          rootDir: root,
-          rootRealPath: alias,
-          relativePath: "plugin.js",
-          rejectHardlinks: true,
-        }),
-      ).toMatchObject({ ok: true, exists: true });
-    });
-  });
-
-  it.each(["native", "javascript"] as const)(
-    "reuses the provider catalog source resolved by the %s filesystem path",
-    (resolver) => {
+  it.each(["regular", "symlink"] as const)(
+    "reuses the provider catalog source resolved from a %s file",
+    (kind) => {
       const dir = fs.realpathSync(tempDirs.make("plugin-provider-source-"));
       const providerDiscoverySource = path.join(dir, "provider-discovery.js");
       fs.writeFileSync(
@@ -356,23 +391,18 @@ describe("plugin package facts", () => {
           configSchema: { type: "object" },
         }),
       );
-      fs.writeFileSync(providerDiscoverySource, "export default {};\n", "utf8");
-      const nativeRealpath = fs.realpathSync.native;
-      const nativeRealpathSpy = vi.spyOn(fs.realpathSync, "native");
-      if (resolver === "javascript") {
-        nativeRealpathSpy.mockImplementation((filePath, options) => {
-          // Exercise metadata fallback without disabling fs-safe's native
-          // canonicalization when it admits the manifest descriptor.
-          if (filePath === providerDiscoverySource) {
-            throw new Error("native realpath unavailable");
-          }
-          return nativeRealpath(filePath, options);
-        });
+      if (kind === "symlink") {
+        const target = path.join(dir, "catalog.js");
+        fs.writeFileSync(target, "export default {};\n", "utf8");
+        fs.symlinkSync(target, providerDiscoverySource);
+      } else {
+        fs.writeFileSync(providerDiscoverySource, "export default {};\n", "utf8");
       }
       const realpathSpy = vi.spyOn(fs, "realpathSync");
-      const resolverSpy = resolver === "native" ? nativeRealpathSpy : realpathSpy;
+      const lstatSpy = vi.spyOn(fs, "lstatSync");
 
       withPluginCache(createPluginCache(), () => {
+        let firstReadCounts: number[] | undefined;
         for (let build = 0; build < 2; build += 1) {
           const registry = loadPluginManifestRegistryCore({
             installRecords: {},
@@ -386,43 +416,16 @@ describe("plugin package facts", () => {
             ],
           });
           expect(registry.plugins[0]?.providerDiscoverySource).toBe(providerDiscoverySource);
-          expect(
-            resolverSpy.mock.calls.filter(([filePath]) => filePath === providerDiscoverySource),
-          ).toHaveLength(1);
+          const readCounts = [realpathSpy, lstatSpy].map(
+            (spy) =>
+              spy.mock.calls.filter(([filePath]) => filePath === providerDiscoverySource).length,
+          );
+          firstReadCounts ??= readCounts;
+          expect(readCounts).toEqual(firstReadCounts);
         }
       });
     },
   );
-
-  it("withPluginLifecycleLease refreshes enclosing operation facts while retaining its callbacks", async () => {
-    const root = tempDirs.make("plugin-lease-parent-");
-    const filePath = path.join(root, "catalog.json");
-    const databasePath = path.join(root, "state.sqlite");
-    fs.writeFileSync(filePath, '{"name":"before-install"}');
-    try {
-      await using cache = createPluginCache();
-      const instance = new PluginInstance("setup-owner");
-      cache.instances.add(instance);
-      const afterWrite = instance.wrap(() => "post-write usable");
-      await withPluginCache(cache, async () => {
-        expect(readPluginCacheJsonFile(filePath)).toMatchObject({
-          ok: true,
-          value: { name: "before-install" },
-        });
-        await withPluginLifecycleLease({ path: databasePath }, async () => {
-          fs.writeFileSync(filePath, '{"name":"after-install"}');
-          clearPluginMetadataLifecycleCaches();
-        });
-        expect(readPluginCacheJsonFile(filePath)).toMatchObject({
-          ok: true,
-          value: { name: "after-install" },
-        });
-        expect(afterWrite()).toBe("post-write usable");
-      });
-    } finally {
-      await closeOpenClawStateDatabaseByPathAsync(databasePath);
-    }
-  });
 
   it.each(["regular", "boundary"] as const)(
     "shares missing %s files across reader policies until the owner changes",
@@ -727,47 +730,6 @@ describe("plugin package facts", () => {
   );
 });
 
-it("lets the last cache borrower own retirement after the requesting scope closes", async () => {
-  const requester = new AsyncWorkScope();
-  const borrower = new AsyncWorkScope();
-  const cache = createPluginCache();
-  const instance = new PluginInstance("cache-borrower");
-  cache.instances.add(instance);
-  const release = retainPluginCache(cache);
-  const entered = createDeferredCore();
-  const finish = createDeferredCore();
-  const cleaned = vi.fn();
-  instance.lifecycle.onDispose(async () => {
-    entered.resolve();
-    await finish.promise;
-    cleaned();
-  });
-  let retirement: ReturnType<typeof retirePluginCache> | undefined;
-  await requester.track(() => {
-    retirement = retirePluginCache(cache);
-    void retirement.catch(() => {});
-  });
-  await requester.drain();
-  let closed = false;
-  const released = borrower.track(release);
-  const drain = borrower.drain().then(() => {
-    closed = true;
-  });
-  try {
-    await Promise.race([entered.promise, retirement]);
-    expect(closed).toBe(false);
-    finish.resolve();
-    await expect(retirement).resolves.toMatchObject({ failures: [] });
-    await drain;
-    expect(cleaned).toHaveBeenCalledOnce();
-    expect(closed).toBe(true);
-  } finally {
-    release();
-    finish.resolve();
-    await Promise.allSettled([retirement, released, drain]);
-  }
-});
-
 it.each([false, true])(
   "owns cache cleanup when retirement runs in a closed request scope (borrowed: %s)",
   async (borrowed) => {
@@ -808,7 +770,6 @@ it("retires a cache released by a borrower captured before package replacement",
         {
           references: Set<object>;
           settled: { resolve: () => void };
-          beginRetirement?: () => void;
         }
       >(),
   );
@@ -843,8 +804,6 @@ it("retires a cache released by a borrower captured before package replacement",
     expect(cleaned).toHaveBeenCalledOnce();
   } finally {
     release();
-    // Unstick the broken implementation's unpublished cleanup after the regression fails.
-    retained.beginRetirement?.();
     finish.resolve();
     await retirement.catch(() => {});
   }

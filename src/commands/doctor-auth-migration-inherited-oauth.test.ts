@@ -80,7 +80,12 @@ describe("auth profile migration with an inherited main OAuth credential", () =>
     );
 
     const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
-      cfg: { agents: { list: [{ id: "gadget", agentDir: secondaryAgentDir }] } },
+      cfg: {
+        agents: {
+          defaults: { authInheritance: { agentId: "main" } },
+          entries: { gadget: { agentDir: secondaryAgentDir } },
+        },
+      },
       prompter: { confirmAutoFix: async () => true },
       env: state.env,
       now: () => Date.parse("2026-07-26T12:00:00.000Z"),

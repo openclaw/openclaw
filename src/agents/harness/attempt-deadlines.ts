@@ -18,6 +18,8 @@ type Deadline = {
 /** Tracks execution and local settlement against their original absolute deadlines. */
 export function createAgentHarnessAttemptDeadlineController(params: {
   startedAtMs: number;
+  /** Captured alongside startedAtMs, before asynchronous attempt preparation. */
+  startedAtMonotonicMs: number;
   timeoutMs: number;
   settlementTimeoutMs: number;
   signal: AbortSignal;
@@ -32,21 +34,26 @@ export function createAgentHarnessAttemptDeadlineController(params: {
   const armDeadline = (next: Deadline) => {
     clearTimeout(timer);
     deadline = next;
+    // Queue receipts remain epoch-based; only execution elapsed time is monotonic.
     const deadlineAtMs = next.startedAtMs + next.timeoutMs;
     params.onDeadlineChanged?.({ kind: "bounded", deadlineAtMs });
+    const nowMs = next.kind === "execution" ? performance.now() : Date.now();
+    const startedMs = next.kind === "execution" ? params.startedAtMonotonicMs : next.startedAtMs;
+    const remainingMs = next.timeoutMs - (nowMs - startedMs);
     timer = setTimeout(
       () => {
         if (deadline !== next || params.signal.aborted) {
           return;
         }
         deadline = { kind: "closed" };
+        const firedNowMs = next.kind === "execution" ? performance.now() : Date.now();
         params.onTimeout({
           kind: next.kind,
-          elapsedMs: Math.max(0, Date.now() - next.startedAtMs),
+          elapsedMs: Math.max(0, firedNowMs - startedMs),
           timeoutMs: next.timeoutMs,
         });
       },
-      resolveTimerTimeoutMs(Math.max(1, deadlineAtMs - Date.now()), 1),
+      resolveTimerTimeoutMs(Math.max(1, remainingMs), 1),
     );
     timer.unref?.();
   };
@@ -72,7 +79,8 @@ export function createAgentHarnessAttemptDeadlineController(params: {
   return {
     ownsExecutionWait: () =>
       deadline.kind === "unlimited" ||
-      (deadline.kind === "execution" && Date.now() < deadline.startedAtMs + deadline.timeoutMs),
+      (deadline.kind === "execution" &&
+        performance.now() < params.startedAtMonotonicMs + deadline.timeoutMs),
     beginSettlement: (startedAtMs: number) => {
       if (deadline.kind === "closed" || deadline.kind === "settlement") {
         return;

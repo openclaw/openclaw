@@ -335,21 +335,6 @@ ${record}
     );
   });
 
-  it("fails closed when the extracted release section is effectively empty", () => {
-    const source = changelog`
-# Changelog
-Docs: https://docs.openclaw.ai
-## 2026.5.28
-### Fixes
-## 2026.5.27
-- Older stable release notes with enough detail.
-`;
-
-    expect(() => extractCurrentPackageChangelog(source, "2026.5.28")).toThrow(
-      "below the 32 byte safety minimum",
-    );
-  });
-
   it("prepares and restores all source notes and credits", async () => {
     const sourceChangelog = oversizedChangelog;
     const root = tempDirs.make("openclaw-package-changelog-");

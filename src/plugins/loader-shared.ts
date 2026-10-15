@@ -46,8 +46,6 @@ import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   captureActivePluginRegistrySnapshot,
   commitStagedPluginRegistry,
-  getActivePluginRegistry,
-  getActivePluginRegistryVersion,
   rollbackStagedPluginRegistry,
   stageActivePluginRegistry,
 } from "./runtime.js";
@@ -268,39 +266,23 @@ function createManifestPluginRecord(params: {
 }): PluginRecord {
   const { candidate, manifestRecord } = params;
   const record = createPluginRecord({
-    id: manifestRecord.id,
+    ...manifestRecord,
     nativeSessionCatalog:
       manifestRecord.setup?.nativeSessionCatalog ??
       shippedNativeSessionCatalogs.find(({ pluginId }) => pluginId === manifestRecord.id),
-    name: manifestRecord.name ?? manifestRecord.id,
-    description: manifestRecord.description,
-    packageVersion: manifestRecord.packageVersion,
-    version: manifestRecord.version,
     builtWithOpenClawVersion: normalizeOptionalString(
       candidate.packageManifest?.build?.openclawVersion,
     ),
-    packageName: manifestRecord.packageName,
-    format: manifestRecord.format,
-    bundleFormat: manifestRecord.bundleFormat,
-    bundleCapabilities: manifestRecord.bundleCapabilities,
     source: candidate.source,
     rootDir: candidate.rootDir,
     origin: candidate.origin,
     workspaceDir: candidate.workspaceDir,
-    trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
-    trust: manifestRecord.trust,
     enabled: params.enabled,
     compat: collectPluginManifestCompatCodes(manifestRecord),
     activationState: params.activationState,
-    syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
     channelIds: manifestRecord.channels,
     providerIds: manifestRecord.providers,
     configSchema: Boolean(manifestRecord.configSchema),
-    contracts: manifestRecord.contracts,
-    dashboard: manifestRecord.dashboard,
-    controlUi: manifestRecord.controlUi,
-    uiCapabilities: manifestRecord.uiCapabilities,
-    mcpServers: manifestRecord.mcpServers,
   });
   if (!params.shouldLoadModules) {
     record.cliBackendIds = [
@@ -397,7 +379,7 @@ export function preparePluginLoadRecord(params: {
   record.configJsonSchema = manifestRecord.configSchema;
   // Manifest ownership survives rollback of executable registrations.
   record.commandAliases = manifestRecord.commandAliases;
-  return { pluginId, policyId, isDreamingSidecar, activationState, enableState, entry, record };
+  return { pluginId, isDreamingSidecar, activationState, enableState, entry, record };
 }
 
 export function maybeThrowOnPluginLoadError(
@@ -440,60 +422,28 @@ export function activatePluginRegistry(
   const activeSnapshot = captureActivePluginRegistrySnapshot();
   const retainedRegistry = previousRegistry ?? activeSnapshot.activeRegistry;
   const previousHookRegistry = getGlobalPluginRegistry();
-  let stagedVersion: number | undefined;
-  const isCurrentStage = () =>
-    stagedVersion !== undefined &&
-    getActivePluginRegistry() === registry &&
-    getActivePluginRegistryVersion() === stagedVersion;
+  let activationFailed = false;
   try {
-    // Install the complete bundle before hooks, but never resume a displaced activation.
-    stagedVersion = stageActivePluginRegistry(
-      registry,
-      cacheKey,
-      runtimeSubagentMode,
-      workspaceDir,
-    );
-    if (!isCurrentStage()) {
-      throw new Error("Plugin registry activation was superseded");
-    }
-    const activationAuthority = trackActivationCleanup
-      ? capturePluginLifecycleAuthority(registry)
-      : undefined;
+    // Registry activation is synchronous; recursive activation from callbacks is best effort.
+    stageActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
+    const activationAuthority = capturePluginLifecycleAuthority(registry);
     initializeGlobalHookRunner(registry);
-    activateContextEngineRegistrations(
-      registry,
-      trackActivationCleanup
-        ? {
-            trackCleanup: trackActivationCleanup,
-            assertCurrent: () => {
-              // A peer Gateway can change the process projection while this owner stays live.
-              if (stagedVersion === undefined || !activationAuthority?.()) {
-                throw new Error("Plugin registry activation was superseded");
-              }
-            },
-          }
-        : undefined,
-    );
-    commitStagedPluginRegistry(retainedRegistry, registry);
-    if (!isCurrentStage()) {
-      throw new Error("Plugin registry activation was superseded");
-    }
-  } catch (error) {
-    const rollbackCurrentStage = isCurrentStage();
-    // Cached registry rollback can keep its epoch; this failed attempt still loses authority.
-    stagedVersion = undefined;
-    if (rollbackCurrentStage) {
-      const rollbackVersion = rollbackStagedPluginRegistry(activeSnapshot, retainedRegistry);
-      if (
-        getActivePluginRegistry() === activeSnapshot.activeRegistry &&
-        getActivePluginRegistryVersion() === rollbackVersion
-      ) {
-        if (previousHookRegistry) {
-          initializeGlobalHookRunner(previousHookRegistry);
-        } else {
-          resetGlobalHookRunner();
+    void activateContextEngineRegistrations(registry, {
+      trackCleanup: (completion) => trackActivationCleanup?.(completion),
+      assertCurrent: () => {
+        if (activationFailed || !activationAuthority?.()) {
+          throw new Error("Plugin registry activation was superseded");
         }
-      }
+      },
+    });
+    commitStagedPluginRegistry(retainedRegistry, registry);
+  } catch (error) {
+    activationFailed = true;
+    rollbackStagedPluginRegistry(activeSnapshot, retainedRegistry);
+    if (previousHookRegistry) {
+      initializeGlobalHookRunner(previousHookRegistry);
+    } else {
+      resetGlobalHookRunner();
     }
     throw error;
   }

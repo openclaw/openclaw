@@ -125,20 +125,6 @@ export function buildInboundMediaUriFromPath(source: string): string | undefined
   }
 }
 
-async function resolveInboundMediaUri(
-  normalizedSource: string,
-): Promise<InboundMediaReference | null> {
-  const uri = parseInboundMediaUri(normalizedSource);
-  if (!uri) {
-    return null;
-  }
-  return {
-    ...uri,
-    physicalPath: await resolveInboundMediaPath(uri.id, uri.normalizedSource),
-    sourceType: "uri",
-  };
-}
-
 /** Rewrites inbound media-store URIs to sandbox-relative paths for staged agent inputs. */
 export function resolveMediaReferenceSandboxPath(
   source: string,
@@ -164,9 +150,13 @@ export async function resolveInboundMediaReference(
     return null;
   }
 
-  const uriSource = await resolveInboundMediaUri(normalizedSource);
-  if (uriSource) {
-    return uriSource;
+  const uri = parseInboundMediaUri(normalizedSource);
+  if (uri) {
+    return {
+      ...uri,
+      physicalPath: await resolveInboundMediaPath(uri.id, uri.normalizedSource),
+      sourceType: "uri",
+    };
   }
 
   const localPath = maybeLocalPathFromSource(normalizedSource);

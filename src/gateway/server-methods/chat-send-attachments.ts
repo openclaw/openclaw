@@ -11,8 +11,10 @@ import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
-import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { retainsUserTurnTranscriptMedia } from "../../sessions/user-turn-transcript-media.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import { DEVICE_FOLDER_ATTACHMENTS_UNSUPPORTED } from "../../worker/node-workspace-protocol.js";
 import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
 import {
   discardPreparedInboundMedia,
@@ -23,32 +25,26 @@ import {
   stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveGatewayModelSupportsImages } from "../session-utils.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
-import {
-  explicitOriginTargetsAcpSession,
-  explicitOriginTargetsPluginBinding,
-} from "./chat-origin-routing.js";
+import { resolveExplicitOriginBindingTargets } from "./chat-origin-routing.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-
-function isPdfOffloadedRef(ref: OffloadedRef): boolean {
-  const mime = ref.mimeType.trim().toLowerCase();
-  if (mime === "application/pdf" || mime.endsWith("+pdf")) {
-    return true;
-  }
-  return path.extname(ref.path.split(/[?#]/u)[0] ?? "").toLowerCase() === ".pdf";
-}
 
 // Managed inbound PDFs can be read host-side from the media-store root, even
 // for locked-down agents, so sandbox staging may safely fall back to that path.
 function isManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
-  if (!isPdfOffloadedRef(ref)) {
+  const mime = ref.mimeType.trim().toLowerCase();
+  if (
+    mime !== "application/pdf" &&
+    !mime.endsWith("+pdf") &&
+    path.extname(ref.path.split(/[?#]/u)[0] ?? "").toLowerCase() !== ".pdf"
+  ) {
     return false;
   }
   try {
@@ -187,19 +183,15 @@ async function prestageMediaPathOffloads(params: {
     const stagedMedia = stagingCtx.media ?? [];
     // Preserve request order while mixing sandbox-relative paths with managed
     // host paths used by pass-through or fallback PDFs.
-    const resolvedByRef = new Map<OffloadedRef, { path: string; mimeType: string }>();
-    refsToStage.forEach((ref, index) => {
-      resolvedByRef.set(ref, {
-        path: stagedMedia[index]?.path ?? ref.path,
-        mimeType: stagedMedia[index]?.contentType ?? ref.mimeType,
-      });
-    });
+    const resolvedByRef = new Map(
+      refsToStage.map((ref, index) => [ref, stagedMedia[index]] as const),
+    );
     return mediaPathRefs.map((ref) => {
-      const resolved = resolvedByRef.get(ref) ?? { path: ref.path, mimeType: ref.mimeType };
+      const resolved = resolvedByRef.get(ref);
       return {
-        path: resolved.path,
+        path: resolved?.path ?? ref.path,
         url: ref.mediaRef,
-        contentType: resolved.mimeType,
+        contentType: resolved?.contentType ?? ref.mimeType,
         fileName: ref.label,
         workspaceDir: sandbox.workspaceDir,
       };
@@ -249,20 +241,28 @@ export async function prepareChatSendAttachments(params: {
   let imageOrder: Awaited<ReturnType<typeof parseMessageWithAttachments>>["imageOrder"] = [];
   let offloadedRefs: OffloadedRef[] = [];
   let mediaPathOffloads: MediaFact[] = [];
-  const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(explicitOrigin);
+  let explicitOriginTargetsPlugin = false;
   let prepareAttachmentsMs: number | undefined;
 
-  if (normalizedAttachments.length > 0) {
-    const prepareAttachmentsStartedAtMs = performance.now();
-    try {
+  try {
+    const explicitOriginTargets = await resolveExplicitOriginBindingTargets(explicitOrigin);
+    assertInputCurrent();
+    explicitOriginTargetsPlugin = explicitOriginTargets.plugin;
+
+    if (normalizedAttachments.length > 0) {
+      // Refuse before parsing or persistence; device folders cannot receive staged files.
+      if (
+        (admission.initialSessionEntry ?? admission.admittedSessionEntry ?? session.entry)
+          ?.deviceFolder
+      ) {
+        throw new Error(DEVICE_FOLDER_ATTACHMENTS_UNSUPPORTED);
+      }
+      const prepareAttachmentsStartedAtMs = performance.now();
       await measureDiagnosticsTimelineSpan(
         "gateway.chat_send.prepare_attachments",
         async () => {
           const imageSupport: { value: boolean | undefined } = {
-            value:
-              explicitOriginTargetsAcpSession(explicitOrigin) || explicitOriginTargetsPlugin
-                ? true
-                : undefined,
+            value: explicitOriginTargets.acp || explicitOriginTargetsPlugin ? true : undefined,
           };
           const resolveSupportsImages = async (): Promise<boolean> => {
             imageSupport.value ??= await resolveGatewayModelSupportsImages({
@@ -298,10 +298,12 @@ export async function prepareChatSendAttachments(params: {
               stagingEntry.skillsSnapshot?.librarySelections)
             : request.systemInputProvenance
               ? undefined
-              : prepareSkillLibrarySessionCreation(
-                  client,
-                  context.getRuntimeConfig ?? cfg,
-                  resolveOperatorSessionCreation(client),
+              : (
+                  await prepareSkillLibrarySessionCreation(
+                    client,
+                    context.getRuntimeConfig ?? cfg,
+                    resolveOperatorSessionCreation(client),
+                  )
                 ).skillLibrarySelections;
           mediaPathOffloads = await prestageMediaPathOffloads({
             offloadedRefs,
@@ -330,38 +332,36 @@ export async function prepareChatSendAttachments(params: {
       prepareAttachmentsMs = roundedChatSendTimingMs(
         performance.now() - prepareAttachmentsStartedAtMs,
       );
-    } catch (err) {
-      const aborted =
-        activeRunAbort.controller.signal.aborted &&
-        (context.chatRunState.hasAbortMarker(clientRunId) ||
-          Object.is(err, activeRunAbort.controller.signal.reason));
-      // Retire failed-run cancellation before cleanup yields, but retain work
-      // admission until deletion finishes so a late abort cannot replace the error.
-      if (!aborted) {
-        activeRunAbort.cleanup();
-      }
-      await discardPreparedInboundMedia(offloadedRefs);
-      if (aborted) {
-        finishAbortedChatSend();
-        return { ok: false as const };
-      }
-      cleanupAdmittedRun();
-      clearAgentRunContext(clientRunId, lifecycleGeneration);
-      logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
-      respond(
-        false,
-        undefined,
-        err instanceof SessionMutationAuthorizationChangedError
-          ? err.error
-          : errorShape(
-              err instanceof MediaOffloadError
-                ? ErrorCodes.UNAVAILABLE
-                : ErrorCodes.INVALID_REQUEST,
-              String(err),
-            ),
-      );
+    }
+  } catch (err) {
+    const aborted =
+      activeRunAbort.controller.signal.aborted &&
+      (context.chatRunState.hasAbortMarker(clientRunId) ||
+        Object.is(err, activeRunAbort.controller.signal.reason));
+    // Retire failed-run cancellation before cleanup yields, but retain work
+    // admission until deletion finishes so a late abort cannot replace the error.
+    if (!aborted) {
+      activeRunAbort.cleanup();
+    }
+    await discardPreparedInboundMedia(offloadedRefs);
+    if (aborted) {
+      finishAbortedChatSend();
       return { ok: false as const };
     }
+    cleanupAdmittedRun();
+    clearAgentRunContext(clientRunId, lifecycleGeneration);
+    logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
+    respond(
+      false,
+      undefined,
+      err instanceof SessionMutationAuthorizationChangedError
+        ? err.error
+        : errorShape(
+            err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+            String(err),
+          ),
+    );
+    return { ok: false as const };
   }
   return {
     ok: true as const,
@@ -390,7 +390,7 @@ export function bindChatSendPreparedMediaCustody(params: {
   let recorder: UserTurnTranscriptRecorder | undefined;
   // Dispatch owns persistence after the ACK disarms this cleanup.
   params.admission.setDiscardAbandonedPreparedMedia(() => {
-    if (!recorder?.hasPersisted() && !recorder?.getPendingInputMessage?.()) {
+    if (!recorder || !retainsUserTurnTranscriptMedia(recorder)) {
       void discardPreparedInboundMedia(params.attachments.offloadedRefs);
     }
   });

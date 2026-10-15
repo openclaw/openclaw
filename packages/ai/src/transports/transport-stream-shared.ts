@@ -6,6 +6,7 @@ import type {
   Usage,
 } from "@openclaw/llm-core";
 import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { racePromiseWithAbortSignal } from "../../../retry/src/index.js";
 import { getAiTransportHost } from "../host.js";
 import {
   appendAssistantMessageDiagnostic,
@@ -340,25 +341,8 @@ async function awaitProviderLifecycleCallback(
   }
   const callbackPromise = Promise.resolve().then(callback);
   getAiTransportHost().observePendingProviderWork?.(callbackPromise);
-  if (!signal) {
-    await callbackPromise;
-    return;
-  }
-  let onAbort: (() => void) | undefined;
-  try {
-    await Promise.race([
-      callbackPromise,
-      new Promise<never>((_resolve, reject) => {
-        onAbort = () => reject(transportAbortError(signal));
-        signal.addEventListener("abort", onAbort, { once: true });
-      }),
-    ]);
-  } finally {
-    if (onAbort) {
-      signal.removeEventListener("abort", onAbort);
-    }
-  }
-  if (signal.aborted) {
+  await racePromiseWithAbortSignal(callbackPromise, signal, transportAbortError);
+  if (signal?.aborted) {
     throw transportAbortError(signal);
   }
 }
@@ -515,8 +499,40 @@ export function assignTransportErrorDetails(
   error: unknown,
   signal?: AbortSignal,
 ): ProviderErrorProjection {
+  if (!signal?.aborted) {
+    // File diagnostics retain the cause before transcript-safe projection clips it.
+    // Select error fields only: responses can also contain generated message content.
+    try {
+      const record = asOptionalRecord(error);
+      const response = asOptionalRecord(record?.response);
+      const detail =
+        asOptionalRecord(record?.error) ??
+        asOptionalRecord(response?.error) ??
+        asOptionalRecord(asOptionalRecord(record?.payload)?.error);
+      getAiTransportHost().logWarn("provider-error", "Model request failed", {
+        provider: output.provider,
+        model: output.model,
+        status: record?.status ?? record?.statusCode ?? response?.status,
+        code: record?.errorCode ?? record?.code ?? detail?.code,
+        type: record?.errorType ?? detail?.type ?? record?.type,
+        message:
+          record?.message ?? detail?.message ?? (typeof error === "string" ? error : undefined),
+        body: record?.errorBody ?? record?.body ?? response?.body ?? response?.data ?? detail,
+        requestId: record?.request_id ?? record?.requestId,
+        responseId: record?.responseId ?? response?.id ?? output.responseId,
+      });
+    } catch {
+      // Diagnostic accessors and log sinks cannot replace the original failure.
+    }
+  }
   const projection = projectProviderError(error, signal);
   Object.assign(output, projection);
+  // A failure after terminal accounting cannot erase it. Earlier cumulative
+  // snapshots and initial zeros never establish a complete response total.
+  if (output.usage.usageReport?.state !== "available") {
+    output.usage.usageReport = { state: "unavailable" };
+    output.usage.contextUsage = { state: "unavailable" };
+  }
   if (
     projection.stopReason === "error" &&
     output.content.length === 0 &&

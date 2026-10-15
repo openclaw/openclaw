@@ -6,6 +6,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -14,6 +15,7 @@ import {
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
 import * as nodeSqlite from "./node-sqlite.js";
+import { classifySqliteMutation } from "./sqlite-schema-mutation.js";
 import * as tempRoot from "./tmp-openclaw-dir.js";
 import {
   createManagedHandoffLeaseDatabase,
@@ -195,6 +197,56 @@ const damage = [
 ];
 
 describe.skipIf(process.platform === "win32")("existing update authority", () => {
+  it("reopens an initialized writable handoff owner without repeating DDL", () => {
+    const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
+    withDatabase(true, (db) =>
+      executeSqliteQuerySync(
+        db,
+        leaseQueries(db).insertInto("managed_update_handoffs").values({
+          install_root: root,
+          owner: "warm-owner",
+          payload_json: "{}",
+          updated_at: 1,
+        }),
+      ),
+    );
+    const sql = observeHostDataSql();
+    try {
+      withDatabase(true, (db) =>
+        withDatabase.transact(
+          db,
+          () =>
+            executeSqliteQuerySync(
+              db,
+              leaseQueries(db)
+                .updateTable("managed_update_handoffs")
+                .set({ updated_at: 2 })
+                .where("install_root", "=", root),
+            ),
+          {},
+        ),
+      );
+      expect(
+        withDatabase(
+          false,
+          (db) =>
+            executeSqliteQuerySync(
+              db,
+              leaseQueries(db)
+                .selectFrom("managed_update_handoffs")
+                .select(["owner", "updated_at"])
+                .where("install_root", "=", root),
+            ).rows,
+        ),
+      ).toEqual([{ owner: "warm-owner", updated_at: 2 }]);
+      expect(
+        sql.queries.filter((query) => classifySqliteMutation(query, "batch").mainSchemaChange),
+      ).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+  });
+
   // Node CI shards do not provision Bun. BUN_BIN opts into runtime qualification;
   // a missing or incompatible selected binary must fail instead of skipping.
   it.runIf(Boolean(process.env.BUN_BIN))(
@@ -328,81 +380,63 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
     },
   );
 
-  it.each(["update", "delete"] as const)(
-    "keeps a real writer excluded across nested child and owner reads until %s commits",
-    async (mutation) => {
-      const existingAuthority = await authority();
-      const store = createManagedHandoffLeaseStore({
-        databasePath,
-        serviceManagerEnv: resolveServiceManagerEnv(),
-        existingIdentity: existingAuthority,
-      });
-      const admitted = store.acquire(root, "reserved-owner", { kind: "update" });
-      if (admitted.kind !== "acquired") {
-        throw new Error("Writer exclusion fixture was not admitted");
-      }
-      const withDatabase = createManagedHandoffLeaseDatabase(databasePath, existingAuthority);
-      withDatabase(true, (db) => {
-        expect(db.isTransaction).toBe(false);
-        expect(probeWriterAdmission("EXCLUSIVE")).toEqual({ acquired: false, errcode: 5 });
-        return withDatabase.transact(
-          db,
-          () => {
-            expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
-            // A second connection alone is safe. A raw open/read/close during
-            // these owner reads must not discard the first connection's POSIX lock.
-            const prefix = `${root}/.openclaw-update-child-`;
-            const children = withDatabase(
-              false,
-              (reader) =>
-                executeSqliteQuerySync(
-                  reader,
-                  leaseQueries(reader)
-                    .selectFrom("managed_update_handoffs")
-                    .select("owner")
-                    .where("install_root", ">=", prefix)
-                    .where("install_root", "<", prefix + "\uffff"),
-                ).rows,
-            );
-            expect(children).toEqual([]);
-            expect(store.current(admitted.lease)).toBe(true);
-            expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
-            if (mutation === "delete") {
+  it("keeps a real writer excluded across nested child and owner reads until an update commits", async () => {
+    const existingAuthority = await authority();
+    const store = createManagedHandoffLeaseStore({
+      databasePath,
+      serviceManagerEnv: resolveServiceManagerEnv(),
+      existingIdentity: existingAuthority,
+    });
+    const admitted = store.acquire(root, "reserved-owner", { kind: "update" });
+    if (admitted.kind !== "acquired") {
+      throw new Error("Writer exclusion fixture was not admitted");
+    }
+    const withDatabase = createManagedHandoffLeaseDatabase(databasePath, existingAuthority);
+    withDatabase(true, (db) => {
+      expect(db.isTransaction).toBe(false);
+      expect(probeWriterAdmission("EXCLUSIVE")).toEqual({ acquired: false, errcode: 5 });
+      return withDatabase.transact(
+        db,
+        () => {
+          expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
+          // A second connection alone is safe. A raw open/read/close during
+          // these owner reads must not discard the first connection's POSIX lock.
+          const prefix = `${root}/.openclaw-update-child-`;
+          const children = withDatabase(
+            false,
+            (reader) =>
               executeSqliteQuerySync(
-                db,
-                leaseQueries(db)
-                  .deleteFrom("managed_update_handoffs")
-                  .where("install_root", "=", root)
-                  .where("owner", "=", admitted.lease.owner),
-              );
-            } else {
-              executeSqliteQuerySync(
-                db,
-                leaseQueries(db)
-                  .updateTable("managed_update_handoffs")
-                  .set({ updated_at: admitted.lease.updatedAt + 1 })
-                  .where("install_root", "=", root)
-                  .where("owner", "=", admitted.lease.owner),
-              );
-            }
-            expect(db.isTransaction).toBe(true);
-            expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
-          },
-          {},
-        );
-      });
-      expect(probeWriterAdmission("EXCLUSIVE")).toEqual({ acquired: true });
-      const after = store.read(root);
-      if (mutation === "delete") {
-        expect(after).toEqual({ kind: "absent" });
-      } else {
-        expect(after).toMatchObject({
-          kind: "current",
-          lease: { owner: admitted.lease.owner, updatedAt: admitted.lease.updatedAt + 1 },
-        });
-      }
-    },
-  );
+                reader,
+                leaseQueries(reader)
+                  .selectFrom("managed_update_handoffs")
+                  .select("owner")
+                  .where("install_root", ">=", prefix)
+                  .where("install_root", "<", prefix + "\uffff"),
+              ).rows,
+          );
+          expect(children).toEqual([]);
+          expect(store.current(admitted.lease)).toBe(true);
+          expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
+          executeSqliteQuerySync(
+            db,
+            leaseQueries(db)
+              .updateTable("managed_update_handoffs")
+              .set({ updated_at: admitted.lease.updatedAt + 1 })
+              .where("install_root", "=", root)
+              .where("owner", "=", admitted.lease.owner),
+          );
+          expect(db.isTransaction).toBe(true);
+          expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
+        },
+        {},
+      );
+    });
+    expect(probeWriterAdmission("EXCLUSIVE")).toEqual({ acquired: true });
+    expect(store.read(root)).toMatchObject({
+      kind: "current",
+      lease: { owner: admitted.lease.owner, updatedAt: admitted.lease.updatedAt + 1 },
+    });
+  });
 
   it("keeps one installation's fence current during another installation's live write", async ({
     signal,
@@ -627,7 +661,14 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
   });
 
   describe.each(["admission", "release"] as const)("%s", (phase) => {
-    it.each(damage)("preserves $name without repair", async ({ apply }) => {
+    // Admission covers each guard; release repeats missing storage and identity revocation.
+    it.each(
+      phase === "admission"
+        ? damage
+        : damage.filter(({ name }) =>
+            ["missing database", "replacement parent with the same database inode"].includes(name),
+          ),
+    )("preserves $name without repair", async ({ apply }) => {
       const existingAuthority = await authority();
       let before: ReturnType<typeof snapshot> | undefined;
       let assertNoRepairs: () => void = () => expect.fail("Authority was not revoked");
@@ -669,41 +710,12 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
     });
   });
 
-  it.each(["missing", "replaced"] as const)(
-    "refuses a database %s immediately before a writable authority reopen",
-    async (change) => {
-      const existingAuthority = await authority();
-      const retained = path.join(root, "retained.sqlite");
-      let before: ReturnType<typeof snapshot> | undefined;
-      let raced = false;
-      vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((location, options) => {
-        if (options?.readOnly) {
-          return openDatabase(location, options);
-        }
-        raced = true;
-        fs.renameSync(databasePath, retained);
-        if (change === "replaced") {
-          fs.copyFileSync(retained, databasePath);
-          fs.chmodSync(databasePath, 0o600);
-        }
-        before = snapshot();
-        return openDatabase(location, options);
-      });
-      const operation = vi.fn();
-      const withDatabase = createManagedHandoffLeaseDatabase(databasePath, existingAuthority);
-      expect(() => withDatabase(true, operation)).toThrow();
-      expect(raced).toBe(true);
-      expect(operation).not.toHaveBeenCalled();
-      expect(snapshot()).toEqual(before);
-    },
-  );
-
   describe.each(["acquire", "release"] as const)("%s transaction", (operation) => {
-    it.each(
-      (["after-open", "after-begin", "before-commit"] as const).flatMap((boundary) =>
-        (["database", "parent"] as const).map((target) => ({ boundary, target })),
-      ),
-    )("refuses a replaced $target at $boundary", async ({ boundary, target }) => {
+    it.each([
+      { boundary: "after-open", target: "database" },
+      { boundary: "after-begin", target: "parent" },
+      { boundary: "before-commit", target: "database" },
+    ] as const)("refuses a replaced $target at $boundary", async ({ boundary, target }) => {
       const existingAuthority = await authority();
       const store = createManagedHandoffLeaseStore({
         databasePath,

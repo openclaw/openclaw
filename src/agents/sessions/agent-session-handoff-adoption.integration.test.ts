@@ -1,6 +1,11 @@
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { runActiveReplySteer } from "../../auto-reply/reply/agent-runner-steer-adoption.js";
 import {
   admitFollowupRunLifecycle,
@@ -15,6 +20,7 @@ import type { ReplyOperationRunState } from "../../auto-reply/reply/reply-operat
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
+import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import {
   createMockFollowupRun,
   createMockTypingController,
@@ -43,12 +49,13 @@ import type { ToolDefinition } from "./extensions/types.js";
 registerAgentSessionLoopTestLifecycle();
 
 describe("AgentSession handoff adoption integration", () => {
-  it("cancels a pending-acceptance steer before one follow-up reuses the session", async () => {
+  it("cancels a pending-acceptance steer before one follow-up reuses the session", async ({
+    signal,
+  }) => {
     const queueKey = "agent:main:telegram:direct:handoff-proof";
     const sessionId = "handoff-proof-session";
     const steerText = "STEER-DURING-HANDOFF";
     const finalText = "HANDOFF-FOLLOWUP-DELIVERED";
-    const toolAuthorityFingerprint = "handoff-proof-authority";
     const sessionRef: { current?: AgentSession } = {};
     const settled = vi.fn();
     const acceptanceEvents: boolean[] = [];
@@ -104,8 +111,10 @@ describe("AgentSession handoff adoption integration", () => {
       },
     };
     const requests: Context[] = [];
+    const firstRequest = createDeferred();
     streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
       requests.push(context);
+      firstRequest.resolve();
       return createAssistantResultStream(
         createAssistant(
           activeModel,
@@ -145,6 +154,35 @@ describe("AgentSession handoff adoption integration", () => {
           options?.onQueueAccepted?.(accepted);
         },
       });
+    const followupRun = createMockFollowupRun({
+      prompt: steerText,
+      messageId: "handoff-proof-message",
+      originatingChannel: "telegram",
+      originatingTo: "chat:handoff-proof",
+      turnAdoptionLifecycle: {
+        admission: "exclusive",
+        onDeferred: () => deferred(),
+        onAdopted: async () => adopted(),
+        onAbandoned: abandoned,
+        onSettled: lifecycleSettled,
+      },
+      run: {
+        sessionId,
+        sessionKey: queueKey,
+        messageProvider: "telegram",
+      },
+    });
+    const activeOperation = createReplyOperation({
+      sessionKey: queueKey,
+      sessionId,
+      resetTriggered: false,
+    });
+    await activeOperation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
+    const toolAuthorityFingerprint = await activeOperation.bindToolAuthorityRouteAsync({
+      provider: followupRun.run.provider,
+      model: followupRun.run.model,
+    });
+    activeOperation.setPhase("running");
     const queueHandle: EmbeddedAgentQueueHandle = {
       kind: "embedded",
       runId: "handoff-proof-active-run",
@@ -159,12 +197,6 @@ describe("AgentSession handoff adoption integration", () => {
       cancel: () => {},
       abort: () => {},
     };
-    const activeOperation = createReplyOperation({
-      sessionKey: queueKey,
-      sessionId,
-      resetTriggered: false,
-    });
-    activeOperation.setPhase("running");
     const replyBackend: ReplyBackendHandle = {
       kind: "embedded",
       runId: queueHandle.runId,
@@ -190,25 +222,6 @@ describe("AgentSession handoff adoption integration", () => {
     const typing = createMockTypingController();
     const typingSignals = createTypingSignaler({ typing, mode: "never", isHeartbeat: false });
     const runState: ReplyOperationRunState = {};
-    const turnAdoptionLifecycle = {
-      admission: "exclusive" as const,
-      onDeferred: () => deferred(),
-      onAdopted: async () => adopted(),
-      onAbandoned: abandoned,
-      onSettled: lifecycleSettled,
-    };
-    const followupRun = createMockFollowupRun({
-      prompt: steerText,
-      messageId: "handoff-proof-message",
-      originatingChannel: "telegram",
-      originatingTo: "chat:handoff-proof",
-      turnAdoptionLifecycle,
-      run: {
-        sessionId,
-        sessionKey: queueKey,
-        messageProvider: "telegram",
-      },
-    });
     const runFollowup = async (queued: typeof followupRun) => {
       await ownerReleased;
       const followupOperation = createReplyOperation({
@@ -255,7 +268,6 @@ describe("AgentSession handoff adoption integration", () => {
       touchActiveSessionEntry: vi.fn(async () => {}),
       typing,
       typingSignals,
-      toolAuthorityFingerprint,
     };
 
     try {
@@ -263,7 +275,15 @@ describe("AgentSession handoff adoption integration", () => {
       setActiveEmbeddedRun(sessionId, queueHandle, queueKey);
 
       const initialPrompt = session.prompt("yield now");
-      await vi.waitFor(() => expect(requests).toHaveLength(1));
+      await withinTest(
+        awaitGateBeforeSettlement(
+          firstRequest.promise,
+          initialPrompt,
+          "Initial prompt settled before its first provider request",
+        ),
+        signal,
+      );
+      expect(requests).toHaveLength(1);
       await Promise.all([runActiveReplySteer(steerParams), initialPrompt]);
       releaseSteerPromise();
       await steerReturned;

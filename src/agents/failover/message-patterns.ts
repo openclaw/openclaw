@@ -1,6 +1,20 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 type ErrorPattern = RegExp | string;
 
+const EXECUTION_APPROVAL_FAILURE_MESSAGES = new Set([
+  "Codex node execution approval expired before a decision. Retry the action and approve the new request.",
+  "Codex node execution was denied. Retry the action and choose Allow once or Allow always to continue.",
+  "Codex node execution requires an available approval reviewer.",
+]);
+
+/** Node launch refusals are not provider failures; only known, bounded copy is public. */
+export function resolveExecutionApprovalFailureMessage(
+  raw: string | undefined,
+): string | undefined {
+  const message = raw?.trim().replace(/\s+\|\s+INVALID_REQUEST$/, "");
+  return message && EXECUTION_APPROVAL_FAILURE_MESSAGES.has(message) ? message : undefined;
+}
+
 // Both figures must be denominated in tokens and come from one clause. A message can state an RPM
 // limit and mention TPM elsewhere, and reading the pair on its own would compare a request count
 // against a token budget; requiring the unit to lead the clause keeps the numbers commensurable.
@@ -26,8 +40,9 @@ export function isProviderRequestSizeCeilingError(errorMessage?: string): boolea
 
 // Match model-transport EOF contracts, not plugin lifecycle stream failures.
 // Unresolved calls at EOF differ from an inconsistent completed response.
+// A body cut inside an SSE frame is a disconnect; a whole frame of malformed JSON is not.
 export const INCOMPLETE_ASSISTANT_STREAM_RE =
-  /^(?:[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without (?:a terminal )?finish[_ ]reason)|Responses stream ended with unresolved tool calls)[.!]?$/i;
+  /^(?:[\w -]*stream ended (?:before (?:message_?stop|(?:a )?terminal (?:finish reason|response event|event))|without (?:a terminal )?finish[_ ]reason|with an incomplete frame)|Responses stream ended with unresolved tool calls)[.!]?$/i;
 // Undici ends a stream body with this exact bare transport message. Keep it
 // anchored so unrelated failures that merely contain the word do not match.
 export const TERMINATED_TRANSPORT_MESSAGE_RE = /^terminated$/i;
@@ -64,6 +79,11 @@ const AMBIGUOUS_AUTH_ERROR_PATTERNS = [
   "permission_error",
 ] as const satisfies readonly ErrorPattern[];
 
+// Diagnostic counts and identifiers can equal 401/403 without an authentication failure.
+// Require a leading status, HTTP/status context, or a structured status/code field.
+const AUTH_HTTP_STATUS_RE =
+  /^\s*(?:401|403)\b|\b(?:http(?:[ _-]?status)?|status(?:[ _-]?code)?|response(?:[ _-]?code)?|error(?:[ _-]?code)?)\b[\s:=#"'(]{0,6}(?:401|403)\b|["'](?:status|code)["']\s*:\s*["']?(?:401|403)\b/i;
+
 const COMMON_AUTH_ERROR_PATTERNS = [
   "incorrect api key",
   "invalid token",
@@ -77,8 +97,7 @@ const COMMON_AUTH_ERROR_PATTERNS = [
   "insufficient permission",
   /missing scopes?:/i,
   "expired",
-  /\b401\b/,
-  /\b403\b/,
+  AUTH_HTTP_STATUS_RE,
   "no credentials found",
   "no api key found",
   /\bfailed to (?:extract|parse|validate|decode)\b.*\btoken\b/,
@@ -281,8 +300,23 @@ function matchesErrorPatterns(raw: string, patterns: readonly ErrorPattern[]): b
 export function matchesFormatErrorPattern(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.format);
 }
+export function isUnsupportedReasoningEffortParameterError(raw: string): boolean {
+  if (/supported values(?: are)?:/i.test(raw)) {
+    return false;
+  }
+  return (
+    /\b(?:unknown|unrecognized|unsupported|unexpected)\s+(?:field|parameter|(?:keyword\s+)?argument)\s*:?\s*["'`\\]*reasoning_effort(?![\w./-])/i.test(
+      raw,
+    ) ||
+    /(?<![\w./-])reasoning_effort["'`\\]*\s+(?:parameter\s+)?(?:is\s+)?(?:not supported|unsupported)\b/i.test(
+      raw,
+    )
+  );
+}
 export function isSessionTranscriptValidationErrorMessage(raw: string): boolean {
-  return /\binvalid session transcript entry\b/i.test(raw);
+  return /\b(?:invalid session transcript entry|persisted legacy session transcripts require doctor\/import migration)\b/i.test(
+    raw,
+  );
 }
 export function isRateLimitErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.rateLimit);
@@ -328,7 +362,9 @@ export function isAuthPermanentErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.authPermanent);
 }
 export function isAuthErrorMessage(raw: string): boolean {
-  return matchesErrorPatterns(raw, ERROR_PATTERNS.auth);
+  return (
+    !resolveExecutionApprovalFailureMessage(raw) && matchesErrorPatterns(raw, ERROR_PATTERNS.auth)
+  );
 }
 export function isOverloadedErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);

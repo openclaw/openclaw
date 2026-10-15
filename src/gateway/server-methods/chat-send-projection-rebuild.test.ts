@@ -1,6 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import {
   appendTranscriptMessage,
@@ -50,14 +54,14 @@ async function createRebuildingFixture() {
       )
       .run(fixture.scope.sessionId);
   };
-  const assertNoDispatch = () => {
+  const assertNoDispatch = async () => {
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     expect(fixture.context.chatAbortControllers.size).toBe(0);
     expect(fixture.context.chatQueuedTurns.size).toBe(0);
     expect(
       fixture.context.dedupe.has(pendingChatSendDedupeKey(fixture.params.idempotencyKey)),
     ).toBe(false);
-    expect(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+    expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
     expect(loadTranscriptEventsSync(fixture.scope)).toEqual(before);
     expect(getActiveSessionWorkAdmissionCount()).toBe(0);
   };
@@ -106,7 +110,7 @@ describe("registered chat.send during SQLite projection rebuild", () => {
       fixture.markRebuilding();
       const rejected = await fixture.send();
       expectRebuildingResponse(rejected);
-      fixture.assertNoDispatch();
+      await fixture.assertNoDispatch();
       expect(loadSessionEntry(fixture.scope)).toEqual(fixture.beforeSession);
       await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
       const accepted = await fixture.send();
@@ -141,7 +145,7 @@ describe("registered chat.send during SQLite projection rebuild", () => {
         fixture.params.expectedPermissionMode = null;
         fixture.markRebuilding();
         expectRebuildingResponse(await fixture.send());
-        fixture.assertNoDispatch();
+        await fixture.assertNoDispatch();
         await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
         if (change === "active leaf") {
           fixture.params.expectedLeafEntryId = "obsolete-leaf";
@@ -155,7 +159,7 @@ describe("registered chat.send during SQLite projection rebuild", () => {
             reason: change === "active leaf" ? "active-leaf-changed" : "session-settings-changed",
           },
         });
-        fixture.assertNoDispatch();
+        await fixture.assertNoDispatch();
       } finally {
         await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
         await fixture.cleanup();
@@ -163,9 +167,9 @@ describe("registered chat.send during SQLite projection rebuild", () => {
     },
   );
 
-  it.each(["expired", "removed", "lifecycle rotation", "chat abort"] as const)(
+  it.for(["expired", "removed", "lifecycle rotation", "chat abort"] as const)(
     "never revives a %s reservation while projection is rebuilding",
-    async (change) => {
+    async (change, { signal }) => {
       const fixture = await createRebuildingFixture();
       const entered = createDeferred();
       const release = createDeferred();
@@ -177,9 +181,33 @@ describe("registered chat.send during SQLite projection rebuild", () => {
       try {
         await entered.promise;
         fixture.markRebuilding();
-        request = fixture.send();
         const key = pendingChatSendDedupeKey(fixture.params.idempotencyKey);
-        await vi.waitFor(() => expect(fixture.context.dedupe.has(key)).toBe(true));
+        const reserved = createDeferred();
+        const setDedupe = fixture.context.dedupe.set.bind(fixture.context.dedupe);
+        // Observe real admission while the writer gate prevents it from completing.
+        const observeReservation = vi
+          .spyOn(fixture.context.dedupe, "set")
+          .mockImplementation((pendingKey, entry) => {
+            const result = setDedupe(pendingKey, entry);
+            if (pendingKey === key) {
+              reserved.resolve();
+            }
+            return result;
+          });
+        try {
+          request = fixture.send();
+          await withinTest(
+            awaitGateBeforeSettlement(
+              reserved.promise,
+              request,
+              "chat.send settled before its pending reservation",
+            ),
+            signal,
+          );
+          expect(fixture.context.dedupe.has(key)).toBe(true);
+        } finally {
+          observeReservation.mockRestore();
+        }
         if (change === "removed") {
           fixture.context.dedupe.delete(key);
         } else if (change === "expired") {
@@ -216,15 +244,30 @@ describe("registered chat.send during SQLite projection rebuild", () => {
         await writer;
         const response = await request;
         expect(JSON.stringify(response.mock.calls)).not.toContain("cloud-session");
-        fixture.assertNoDispatch();
+        await fixture.assertNoDispatch();
         await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
         expect(response.mock.calls[0]?.[1]).toMatchObject({
           status: "timeout",
           summary: "aborted",
         });
         const retry = await fixture.send();
-        expect(retry.mock.calls[0]?.[1]).toMatchObject({ status: "timeout", summary: "aborted" });
-        fixture.assertNoDispatch();
+        expect(retry).toHaveBeenCalledExactlyOnceWith(
+          true,
+          expect.objectContaining({ status: "timeout", summary: "aborted" }),
+          undefined,
+          { cached: true },
+        );
+        fixture.params.message = "A different input must not reuse the aborted request.";
+        const conflict = await fixture.send();
+        expect(conflict).toHaveBeenCalledExactlyOnceWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            details: { reason: "chat-request-conflict" },
+          }),
+        );
+        await fixture.assertNoDispatch();
       } finally {
         release.resolve();
         await writer;

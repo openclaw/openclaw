@@ -85,7 +85,6 @@ type MatrixHandlerTestHarnessOptions = {
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   mediaMaxBytes?: number;
   startupMs?: number;
-  startupGraceMs?: number;
   dropPreStartupMessages?: boolean;
   needsRoomAliasesForConfig?: boolean;
   isDirectMessage?: boolean;
@@ -192,10 +191,10 @@ export function createMatrixHandlerTestHarness(
       prepared.markDispatchIdle();
     }
   };
-  const createChannelInboundEnvelopeBuilder = (() => (input: { body: string }) =>
+  const createChannelInboundEnvelopeBuilderAsync = (async () => (input: { body: string }) =>
     (options.formatAgentEnvelope ?? (({ body }: { body: string }) => body))({
       body: input.body,
-    })) as NonNullable<MatrixMonitorHandlerParams["createChannelInboundEnvelopeBuilder"]>;
+    })) as NonNullable<MatrixMonitorHandlerParams["createChannelInboundEnvelopeBuilderAsync"]>;
   const runPrepared =
     options.runPrepared ??
     vi.fn<MatrixRunPreparedMockFn>(async (turn) => {
@@ -380,7 +379,6 @@ export function createMatrixHandlerTestHarness(
     dmPolicy,
     mediaMaxBytes: options.mediaMaxBytes ?? 10_000_000,
     startupMs: options.startupMs ?? 0,
-    startupGraceMs: options.startupGraceMs ?? 0,
     dropPreStartupMessages: options.dropPreStartupMessages ?? true,
     inboundDeduper: options.inboundDeduper,
     directTracker: {
@@ -391,7 +389,7 @@ export function createMatrixHandlerTestHarness(
     needsRoomAliasesForConfig: options.needsRoomAliasesForConfig ?? false,
     resolveLiveUserAllowlist: options.resolveLiveUserAllowlist,
     resolveStorePath: options.resolveStorePath ?? (() => "/tmp/session-store"),
-    createChannelInboundEnvelopeBuilder,
+    createChannelInboundEnvelopeBuilderAsync,
     finalizeInboundContext,
     resolveHumanDelayConfig: options.resolveHumanDelayConfig ?? (() => undefined),
     historyLimit: options.historyLimit ?? 0,

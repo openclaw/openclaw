@@ -5,12 +5,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildRuntimeAccountStatusSnapshot } from "../plugin-sdk/status-helpers.js";
 import { isRecord } from "../utils.js";
 import { asBoolean } from "../utils/boolean.js";
+import { describeChannelAccount } from "./account-resolution.js";
 import {
   projectSafeChannelAccountSnapshotFields,
   redactChannelStatusSummaryBaseUrl,
 } from "./account-snapshot-fields.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
-import type { ChannelPlugin } from "./plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./plugins/types.plugin.js";
 import { applyChannelAccountState, resolveChannelAccountState } from "./status/account-state.js";
 
 /** Projects an admitted lifetime without resolving its potentially stale account configuration. */
@@ -73,15 +74,15 @@ export function buildChannelAccountSnapshotFromInspection(params: {
   return redactChannelStatusSummaryBaseUrl(snapshot);
 }
 
-export function buildChannelAccountSummary(params: {
+export async function buildChannelAccountSummary(params: {
   plugin: ChannelPlugin;
   account: unknown;
   cfg: OpenClawConfig;
   accountId: string;
   enabled: boolean;
   configured: boolean;
-}): ChannelAccountSnapshot {
-  const described = params.plugin.config.describeAccount?.(params.account, params.cfg);
+}): Promise<ChannelAccountSnapshot> {
+  const described = await describeChannelAccount(params);
   return redactChannelStatusSummaryBaseUrl({
     enabled: params.enabled,
     configured: params.configured,

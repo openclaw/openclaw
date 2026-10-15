@@ -9,6 +9,7 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import type { ModelCatalogResult, SessionsListResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:thinking-status";
@@ -150,6 +151,7 @@ suite.define(() => {
             socket.on("framereceived", ({ payload }) => recordFrame("received", payload));
           });
           await page.goto(url.href);
+          await enterControlUiSession(page);
           await waitForControlUiGatewayReady(page);
           const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
           await composer.waitFor({ state: "visible" });
@@ -246,8 +248,18 @@ suite.define(() => {
           }
         },
       );
+    } catch (error) {
+      observations.gatewayPatchErrors = instance
+        .logs()
+        .split("\n")
+        .filter((line) => line.includes(`sessions.patch: target failed for ${key}:`));
+      throw error;
     } finally {
-      const serialized = JSON.stringify({ commands, frames, observations }, null, 2)
+      const serialized = JSON.stringify(
+        { commands, frames, observations, gatewayLog: instance.logs() },
+        null,
+        2,
+      )
         .replaceAll(instance.gatewayToken, "[synthetic token]")
         .replaceAll(instance.hookToken, "[synthetic token]")
         .replaceAll(instance.homeDir, "[fixture home]")
@@ -323,6 +335,7 @@ suite.define(() => {
               });
             });
             await page.goto(url.href);
+            await enterControlUiSession(page);
             await waitForControlUiGatewayReady(page);
             const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
             await composer.waitFor({ state: "visible" });

@@ -45,7 +45,7 @@ function progressCard(revision = 1): ProgressCard {
 function createHistoryProgressPane(request: GatewayRequestHandler) {
   const client = createGatewayBrowserClientFixture({ request });
   const { pane, state, sessions } = createTestChatPane({ client });
-  const hello = gatewayHelloForMethods(["chat.history", "progressCard.get", "progressCard.put"]);
+  const hello = gatewayHelloForMethods(["chat.history", "progressCard.get"]);
   pane.context.gateway.snapshot.hello = hello;
   state.hello = hello;
   state.agentsList = {
@@ -62,6 +62,7 @@ function createHistoryProgressPane(request: GatewayRequestHandler) {
     progressCard: SessionProgressCardController;
     readonly progressCardPresentation: { card: ProgressCard; identity: string } | null;
     readonly progressCardInitialLoading: boolean;
+    hideProgressCard: (card: ProgressCard) => void;
   };
   const progress = presentation.progressCard;
   onTestFinished(() => progress.hostDisconnected());
@@ -80,18 +81,18 @@ function createHistoryProgressPane(request: GatewayRequestHandler) {
 }
 
 describe("retained bare pane progress follows accepted history ownership", () => {
-  it("loads, refreshes and dismisses the history owner's card without rekeying the composer", async () => {
-    let card: ProgressCard | null = progressCard();
+  it("hides the history owner's card only in this pane without rekeying the composer", async () => {
+    let card: ProgressCard = progressCard();
     const request = vi.fn(async (method: string) => {
       if (method === "chat.history") {
         return history;
       }
-      if (method === "progressCard.put") {
-        card = null;
+      if (method !== "progressCard.get") {
+        throw new Error(`Unexpected progress-card write: ${method}`);
       }
       return { card };
     });
-    const { state, progress, emit } = createHistoryProgressPane(request);
+    const { state, progress, emit, presentation } = createHistoryProgressPane(request);
     state.chatMessage = "Retained draft";
     progress.hostUpdate();
     expect(request).not.toHaveBeenCalled();
@@ -103,6 +104,7 @@ describe("retained bare pane progress follows accepted history ownership", () =>
         sessionKey: "notes",
         limit: 80,
         maxBytes: 256 * 1024,
+        toolResultMaxChars: 2_000,
       },
       { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
@@ -119,14 +121,18 @@ describe("retained bare pane progress follows accepted history ownership", () =>
     emit(card);
     await vi.waitFor(() => expect(progress.card).toEqual(card));
     expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(2);
-    expect(await progress.dismiss(expectDefined(progress.card, "displayed progress card"))).toBe(
-      true,
+    presentation.hideProgressCard(
+      expectDefined(presentation.progressCardPresentation?.card, "displayed progress card"),
     );
-    expect(request).toHaveBeenLastCalledWith("progressCard.put", {
-      sessionKey: "agent:research:notes",
-      expectedRevision: 2,
-    });
-    expect(progress.card).toBeNull();
+    expect(presentation.progressCardPresentation).toBeNull();
+    expect(progress.card).toEqual(card);
+    expect(request.mock.calls.every(([method]) => method !== "progressCard.put")).toBe(true);
+    expect(state.chatMessage).toBe("Retained draft");
+
+    card = progressCard(3);
+    emit(card);
+    await vi.waitFor(() => expect(progress.card).toEqual(card));
+    expect(presentation.progressCardPresentation).toBeNull();
   });
 
   it("hides progress and its loading slot without clearing saved progress, then restores updates", async () => {

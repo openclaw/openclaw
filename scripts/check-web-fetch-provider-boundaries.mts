@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Checks core web-fetch surfaces for provider-owned Firecrawl coupling.
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 import { runAsScript } from "./lib/ts-guard-utils.mts";
@@ -31,7 +30,7 @@ const suspiciousPatterns = [
   /id:\s*"firecrawl"/,
 ];
 
-async function scanWebFetchProviderBoundaryViolations() {
+async function main() {
   const violations = [];
   const files = await collectSourceFileContents({
     repoRoot,
@@ -62,24 +61,15 @@ async function scanWebFetchProviderBoundaryViolations() {
       });
     }
   }
-  return violations.toSorted(
+  for (const violation of violations.toSorted(
     (left, right) => left.file.localeCompare(right.file) || left.line - right.line,
-  );
-}
-
-/** Runs the web-fetch provider boundary check. */
-async function main() {
-  const violations = await scanWebFetchProviderBoundaryViolations();
-  for (const violation of violations) {
+  )) {
     process.stderr.write(`${violation.file}:${violation.line} ${violation.reason}\n`);
   }
-  return violations.length === 0 ? 0 : 1;
+  if (violations.length > 0) {
+    process.exit(1);
+  }
+  return 0;
 }
 
-runAsScript(import.meta.url, async () => {
-  const exitCode = await main();
-  if (exitCode !== 0) {
-    process.exit(exitCode);
-  }
-  return exitCode;
-});
+runAsScript(import.meta.url, main);

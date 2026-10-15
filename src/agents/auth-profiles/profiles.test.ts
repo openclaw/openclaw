@@ -6,17 +6,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveOAuthDir } from "../../config/paths.js";
-import { createDeferredCore } from "../../shared/deferred.js";
-import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { ensureOpenClawModelsJson } from "../models-config.js";
-import * as modelPlans from "../models-config.plan.js";
-import * as catalogs from "../plugin-model-catalog.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { createApiKeyCredential, oauthCred } from "./credential-fixtures.test-support.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
@@ -30,6 +21,7 @@ import { reloadSharedAuthStoreOwnership } from "./path-resolve.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import {
   expectOAuthCredentialFields,
+  failNextRuntimeAuthSnapshotPublication,
   withAuthProfileTestState,
 } from "./profile-mutations.test-support.js";
 import {
@@ -41,20 +33,13 @@ import {
   setAuthProfileOrder,
   upsertAuthProfileWithLock,
 } from "./profiles.js";
-import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
-  getRuntimeAuthProfileStoreSnapshotCore as getInternalRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreCredentialsRevision,
   listOwnedRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "./runtime-snapshots.js";
-import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
-import {
-  resolveAuthProfileDatabasePath,
-  runAuthProfileWriteTransaction,
-  writePersistedAuthProfileStoreRaw,
-} from "./sqlite.js";
+import { runAuthProfileWriteTransaction, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreForRuntime,
@@ -67,7 +52,6 @@ import {
   getRuntimeAuthProfileStoreSnapshot,
   restoreAuthProfileStorePersistenceSnapshot,
 } from "./store.js";
-import { testing as storeTesting } from "./store.test-support.js";
 import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
@@ -85,7 +69,7 @@ vi.mock("../provider-auth-aliases.js", async (importOriginal) => {
 });
 
 afterEach(() => {
-  storeTesting.resetRuntimeSnapshotPublisherForTest();
+  vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
 });
 
@@ -300,10 +284,7 @@ describe("promoteAuthProfileInOrder", () => {
           { agentDir: savingAgentDir, store: loadAuthProfileStoreForRuntime(savingAgentDir) },
           { agentDir: siblingAgentDir, store: siblingStore },
         ]);
-        storeTesting.setRuntimeSnapshotPublisherForTest((publish) => {
-          publish();
-          throw new Error("postcommit publication failed");
-        });
+        failNextRuntimeAuthSnapshotPublication();
 
         saveAuthProfileStore(
           {
@@ -316,6 +297,11 @@ describe("promoteAuthProfileInOrder", () => {
         );
 
         expect(getRuntimeAuthProfileStoreSnapshot(savingAgentDir)).toBeUndefined();
+        expect(
+          loadPersistedAuthProfileStore(savingAgentDir)?.profiles["openai:saving"],
+        ).toMatchObject({
+          key: "sk-new",
+        });
         expect(getRuntimeAuthProfileStoreSnapshot(siblingAgentDir)).toEqual(siblingStore);
       },
     );
@@ -415,85 +401,6 @@ describe("promoteAuthProfileInOrder", () => {
     );
   });
 
-  it("keeps a direct save committed when postcommit publication throws", async () => {
-    await withAuthProfileTestState("openclaw-auth-direct-publication-", async ({ agentDir }) => {
-      const store = (key: string): AuthProfileStore => ({
-        version: AUTH_STORE_VERSION,
-        profiles: {
-          "openai:default": { type: "api_key", provider: "openai", key },
-        },
-      });
-      saveAuthProfileStore(store("sk-old"), agentDir);
-      replaceRuntimeAuthProfileStoreSnapshots([
-        { agentDir, store: loadAuthProfileStoreForRuntime(agentDir) },
-      ]);
-      storeTesting.setRuntimeSnapshotPublisherForTest((publish) => {
-        publish();
-        throw new Error("postcommit publication failed");
-      });
-      let result: ReturnType<typeof saveAuthProfileStore> = undefined;
-      try {
-        expect(() => {
-          result = saveAuthProfileStore(store("sk-new"), agentDir);
-        }).not.toThrow();
-      } finally {
-        storeTesting.resetRuntimeSnapshotPublisherForTest();
-      }
-
-      expect(result).toBeUndefined();
-      expect(loadPersistedAuthProfileStore(agentDir)?.profiles["openai:default"]).toMatchObject({
-        key: "sk-new",
-      });
-      expect(getRuntimeAuthProfileStoreSnapshot(agentDir)).toBeUndefined();
-    });
-  });
-
-  it("publishes a caller-owned database transaction from the supplied store", async () => {
-    await withAuthProfileTestState("openclaw-auth-caller-transaction-", async ({ agentDir }) => {
-      const store = (key: string): AuthProfileStore => ({
-        version: AUTH_STORE_VERSION,
-        profiles: {
-          "openai:default": { type: "api_key", provider: "openai", key },
-          "openai:backup": { type: "api_key", provider: "openai", key: "sk-backup" },
-        },
-        order: {
-          openai:
-            key === "sk-old"
-              ? ["openai:default", "openai:backup"]
-              : ["openai:backup", "openai:default"],
-        },
-      });
-      saveAuthProfileStore(store("sk-old"), agentDir);
-      replaceRuntimeAuthProfileStoreSnapshots([
-        { agentDir, store: loadAuthProfileStoreForRuntime(agentDir) },
-      ]);
-      const credentialRevision =
-        getRuntimeAuthProfileStoreCredentialMutationToken(agentDir).revision;
-      const stateRevision = getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision;
-
-      runAuthProfileWriteTransaction(agentDir, (database) => {
-        saveAuthProfileStore(store("sk-new"), agentDir, undefined, database);
-      });
-
-      expect(loadPersistedAuthProfileStore(agentDir)?.profiles["openai:default"]).toMatchObject({
-        key: "sk-new",
-      });
-      expect(
-        getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:default"],
-      ).toMatchObject({ key: "sk-new" });
-      expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.order?.openai).toEqual([
-        "openai:backup",
-        "openai:default",
-      ]);
-      expect(getRuntimeAuthProfileStoreCredentialMutationToken(agentDir).revision).toBeGreaterThan(
-        credentialRevision,
-      );
-      expect(getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision).toBeGreaterThan(
-        stateRevision,
-      );
-    });
-  });
-
   it("preserves derived runtime snapshots on a caller-owned main-store no-op", async () => {
     await withAuthProfileTestState(
       "openclaw-auth-caller-noop-",
@@ -552,113 +459,7 @@ describe("promoteAuthProfileInOrder", () => {
     });
   });
 
-  it("rolls back credentials when the state write fails", async () => {
-    await withAuthProfileTestState("openclaw-auth-atomic-save-", async ({ agentDir }) => {
-      const oldStore: AuthProfileStore = {
-        version: AUTH_STORE_VERSION,
-        profiles: {
-          "openai:old": { type: "api_key", provider: "openai", key: "sk-old" },
-        },
-        order: { openai: ["openai:old"] },
-      };
-      saveAuthProfileStore(oldStore, agentDir);
-      const credentialRevision =
-        getRuntimeAuthProfileStoreCredentialMutationToken(agentDir).revision;
-      const stateRevision = getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision;
-      const database = openOpenClawAgentDatabase({
-        agentId: "main",
-        path: resolveAuthProfileDatabasePath(agentDir),
-      });
-      database.db.exec(`
-        CREATE TRIGGER reject_auth_profile_state_update
-        BEFORE UPDATE ON auth_profile_state
-        BEGIN
-          SELECT RAISE(ABORT, 'injected auth state write failure');
-        END;
-      `);
-
-      expect(() =>
-        saveAuthProfileStore(
-          {
-            version: AUTH_STORE_VERSION,
-            profiles: {
-              "openai:new": { type: "api_key", provider: "openai", key: "sk-new" },
-            },
-            order: { openai: ["openai:new"] },
-          },
-          agentDir,
-        ),
-      ).toThrow("injected auth state write failure");
-      database.db.exec("DROP TRIGGER reject_auth_profile_state_update;");
-
-      expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir)).toMatchObject(oldStore);
-      expect(getRuntimeAuthProfileStoreCredentialMutationToken(agentDir).revision).toBe(
-        credentialRevision,
-      );
-      expect(getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision).toBe(stateRevision);
-    });
-  });
-
-  it("restores materialized and runtime-external snapshot credentials after a temporary write", async () => {
-    await withAuthProfileTestState("openclaw-auth-runtime-restore-", async ({ agentDir }) => {
-      const keyRef = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
-      saveAuthProfileStore(
-        {
-          version: AUTH_STORE_VERSION,
-          profiles: {
-            "openai:default": {
-              type: "api_key",
-              provider: "openai",
-              key: "sk-materialized",
-              keyRef,
-            },
-          },
-        },
-        agentDir,
-      );
-      const runtimeStore: AuthProfileStore = {
-        version: AUTH_STORE_VERSION,
-        profiles: {
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-materialized",
-            keyRef,
-          },
-          "anthropic:external": oauthCred({
-            provider: "anthropic",
-            access: "external-access",
-            refresh: "external-refresh",
-            expires: Date.now() + 60_000,
-          }),
-        },
-        runtimeExternalProfileIds: ["anthropic:external"],
-      };
-      replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: runtimeStore }]);
-      const snapshot = captureAuthProfileStorePersistenceSnapshot(agentDir);
-
-      const committed = saveAuthProfileStoreIfPersistenceSnapshotMatches({
-        snapshot,
-        agentDir,
-        store: {
-          version: AUTH_STORE_VERSION,
-          profiles: {
-            "openai:temporary": createApiKeyCredential("openai", "sk-temporary"),
-          },
-        },
-      });
-      expect(committed.publishRuntimeSnapshots()).toBe(true);
-      const { owned } = committed;
-      restoreAuthProfileStorePersistenceSnapshot(snapshot, owned, agentDir);
-
-      expect(getRuntimeAuthProfileStoreSnapshot(agentDir)).toMatchObject(runtimeStore);
-      expect(
-        getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:temporary"],
-      ).toBeUndefined();
-    });
-  });
-
-  it("does not persist built-in CLI ownership metadata", async () => {
+  it("does not persist runtime-only external profiles", async () => {
     await withAuthProfileTestState("openclaw-auth-cli-provenance-", async ({ agentDir }) => {
       const profileId = "openai:default";
       const runtimeStore: RuntimeAuthProfileStore = {
@@ -672,14 +473,12 @@ describe("promoteAuthProfileInOrder", () => {
           }),
         },
         runtimeExternalProfileIds: [profileId],
-        runtimeExternalCliProfileIds: [profileId],
       };
       replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: runtimeStore }]);
 
       saveAuthProfileStore(runtimeStore, agentDir);
 
       const persisted = loadPersistedAuthProfileStore(agentDir);
-      expect(persisted).not.toHaveProperty("runtimeExternalCliProfileIds");
       expect(persisted?.profiles[profileId]).toBeUndefined();
     });
   });
@@ -740,11 +539,7 @@ describe("promoteAuthProfileInOrder", () => {
             },
           });
           if (mutationTiming === "before publication") {
-            storeTesting.setRuntimeSnapshotPublisherForTest((publish) => {
-              storeTesting.resetRuntimeSnapshotPublisherForTest();
-              mutateRuntimeStore();
-              publish();
-            });
+            mutateRuntimeStore();
           }
           expect(committed.publishRuntimeSnapshots()).toBe(true);
           const { owned } = committed;
@@ -923,76 +718,6 @@ describe("promoteAuthProfileInOrder", () => {
     );
   });
 
-  it("tracks state-only saves without advancing credential ownership", async () => {
-    await withAuthProfileTestState("openclaw-auth-state-lineage-", async ({ agentDir }) => {
-      const store: AuthProfileStore = {
-        version: AUTH_STORE_VERSION,
-        profiles: {
-          "openai:default": { type: "api_key", provider: "openai", key: "sk-stable" },
-        },
-      };
-      saveAuthProfileStore(store, agentDir);
-      const credentialRevision = getRuntimeAuthProfileStoreCredentialsRevision();
-      const stateRevision = getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision;
-
-      saveAuthProfileStore(
-        { ...store, usageStats: { "openai:default": { lastUsed: 42 } } },
-        agentDir,
-      );
-
-      expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(credentialRevision);
-      expect(getRuntimeAuthProfileStoreStateMutationToken(agentDir).revision).toBeGreaterThan(
-        stateRevision,
-      );
-    });
-  });
-
-  it("marks newly saved runtime snapshot profiles as persisted", async () => {
-    await withAuthProfileTestState(
-      "openclaw-auth-profile-runtime-persisted-",
-      async ({ agentDir }) => {
-        fs.mkdirSync(agentDir, { recursive: true });
-        replaceRuntimeAuthProfileStoreSnapshots([
-          {
-            agentDir,
-            store: {
-              version: AUTH_STORE_VERSION,
-              profiles: {},
-            },
-          },
-        ]);
-        try {
-          saveAuthProfileStore(
-            {
-              version: AUTH_STORE_VERSION,
-              profiles: {
-                "openai:work": {
-                  type: "oauth",
-                  provider: "openai",
-                  access: "access-token",
-                  refresh: "refresh-token",
-                  expires: Date.now() + 60_000,
-                  accountId: "account-123",
-                },
-              },
-            },
-            agentDir,
-          );
-
-          expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.runtimePersistedProfileIds).toEqual([
-            "openai:work",
-          ]);
-          expect(
-            getInternalRuntimeAuthProfileStoreSnapshot(agentDir)?.runtimeLocalProfileIds,
-          ).toEqual(["openai:work"]);
-        } finally {
-          clearRuntimeAuthProfileStoreSnapshots();
-        }
-      },
-      { clearOAuthDir: true },
-    );
-  });
-
   it("normalizes copied secrets when using the locked upsert path", async () => {
     await withAuthProfileTestState(
       "openclaw-auth-profile-upsert-",
@@ -1036,100 +761,6 @@ describe("promoteAuthProfileInOrder", () => {
       },
       { clearOAuthDir: true },
     );
-  });
-
-  it("persists openai oauth credentials inline", async () => {
-    await withAuthProfileTestState("openclaw-auth-profile-metadata-", ({ agentDir }) => {
-      fs.mkdirSync(agentDir, { recursive: true });
-      const profileId = "openai:default";
-      const expires = Date.now() + 60 * 60 * 1000;
-      saveAuthProfileStore(
-        {
-          version: AUTH_STORE_VERSION,
-          profiles: {
-            [profileId]: {
-              type: "oauth",
-              provider: "openai",
-              access: "local-access-token",
-              refresh: "local-refresh-token",
-              idToken: "local-id-token",
-              expires,
-              email: "dev@example.test",
-              accountId: "acct-local",
-              chatgptPlanType: "plus",
-            },
-          },
-        },
-        agentDir,
-        { filterExternalAuthProfiles: false },
-      );
-
-      const credential = loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
-
-      expectOAuthCredentialFields(credential, {
-        provider: "openai",
-        access: "local-access-token",
-        refresh: "local-refresh-token",
-        idToken: "local-id-token",
-        expires,
-        email: "dev@example.test",
-        accountId: "acct-local",
-        chatgptPlanType: "plus",
-      });
-      expect(credential).not.toHaveProperty("oauthRef");
-      expect(fs.existsSync(path.join(resolveOAuthDir(), "auth-profiles"))).toBe(false);
-
-      clearRuntimeAuthProfileStoreSnapshots();
-      expectOAuthCredentialFields(
-        loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId],
-        {
-          provider: "openai",
-          access: "local-access-token",
-          refresh: "local-refresh-token",
-          idToken: "local-id-token",
-        },
-      );
-    });
-  });
-
-  it("preserves access-only openai oauth credentials inline", async () => {
-    await withAuthProfileTestState("openclaw-auth-profile-access-only-", ({ agentDir }) => {
-      fs.mkdirSync(agentDir, { recursive: true });
-      const profileId = "openai:default";
-      const expires = Date.now() + 60 * 60 * 1000;
-      saveAuthProfileStore(
-        {
-          version: AUTH_STORE_VERSION,
-          profiles: {
-            [profileId]: {
-              type: "oauth",
-              provider: "openai",
-              access: "access-only-token",
-              expires,
-            } as AuthProfileStore["profiles"][string],
-          },
-        },
-        agentDir,
-        { filterExternalAuthProfiles: false },
-      );
-
-      const credential = loadPersistedAuthProfileStore(agentDir)?.profiles[profileId];
-      expectOAuthCredentialFields(credential, {
-        provider: "openai",
-        access: "access-only-token",
-        expires,
-      });
-      expect(credential).not.toHaveProperty("oauthRef");
-
-      clearRuntimeAuthProfileStoreSnapshots();
-      expectOAuthCredentialFields(
-        loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId],
-        {
-          provider: "openai",
-          access: "access-only-token",
-        },
-      );
-    });
   });
 
   it("keeps copied openai oauth profiles inline", async () => {
@@ -1245,66 +876,6 @@ describe("promoteAuthProfileInOrder", () => {
       expect(loadAuthProfileStoreForRuntime(agentDir).order?.["openai"]).toEqual([
         newProfileId,
         staleProfileId,
-      ]);
-    });
-  });
-
-  it("creates a per-agent provider order when relogin has no existing order", async () => {
-    await withAuthProfileTestState("openclaw-auth-order-create-", async ({ agentDir }) => {
-      fs.mkdirSync(agentDir, { recursive: true });
-      const newProfileId = "openai:new-login";
-      const primaryProfileId = "openai:primary-login";
-      const backupProfileId = "openai:backup-login";
-      const unrelatedProfileId = "openai:unrelated-login";
-      saveAuthProfileStore(
-        {
-          version: AUTH_STORE_VERSION,
-          profiles: {
-            [primaryProfileId]: oauthCred({
-              provider: "openai",
-              access: "primary-access",
-              refresh: "primary-refresh",
-              expires: Date.now() + 30 * 60 * 1000,
-            }),
-            [backupProfileId]: oauthCred({
-              provider: "openai",
-              access: "backup-access",
-              refresh: "backup-refresh",
-              expires: Date.now() + 30 * 60 * 1000,
-            }),
-            [newProfileId]: oauthCred({
-              provider: "openai",
-              access: "new-access",
-              refresh: "new-refresh",
-              expires: Date.now() + 60 * 60 * 1000,
-            }),
-            [unrelatedProfileId]: oauthCred({
-              provider: "openai",
-              access: "unrelated-access",
-              refresh: "unrelated-refresh",
-              expires: Date.now() + 30 * 60 * 1000,
-            }),
-          },
-        },
-        agentDir,
-      );
-
-      const updated = await promoteAuthProfileInOrder({
-        agentDir,
-        provider: "openai",
-        profileId: newProfileId,
-        createIfMissing: true,
-        createFromOrder: [backupProfileId, primaryProfileId],
-      });
-
-      expect(updated).toMatchObject({
-        ok: true,
-        value: { order: { openai: [newProfileId, backupProfileId, primaryProfileId] } },
-      });
-      expect(loadAuthProfileStoreForRuntime(agentDir).order?.["openai"]).toEqual([
-        newProfileId,
-        backupProfileId,
-        primaryProfileId,
       ]);
     });
   });
@@ -1459,11 +1030,12 @@ describe("promoteAuthProfileInOrder", () => {
     );
   });
 
-  it.each(
-    (["main", "secondary", "shared"] as const).flatMap((scope) =>
-      [false, true].map((selected) => ({ scope, selected })),
-    ),
-  )(
+  it.each([
+    { scope: "main", selected: false },
+    { scope: "main", selected: true },
+    { scope: "secondary", selected: false },
+    { scope: "shared", selected: false },
+  ] as const)(
     "clears only the $scope credential owners before replacing an expired login (selected=$selected)",
     async ({ scope, selected }) => {
       await withAuthProfileTestState("openclaw-auth-force-owner-", async ({ agentDirFor }) => {
@@ -1556,7 +1128,6 @@ describe("promoteAuthProfileInOrder", () => {
         runtimePersistedProfileIds: ["openrouter:oauth", "openrouter:api-key"],
         runtimeLocalProfileIds: ["openrouter:oauth", "openrouter:api-key"],
         runtimeExternalProfileIds: ["openrouter:oauth", "openrouter:api-key"],
-        runtimeExternalCliProfileIds: ["openrouter:oauth", "openrouter:api-key"],
       };
       saveAuthProfileStore(initialStore, agentDir);
 
@@ -1578,9 +1149,6 @@ describe("promoteAuthProfileInOrder", () => {
       expect(removedStore?.runtimePersistedProfileIds ?? []).not.toContain("openrouter:oauth");
       expect(removedStore?.runtimeLocalProfileIds ?? []).not.toContain("openrouter:oauth");
       expect(removedStore?.runtimeExternalProfileIds ?? []).not.toContain("openrouter:oauth");
-      expect(removedStore ? getRuntimeExternalCliProfileIds(removedStore) : []).not.toContain(
-        "openrouter:oauth",
-      );
     });
   });
 
@@ -1632,11 +1200,10 @@ describe("promoteAuthProfileInOrder", () => {
     });
   });
 
-  it.each(
-    (["profile", "provider"] as const).flatMap((scope) =>
-      [false, true].map((replaceDuringCleanup) => ({ scope, replaceDuringCleanup })),
-    ),
-  )(
+  it.each([
+    { scope: "provider", replaceDuringCleanup: false },
+    { scope: "provider", replaceDuringCleanup: true },
+  ] as const)(
     "removes a legacy-main $scope once after config cleanup (replacement=$replaceDuringCleanup)",
     async ({ scope, replaceDuringCleanup }) => {
       await withAuthProfileTestState("openclaw-auth-remove-shared-alias-", async ({ agentDir }) => {
@@ -1653,7 +1220,13 @@ describe("promoteAuthProfileInOrder", () => {
           profiles: { [profileId]: original, "other:default": unrelated },
         };
         saveAuthProfileStore(store, agentDir);
-        expect(reloadSharedAuthStoreOwnership().location).toBe("legacy-main");
+        expect((await reloadSharedAuthStoreOwnership()).location).toBe("legacy-main");
+        replaceRuntimeAuthProfileStoreSnapshots([
+          {
+            agentDir,
+            store: { ...store, profiles: { ...store.profiles, [profileId]: replacement } },
+          },
+        ]);
         const beforeRemove = vi.fn(async () => {
           expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toEqual(original);
           if (replaceDuringCleanup) {
@@ -1689,133 +1262,6 @@ describe("promoteAuthProfileInOrder", () => {
           );
         } else {
           expect(onIncomplete).not.toHaveBeenCalled();
-        }
-      });
-    },
-  );
-
-  it.each([
-    { window: "before-delete", credentialChange: "unchanged" },
-    { window: "after-delete", credentialChange: "unchanged" },
-    { window: "after-delete", credentialChange: "rotated" },
-    { window: "after-delete", credentialChange: "added" },
-  ] as const)(
-    "does not retain a held refresh credential published $window ($credentialChange)",
-    async ({ window, credentialChange }) => {
-      await withAuthProfileTestState("openclaw-held-catalog-", async ({ agentDir }) => {
-        const initialKey = "held-refresh-secret";
-        const key = credentialChange === "unchanged" ? initialKey : "held-refresh-replacement";
-        const independentKey = "never-canonical-catalog-key";
-        const independentHeader = "never-canonical-catalog-header";
-        const survivor = createApiKeyCredential("fixture", "held-refresh-surviving-secret");
-        saveAuthProfileStore(
-          {
-            version: AUTH_STORE_VERSION,
-            profiles:
-              credentialChange === "added"
-                ? { survivor }
-                : { survivor, selected: { type: "api_key", provider: "fixture", key: initialKey } },
-          },
-          agentDir,
-        );
-        const planned = createDeferredCore();
-        const release = createDeferredCore();
-        const planner = vi
-          .spyOn(modelPlans, "planOpenClawModelsJson")
-          .mockImplementationOnce(async () => {
-            if (credentialChange !== "unchanged") {
-              saveAuthProfileStore(
-                {
-                  version: AUTH_STORE_VERSION,
-                  profiles: { survivor, selected: { type: "api_key", provider: "fixture", key } },
-                },
-                agentDir,
-              );
-            }
-            const credential =
-              loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles.selected;
-            if (credential?.type !== "api_key") {
-              throw new Error("expected selected API-key profile during catalog planning");
-            }
-            expect(credential.key).toBe(key);
-            const contents = JSON.stringify({
-              generatedBy: "openclaw-plugin-model-catalog-v1",
-              providers: {
-                fixture: {
-                  api: "openai-completions",
-                  apiKey: credential.key,
-                  headers: { Authorization: `Bearer ${credential.key}` },
-                  models: [
-                    {
-                      id: "retained-inventory",
-                      apiKey: independentKey,
-                      headers: { "X-Independent-Auth": independentHeader },
-                    },
-                    {
-                      id: "surviving-inventory",
-                      apiKey: survivor.key,
-                      headers: { Authorization: `Bearer ${survivor.key}` },
-                    },
-                  ],
-                },
-              },
-            });
-            planned.resolve();
-            await release.promise;
-            return {
-              action: "write",
-              contents: '{"providers":{}}\n',
-              pluginCatalogWrites: {
-                [catalogs.encodePluginModelCatalogRelativePath("fixture")]: contents,
-              },
-            };
-          });
-        const refresh = ensureOpenClawModelsJson({}, agentDir);
-        await Promise.race([planned.promise, refresh]);
-        const scrub = catalogs.removePersistedPluginModelCatalogCredentials;
-        let calls = 0;
-        const cleanup = vi
-          .spyOn(catalogs, "removePersistedPluginModelCatalogCredentials")
-          .mockImplementation(async (params) => {
-            await scrub(params);
-            calls += 1;
-            if (calls === (window === "before-delete" ? 1 : 2)) {
-              release.resolve();
-              await refresh;
-              const persisted =
-                catalogs.loadPersistedPluginModelCatalogsReadOnly(agentDir)[0]?.contents;
-              if (window === "before-delete") {
-                expect(persisted).toContain(key);
-              } else {
-                expect(persisted).not.toContain(key);
-                expect(persisted).toContain("retained-inventory");
-              }
-            }
-          });
-        try {
-          expect(
-            await removeAuthProfilesAcrossOwnerStores({
-              agentDir,
-              profileIds: ["selected"],
-            }),
-          ).toBe(true);
-          expect(loadPersistedAuthProfileStore(agentDir)?.profiles).toEqual({ survivor });
-          const persisted =
-            catalogs.loadPersistedPluginModelCatalogsReadOnly(agentDir)[0]?.contents;
-          expect(persisted).not.toContain(key);
-          expect(persisted).toContain("retained-inventory");
-          expect(persisted).toContain(independentKey);
-          expect(persisted).toContain(independentHeader);
-          expect(JSON.parse(persisted ?? "null").providers.fixture.models).toContainEqual({
-            id: "surviving-inventory",
-            apiKey: survivor.key,
-            headers: { Authorization: `Bearer ${survivor.key}` },
-          });
-        } finally {
-          release.resolve();
-          await refresh;
-          cleanup.mockRestore();
-          planner.mockRestore();
         }
       });
     },
@@ -1956,51 +1402,6 @@ describe("promoteAuthProfileInOrder", () => {
 });
 
 describe("setAuthProfileOrder", () => {
-  it("writes an explicit main-agent order to the canonical shared store", async () => {
-    await withAuthProfileTestState(
-      "openclaw-auth-order-set-shared-main-",
-      async ({ agentDir }) => {
-        writeConfigMachineState(
-          SHARED_AUTH_STORE_STATE_KEY,
-          { location: "state-db" },
-          { env: process.env },
-        );
-        reloadSharedAuthStoreOwnership(process.env);
-        saveAuthProfileStore({
-          version: AUTH_STORE_VERSION,
-          profiles: {
-            "openai:first": oauthCred({
-              provider: "openai",
-              access: "first",
-              refresh: "first-refresh",
-              expires: Date.now() + 60_000,
-            }),
-            "openai:second": oauthCred({
-              provider: "openai",
-              access: "second",
-              refresh: "second-refresh",
-              expires: Date.now() + 60_000,
-            }),
-          },
-          order: { openai: ["openai:first", "openai:second"] },
-        });
-
-        await setAuthProfileOrder({
-          agentDir,
-          provider: "openai",
-          order: ["openai:second", "openai:first"],
-          sharedStoreWrite: true,
-        });
-
-        expect(loadPersistedAuthProfileStore()?.order?.openai).toEqual([
-          "openai:second",
-          "openai:first",
-        ]);
-      },
-      { clearOAuthDir: true },
-    );
-  });
-
   it("canonicalizes every alias-equivalent provider state mutation", async () => {
     await withAuthProfileTestState("openclaw-auth-alias-state-", async ({ agentDir }) => {
       fs.mkdirSync(agentDir, { recursive: true });

@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SourceInfo } from "../../agents/sessions/source-info.js";
 import { decodeXml, escapeXml } from "../../shared/xml.js";
+import { resolveSkillReadPath } from "../workspace-skill-read-path.js";
 
 export interface Skill {
   name: string;
@@ -116,7 +117,7 @@ function formatSkillCatalog(
     if (description !== undefined) {
       lines.push(`    <description>${escapeXml(description)}</description>`);
     }
-    lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+    lines.push(`    <location>${escapeXml(resolveSkillReadPath(skill))}</location>`);
     if (skill.locationNote) {
       lines.push(`    <location_note>${escapeXml(skill.locationNote)}</location_note>`);
     }

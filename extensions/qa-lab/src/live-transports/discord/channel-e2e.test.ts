@@ -56,6 +56,7 @@ afterEach(async () => {
       await session.cleanup().catch(() => {});
     }),
   );
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -300,6 +301,72 @@ describe("Discord agent E2E authority and evidence", () => {
       route: `/channels/${channelId}/messages/${id}`,
       token: "Bot sut-token",
     });
+  });
+
+  it("cleans marker-correlated replies after a recorder failure without claiming unrelated messages", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const marker = "OWNED_REPLY_MARKER";
+    const trigger = await f.driver.send({ text: `reply with ${marker}`, mention: true });
+    const thread = await f.driver.thread({ name: "owned thread", messageId: trigger.id });
+    const waiting = f.driver.waitForReply({ afterMessageId: trigger.id, textIncludes: marker });
+    const rejected = expect(waiting).rejects.toThrow("closed (1006)");
+    await vi.advanceTimersByTimeAsync(0);
+    const reply = {
+      id: "623456789012345678",
+      channel_id: channelId,
+      author: { id: sutId },
+      content: marker,
+    };
+    const unrelated: DiscordE2eNativeMessage[] = [
+      { ...reply, id: "523456789012345677" },
+      { ...reply, id: "623456789012345679", content: "another conversation" },
+      { ...reply, id: "623456789012345680", author: { id: driverId } },
+      { ...reply, id: "623456789012345681", channel_id: thread.threadId },
+      {
+        ...reply,
+        id: "623456789012345682",
+        message_reference: { message_id: "923456789012345678" },
+      },
+    ];
+    for (const message of [reply, ...unrelated]) {
+      f.messages.set(message.id, message);
+      f.emit("MESSAGE_CREATE", message);
+    }
+    socketHarness.current!.emit("close", 1006);
+    await vi.advanceTimersByTimeAsync(100);
+    await rejected;
+    await f.session.stop();
+    await expect(f.session.cleanup()).rejects.toThrow("closed (1006)");
+
+    expect(f.messages.has(trigger.id)).toBe(false);
+    expect(f.messages.has(reply.id)).toBe(false);
+    expect(unrelated.every((message) => f.messages.has(message.id))).toBe(true);
+    expect(f.mutations.filter((row) => row.method === "DELETE")).toEqual(
+      expect.arrayContaining([
+        {
+          method: "DELETE",
+          route: `/channels/${channelId}/messages/${trigger.id}`,
+          token: "Bot driver-token",
+        },
+        {
+          method: "DELETE",
+          route: `/channels/${channelId}/messages/${reply.id}`,
+          token: "Bot sut-token",
+        },
+      ]),
+    );
+    expect(f.mutations.filter((row) => row.method === "DELETE")).toHaveLength(2);
+    expect(await f.evidence()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "correlation",
+          messageId: reply.id,
+          triggerMessageId: trigger.id,
+        }),
+        expect.objectContaining({ source: "recorder", continuous: false }),
+      ]),
+    );
   });
 
   it("never retries an uncertain write or sweeps the channel to conceal its missing receipt", async () => {

@@ -36,10 +36,6 @@ export class StreamDisconnectGrace implements StreamDisconnectLifecycle {
     }
 
     const disconnectTimer = setTimeout(() => {
-      const latest = this.streams.get(providerCallId);
-      if (latest?.disconnectTimer !== disconnectTimer) {
-        return;
-      }
       this.streams.delete(providerCallId);
       this.onGraceExpired({ providerCallId, streamId });
     }, STREAM_DISCONNECT_GRACE_MS);

@@ -16,6 +16,7 @@ import {
   prepareGatewaySuspend,
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
+  type GatewaySuspendHandoffOwner,
 } from "./gateway-suspend-coordinator.js";
 import { inspectors } from "./gateway-suspend-coordinator.test-support.js";
 
@@ -39,20 +40,35 @@ describe("gateway suspend coordinator", () => {
       let now = 1_000;
       let pending = 0;
       let work = Number(draining);
+      let mutations = 0;
       let current = true;
-      const owner = { isCurrent: () => current };
+      const owner: GatewaySuspendHandoffOwner = { isCurrent: () => current };
+      const commitStop = vi.fn(() => {
+        const consumed = consumeGatewaySuspendHandoff(owner);
+        if (!consumed.ok || !consumed.value) {
+          throw new Error("host did not consume its suspension");
+        }
+        markGatewayRestartDraining();
+        current = false;
+      });
+      owner.commitStop = commitStop;
       const params = {
         requestId: "external-host",
         drain: true,
         pauseScheduling: vi.fn(),
         resumeScheduling: vi.fn(),
-        inspect: inspectors({ getRootRequests: () => work, getTerminalPersistence: () => pending }),
+        inspect: inspectors({
+          getRootRequests: () => work,
+          getTerminalPersistence: () => pending,
+          getSessionMutations: () => mutations,
+        }),
         nowMs: () => now,
         createSuspensionId: () => "external-lease",
       };
       expect(prepareGatewaySuspend(params).status).toBe(draining ? "draining" : "ready");
       return {
         owner,
+        commitStop,
         params,
         arm: () =>
           armGatewaySuspendHandoff({
@@ -60,6 +76,11 @@ describe("gateway suspend coordinator", () => {
             owner,
           }),
         consume: () => consumeGatewaySuspendHandoff(owner),
+        commit: () =>
+          armGatewaySuspendHandoff({ suspensionId: "external-lease", owner, commit: true }),
+        mutate: () => {
+          mutations = 1;
+        },
         advance: (ms: number) => {
           now += ms;
         },
@@ -78,24 +99,95 @@ describe("gateway suspend coordinator", () => {
       };
     };
 
-    it.each([false, true])(
-      "consumes one explicit arm without renewing it (draining: %s)",
+    it.each([false])(
+      "commits the host's one-way shutdown before acknowledging and preserves it after expiry (draining: %s)",
       (draining) => {
         const fixture = setup(draining);
-        expect(fixture.consume()).toEqual({ ok: true, value: false });
-        expect(fixture.arm()).toEqual({
+        expect(fixture.commit()).toEqual({
           ok: true,
-          value: { status: "armed", suspensionId: "external-lease", expiresAtMs: 121_000 },
+          value: { status: "committed", suspensionId: "external-lease", expiresAtMs: 121_000 },
         });
-        fixture.advance(30_000);
-        expect(prepareGatewaySuspend(fixture.params)).toMatchObject({ expiresAtMs: 121_000 });
-        expect(fixture.arm()).toMatchObject({ ok: true, value: { expiresAtMs: 121_000 } });
-        expect(fixture.consume()).toEqual({ ok: true, value: true });
-        expect(fixture.consume()).toEqual({ ok: true, value: false });
-        expect(isGatewayWorkAdmissionClosed()).toBe(true);
+        expect(fixture.commitStop).toHaveBeenCalledOnce();
+        expect(resumeGatewaySuspend("external-lease")).toEqual({
+          ok: false,
+          reason: "gateway-restarting",
+        });
+        fixture.advance(SUSPEND_TTL_MS + 1);
+        expect(getGatewaySuspendStatus("external-lease", true)).toMatchObject({
+          status: "draining",
+          phase: "interrupting",
+        });
+        expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
         expect(fixture.params.resumeScheduling).not.toHaveBeenCalled();
       },
     );
+
+    it("reconciles a lost committed reply without committing twice or adopting another host", () => {
+      const fixture = setup(true);
+      const committed = fixture.commit();
+      expect(committed.ok).toBe(true);
+      fixture.advance(SUSPEND_TTL_MS + 1);
+      expect(fixture.commit()).toEqual(committed);
+      expect(fixture.commitStop).toHaveBeenCalledOnce();
+      expect(
+        armGatewaySuspendHandoff({
+          suspensionId: "another-lease",
+          owner: fixture.owner,
+          commit: true,
+        }).ok,
+      ).toBe(false);
+      expect(
+        armGatewaySuspendHandoff({
+          suspensionId: "external-lease",
+          owner: { isCurrent: () => true, commitStop: fixture.commitStop },
+          commit: true,
+        }).ok,
+      ).toBe(false);
+      expect(fixture.commitStop).toHaveBeenCalledOnce();
+      expect(isGatewayWorkAdmissionClosed()).toBe(true);
+    });
+
+    it.each(["expired", "resumed", "write custody", "old host"] as const)(
+      "refuses committed shutdown for %s without invoking the host exit owner",
+      (reason) => {
+        const fixture = setup(true);
+        if (reason === "expired") {
+          fixture.advance(SUSPEND_TTL_MS);
+        } else if (reason === "resumed") {
+          resumeGatewaySuspend("external-lease");
+        } else if (reason === "write custody") {
+          fixture.mutate();
+        } else {
+          delete fixture.owner.commitStop;
+        }
+        expect(fixture.commit().ok).toBe(false);
+        expect(fixture.commitStop).not.toHaveBeenCalled();
+      },
+    );
+
+    it("does not acknowledge a host callback that leaves suspension reversible", () => {
+      const fixture = setup(false);
+      fixture.owner.commitStop = () => {};
+      expect(fixture.commit().ok).toBe(false);
+      expect(getGatewaySuspendStatus("external-lease").status).toBe("ready");
+      expect(resumeGatewaySuspend("external-lease")).toMatchObject({ ok: true, resumed: true });
+    });
+
+    it.each([true])("consumes one explicit arm without renewing it (draining: %s)", (draining) => {
+      const fixture = setup(draining);
+      expect(fixture.consume()).toEqual({ ok: true, value: false });
+      expect(fixture.arm()).toEqual({
+        ok: true,
+        value: { status: "armed", suspensionId: "external-lease", expiresAtMs: 121_000 },
+      });
+      fixture.advance(30_000);
+      expect(prepareGatewaySuspend(fixture.params)).toMatchObject({ expiresAtMs: 121_000 });
+      expect(fixture.arm()).toMatchObject({ ok: true, value: { expiresAtMs: 121_000 } });
+      expect(fixture.consume()).toEqual({ ok: true, value: true });
+      expect(fixture.consume()).toEqual({ ok: true, value: false });
+      expect(isGatewayWorkAdmissionClosed()).toBe(true);
+      expect(fixture.params.resumeScheduling).not.toHaveBeenCalled();
+    });
 
     it.each(["expiry", "resume", "replacement", "host", "restart", "disarm"])(
       "refuses a previously armed handoff after %s",
@@ -125,7 +217,7 @@ describe("gateway suspend coordinator", () => {
       },
     );
 
-    it.each([false, true])(
+    it.each([true])(
       "refreshes final-chat custody after a lease becomes ready (draining: %s)",
       (draining) => {
         const fixture = setup(draining);

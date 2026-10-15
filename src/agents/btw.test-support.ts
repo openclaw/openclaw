@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import type { AssistantMessage, AssistantMessageEvent } from "../llm/types.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   createOpenClawTestState,
@@ -115,7 +116,9 @@ function createSessionEntry(overrides: Partial<SessionEntry> = {}) {
   };
 }
 
-function createAssistantDoneEvent(content: unknown[]) {
+function createAssistantDoneEvent(
+  content: AssistantMessage["content"],
+): Extract<AssistantMessageEvent, { type: "done" }> {
   return {
     type: "done",
     reason: "stop",
@@ -134,10 +137,6 @@ function createAssistantDoneEvent(content: unknown[]) {
 
 function createDoneEvent(text: string) {
   return createAssistantDoneEvent([{ type: "text", text }]);
-}
-
-function createThinkingOnlyDoneEvent(thinking: string) {
-  return createAssistantDoneEvent([{ type: "thinking", thinking }]);
 }
 
 function mockDoneAnswer(text: string) {
@@ -202,7 +201,7 @@ function createSideQuestionParams(
   overrides: Partial<RunBtwSideQuestionParams> = {},
 ): RunBtwSideQuestionParams {
   return {
-    cfg: { agents: { entries: { main: { default: true } } } } as never,
+    cfg: { agents: { entries: { main: {} } } },
     agentId: "main",
     agentDir: DEFAULT_AGENT_DIR,
     provider: DEFAULT_PROVIDER,
@@ -352,15 +351,6 @@ function expectTextBlockContains(block: unknown, text: string): void {
   const record = expectRecordFields(block, { type: "text" });
   expect(typeof record.text).toBe("string");
   expect(record.text).toContain(text);
-}
-
-function firstTextBlockIncludes(message: Record<string, unknown>, text: string): boolean {
-  if (!Array.isArray(message.content)) {
-    return false;
-  }
-  const [block] = message.content;
-  const blockText = (block as { text?: unknown } | undefined)?.text;
-  return typeof blockText === "string" && blockText.includes(text);
 }
 
 function expectNoAssistantMessages(context: unknown) {
@@ -540,15 +530,11 @@ export {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   DEFAULT_SESSION_KEY,
-  DEFAULT_STORE_PATH,
   DEFAULT_QUESTION,
-  MATH_QUESTION,
   MATH_ANSWER,
   makeAsyncEvents,
   createSessionEntry,
-  createAssistantDoneEvent,
   createDoneEvent,
-  createThinkingOnlyDoneEvent,
   mockDoneAnswer,
   createCliRuntimeConfig,
   mockCliOutput,
@@ -570,7 +556,6 @@ export {
   streamContext,
   contextMessages,
   expectTextBlockContains,
-  firstTextBlockIncludes,
   expectNoAssistantMessages,
   expectSanitizedAssistantContext,
   expectSeedOnlyUserContext,
@@ -578,9 +563,7 @@ export {
 };
 export {
   streamSimpleMock,
-  readFileMock,
   buildSessionContextMock,
-  ensureOpenClawModelsJsonMock,
   loadPreparedModelRuntimeSnapshotMock,
   snapshotResources,
   discoverAuthStorageMock,
@@ -597,11 +580,8 @@ export {
   resolveAgentWorkspaceDirMock,
   prepareProviderRuntimeAuthMock,
   registerProviderStreamForModelMock,
-  resolveEmbeddedAgentStreamMock,
   prepareCliRunContextMock,
-  executePreparedCliRunMock,
   diagDebugMock,
-  ensureSelectedAgentHarnessPluginMock,
   createAgentHarnessHostCapabilitiesMock,
   closeAgentHarnessHostCapabilitiesMock,
   agentHarnessHostCapabilitiesMock,

@@ -7,9 +7,5 @@ export function resolveUserPath(input: string, homedir: () => string = os.homedi
   if (!trimmed) {
     return trimmed;
   }
-  if (trimmed.startsWith("~")) {
-    const expanded = trimmed.replace(/^~(?=$|[\\/])/, homedir);
-    return path.resolve(expanded);
-  }
-  return path.resolve(trimmed);
+  return path.resolve(trimmed.replace(/^~(?=$|[\\/])/, homedir));
 }

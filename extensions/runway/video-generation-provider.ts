@@ -2,7 +2,7 @@ import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -218,7 +218,7 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
     label: "Runway",
     defaultModel: DEFAULT_RUNWAY_MODEL,
     models: ["gen4.5", "gen4_turbo", "gen4_aleph", "gen3a_turbo", "veo3.1", "veo3.1_fast", "veo3"],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "runway", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "runway", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,
@@ -300,13 +300,13 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
         const completed = await pollProviderOperationJson<RunwayTaskDetailResponse>({
           url: `${baseUrl}/v1/tasks/${taskId}`,
           headers,
-          deadline: createProviderOperationDeadline({
-            timeoutMs: resolveProviderOperationTimeoutMs({
-              deadline,
-              defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-            }),
-            label: `Runway video generation task ${taskId}`,
-          }),
+          deadline:
+            deadline.deadlineAtMs === undefined
+              ? createProviderOperationDeadline({
+                  timeoutMs: DEFAULT_TIMEOUT_MS,
+                  label: `Runway video generation task ${taskId}`,
+                })
+              : { ...deadline, label: `Runway video generation task ${taskId}` },
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           fetchFn,
           maxAttempts: MAX_POLL_ATTEMPTS,

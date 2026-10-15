@@ -1,4 +1,3 @@
-/** Builds prompt body and envelope metadata for reply runs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
@@ -13,6 +12,7 @@ import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
 import { buildInboundMediaNoteProjection } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { appendChannelPromptContext } from "./channel-prompt-context.js";
+import { CURRENT_MESSAGE_MARKER } from "./history.js";
 
 const ROOM_EVENT_PROMPT = "[OpenClaw room event]";
 const ROOM_EVENT_PARTICIPATION_RULE =
@@ -33,7 +33,6 @@ type ReplyPromptEnvelope = ReplyPromptEnvelopeBase & {
   transcriptCommandBody: string;
 };
 
-/** Base prompt envelope fields before body variants are added. */
 type ReplyPromptEnvelopeBase = {
   /** Model-visible body before media, thread context, and inter-session annotation are applied. */
   effectiveBaseBody: string;
@@ -136,7 +135,6 @@ function buildResumableRoomContext(roomContext: string): string {
     .join("\n\n");
 }
 
-/** Builds prompt envelope metadata shared by all body variants. */
 export function buildReplyPromptEnvelopeBase(
   params: ReplyPromptEnvelopeBaseParams,
 ): ReplyPromptEnvelopeBase {
@@ -149,7 +147,12 @@ export function buildReplyPromptEnvelopeBase(
     : undefined;
   const currentInboundContextText = isRoomEvent
     ? buildRoomEventContext(inboundUserContext, deliveryDirective)
-    : [inboundUserContext, deliveryDirective].filter(Boolean).join("\n\n");
+    : (params.inboundUserContextPromptJoiner === " "
+        ? [deliveryDirective, inboundUserContext]
+        : [inboundUserContext, deliveryDirective]
+      )
+        .filter(Boolean)
+        .join("\n\n");
   const resetModelBody = params.isBareSessionReset
     ? [
         params.inboundUserContext,
@@ -175,7 +178,7 @@ export function buildReplyPromptEnvelopeBase(
       }).text
     : params.isBareSessionReset
       ? softResetTail || `[OpenClaw session ${params.startupAction}]`
-      : (roomEventBody ?? (params.hasUserBody ? params.baseBody : MEDIA_ONLY_USER_TEXT));
+      : effectiveBaseBody;
   const fragments: RuntimeContextFragment[] = [
     ...(isRoomEvent ? [{ kind: "runtime-instruction" as const, text: ROOM_EVENT_PROMPT }] : []),
     ...(inboundUserContext
@@ -203,7 +206,6 @@ export function buildReplyPromptEnvelopeBase(
   };
 }
 
-/** Builds the full reply prompt envelope for a prepared run. */
 export function buildReplyPromptEnvelope(
   params: ReplyPromptEnvelopeBaseParams & {
     prefixedBody?: string;
@@ -219,38 +221,32 @@ export function buildReplyPromptEnvelope(
   const media = [...generatedMedia.media, ...normalizeMediaFacts(params.media)];
   const prependMediaNote = (body: string): string =>
     mediaNote ? [mediaNote, body].filter(Boolean).join("\n").trim() : body;
-  const transcriptCommandBody =
-    mediaNote && params.inboundEventKind !== "room_event"
-      ? base.transcriptBody
-        ? prependMediaNote(base.transcriptBody)
-        : mediaNote
-      : base.transcriptBody;
-
-  const sourceContext = [
+  const sourceContext: RuntimeContextFragment[] = [
     params.threadContextNote,
     ...(params.systemEventBlocks ?? []),
     appendChannelPromptContext("", params.sessionCtx.ChannelPromptContext),
-  ].filter((text): text is string => Boolean(text?.trim()));
-  const currentInboundContext = sourceContext.length
-    ? appendCurrentInboundContext(
-        base.currentInboundContext,
-        sourceContext.map((text) => ({ kind: "conversation-data", text })),
-      )
-    : base.currentInboundContext;
+  ]
+    .filter((text): text is string => Boolean(text?.trim()))
+    .map((text) => ({ kind: "conversation-data", text }));
+  // Close thread context without overriding room events' optional-response policy.
+  if (params.threadContextNote?.trim() && params.inboundEventKind !== "room_event") {
+    sourceContext.push({ kind: "runtime-instruction", text: CURRENT_MESSAGE_MARKER });
+  }
+  const annotateBody = (body: string) =>
+    annotateInterSessionPromptText(prependMediaNote(body), params.sessionCtx.InputProvenance);
   return {
     mediaNote,
     inboundMediaIndexes: generatedMedia.mediaIndexes,
     ...(media.length > 0 ? { media } : {}),
-    prefixedCommandBody: annotateInterSessionPromptText(
-      prependMediaNote(params.prefixedBody ?? base.effectiveBaseBody),
-      params.sessionCtx.InputProvenance,
-    ),
-    queuedBody: annotateInterSessionPromptText(
-      prependMediaNote(base.effectiveBaseBody),
-      params.sessionCtx.InputProvenance,
-    ),
-    transcriptCommandBody,
+    prefixedCommandBody: annotateBody(params.prefixedBody ?? base.effectiveBaseBody),
+    queuedBody: annotateBody(base.effectiveBaseBody),
+    transcriptCommandBody:
+      params.inboundEventKind === "room_event"
+        ? base.transcriptBody
+        : prependMediaNote(base.transcriptBody),
     ...base,
-    currentInboundContext,
+    currentInboundContext: sourceContext.length
+      ? appendCurrentInboundContext(base.currentInboundContext, sourceContext)
+      : base.currentInboundContext,
   };
 }

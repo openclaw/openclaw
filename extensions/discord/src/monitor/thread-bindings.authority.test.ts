@@ -7,7 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -70,8 +70,8 @@ beforeEach(async () => {
   await resetThreadBindingsForTests();
   resetPluginStateStoreForTests();
   clearRuntimeConfigSnapshot();
-  getDiscordRuntime().state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
-    createPluginStateKeyedStoreForTests<T>("discord", options);
+  getDiscordRuntime().state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions) =>
+    createPluginStateKeyedStoreV2ForTests<T>("discord", options, { assertCurrent() {} });
   getDiscordRuntime().state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
     createPluginStateSyncKeyedStoreForTests<T>("discord", options);
   fixture = createRestFixture();
@@ -205,6 +205,7 @@ describe("thread binding current authority", () => {
         setImmediate(resolve);
       });
       expect(stopped).toBe(false);
+      await expect(manager.touchThread({ threadId: THREAD_ID })).rejects.toThrow("stopping");
       expect(unbindingCompleted).toBe(false);
       expect(touchFailure).toBeUndefined();
       expect(touchCompleted).toBe(true);
@@ -239,8 +240,8 @@ describe("thread binding current authority", () => {
           conversation: {
             channel: "discord",
             accountId: "default",
-            conversationId: PARENT_ID,
-            parentConversationId: PARENT_ID,
+            conversationId: `channel:${PARENT_ID}`,
+            parentConversationId: `channel:${PARENT_ID}`,
           },
           placement: "child",
           metadata: { introText: "Binding ready" },

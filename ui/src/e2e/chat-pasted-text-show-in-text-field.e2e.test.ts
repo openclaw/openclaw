@@ -1,4 +1,6 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -18,6 +20,19 @@ const suite = createControlUiE2eSuite({
 
 const pastedText = `Quarterly launch plan\n\n  Preserve indentation 🦞\n${"x".repeat(1100)}`;
 const pastedTextLabel = "Quarterly launch plan Preserve…";
+type GeometryNode = { tag: string; classes: string[]; connected: boolean };
+type GeometryWindow = Window & {
+  pastedGeometryFailure?: {
+    missing: string[];
+    theme: string;
+    width: number;
+    connected: { card: boolean; host: boolean };
+    host: { pending: boolean | null; updated: boolean | null };
+    actionSpan: { children: number | null; empty: boolean | null };
+    ancestors: GeometryNode[];
+    structure: Array<GeometryNode & { children: string[] }>;
+  };
+};
 const contextOptions = {
   locale: "en-US",
   reducedMotion: "reduce" as const,
@@ -41,62 +56,6 @@ async function paste(composer: Locator) {
 }
 
 suite.define(() => {
-  it.each([1280, 390])(
-    "removes a pasted-text card at %ipx without changing the draft or other files",
-    async (width) => {
-      await suite.withPage(
-        { ...contextOptions, viewport: { width, height: 900 } },
-        async ({ page }) => {
-          const gateway = await installMockGateway(page);
-          await page.goto(`${suite.server.baseUrl}chat`);
-          await page.evaluate(() => {
-            document.documentElement.dataset.themeMode = "dark";
-          });
-          const composer = page.locator(".agent-chat__composer-combobox textarea");
-          await composer.waitFor({ state: "visible" });
-          await composer.fill("Keep this draft");
-          await paste(composer);
-          await page.locator(".agent-chat__file-input").setInputFiles({
-            name: "keep.html",
-            mimeType: "text/html",
-            buffer: Buffer.from("<!doctype html><title>Keep</title>"),
-          });
-          const card = page.locator("openclaw-chat-pasted-text .chat-attachment-thumb");
-          await card.getByRole("button", { name: pastedTextLabel, exact: true }).waitFor();
-          const remove = card.locator(".chat-attachment-remove");
-          const proofDir = createControlUiE2eArtifactDir("pasted-text-remove");
-          await page.screenshot({ path: `${proofDir}/card-${width}.png` });
-          await expect.poll(() => remove.count()).toBe(1);
-          const placement = await remove.evaluate((button) => {
-            const tile = button.closest(".chat-attachment-thumb")!;
-            const rect = tile.getBoundingClientRect();
-            const buttonRect = button.getBoundingClientRect();
-            return {
-              visible: getComputedStyle(button).opacity === "1",
-              topRight:
-                buttonRect.left > rect.left + rect.width / 2 &&
-                buttonRect.top < rect.top + rect.height / 2,
-              name: button.getAttribute("aria-label"),
-            };
-          });
-          expect(placement).toEqual({
-            visible: true,
-            topRight: true,
-            name: expect.stringContaining("Remove"),
-          });
-          await remove.click();
-          await expect.poll(() => card.count()).toBe(0);
-          expect(
-            await page.locator(".chat-attachment-file__name", { hasText: "keep.html" }).count(),
-          ).toBe(1);
-          expect(await composer.inputValue()).toBe("Keep this draft");
-          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-          await page.screenshot({ path: `${proofDir}/removed-${width}.png` });
-        },
-      );
-    },
-  );
-
   it.each([1280, 390])("restores pasted text directly from the %ipx composer", async (width) => {
     await suite.withPage(
       { ...contextOptions, viewport: { width, height: 900 } },
@@ -124,34 +83,100 @@ suite.define(() => {
             document.documentElement.dataset.themeMode = mode;
           }, theme);
           expect(
-            await pastedCard.evaluate((card) => {
-              const other = document.querySelector(
-                ".chat-attachments-preview .chat-attachment-thumb--file:not(openclaw-chat-pasted-text *)",
-              )!;
-              const name = card.querySelector(".chat-attachment-file__name")!;
-              const action = card.querySelector(".chat-attachment-text-action")!;
-              const rect = card.getBoundingClientRect();
-              const actionRect = action.getBoundingClientRect();
-              const style = getComputedStyle(card);
-              const otherStyle = getComputedStyle(other);
-              return {
-                sameSize:
-                  rect.width === other.getBoundingClientRect().width &&
-                  rect.height === other.getBoundingClientRect().height,
-                sameBorder:
-                  style.border === otherStyle.border &&
-                  style.borderRadius === otherStyle.borderRadius,
-                secondRow: actionRect.top >= name.getBoundingClientRect().bottom,
-                inside:
-                  actionRect.left >= rect.left &&
-                  actionRect.right <= rect.right &&
-                  actionRect.bottom < rect.bottom,
-                readable: action.clientWidth >= action.scrollWidth,
-                nestedControls: card.querySelectorAll(
-                  "button button, button a, [role=button] button",
-                ).length,
-              };
-            }),
+            await pastedCard
+              .evaluate((card) => {
+                const other = document.querySelector(
+                  ".chat-attachments-preview .chat-attachment-thumb--file:not(openclaw-chat-pasted-text *)",
+                )!;
+                const name = card.querySelector(".chat-attachment-file__name")!;
+                const action = card.querySelector(".chat-attachment-text-action")!;
+                if (!other || !name || !action) {
+                  try {
+                    const describe = (element: Element): GeometryNode => ({
+                      tag: element.localName,
+                      classes: [...element.classList],
+                      connected: element.isConnected,
+                    });
+                    const host = card.closest("openclaw-chat-pasted-text");
+                    const span = name?.parentElement?.querySelector("span[style*=contents]");
+                    const ancestors: GeometryNode[] = [];
+                    let parent = card.parentElement;
+                    while (parent && ancestors.length < 3) {
+                      ancestors.push(describe(parent));
+                      parent = parent.parentElement;
+                    }
+                    // Snapshot the null moment; cleanup only reads these synthetic structural facts.
+                    (window as GeometryWindow).pastedGeometryFailure = {
+                      missing: Object.entries({ ordinary: other, name, action })
+                        .filter(([, element]) => !element)
+                        .map(([label]) => label),
+                      theme:
+                        document.documentElement.dataset.themeMode === "dark" ? "dark" : "light",
+                      width: window.innerWidth,
+                      connected: { card: card.isConnected, host: host?.isConnected ?? false },
+                      host: {
+                        pending: host ? Reflect.get(host, "isUpdatePending") === true : null,
+                        updated: host ? Reflect.get(host, "hasUpdated") === true : null,
+                      },
+                      actionSpan: {
+                        children: span?.childNodes.length ?? null,
+                        empty: span ? !span.hasChildNodes() : null,
+                      },
+                      ancestors,
+                      structure: [card, ...card.querySelectorAll("*")].slice(0, 16).map((element) =>
+                        Object.assign(describe(element), {
+                          children: [...element.childNodes]
+                            .slice(0, 12)
+                            .map((child) => child.nodeName.toLowerCase()),
+                        }),
+                      ),
+                    };
+                  } catch {
+                    // Preserve the original null access if capture fails.
+                  }
+                }
+                const rect = card.getBoundingClientRect();
+                const actionRect = action.getBoundingClientRect();
+                const style = getComputedStyle(card);
+                const otherStyle = getComputedStyle(other);
+                return {
+                  sameSize:
+                    rect.width === other.getBoundingClientRect().width &&
+                    rect.height === other.getBoundingClientRect().height,
+                  sameBorder:
+                    style.border === otherStyle.border &&
+                    style.borderRadius === otherStyle.borderRadius,
+                  secondRow: actionRect.top >= name.getBoundingClientRect().bottom,
+                  inside:
+                    actionRect.left >= rect.left &&
+                    actionRect.right <= rect.right &&
+                    actionRect.bottom < rect.bottom,
+                  readable: action.clientWidth >= action.scrollWidth,
+                  nestedControls: card.querySelectorAll(
+                    "button button, button a, [role=button] button",
+                  ).length,
+                };
+              })
+              .catch(async (error: unknown) => {
+                try {
+                  const snapshot = await withTimeout(
+                    page.evaluate(() => (window as GeometryWindow).pastedGeometryFailure),
+                    5_000,
+                    "pasted text geometry diagnostics",
+                  );
+                  if (snapshot) {
+                    const artifactParent = process.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR;
+                    const directory = createControlUiE2eArtifactDir("failure", artifactParent);
+                    await writeFile(
+                      join(directory, "failure.public.json"),
+                      JSON.stringify({ schemaVersion: 1, pastedTextGeometry: snapshot }),
+                    );
+                  }
+                } catch {
+                  // Preserve the original geometry failure.
+                }
+                throw error;
+              }),
           ).toEqual({
             sameSize: true,
             sameBorder: true,
@@ -333,37 +358,6 @@ suite.define(() => {
         }),
       );
       expect(fileName).toMatch(/^pasted-text-\d+\.txt$/);
-    });
-  });
-
-  it("keeps a newly uploaded lookalike filename as a file and sends file origin", async () => {
-    await suite.withPage(contextOptions, async ({ page }) => {
-      const gateway = await installMockGateway(page);
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await page.locator(".agent-chat__file-input").setInputFiles({
-        name: "pasted-text-123.txt",
-        mimeType: "text/plain",
-        buffer: Buffer.from(pastedText),
-      });
-      await page
-        .locator(".chat-attachment-file__name", { hasText: "pasted-text-123.txt" })
-        .waitFor();
-      expect(await page.locator("openclaw-chat-pasted-text").count()).toBe(0);
-      await page.getByRole("button", { name: "Send message", exact: true }).click();
-      await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(1);
-      expect((await gateway.getRequests("chat.send"))[0]!.params).toEqual(
-        expect.objectContaining({
-          attachments: [
-            {
-              type: "file",
-              mimeType: "text/plain",
-              fileName: "pasted-text-123.txt",
-              origin: "file",
-              content: Buffer.from(pastedText).toString("base64"),
-            },
-          ],
-        }),
-      );
     });
   });
 

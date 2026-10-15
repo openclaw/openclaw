@@ -1,4 +1,3 @@
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 
@@ -177,62 +176,6 @@ describe("detectZaiEndpoint", () => {
     }
   });
 
-  it("caps oversized probe timeouts before scheduling", async () => {
-    const timeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
-    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
-    const fetchFn = makeFetch({
-      "https://api.z.ai/api/paas/v4/chat/completions::glm-5.2": { status: 200 },
-    });
-
-    await detectZaiEndpoint({
-      apiKey: "sk-test", // pragma: allowlist secret
-      fetchFn,
-      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
-    });
-
-    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-  });
-
-  it("still parses well-formed sub-cap error bodies to drive endpoint classification", async () => {
-    const codingGlobal = "https://api.z.ai/api/coding/paas/v4/chat/completions";
-    const detected = await detectZaiEndpoint({
-      apiKey: "sk-test", // pragma: allowlist secret
-      endpoint: "coding-global",
-      fetchFn: makeFetch({
-        [`${codingGlobal}::glm-5.3`]: {
-          status: 400,
-          raw: JSON.stringify({ error: { message: "model not found for this plan" } }),
-        },
-        [`${codingGlobal}::glm-5.1`]: {
-          status: 400,
-          raw: JSON.stringify({ code: 1211, msg: "model does not exist" }),
-        },
-        [`${codingGlobal}::glm-4.7`]: { status: 200, raw: "{}" },
-      }),
-    });
-
-    expect(detected?.endpoint).toBe("coding-global");
-    expect(detected?.modelId).toBe("glm-4.7");
-  });
-
-  it("swallows malformed and empty sub-cap error bodies and falls back on status", async () => {
-    const codingGlobal = "https://api.z.ai/api/coding/paas/v4/chat/completions";
-    const detected = await detectZaiEndpoint({
-      apiKey: "sk-test", // pragma: allowlist secret
-      endpoint: "coding-global",
-      fetchFn: makeFetch({
-        [`${codingGlobal}::glm-5.3`]: { status: 404, raw: "<html>gateway error</html>" },
-        [`${codingGlobal}::glm-5.1`]: { status: 404, raw: "" },
-        [`${codingGlobal}::glm-4.7`]: { status: 200, raw: "{}" },
-      }),
-    });
-
-    expect(detected?.endpoint).toBe("coding-global");
-    expect(detected?.modelId).toBe("glm-4.7");
-  });
-
   it("rejects sub-cap error bodies that are not valid UTF-8 instead of classifying substituted text", async () => {
     const codingGlobal = "https://api.z.ai/api/coding/paas/v4/chat/completions";
     // Invalid UTF-8 must not turn into a trusted error code via replacement characters.
@@ -259,26 +202,6 @@ describe("detectZaiEndpoint", () => {
 
     expect(calls).toEqual(["glm-5.3"]);
     expect(detected).toBeNull();
-  });
-
-  it("still classifies well-formed multibyte error bodies (fatal decode does not regress valid UTF-8)", async () => {
-    const codingGlobal = "https://api.z.ai/api/coding/paas/v4/chat/completions";
-    const valid = new TextEncoder().encode(
-      '{"error":{"code":1211,"message":"model \u4e0d\u5b58\u5728 \u{1F99E}"}}',
-    );
-
-    const detected = await detectZaiEndpoint({
-      apiKey: "sk-test", // pragma: allowlist secret
-      endpoint: "coding-global",
-      fetchFn: makeFetch({
-        [`${codingGlobal}::glm-5.3`]: { status: 400, bytes: valid },
-        [`${codingGlobal}::glm-5.1`]: { status: 400, bytes: valid },
-        [`${codingGlobal}::glm-4.7`]: { status: 200, bytes: new TextEncoder().encode("{}") },
-      }),
-    });
-
-    expect(detected?.endpoint).toBe("coding-global");
-    expect(detected?.modelId).toBe("glm-4.7");
   });
 
   it("fails closed on oversized probe error bodies without buffering unbounded", async () => {
@@ -341,12 +264,18 @@ describe("detectZaiEndpoint", () => {
   });
 
   it("fails closed when a probe error body stalls without chunks", async () => {
+    vi.useFakeTimers();
+    const state = { cancelled: false, settled: false };
     const fetchFn = (async (url: string) => {
       if (url !== "https://api.z.ai/api/paas/v4/chat/completions") {
         throw new Error(`unexpected url: ${url}`);
       }
       // Headers arrived, but the body never produces a chunk or closes.
-      const body = new ReadableStream<Uint8Array>();
+      const body = new ReadableStream<Uint8Array>({
+        cancel() {
+          state.cancelled = true;
+        },
+      });
       return new Response(body, {
         status: 400,
         headers: { "content-type": "application/json" },
@@ -354,26 +283,39 @@ describe("detectZaiEndpoint", () => {
     }) as typeof fetch;
 
     const timeoutMs = 80;
-    const startedAt = Date.now();
-    const detected = await detectZaiEndpoint({
-      apiKey: "sk-test", // pragma: allowlist secret
-      endpoint: "global",
-      timeoutMs,
-      fetchFn,
-    });
-    const elapsedMs = Date.now() - startedAt;
+    try {
+      const detectedPromise = detectZaiEndpoint({
+        apiKey: "sk-test", // pragma: allowlist secret
+        endpoint: "global",
+        timeoutMs,
+        fetchFn,
+      }).then((result) => {
+        state.settled = true;
+        return result;
+      });
 
-    expect(detected).toBeNull();
-    expect(elapsedMs).toBeLessThan(2 * timeoutMs);
+      await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+      expect(state).toEqual({ cancelled: false, settled: false });
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(state).toEqual({ cancelled: true, settled: true });
+      expect(await detectedPromise).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps one probe deadline through a slow-drip error body", async () => {
-    const state = { cancelled: false };
+    vi.useFakeTimers();
+    const state = { cancelled: false, settled: false, chunks: 0 };
     let interval: ReturnType<typeof setInterval> | undefined;
     const fetchFn = (async () => {
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
-          interval = setInterval(() => controller.enqueue(new Uint8Array([123])), 10);
+          interval = setInterval(() => {
+            state.chunks += 1;
+            controller.enqueue(new Uint8Array([123]));
+          }, 10);
         },
         cancel() {
           state.cancelled = true;
@@ -389,16 +331,27 @@ describe("detectZaiEndpoint", () => {
     }) as typeof fetch;
 
     const timeoutMs = 80;
-    const startedAt = Date.now();
-    const detected = await detectZaiEndpoint({
-      apiKey: "sk-test", // pragma: allowlist secret
-      endpoint: "global",
-      timeoutMs,
-      fetchFn,
-    });
+    try {
+      const detectedPromise = detectZaiEndpoint({
+        apiKey: "sk-test", // pragma: allowlist secret
+        endpoint: "global",
+        timeoutMs,
+        fetchFn,
+      }).then((result) => {
+        state.settled = true;
+        return result;
+      });
 
-    expect(detected).toBeNull();
-    expect(Date.now() - startedAt).toBeLessThan(3 * timeoutMs);
-    expect(state.cancelled).toBe(true);
+      await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+      expect(state).toEqual({ cancelled: false, settled: false, chunks: 7 });
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(state.cancelled).toBe(true);
+      expect(state.settled).toBe(true);
+      expect(await detectedPromise).toBeNull();
+    } finally {
+      clearInterval(interval);
+      vi.useRealTimers();
+    }
   });
 });

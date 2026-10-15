@@ -43,7 +43,7 @@ const refreshResult = {
 };
 
 const appConfig = {
-  agents: { list: [{ id: "main", default: true }] },
+  agents: { entries: { main: {} } },
 } as OpenClawConfig;
 
 let vaultCounter = 0;
@@ -68,23 +68,27 @@ describe("syncMemoryWikiImportedSources", () => {
     refreshIndexesMock.mockResolvedValue(refreshResult);
   });
 
-  it("routes bridge mode through bridge sync and merges refresh results", async () => {
+  it("does not share a deferred flight with a refreshing one", async () => {
     const config = createConfig();
+    const bridgeGate = deferred<typeof bridgeResult>();
+    const bridgeStarted = deferred();
+    syncBridgeMock.mockImplementationOnce(() => {
+      bridgeStarted.resolve();
+      return bridgeGate.promise;
+    });
 
-    const result = await syncMemoryWikiImportedSources({ config, appConfig });
-
-    expect(syncBridgeMock).toHaveBeenCalledWith({ config, appConfig });
-    expect(syncUnsafeLocalMock).not.toHaveBeenCalled();
-    expect(refreshIndexesMock).toHaveBeenCalledWith({
+    const deferredSync = syncMemoryWikiImportedSources({
       config,
-      syncResult: bridgeResult,
+      appConfig,
+      deferIndexRefresh: true,
     });
-    expect(result).toEqual({
-      ...bridgeResult,
-      indexesRefreshed: true,
-      indexRefreshReason: "import-changed",
-      indexUpdatedFiles: ["index.md", "sources/index.md"],
-    });
+    await bridgeStarted.promise;
+    const refreshing = syncMemoryWikiImportedSources({ config, appConfig });
+    bridgeGate.resolve(bridgeResult);
+
+    await expect(refreshing).resolves.toMatchObject({ indexesRefreshed: true });
+    await expect(deferredSync).resolves.toMatchObject({ indexesRefreshed: false });
+    expect(refreshIndexesMock).toHaveBeenCalledTimes(1);
   });
 
   it("coalesces separately resolved equivalent configs for one vault", async () => {
@@ -162,11 +166,11 @@ describe("syncMemoryWikiImportedSources", () => {
   it("serializes different config snapshots for the same vault", async () => {
     const config = createConfig();
     const firstAppConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       update: { channel: "stable" },
     } as OpenClawConfig;
     const secondAppConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       update: { channel: "beta" },
     } as OpenClawConfig;
     const firstGate = deferred<typeof bridgeResult>();

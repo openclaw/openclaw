@@ -1,5 +1,6 @@
 /** Tests runtime secret auditing for externalized channel plugin surfaces. */
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
@@ -138,6 +139,25 @@ function expectResolvedPaths(config: OpenClawConfig, expected: Record<string, un
   }
 }
 
+function setFixtureField(
+  record: Record<string, unknown>,
+  segments: string[],
+  value: unknown,
+): void {
+  const [key, ...rest] = segments;
+  if (!key) {
+    throw new Error("Missing fixture field");
+  }
+  if (!rest.length) {
+    record[key] = value;
+    return;
+  }
+  const next = record[key];
+  const child = isRecord(next) ? next : {};
+  record[key] = child;
+  setFixtureField(child, rest, value);
+}
+
 describe("secrets runtime externalized channel SecretRef audit", () => {
   beforeEach(() => {
     getBootstrapChannelSecretsMock.mockReset();
@@ -147,344 +167,86 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     loadPluginMetadataSnapshotMock.mockReset();
   });
 
-  it.each(EXTERNALIZED_CHANNEL_IDS)(
-    "resolves active SecretRef targets for %s contract",
-    async (channelId) => {
-      const records = configureExternalChannelRecords([channelId]);
-      const config = asConfig({
-        channels: {
-          discord: {
-            token: ref("DISCORD_TOKEN"),
-            pluralkit: {
-              enabled: true,
-              token: ref("DISCORD_PLURALKIT_TOKEN"),
-            },
-            voice: {
-              enabled: true,
-              realtime: {
-                providers: {
-                  openai: { apiKey: ref("DISCORD_VOICE_REALTIME_API_KEY") },
-                },
-              },
-              tts: {
-                providers: {
-                  openai: { apiKey: ref("DISCORD_VOICE_TTS_API_KEY") },
-                },
-              },
-            },
-            accounts: {
-              inherited: {
-                enabled: true,
-              },
-              work: {
-                enabled: true,
-                token: ref("DISCORD_WORK_TOKEN"),
-                pluralkit: {
-                  enabled: true,
-                  token: ref("DISCORD_WORK_PLURALKIT_TOKEN"),
-                },
-                voice: {
-                  enabled: true,
-                  realtime: {
-                    providers: {
-                      openai: { apiKey: ref("DISCORD_WORK_VOICE_REALTIME_API_KEY") },
-                    },
-                  },
-                  tts: {
-                    providers: {
-                      openai: { apiKey: ref("DISCORD_WORK_VOICE_TTS_API_KEY") },
-                    },
-                  },
-                },
-              },
-            },
-          },
-          feishu: {
-            connectionMode: "webhook",
-            appSecret: ref("FEISHU_APP_SECRET"),
-            encryptKey: ref("FEISHU_ENCRYPT_KEY"),
-            verificationToken: ref("FEISHU_VERIFICATION_TOKEN"),
-            accounts: {
-              inherited: {
-                enabled: true,
-                connectionMode: "webhook",
-              },
-              work: {
-                enabled: true,
-                connectionMode: "webhook",
-                appSecret: ref("FEISHU_WORK_APP_SECRET"),
-                encryptKey: ref("FEISHU_WORK_ENCRYPT_KEY"),
-                verificationToken: ref("FEISHU_WORK_VERIFICATION_TOKEN"),
-              },
-            },
-          },
-          msteams: {
-            appPassword: ref("MSTEAMS_APP_PASSWORD"),
-          },
-          "nextcloud-talk": {
-            botSecret: ref("NEXTCLOUD_TALK_BOT_SECRET"),
-            apiPassword: ref("NEXTCLOUD_TALK_API_PASSWORD"),
-            accounts: {
-              inherited: {
-                enabled: true,
-              },
-              work: {
-                enabled: true,
-                botSecret: ref("NEXTCLOUD_TALK_WORK_BOT_SECRET"),
-                apiPassword: ref("NEXTCLOUD_TALK_WORK_API_PASSWORD"),
-              },
-            },
-          },
-          qqbot: {
-            appId: "qqbot-default-app",
-            clientSecret: ref("QQBOT_DEFAULT_SECRET"),
-            accounts: {
-              work: {
-                appId: "qqbot-work-app",
-                clientSecret: ref("QQBOT_WORK_SECRET"),
-              },
-            },
-          },
-          zalo: {
-            webhookUrl: "https://example.test/zalo",
-            botToken: ref("ZALO_BOT_TOKEN"),
-            webhookSecret: ref("ZALO_WEBHOOK_SECRET"),
-            accounts: {
-              inherited: {
-                enabled: true,
-              },
-              work: {
-                enabled: true,
-                webhookUrl: "https://example.test/zalo-work",
-                botToken: ref("ZALO_WORK_BOT_TOKEN"),
-                webhookSecret: ref("ZALO_WORK_WEBHOOK_SECRET"),
-              },
-            },
-          },
-        },
-      });
-      const channels = (config as { channels: Record<string, unknown> }).channels;
-      (config as { channels: Record<string, unknown> }).channels = {
-        [channelId]: channels[channelId],
-      };
-
-      const snapshot = await prepareSecretsRuntimeSnapshot({
-        config,
-        env: {
-          DISCORD_TOKEN: "discord-token",
-          DISCORD_PLURALKIT_TOKEN: "discord-pluralkit-token",
-          DISCORD_VOICE_REALTIME_API_KEY: "discord-voice-realtime-api-key",
-          DISCORD_VOICE_TTS_API_KEY: "discord-voice-tts-api-key",
-          DISCORD_WORK_TOKEN: "discord-work-token",
-          DISCORD_WORK_PLURALKIT_TOKEN: "discord-work-pluralkit-token",
-          DISCORD_WORK_VOICE_REALTIME_API_KEY: "discord-work-voice-realtime-api-key",
-          DISCORD_WORK_VOICE_TTS_API_KEY: "discord-work-voice-tts-api-key",
-          FEISHU_APP_SECRET: "feishu-app-secret",
-          FEISHU_ENCRYPT_KEY: "feishu-encrypt-key",
-          FEISHU_VERIFICATION_TOKEN: "feishu-verification-token",
-          FEISHU_WORK_APP_SECRET: "feishu-work-app-secret",
-          FEISHU_WORK_ENCRYPT_KEY: "feishu-work-encrypt-key",
-          FEISHU_WORK_VERIFICATION_TOKEN: "feishu-work-verification-token",
-          MSTEAMS_APP_PASSWORD: "msteams-app-password",
-          NEXTCLOUD_TALK_BOT_SECRET: "nextcloud-talk-bot-secret",
-          NEXTCLOUD_TALK_API_PASSWORD: "nextcloud-talk-api-password",
-          NEXTCLOUD_TALK_WORK_BOT_SECRET: "nextcloud-talk-work-bot-secret",
-          NEXTCLOUD_TALK_WORK_API_PASSWORD: "nextcloud-talk-work-api-password",
-          QQBOT_DEFAULT_SECRET: "qqbot-default-secret",
-          QQBOT_WORK_SECRET: "qqbot-work-secret",
-          ZALO_BOT_TOKEN: "zalo-bot-token",
-          ZALO_WEBHOOK_SECRET: "zalo-webhook-secret",
-          ZALO_WORK_BOT_TOKEN: "zalo-work-bot-token",
-          ZALO_WORK_WEBHOOK_SECRET: "zalo-work-webhook-secret",
-        },
-        includeAuthStoreRefs: false,
-        loadablePluginOrigins: externalChannelOrigins(records),
-      });
-
-      const expectedPaths = {
-        "channels.discord.token": "discord-token",
-        "channels.discord.pluralkit.token": "discord-pluralkit-token",
-        "channels.discord.voice.realtime.providers.openai.apiKey": "discord-voice-realtime-api-key",
-        "channels.discord.voice.tts.providers.openai.apiKey": "discord-voice-tts-api-key",
-        "channels.discord.accounts.work.token": "discord-work-token",
-        "channels.discord.accounts.work.pluralkit.token": "discord-work-pluralkit-token",
-        "channels.discord.accounts.work.voice.realtime.providers.openai.apiKey":
-          "discord-work-voice-realtime-api-key",
-        "channels.discord.accounts.work.voice.tts.providers.openai.apiKey":
-          "discord-work-voice-tts-api-key",
-        "channels.feishu.appSecret": "feishu-app-secret",
-        "channels.feishu.encryptKey": "feishu-encrypt-key",
-        "channels.feishu.verificationToken": "feishu-verification-token",
-        "channels.feishu.accounts.work.appSecret": "feishu-work-app-secret",
-        "channels.feishu.accounts.work.encryptKey": "feishu-work-encrypt-key",
-        "channels.feishu.accounts.work.verificationToken": "feishu-work-verification-token",
-        "channels.msteams.appPassword": "msteams-app-password",
-        "channels.nextcloud-talk.botSecret": "nextcloud-talk-bot-secret",
-        "channels.nextcloud-talk.apiPassword": "nextcloud-talk-api-password",
-        "channels.nextcloud-talk.accounts.work.botSecret": "nextcloud-talk-work-bot-secret",
-        "channels.nextcloud-talk.accounts.work.apiPassword": "nextcloud-talk-work-api-password",
-        "channels.qqbot.clientSecret": "qqbot-default-secret",
-        "channels.qqbot.accounts.work.clientSecret": "qqbot-work-secret",
-        "channels.zalo.botToken": "zalo-bot-token",
-        "channels.zalo.webhookSecret": "zalo-webhook-secret",
-        "channels.zalo.accounts.work.botToken": "zalo-work-bot-token",
-        "channels.zalo.accounts.work.webhookSecret": "zalo-work-webhook-secret",
-      };
-      expectResolvedPaths(
-        snapshot.config,
-        Object.fromEntries(
-          Object.entries(expectedPaths).filter(([pathKey]) =>
-            pathKey.startsWith(`channels.${channelId}.`),
-          ),
-        ),
-      );
-      expect(snapshot.warnings).toStrictEqual([]);
-      expectMetadataBackedContractsWereUsed([channelId]);
-    },
-  );
-
-  it("skips inactive exec-backed SecretRefs for every externalized channel contract", async () => {
+  it.each([true, false])("resolves only active channel credentials (active=%s)", async (active) => {
     const records = configureExternalChannelRecords();
-    const config = asConfig({
-      channels: {
-        discord: {
-          enabled: false,
-          token: inactiveExecRef("DISCORD_DISABLED_TOKEN"),
-          pluralkit: {
-            enabled: true,
-            token: inactiveExecRef("DISCORD_DISABLED_PLURALKIT_TOKEN"),
-          },
-          voice: {
-            enabled: true,
-            tts: {
-              providers: {
-                openai: {
-                  apiKey: inactiveExecRef("DISCORD_DISABLED_VOICE_TTS_API_KEY"),
+    const channels: Record<string, unknown> = {};
+    const env: NodeJS.ProcessEnv = {};
+    const expected: Record<string, unknown> = {};
+    const warningPaths: string[] = [];
+    const accountId = active ? "work" : "disabled";
+    for (const id of EXTERNALIZED_CHANNEL_IDS) {
+      const fields = {
+        discord: [
+          "token",
+          "pluralkit.token",
+          ...(active ? ["voice.realtime.providers.openai.apiKey"] : []),
+          "voice.tts.providers.openai.apiKey",
+        ],
+        feishu: ["appSecret", "encryptKey", "verificationToken"],
+        msteams: ["appPassword"],
+        "nextcloud-talk": ["botSecret", "apiPassword"],
+        qqbot: ["clientSecret"],
+        zalo: ["botToken", "webhookSecret"],
+      }[id];
+      const settings: Record<string, unknown> = { enabled: active };
+      if (id === "discord") {
+        settings.pluralkit = { enabled: true };
+        settings.voice = { enabled: true };
+      } else if (id === "feishu") {
+        settings.connectionMode = "webhook";
+      } else if (id === "qqbot") {
+        settings.appId = "qqbot-app";
+      } else if (id === "zalo") {
+        settings.webhookUrl = "https://example.test/zalo";
+      }
+      const channel = structuredClone(settings);
+      const account = structuredClone(settings);
+      if (id !== "msteams") {
+        channel.accounts = {
+          ...(active && id !== "qqbot"
+            ? {
+                inherited: {
+                  enabled: true,
+                  ...(id === "feishu" ? { connectionMode: "webhook" } : {}),
                 },
-              },
-            },
-          },
-          accounts: {
-            disabled: {
-              enabled: false,
-              token: inactiveExecRef("DISCORD_DISABLED_ACCOUNT_TOKEN"),
-              pluralkit: {
-                enabled: true,
-                token: inactiveExecRef("DISCORD_DISABLED_ACCOUNT_PLURALKIT_TOKEN"),
-              },
-              voice: {
-                enabled: true,
-                tts: {
-                  providers: {
-                    openai: {
-                      apiKey: inactiveExecRef("DISCORD_DISABLED_ACCOUNT_VOICE_TTS_API_KEY"),
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-        feishu: {
-          enabled: false,
-          connectionMode: "webhook",
-          appSecret: inactiveExecRef("FEISHU_DISABLED_APP_SECRET"),
-          encryptKey: inactiveExecRef("FEISHU_DISABLED_ENCRYPT_KEY"),
-          verificationToken: inactiveExecRef("FEISHU_DISABLED_VERIFICATION_TOKEN"),
-          accounts: {
-            disabled: {
-              enabled: false,
-              connectionMode: "webhook",
-              appSecret: inactiveExecRef("FEISHU_DISABLED_ACCOUNT_APP_SECRET"),
-              encryptKey: inactiveExecRef("FEISHU_DISABLED_ACCOUNT_ENCRYPT_KEY"),
-              verificationToken: inactiveExecRef("FEISHU_DISABLED_ACCOUNT_VERIFICATION_TOKEN"),
-            },
-          },
-        },
-        msteams: {
-          enabled: false,
-          appPassword: inactiveExecRef("MSTEAMS_DISABLED_APP_PASSWORD"),
-        },
-        "nextcloud-talk": {
-          enabled: false,
-          botSecret: inactiveExecRef("NEXTCLOUD_TALK_DISABLED_BOT_SECRET"),
-          apiPassword: inactiveExecRef("NEXTCLOUD_TALK_DISABLED_API_PASSWORD"),
-          accounts: {
-            disabled: {
-              enabled: false,
-              botSecret: inactiveExecRef("NEXTCLOUD_TALK_DISABLED_ACCOUNT_BOT_SECRET"),
-              apiPassword: inactiveExecRef("NEXTCLOUD_TALK_DISABLED_ACCOUNT_API_PASSWORD"),
-            },
-          },
-        },
-        qqbot: {
-          enabled: false,
-          appId: "qqbot-disabled-app",
-          clientSecret: inactiveExecRef("QQBOT_DISABLED_SECRET"),
-          accounts: {
-            disabled: {
-              enabled: false,
-              appId: "qqbot-disabled-account-app",
-              clientSecret: inactiveExecRef("QQBOT_DISABLED_ACCOUNT_SECRET"),
-            },
-          },
-        },
-        zalo: {
-          enabled: false,
-          webhookUrl: "https://example.test/zalo-disabled",
-          botToken: inactiveExecRef("ZALO_DISABLED_BOT_TOKEN"),
-          webhookSecret: inactiveExecRef("ZALO_DISABLED_WEBHOOK_SECRET"),
-          accounts: {
-            disabled: {
-              enabled: false,
-              webhookUrl: "https://example.test/zalo-account-disabled",
-              botToken: inactiveExecRef("ZALO_DISABLED_ACCOUNT_BOT_TOKEN"),
-              webhookSecret: inactiveExecRef("ZALO_DISABLED_ACCOUNT_WEBHOOK_SECRET"),
-            },
-          },
-        },
-      },
-    });
-
+              }
+            : {}),
+          [accountId]: account,
+        };
+      }
+      channels[id] = channel;
+      for (const field of fields) {
+        for (const [record, prefix] of [
+          [channel, `channels.${id}`],
+          ...(id === "msteams" ? [] : [[account, `channels.${id}.accounts.${accountId}`] as const]),
+        ] as const) {
+          const key = `${prefix}.${field}`;
+          const refId = key.replaceAll(/[^a-z0-9]/gi, "_").toUpperCase();
+          const value = active ? ref(refId) : inactiveExecRef(refId);
+          setFixtureField(record, field.split("."), value);
+          env[refId] = `synthetic-${refId}`;
+          expected[key] = active ? env[refId] : value;
+          if (!active) {
+            warningPaths.push(key);
+          }
+        }
+      }
+    }
     const snapshot = await prepareSecretsRuntimeSnapshot({
-      config,
-      env: {},
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => loadAuthStoreWithProfiles({}),
+      config: asConfig({ channels }),
+      env: active ? env : {},
+      ...(active
+        ? { includeAuthStoreRefs: false }
+        : {
+            agentDirs: ["/tmp/openclaw-agent-main"],
+            loadAuthStore: () => loadAuthStoreWithProfiles({}),
+          }),
       loadablePluginOrigins: externalChannelOrigins(records),
     });
-
-    expect(getPath(snapshot.config, ["channels", "discord", "token"])).toEqual(
-      inactiveExecRef("DISCORD_DISABLED_TOKEN"),
-    );
-    expect(
-      getPath(snapshot.config, ["channels", "zalo", "accounts", "disabled", "botToken"]),
-    ).toEqual(inactiveExecRef("ZALO_DISABLED_ACCOUNT_BOT_TOKEN"));
-    expect(snapshot.warnings.map((warning) => warning.path)).toStrictEqual([
-      "channels.discord.token",
-      "channels.discord.accounts.disabled.token",
-      "channels.discord.pluralkit.token",
-      "channels.discord.accounts.disabled.pluralkit.token",
-      "channels.discord.voice.tts.providers.openai.apiKey",
-      "channels.discord.accounts.disabled.voice.tts.providers.openai.apiKey",
-      "channels.feishu.appSecret",
-      "channels.feishu.accounts.disabled.appSecret",
-      "channels.feishu.encryptKey",
-      "channels.feishu.accounts.disabled.encryptKey",
-      "channels.feishu.verificationToken",
-      "channels.feishu.accounts.disabled.verificationToken",
-      "channels.msteams.appPassword",
-      "channels.nextcloud-talk.botSecret",
-      "channels.nextcloud-talk.accounts.disabled.botSecret",
-      "channels.nextcloud-talk.apiPassword",
-      "channels.nextcloud-talk.accounts.disabled.apiPassword",
-      "channels.qqbot.clientSecret",
-      "channels.qqbot.accounts.disabled.clientSecret",
-      "channels.zalo.botToken",
-      "channels.zalo.accounts.disabled.botToken",
-      "channels.zalo.webhookSecret",
-      "channels.zalo.accounts.disabled.webhookSecret",
-    ]);
+    for (const [key, value] of Object.entries(expected)) {
+      expect(getPath(snapshot.config, key.split(".")), key).toEqual(value);
+    }
+    expect(snapshot.warnings.map((warning) => warning.path)).toStrictEqual(warningPaths);
     expectMetadataBackedContractsWereUsed();
   });
 

@@ -1,14 +1,8 @@
+import Darwin
 import Foundation
 import Network
-#if canImport(Darwin)
-import Darwin
-#endif
 
 public enum LoopbackHost {
-    public static func isLoopback(_ rawHost: String) -> Bool {
-        self.isLoopbackHost(rawHost)
-    }
-
     public static func isLoopbackHost(_ rawHost: String) -> Bool {
         let host = self.normalizedHost(rawHost)
         if host.isEmpty {
@@ -50,20 +44,10 @@ public enum LoopbackHost {
     }
 
     public static func isPrivateOrTailnetIPv4Literal(_ value: String) -> Bool {
-        let labels = value.split(separator: ".", omittingEmptySubsequences: false)
-        guard labels.count == 4 else { return false }
-        var parts: [Int] = []
-        parts.reserveCapacity(4)
-        for label in labels {
-            guard !label.isEmpty,
-                  label.allSatisfy(\.isNumber),
-                  let part = Int(label),
-                  part >= 0,
-                  part <= 255
-            else { return false }
-            parts.append(part)
-        }
-        switch (parts[0], parts[1]) {
+        guard value.allSatisfy({ $0.isNumber || $0 == "." }),
+              let (first, second, _, _) = self.parseIPv4(value)
+        else { return false }
+        switch (first, second) {
         case (10, _), (192, 168), (169, 254), (172, 16...31), (100, 64...127):
             return true
         default:
@@ -72,15 +56,11 @@ public enum LoopbackHost {
     }
 
     public static func isPrivateIPv6Literal(_ value: String) -> Bool {
-        #if canImport(Darwin)
         var addr = in6_addr()
         guard value.withCString({ inet_pton(AF_INET6, $0, &addr) }) == 1 else {
             return false
         }
         return value.hasPrefix("fc") || value.hasPrefix("fd") || value.hasPrefix("fe80:")
-        #else
-        return false
-        #endif
     }
 
     static func normalizedHost(_ rawHost: String) -> String {
@@ -106,17 +86,9 @@ public enum LoopbackHost {
     }
 
     static func isLocalNetworkIPv4(_ ip: (UInt8, UInt8, UInt8, UInt8)) -> Bool {
-        let (a, b, _, _) = ip
-        // 10.0.0.0/8
-        if a == 10 { return true }
-        // 172.16.0.0/12
-        if a == 172, (16...31).contains(Int(b)) { return true }
-        // 192.168.0.0/16
-        if a == 192, b == 168 { return true }
-        // 127.0.0.0/8
-        if a == 127 { return true }
-        // 169.254.0.0/16 (link-local)
-        if a == 169, b == 254 { return true }
-        return false
+        switch (ip.0, ip.1) {
+        case (10, _), (172, 16...31), (192, 168), (127, _), (169, 254): true
+        default: false
+        }
     }
 }

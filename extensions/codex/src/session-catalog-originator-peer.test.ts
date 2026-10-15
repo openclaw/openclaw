@@ -101,7 +101,7 @@ it("hydrates recorded originators through the protocol and serves excluded rows 
       throw new Error("Expected the fixture's loopback WebSocket port");
     }
     const config: OpenClawConfig = {
-      agents: { list: [{ id: "main", agentDir: path.join(home, "agent") }] },
+      agents: { entries: { main: { agentDir: path.join(home, "agent") } } },
     };
     const pluginConfig = {
       appServer: {

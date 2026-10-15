@@ -112,7 +112,9 @@ function normalizeDiagnosticFieldName(value: string): string {
   return value.toLowerCase().replaceAll(DIAGNOSTIC_FIELD_SEPARATOR_RE, "");
 }
 
-function isCredentialFieldName(normalized: string): boolean {
+/** Classifies credential-bearing fields, including case-insensitive HTTP header names. */
+export function isCredentialFieldName(name: string): boolean {
+  const normalized = normalizeDiagnosticFieldName(name);
   if (!normalized || NON_CREDENTIAL_FIELD_NAMES.has(normalized)) {
     return false;
   }
@@ -168,6 +170,7 @@ type DiagnosticMediaField =
       source?: string | Uint8Array;
     };
 export type DiagnosticProjectionPolicy = {
+  redactCredentials?: boolean;
   omitField?: (key: string) => boolean;
   propertyScope?: "enumerable" | "error";
   projectBinary?: (binary: Uint8Array) => unknown;
@@ -223,7 +226,10 @@ export function projectDiagnosticValue(
 ): unknown {
   try {
     if (typeof value === "string") {
-      const projected = redactDiagnosticText(value);
+      const projected =
+        policy.redactCredentials === false
+          ? value.replace(MEDIA_DATA_URL_RE, "<redacted>")
+          : redactDiagnosticText(value);
       state.changed ||= projected !== value;
       return projected;
     }
@@ -277,8 +283,10 @@ export function projectDiagnosticValue(
     const rawName =
       typeof descriptors.name?.value === "string" ? descriptors.name.value : descriptors.key?.value;
     const redactValueField =
-      keys.length > 64 ||
-      (typeof rawName === "string" && isCredentialFieldName(normalizeDiagnosticFieldName(rawName)));
+      policy.redactCredentials !== false &&
+      (keys.length > 64 ||
+        (typeof rawName === "string" &&
+          isCredentialFieldName(normalizeDiagnosticFieldName(rawName))));
     const redactMedia = mediaPayload || keys.length > 64 || isDiagnosticMediaPayload(descriptors);
     for (const key in descriptors) {
       const descriptor = expectDefined(descriptors[key], "diagnostic descriptor");
@@ -293,7 +301,10 @@ export function projectDiagnosticValue(
       }
       const child = descriptor.value;
       const normalized = policy.omitField?.(key) ? undefined : normalizeDiagnosticFieldName(key);
-      if (normalized === undefined || isCredentialFieldName(normalized)) {
+      if (
+        normalized === undefined ||
+        (policy.redactCredentials !== false && isCredentialFieldName(normalized))
+      ) {
         state.changed = true;
         continue;
       }

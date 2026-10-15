@@ -2,7 +2,26 @@ import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import { PluginInstance } from "./plugin-instance.js";
-import { runPluginCleanupScope } from "./plugin-invocation-scope.js";
+import { PluginInvocationScope, runPluginCleanupScope } from "./plugin-invocation-scope.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+
+it("finishes plugin and module disposal after its caller scope closes", async () => {
+  const instance = new PluginInstance("closed-caller-cleanup");
+  const scope = new PluginInvocationScope(createEmptyPluginRegistry(), [instance]);
+  const completed: string[] = [];
+  instance.lifecycle.onDispose(() => {
+    completed.push("plugin");
+  });
+  instance.onModuleDispose(() => {
+    completed.push("module");
+  });
+  const result = await scope.run(() => {
+    scope.release();
+    return instance.dispose();
+  });
+  expect(result.errors).toEqual([]);
+  expect(completed).toEqual(["plugin", "module"]);
+});
 
 it.each(["idle", "active"])(
   "bounds %s cross-plugin teardown authority to its host cleanup",

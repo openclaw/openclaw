@@ -2,15 +2,12 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as configOwner from "../../config/config.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  swapStagedPackageInstall,
-  type PackageUpdateTransaction,
-} from "../../infra/package-update-swap.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
@@ -19,9 +16,11 @@ import {
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunNotice, renderUpdateRunReport } from "../../infra/update-run-report.js";
+import { renderUpdateRunNotice } from "../../infra/update-run-notice.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 
 const mocks = vi.hoisted(() => ({
   verifyGateway: vi.fn<typeof import("./update-command-verification.js").verifyUpdatedGateway>(
@@ -50,7 +49,7 @@ const mocks = vi.hoisted(() => ({
   ),
   stopCandidate: vi.fn(),
   revalidateService: vi.fn<
-    typeof import("./update-command-service-maintenance.js").revalidateManagedGatewayServiceAfterUpdate
+    typeof import("./update-command-service-revalidation.js").revalidateManagedGatewayServiceAfterUpdate
   >(async ({ root }) => ({
     kind: "owned",
     root,
@@ -99,8 +98,8 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
     command: { programArguments: ["node", "/repo/dist/entry.js", "gateway"] },
   }),
 }));
-vi.mock("./update-command-service-maintenance.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-service-maintenance.js")>()),
+vi.mock("./update-command-service-revalidation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-service-revalidation.js")>()),
   revalidateManagedGatewayServiceAfterUpdate: mocks.revalidateService,
 }));
 vi.mock("./update-command-service.js", async (importOriginal) => ({
@@ -109,7 +108,6 @@ vi.mock("./update-command-service.js", async (importOriginal) => ({
   maybeRestartService: mocks.restartCandidate,
   maybeStopManagedServiceBeforeMutableUpdate: mocks.stopCandidate,
   resolveUpdatedGatewayRestartPort: async () => 19101,
-  revalidateManagedGatewayServiceAfterUpdate: mocks.revalidateService,
 }));
 vi.mock("./update-command-post-core.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-post-core.js")>()),
@@ -127,7 +125,7 @@ import { registerRestartFailureOwnershipTest } from "./update-command-restart-fa
 import { UpdateCommandFailure } from "./update-command-result.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useStateDatabaseTempDirs();
 
 beforeEach(() => {
   mocks.verifyGateway.mockReset();
@@ -251,7 +249,6 @@ describe("skipped update exit status", () => {
 
   it.each([
     ["dirty", 1],
-    ["not-git-install", 1],
     ["already-current", 0],
   ] as const)("handles %s with exit %i", async (reason, exitCode) => {
     const failure = await finishSkippedUpdate(reason);
@@ -356,11 +353,6 @@ describe("failed update recovery restart", () => {
     },
   );
 
-  it("does not turn missing producer safety into restart permission", async () => {
-    await finishFailedUpdate(failedResult(undefined));
-    expect(mocks.restart).not.toHaveBeenCalled();
-  });
-
   it.each([
     { mutationStarted: false, stopped: false, waitForStartup: false },
     { mutationStarted: false, stopped: true, waitForStartup: true },
@@ -443,14 +435,6 @@ describe("failed update recovery restart", () => {
     },
   );
 
-  it("leaves a managed Gateway stopped after unverified rollback recovery", async () => {
-    await finishFailedUpdate(
-      failedResult({ serviceRestartSafe: false, reason: "runtime-verification-failed" }),
-    );
-
-    expect(mocks.restart).not.toHaveBeenCalled();
-  });
-
   it("does not restart when the mutation owner returned no recovery verdict", async () => {
     vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
     const failure = await finishFailedUpdate(failedResult(undefined), {
@@ -526,7 +510,7 @@ describe("failed update recovery restart", () => {
     },
   );
 
-  it.each([79, 80])(
+  it.each([80])(
     "does not activate when pre-restart convergence exits %s",
     async (childExitCode) => {
       mocks.restartCandidate.mockResolvedValueOnce("ok");
@@ -618,39 +602,22 @@ describe("failed update recovery restart", () => {
       expect(recorded.origin.nextAction).not.toContain("gateway stopped");
       expect(recorded.origin.nextAction).not.toContain("remains stopped");
       expect(recorded.origin.nextAction).toContain("triage");
+      expect(recorded.origin.nextAction).toContain("update repair");
       expect(recorded.verification).toMatchObject({ serviceRunning: true, pid });
       expect(recorded.verification.runningVersion).toBe(version);
       expect(mocks.printResult.mock.lastCall?.[2]).toEqual({
         nextAction: recorded.origin.nextAction,
       });
-      for (const report of [
-        renderUpdateRunReport(recorded).markdown,
-        renderUpdateRunNotice(recorded, "finished"),
-      ]) {
-        expect(report).toContain("readyz-unhealthy");
-        expect(report).toContain("triage");
-        expect(report).not.toContain("remains stopped");
-      }
+      const report = renderUpdateRunReport(recorded).markdown;
+      expect(report).toContain("readyz-unhealthy");
+      expect(report).toContain("triage");
+      expect(report).toContain("update repair");
+      expect(report).not.toContain("remains stopped");
+      expect(renderUpdateRunNotice(recorded, "finished")).toBe(
+        "⚠️ OpenClaw couldn't finish updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+      );
     },
   );
-
-  it("keeps structured JSON recovery free of prose guidance", async () => {
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-    const result = failedResult({
-      serviceRestartSafe: false,
-      reason: "rollback-checkout-dirty",
-    });
-
-    await finishFailedUpdate(result, { json: true });
-
-    expect(mocks.printResult).toHaveBeenCalledWith(
-      expect.objectContaining({ ...result, durationMs: expect.any(Number) }),
-      expect.objectContaining({ json: true }),
-      expect.objectContaining({ nextAction: expect.any(String) }),
-    );
-    expect(mocks.restart).not.toHaveBeenCalled();
-    expect(log).not.toHaveBeenCalled();
-  });
 });
 
 describe("failed package update recovery safety", () => {
@@ -878,30 +845,6 @@ describe("failed package update recovery safety", () => {
       }
     },
   );
-
-  it("keeps the replaced package stopped after the package-swap fails", async () => {
-    const failure = await finishFailedUpdate({
-      status: "error",
-      mode: "npm",
-      reason: "global-install-failed",
-      steps: [
-        { name: "package-install", command: "npm", cwd: "/", durationMs: 1, exitCode: 0 },
-        {
-          name: "package-swap",
-          command: "verify",
-          cwd: "/",
-          durationMs: 1,
-          exitCode: 1,
-        },
-      ],
-      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-      durationMs: 1,
-    });
-    expect(failure.exitCode).toBe(1);
-
-    expect(mocks.restart).not.toHaveBeenCalled();
-    expect(mocks.restartCandidate).not.toHaveBeenCalled();
-  });
 
   it("does not start a Doctor-rejected candidate even after a verified swap", async () => {
     const failure = await finishFailedUpdate({

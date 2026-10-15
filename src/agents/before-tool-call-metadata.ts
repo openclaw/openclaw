@@ -19,15 +19,15 @@ type BeforeToolCallMetadata = {
   executionWrappers?: readonly ToolExecutionWrapper[];
 };
 
-// Frozen keys survive spreads and plugin views without projecting host context.
+// Symbols survive spreads and plugin views without projecting host context.
 // Source-transformed SDK modules and compiled hosts must recognize the same marker.
 const metadataByMarker = resolveGlobalSingleton(
   Symbol.for("openclaw.beforeToolCallMetadata"),
-  () => new WeakMap<object, BeforeToolCallMetadata>(),
+  () => new WeakMap<symbol, BeforeToolCallMetadata>(),
 );
 
 type BeforeToolCallMetadataTool = AnyAgentTool & {
-  [BEFORE_TOOL_CALL_WRAPPED]?: object;
+  [BEFORE_TOOL_CALL_WRAPPED]?: symbol;
   [BEFORE_TOOL_CALL_SOURCE_TOOL]?: AnyAgentTool;
 };
 
@@ -44,7 +44,7 @@ export function bindBeforeToolCallMetadata(
   tool: AnyAgentTool,
   { sourceTool, ...metadata }: BeforeToolCallMetadata & { sourceTool: AnyAgentTool },
 ): void {
-  const marker = Object.freeze({});
+  const marker = Symbol("beforeToolCallMetadata");
   metadataByMarker.set(marker, metadata);
   Object.defineProperties(tool, {
     [BEFORE_TOOL_CALL_WRAPPED]: { value: marker, enumerable: true },
@@ -101,7 +101,7 @@ export function copyBeforeToolCallMetadata(
   if (!sourceMarker || !metadata) {
     return;
   }
-  const marker = wrapExecution ? Object.freeze({}) : sourceMarker;
+  const marker = wrapExecution ? Symbol("beforeToolCallMetadata") : sourceMarker;
   if (wrapExecution) {
     metadataByMarker.set(marker, {
       ...metadata,

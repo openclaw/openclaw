@@ -1,4 +1,4 @@
-import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelGatewayContextV2 } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
@@ -63,7 +63,7 @@ function resolveBuzzProfileName(params: {
     : "OpenClaw";
 }
 
-export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<ResolvedBuzzAccount>) {
+export async function startBuzzGatewayAccount(ctx: ChannelGatewayContextV2<ResolvedBuzzAccount>) {
   const channelRuntime = ctx.channelRuntime as PluginRuntime["channel"] | undefined;
   const buildContext = channelRuntime?.inbound.buildContext;
   const account = ctx.account;
@@ -102,6 +102,7 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
         lookbackSeconds: RECONNECT_LOOKBACK_SECONDS,
       });
       bus = await startBuzzBus({
+        scheduler: ctx.scheduler,
         accountId: account.accountId,
         relayUrl: account.relayUrl,
         privateKey: account.privateKey,

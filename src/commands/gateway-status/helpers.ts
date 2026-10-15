@@ -103,11 +103,8 @@ function isLoopbackProbeTarget(target: Pick<GatewayStatusTarget, "kind" | "url">
   if (target.kind === "localLoopback") {
     return true;
   }
-  try {
-    return isLoopbackHost(new URL(target.url).hostname);
-  } catch {
-    return false;
-  }
+  const url = URL.parse(target.url);
+  return url !== null && isLoopbackHost(url.hostname);
 }
 
 export function resolveProbeBudgetMs(
@@ -131,14 +128,7 @@ export function resolveProbeBudgetMs(
 
 /** Normalizes user-entered SSH targets, accepting both raw targets and `ssh host` input. */
 export function sanitizeSshTarget(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return trimmed.replace(/^ssh\s+/, "");
+  return normalizeOptionalString(value)?.replace(/^ssh\s+/, "") ?? null;
 }
 
 export async function resolveAuthForTarget(
@@ -170,6 +160,13 @@ export function extractConfigSummary(snapshotUnknown: unknown) {
   const valid = Boolean(snap?.valid);
   const issuesRaw = Array.isArray(snap?.issues) ? snap.issues : [];
   const legacyRaw = Array.isArray(snap?.legacyIssues) ? snap.legacyIssues : [];
+  const summarizeIssues = (issues: ConfigFileSnapshot["issues"]) =>
+    issues
+      .filter(
+        (issue): issue is { path: string; message: string } =>
+          issue && typeof issue.path === "string" && typeof issue.message === "string",
+      )
+      .map((issue) => ({ path: issue.path, message: issue.message }));
 
   const cfg = (snap?.config ?? {}) as Record<string, unknown>;
   const gateway = (cfg.gateway ?? {}) as Record<string, unknown>;
@@ -200,18 +197,8 @@ export function extractConfigSummary(snapshotUnknown: unknown) {
     path,
     exists,
     valid,
-    issues: issuesRaw
-      .filter(
-        (i): i is { path: string; message: string } =>
-          i && typeof i.path === "string" && typeof i.message === "string",
-      )
-      .map((i) => ({ path: i.path, message: i.message })),
-    legacyIssues: legacyRaw
-      .filter(
-        (i): i is { path: string; message: string } =>
-          i && typeof i.path === "string" && typeof i.message === "string",
-      )
-      .map((i) => ({ path: i.path, message: i.message })),
+    issues: summarizeIssues(issuesRaw),
+    legacyIssues: summarizeIssues(legacyRaw),
     gateway: {
       mode: typeof gateway.mode === "string" ? gateway.mode : null,
       bind: typeof gateway.bind === "string" ? gateway.bind : null,
@@ -308,19 +295,15 @@ function renderProbeCapabilityLine(probe: GatewayProbeResult, rich: boolean) {
 
 export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean) {
   const capability = renderProbeCapabilityLine(probe, rich);
-  if (probe.ok) {
+  const detail = !probe.ok && probe.error ? ` - ${probe.error}` : "";
+  if (probe.ok || (probe.gatewayReached && probe.connectLatencyMs != null)) {
     const latency =
       typeof probe.connectLatencyMs === "number" ? `${probe.connectLatencyMs}ms` : "unknown";
-    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${capability} · ${colorize(rich, theme.success, "Read probe: ok")}`;
-  }
-
-  const detail = probe.error ? ` - ${probe.error}` : "";
-  if (probe.gatewayReached && probe.connectLatencyMs != null) {
-    const latency =
-      typeof probe.connectLatencyMs === "number" ? `${probe.connectLatencyMs}ms` : "unknown";
-    const readStatus = isScopeLimitedProbeFailure(probe)
-      ? colorize(rich, theme.warn, "Read probe: limited")
-      : colorize(rich, theme.error, "Read probe: failed");
+    const readStatus = probe.ok
+      ? colorize(rich, theme.success, "Read check: ok")
+      : isScopeLimitedProbeFailure(probe)
+        ? colorize(rich, theme.warn, "Read check: limited")
+        : colorize(rich, theme.error, "Read check: failed");
     return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${capability} · ${readStatus}${detail}`;
   }
 

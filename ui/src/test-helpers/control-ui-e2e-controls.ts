@@ -35,13 +35,17 @@ export function createMockGatewayControls(
     }, frame);
   };
 
-  const getRequests = async (method?: string, match?: Record<string, unknown>) =>
+  const getRequests = async (
+    method?: string,
+    match?: Record<string, unknown>,
+    options?: { exactParams?: boolean },
+  ) =>
     page.evaluate(
-      ({ targetMethod, requestMatch }) => {
+      ({ targetMethod, requestMatch, requestOptions }) => {
         const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        return gateway?.findRequests(targetMethod, requestMatch) ?? [];
+        return gateway?.findRequests(targetMethod, requestMatch, requestOptions) ?? [];
       },
-      { targetMethod: method, requestMatch: match },
+      { targetMethod: method, requestMatch: match, requestOptions: options },
     );
 
   return {
@@ -58,16 +62,16 @@ export function createMockGatewayControls(
       );
     },
     deliverLatest,
-    async deferNext(method, match) {
-      await page.evaluate(
-        ({ targetMethod, requestMatch }) => {
+    async deferNext(method, match, options) {
+      return await page.evaluate(
+        ({ targetMethod, requestMatch, requestOptions }) => {
           const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
           if (!gateway) {
             throw new Error("Mock Gateway is not installed");
           }
-          gateway.deferNext(targetMethod, requestMatch);
+          return gateway.deferNext(targetMethod, requestMatch, requestOptions);
         },
-        { targetMethod: method, requestMatch: match },
+        { targetMethod: method, requestMatch: match, requestOptions: options },
       );
     },
     async emitChatFinal(params) {
@@ -105,28 +109,28 @@ export function createMockGatewayControls(
         return gateway?.socketUrls() ?? [];
       });
     },
-    async rejectDeferred(method, error) {
+    async rejectDeferred(method, error, options) {
       await page.evaluate(
-        ({ targetMethod, responseError }) => {
+        ({ targetMethod, responseError, requestOptions }) => {
           const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
           if (!gateway) {
             throw new Error("Mock Gateway is not installed");
           }
-          gateway.rejectDeferred(targetMethod, responseError);
+          gateway.rejectDeferred(targetMethod, responseError, requestOptions);
         },
-        { targetMethod: method, responseError: error },
+        { targetMethod: method, responseError: error, requestOptions: options },
       );
     },
-    async resolveDeferred(method, payload) {
+    async resolveDeferred(method, payload, options) {
       await page.evaluate(
-        ({ targetMethod, responsePayload }) => {
+        ({ targetMethod, responsePayload, requestOptions }) => {
           const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
           if (!gateway) {
             throw new Error("Mock Gateway is not installed");
           }
-          gateway.resolveDeferred(targetMethod, responsePayload);
+          gateway.resolveDeferred(targetMethod, responsePayload, requestOptions);
         },
-        { targetMethod: method, responsePayload: payload },
+        { targetMethod: method, responsePayload: payload, requestOptions: options },
       );
     },
     async suspendLatest() {
@@ -218,20 +222,27 @@ export function createMockGatewayControls(
       const deadline = Date.now() + controlUiE2eWaitTimeoutMs;
       const after = options?.after;
       const match = options?.match;
+      const exactParams = options?.exactParams;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
           await page.waitForFunction(
-            ({ targetMethod, priorCount, requestMatch }) => {
+            ({ targetMethod, priorCount, requestMatch, requestOptions }) => {
               const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-              const matching = gateway?.findRequests(targetMethod, requestMatch) ?? [];
+              const matching =
+                gateway?.findRequests(targetMethod, requestMatch, requestOptions) ?? [];
               return matching.length > (priorCount ?? 0);
             },
-            { targetMethod: method, priorCount: after ?? 0, requestMatch: match },
+            {
+              targetMethod: method,
+              priorCount: after ?? 0,
+              requestMatch: match,
+              requestOptions: { exactParams },
+            },
             // Request capture is non-rendering state. Interval polling avoids background-page
             // requestAnimationFrame throttling when CI runs several headless pages concurrently.
             { polling: 25, timeout: Math.max(1, deadline - Date.now()) },
           );
-          const matching = await getRequests(method, match);
+          const matching = await getRequests(method, match, { exactParams });
           // With an `after` cursor, return the first NEW request; otherwise keep
           // the historical latest-match behavior existing callers rely on.
           const request = after === undefined ? matching.at(-1) : matching.at(after);

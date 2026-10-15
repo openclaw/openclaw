@@ -4,6 +4,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { signalCheck, signalRpcRequest, streamSignalEvents } from "./client.js";
@@ -56,6 +58,68 @@ function response(id: unknown, result: unknown) {
 }
 
 describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
+  it.each([false, true])(
+    "prepares the socket write and rechecks its caller after waiting (revoked=%s)",
+    async (revoked) => {
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const arrived = createDeferred<void>();
+      const reply = createDeferred<void>();
+      const authority = fetchRuntime.captureEffectAuthority();
+      vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
+        ...authority,
+        async initiate(effect) {
+          preparing.resolve();
+          await prepared.promise;
+          return authority.initiate(effect);
+        },
+      });
+      const requests: Record<string, unknown>[] = [];
+      const { baseUrl } = await serve((request, socket) => {
+        requests.push(request);
+        arrived.resolve();
+        void reply.promise.then(() => socket.end(response(request.id, { sent: true })));
+      });
+      const caller = new AbortController();
+      const failure = new Error("Signal caller ended during preparation");
+      const sending = signalRpcRequest(
+        "send",
+        { message: "prepared" },
+        {
+          baseUrl,
+          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+        },
+      ).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          preparing.promise,
+          arrived.promise.then(() => {
+            throw new Error("socket write bypassed preparation");
+          }),
+        ]);
+        expect(requests).toEqual([]);
+        if (revoked) {
+          caller.abort(failure);
+        }
+        prepared.resolve();
+        if (!revoked) {
+          await arrived.promise;
+          reply.resolve();
+        }
+        expect(await sending).toEqual(revoked ? { error: failure } : { value: { sent: true } });
+        expect(requests).toHaveLength(revoked ? 0 : 1);
+      } finally {
+        caller.abort(failure);
+        prepared.resolve();
+        reply.resolve();
+        await sending;
+      }
+    },
+  );
+
   it("sends newline JSON-RPC and matches a fragmented UTF-8 response by id", async () => {
     const caller = new AbortController();
     const requests: Record<string, unknown>[] = [];
@@ -135,59 +199,41 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
 
   it.each([
     [
-      "definitive quote rejection",
-      {
-        code: -32602,
-        message: 'quote rejected: Unrecognized field "quoteTimestamp" for +15550000001',
-      },
+      -32602,
+      'quote rejected: Unrecognized field "quoteTimestamp" for +15550000001',
+      "quote metadata rejected (redacted)",
     ],
-    [
-      "quote validation failure",
-      { code: -32602, message: "quote metadata invalid: unknown author" },
-    ],
-  ] as const)("classifies a %s without echoing its raw message", async (_name, errorBody) => {
-    const { baseUrl } = await serve((request, socket) =>
-      socket.end(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, error: errorBody })}\n`),
-    );
-    // The redacted message must keep the send-path fallback classifier working:
-    // Signal RPC -32602: + "quote" + a definitive rejection word.
-    await expect(signalRpcRequest("send", undefined, { baseUrl })).rejects.toThrow(
-      /^Signal RPC -32602: quote metadata rejected \(redacted\)$/,
-    );
-  });
-
-  it("keeps a non-quote -32602 error unclassified and redacted", async () => {
+    [-32602, "quote metadata invalid: unknown author", "quote metadata rejected (redacted)"],
+    [-32602, "private +15550000001", "remote error"],
+    [-32000, "quote metadata was rejected after an ambiguous send +15550000001", "remote error"],
+  ] as const)("redacts RPC %s: %s", async (code, message, classification) => {
     const { baseUrl } = await serve((request, socket) =>
       socket.end(
-        `${JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32602, message: "private +15550000001" } })}\n`,
+        `${JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code, message } })}\n`,
       ),
     );
-    await expect(signalRpcRequest("send", undefined, { baseUrl })).rejects.toThrow(
-      /^Signal RPC -32602: remote error$/,
-    );
-  });
-
-  it("redacts an ambiguous quote-shaped failure from another code", async () => {
-    const { baseUrl } = await serve((request, socket) =>
-      socket.end(
-        `${JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: "quote metadata was rejected after an ambiguous send +15550000001" } })}\n`,
-      ),
-    );
-    await expect(signalRpcRequest("send", undefined, { baseUrl })).rejects.toThrow(
-      /^Signal RPC -32000: remote error$/,
-    );
-  });
-
-  it("enforces a response deadline and closes the connection", async () => {
-    let closed: Promise<unknown> | undefined;
-    const { baseUrl } = await serve((_request, socket) => {
-      closed = once(socket, "close");
+    await expect(signalRpcRequest("send", undefined, { baseUrl })).rejects.toMatchObject({
+      message: `Signal RPC ${code}: ${classification}`,
     });
-    await expect(signalRpcRequest("send", undefined, { baseUrl, timeoutMs: 30 })).rejects.toThrow(
-      /deadline/,
-    );
-    await closed;
   });
+
+  it.each(["request", "subscription"] as const)(
+    "bounds an unanswered %s and closes its socket",
+    async (mode) => {
+      let closed: Promise<unknown> | undefined;
+      const { baseUrl } = await serve((_request, socket) => {
+        closed = once(socket, "close");
+      });
+      const opened = vi.fn();
+      const pending =
+        mode === "request"
+          ? signalRpcRequest("send", undefined, { baseUrl, timeoutMs: 30 })
+          : streamSignalEvents({ baseUrl, timeoutMs: 30, onStreamOpen: opened, onEvent: () => {} });
+      await expect(pending).rejects.toThrow(/deadline/);
+      expect(opened).not.toHaveBeenCalled();
+      await closed;
+    },
+  );
 
   it("rejects an insecure parent before sending account data", async () => {
     const onRequest = vi.fn();
@@ -228,15 +274,6 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(opened).toHaveBeenCalledOnce();
     expect(events).toEqual([{ event: "receive", data: JSON.stringify(payload) }]);
-  });
-
-  it("times out an unacknowledged subscription without reporting stream ready", async () => {
-    const { baseUrl } = await serve(() => {});
-    const opened = vi.fn();
-    await expect(
-      streamSignalEvents({ baseUrl, timeoutMs: 30, onStreamOpen: opened, onEvent: () => {} }),
-    ).rejects.toThrow(/deadline/);
-    expect(opened).not.toHaveBeenCalled();
   });
 
   it("receives after a delayed subscription through the monitor's zero-timeout reconnect path", async () => {

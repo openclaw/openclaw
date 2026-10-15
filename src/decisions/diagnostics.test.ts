@@ -29,11 +29,6 @@ const emit = (outcome?: DecisionOutcome, dispatched = false) =>
   });
 
 describe("Decision diagnostics", () => {
-  it("collects no DEBUG facts when disabled", () => {
-    emit({ status: "unavailable", reason: "disabled" });
-    expect(logger.debug).not.toHaveBeenCalled();
-    expect(logger.warn).not.toHaveBeenCalled();
-  });
   it("logs safe counters and actual usage, not content or an inferred caller effect", () => {
     logger.isEnabled.mockImplementation((level) => level === "debug");
     emit(
@@ -81,14 +76,19 @@ describe("Decision diagnostics", () => {
       expect.objectContaining({ status: "rejected" }),
     );
   });
-  it("rate limits generic input-rejection warnings without claiming context overflow", () => {
-    logger.isEnabled.mockImplementation((level) => level === "warn");
-    emit({ status: "unavailable", reason: "unsupported-input" }, true);
-    emit({ status: "unavailable", reason: "unsupported-input" }, true);
-    expect(logger.warn).toHaveBeenCalledOnce();
-    expect(logger.warn).toHaveBeenCalledWith(
-      "Decision input was rejected; the caller retains its fallback policy.",
-    );
+  it.each([false, true])("keeps DEBUG disabled and bounds input warnings (warn: %s)", (warn) => {
+    logger.isEnabled.mockImplementation((level) => warn && level === "warn");
+    if (warn) {
+      emit({ status: "unavailable", reason: "unsupported-input" }, true);
+      emit({ status: "unavailable", reason: "unsupported-input" }, true);
+      expect(logger.warn).toHaveBeenCalledOnce();
+      expect(logger.warn).toHaveBeenCalledWith(
+        "Decision input was rejected; the caller retains its fallback policy.",
+      );
+    } else {
+      emit({ status: "unavailable", reason: "disabled" });
+      expect(logger.warn).not.toHaveBeenCalled();
+    }
     expect(logger.debug).not.toHaveBeenCalled();
   });
 });

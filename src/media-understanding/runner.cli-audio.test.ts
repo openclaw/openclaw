@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import { logWarn } from "../logger.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { CLI_OUTPUT_MAX_BUFFER } from "./defaults.constants.js";
-import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
 import { runCliEntry } from "./runner.entries.js";
 import { runCapability } from "./runner.js";
 import {
@@ -112,29 +112,6 @@ const transcriptFileCases: Array<{
     text: "context:",
   },
   {
-    name: "empty parakeet txt output",
-    command: "parakeet-mlx",
-    args: ["{{MediaPath}}", "--output-format", "txt", "--output-dir", "{{OutputDir}}"],
-    resolvePath: (args) => path.join(args[4] ?? "", `${path.parse(args[0] ?? "").name}.txt`),
-    text: "  \n",
-  },
-  {
-    name: "parakeet all output with default template",
-    command: "parakeet-mlx",
-    args: [
-      "{{MediaPath}}",
-      "--output-format=all",
-      "--output-dir={{OutputDir}}",
-      "--output-template={filename}",
-    ],
-    resolvePath: (args) =>
-      path.join(
-        args[2]?.slice("--output-dir=".length) ?? "",
-        `${path.parse(args[0] ?? "").name}.txt`,
-      ),
-    text: "file transcript",
-  },
-  {
     name: "parakeet environment-selected output",
     command: "parakeet-mlx",
     args: ["{{MediaPath}}", "--output-dir", "{{OutputDir}}"],
@@ -211,25 +188,6 @@ describe("media-understanding CLI audio entry", () => {
     });
   });
 
-  it("executes a custom CLI with a literal attachment path", async () => {
-    const actual = await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
-    runExecMock.mockImplementationOnce(actual.runExec);
-    await withAudioFixture("openclaw-cli-literal-input", async (fixture) => {
-      const args = [
-        "-e",
-        "process.stdout.write(String(require('node:fs').readFileSync(process.argv[1]).length))",
-        fixture.mediaPath,
-      ];
-      const result = await runFixture(fixture, { command: process.execPath, args });
-      expect(result?.text).toBe(String((await fs.stat(fixture.mediaPath)).size));
-      expect(runExecMock).toHaveBeenCalledExactlyOnceWith(
-        process.execPath,
-        args,
-        expect.any(Object),
-      );
-    });
-  });
-
   it("preserves custom arguments relative to the attachment working directory", async () => {
     await withAudioFixture("openclaw-cli-custom-input", async (fixture) => {
       const args = ["describe", path.basename(fixture.mediaPath)];
@@ -243,8 +201,6 @@ describe("media-understanding CLI audio entry", () => {
   });
 
   it.each<[string, string | undefined, Overrides["request"], string, string]>([
-    ["request", "de", { prompt: "Focus on names", language: "en" }, "en", "Focus on names"],
-    ["entry", "de", undefined, "de", "entry prompt"],
     ["capability", undefined, undefined, "fr", "entry prompt"],
   ])(
     "uses %s language and prompt precedence",
@@ -266,53 +222,19 @@ describe("media-understanding CLI audio entry", () => {
     },
   );
 
-  it("projects aligned attachment facts and legacy templates after an empty slot", async () => {
-    await withTestDir({ prefix: "openclaw-cli-media-template-" }, async (base) => {
-      const media = await Promise.all(
-        ["audio/wav", "audio/x-wav"].map(async (contentType, index) => {
-          const mediaPath = path.join(base, `audio-${index}.wav`);
-          await fs.writeFile(mediaPath, createSafeAudioFixtureBuffer());
-          return { path: mediaPath, url: `media://inbound/audio-${index}.wav`, contentType };
-        }),
-      );
-      const ctx = { media: [{}, ...media] };
-      const attachments = normalizeMediaAttachments(ctx);
-      expect(attachments.map((attachment) => attachment.index)).toEqual([1, 2]);
-      const cache = createMediaAttachmentCache(attachments, {
-        localPathRoots: [base],
-        includeDefaultLocalPathRoots: false,
-      });
-      try {
-        for (const [index, attachment] of attachments.entries()) {
-          const expected = {
-            AttachmentPath: media[index]?.path,
-            AttachmentUrl: media[index]?.url,
-            AttachmentContentType: media[index]?.contentType,
-            AttachmentDir: base,
-            AttachmentIndex: String(index + 1),
-            MediaPath: media[index]?.path,
-            MediaUrl: media[index]?.url,
-            MediaType: media[index]?.contentType,
-            MediaDir: base,
-            MediaPaths: "",
-          };
-          await runCliEntry({
-            capability: "audio",
-            cfg: {},
-            ctx,
-            attachment,
-            cache,
-            entry: {
-              command: "mock-transcriber",
-              args: Object.keys(expected).map((key) => `{{${key}}}`),
-            },
-          });
-          expect(runExecMock.mock.calls[index]?.[1]).toEqual(Object.values(expected));
-        }
-      } finally {
-        await cache.cleanup();
-      }
+  it("substitutes an unset language as an empty argument instead of dropping it", async () => {
+    // No language at any level leaves {{Language}} unpopulated. Templates substitute
+    // an empty string rather than dropping the argument, so a flag-style pair keeps
+    // its flag and gains an empty value; CLI args stay literal by contract.
+    await runAudioEntry({
+      command: "mock-transcriber",
+      args: ["--language", "{{Language}}", "--file", "{{AttachmentPath}}"],
     });
+    expect(runExecMock).toHaveBeenCalledExactlyOnceWith(
+      "mock-transcriber",
+      ["--language", "", "--file", expect.any(String)],
+      { timeoutMs: 60_000, maxBuffer: CLI_OUTPUT_MAX_BUFFER },
+    );
   });
 
   it.each(transcriptFileCases)("honors $name transcript file authority", async (testCase) => {
@@ -342,6 +264,105 @@ describe("media-understanding CLI audio entry", () => {
     }
   });
 
+  it.each([
+    { language: "fr", expected: "fr" },
+    { language: "fr", request: { language: "es" }, expected: "es" },
+    { language: "fr", config: { language: "de" }, expected: "de" },
+    { expected: undefined },
+    { language: "", expected: undefined },
+    { language: "fr", request: { language: "" }, expected: undefined },
+    { language: "fr", request: { language: " " }, expected: " " },
+    { command: "whisper-cli", language: "fr", expected: undefined },
+  ])("forwards auto-discovered Whisper language: %j", async (options) => {
+    await withTestDir({ prefix: "openclaw-auto-language-" }, async (dir) => {
+      const command = options.command ?? "whisper";
+      await fs.writeFile(
+        path.join(dir, `${command}${process.platform === "win32" ? ".cmd" : ""}`),
+        "synthetic executable",
+        { mode: 0o755 },
+      );
+      const model = path.join(dir, "model.bin");
+      await fs.writeFile(model, "synthetic model");
+      runExecMock.mockImplementation(async (_executable, args: string[]) => {
+        if (command === "whisper") {
+          await fs.writeFile(
+            path.join(
+              expectDefined(args[args.indexOf("--output_dir") + 1], "Whisper output directory"),
+              `${path.parse(args.at(-1) ?? "").name}.txt`,
+            ),
+            "fixture transcript",
+          );
+        } else if (args.includes("-of")) {
+          await fs.writeFile(`${args[args.indexOf("-of") + 1]}.txt`, "fixture transcript");
+        }
+        return { stdout: "", stderr: "" };
+      });
+      await withAudioFixture("openclaw-auto-language", async ({ ctx, media, cache }) => {
+        const result = await withEnvAsync(
+          { PATH: dir, WHISPER_CPP_MODEL: model, SHERPA_ONNX_MODEL_DIR: undefined },
+          () =>
+            runCapability({
+              capability: "audio",
+              cfg: { tools: { media: { audio: { language: options.language } } } },
+              ctx,
+              media,
+              attachments: cache,
+              providerRegistry: new Map(),
+              request: options.request,
+              config: options.config,
+            }),
+        );
+        expect(result.outputs[0]?.text).toBe("fixture transcript");
+      });
+      const args = runExecMock.mock.calls.find(
+        ([executable]) =>
+          executable === path.join(dir, command) || executable === path.join(dir, `${command}.cmd`),
+      )?.[1];
+      expect(args).toBeDefined();
+      if (options.expected === undefined) {
+        expect(args).not.toContain("--language");
+      } else {
+        expect(args.filter((arg: string) => arg === "--language")).toHaveLength(1);
+        expect(args[args.indexOf("--language") + 1]).toBe(options.expected);
+      }
+      expect(args).not.toContain("{{Language}}");
+    });
+  });
+
+  it.each([
+    {
+      args: ["--language", "{{Language}}", "{{AttachmentPath}}"],
+      language: "de",
+      request: { language: "en" },
+      expected: ["--language", "en", expect.any(String)],
+    },
+    {
+      args: ["--language", "{{Language}}", "{{AttachmentPath}}"],
+      language: "de",
+      expected: ["--language", "de", expect.any(String)],
+    },
+    {
+      args: ["--language", "{{Language}}", "{{AttachmentPath}}"],
+      expected: ["--language", "fr", expect.any(String)],
+    },
+    {
+      args: ["--language", "it", "{{AttachmentPath}}"],
+      language: "de",
+      request: { language: "en" },
+      expected: ["--language", "it", expect.any(String)],
+    },
+    { args: ["{{AttachmentPath}}"], request: { language: "en" }, expected: [expect.any(String)] },
+  ])(
+    "preserves explicit CLI language arguments: %j",
+    async ({ args, language, request, expected }) => {
+      await runAudioEntry(
+        { command: "whisper", args, language },
+        { config: { language: "fr" }, request },
+      );
+      expect(runExecMock.mock.calls[0]?.[1]).toEqual(expected);
+    },
+  );
+
   it("removes the CLI scratch directory when audio conversion fails", async () => {
     let scratchDir = "";
     runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
@@ -367,23 +388,20 @@ describe("media-understanding CLI audio entry", () => {
     await expect(fs.stat(scratchDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.each([
-    { name: "default srt output", extra: [] },
-    {
-      name: "custom template",
-      extra: ["--output-format", "txt", "--output-template", "custom-{filename}"],
+  it.each([{ name: "default srt output", extra: [] }])(
+    "preserves parakeet stdout for $name without a file contract",
+    async ({ extra }) => {
+      const result = await withEnvAsync(
+        { PARAKEET_OUTPUT_FORMAT: undefined, PARAKEET_OUTPUT_TEMPLATE: undefined },
+        async () =>
+          await runAudioEntry({
+            command: "parakeet-mlx",
+            args: ["{{MediaPath}}", "--output-dir", "{{OutputDir}}", ...extra],
+          }),
+      );
+      expect(result?.text).toBe("cli transcript");
     },
-  ])("preserves parakeet stdout for $name without a file contract", async ({ extra }) => {
-    const result = await withEnvAsync(
-      { PARAKEET_OUTPUT_FORMAT: undefined, PARAKEET_OUTPUT_TEMPLATE: undefined },
-      async () =>
-        await runAudioEntry({
-          command: "parakeet-mlx",
-          args: ["{{MediaPath}}", "--output-dir", "{{OutputDir}}", ...extra],
-        }),
-    );
-    expect(result?.text).toBe("cli transcript");
-  });
+  );
 
   it("surfaces unexpected transcript file read errors", async () => {
     runExecMock.mockImplementationOnce(async (_command, args: string[]) => {

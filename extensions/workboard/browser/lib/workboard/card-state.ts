@@ -1,17 +1,12 @@
 import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { matchesBoardFilter } from "./board-filter.ts";
 import type {
   WorkboardCard,
   WorkboardDependencyState,
   WorkboardMetadata,
-  WorkboardStaleState,
   WorkboardStatus,
-  WorkboardTemplateId,
   WorkboardUiState,
 } from "./types.ts";
-
-const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 
 export function isActiveWorkboardCard(card: WorkboardCard): boolean {
   return !card.metadata?.archivedAt;
@@ -171,21 +166,25 @@ export function removeCardAndReferences(
   return nextCards;
 }
 
+export const WORKBOARD_DRAFT_DEFAULTS = {
+  draftOpen: false,
+  draftDiscardOpen: false,
+  editingCardId: null,
+  editingCardBase: null,
+  draftTitle: "",
+  draftNotes: "",
+  draftStatus: "todo",
+  draftPriority: "normal",
+  draftLabels: "",
+  draftAgentId: "",
+  draftSessionKey: "",
+  draftTemplateId: "",
+  draftCommentBody: "",
+} satisfies Partial<WorkboardUiState>;
+
 export function resetDraftState(state: WorkboardUiState) {
   const resolveStaleEdit = state.loaded && state.mutationReadiness === "stale_edit_draft";
-  state.draftOpen = false;
-  state.draftDiscardOpen = false;
-  state.editingCardId = null;
-  state.editingCardBase = null;
-  state.draftTitle = "";
-  state.draftNotes = "";
-  state.draftStatus = "todo";
-  state.draftPriority = "normal";
-  state.draftLabels = "";
-  state.draftAgentId = "";
-  state.draftSessionKey = "";
-  state.draftTemplateId = "";
-  state.draftCommentBody = "";
+  Object.assign(state, WORKBOARD_DRAFT_DEFAULTS);
   if (resolveStaleEdit) {
     state.mutationReadiness = "ready";
   }
@@ -208,18 +207,7 @@ export function draftPayload(state: WorkboardUiState) {
   };
 }
 
-type WorkboardCardDraft = {
-  title: string;
-  notes: string;
-  status: WorkboardStatus;
-  priority: WorkboardCard["priority"];
-  labels: string[];
-  agentId: string;
-  sessionKey: string;
-  templateId: WorkboardTemplateId | "";
-};
-
-function cardDraftPayload(card: WorkboardCard): WorkboardCardDraft {
+function cardDraftPayload(card: WorkboardCard) {
   return {
     title: card.title,
     notes: card.notes ?? "",
@@ -228,7 +216,7 @@ function cardDraftPayload(card: WorkboardCard): WorkboardCardDraft {
     labels: card.labels,
     agentId: card.agentId ?? "",
     sessionKey: workboardCardSessionKey(card) ?? "",
-    templateId: card.metadata?.templateId ?? "",
+    templateId: card.metadata?.templateId ?? ("" as const),
   };
 }
 
@@ -279,30 +267,6 @@ export function rebaseWorkboardDraft(state: WorkboardUiState, current: Workboard
     state.draftTemplateId = next.templateId;
   }
   state.editingCardBase = current;
-}
-
-export function isFailedSessionStatus(status: GatewaySessionRow["status"]): boolean {
-  return status === "failed" || status === "killed" || status === "timeout";
-}
-
-export function staleSessionState(session: GatewaySessionRow): WorkboardStaleState | undefined {
-  if (session.status !== "running") {
-    return undefined;
-  }
-  if (session.hasActiveRun !== false) {
-    return undefined;
-  }
-  if (
-    typeof session.updatedAt !== "number" ||
-    Date.now() - session.updatedAt < WORKBOARD_STALE_SESSION_MS
-  ) {
-    return undefined;
-  }
-  return {
-    detectedAt: Date.now(),
-    lastSessionUpdatedAt: session.updatedAt,
-    reason: "Linked session has not reported recent activity.",
-  };
 }
 
 export function workboardCardSessionKey(card: WorkboardCard): string | undefined {

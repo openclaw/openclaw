@@ -32,3 +32,22 @@ export function createExactAssistantMessage(params: {
 export function transcriptMessage(eventId: string, parentId: string | null, message: unknown) {
   return { eventId, parentId, message };
 }
+
+export function createManualCompactRecords(sessionId: string, cwd?: string) {
+  return [
+    {
+      type: "session",
+      version: 3,
+      id: sessionId,
+      timestamp: "2026-06-19T12:00:00.000Z",
+      ...(cwd ? { cwd } : {}),
+    },
+    ...[1, 2, 3, 4].map((index) => ({
+      type: "message",
+      id: `entry-${index}`,
+      parentId: index === 1 ? null : `entry-${index - 1}`,
+      timestamp: `2026-06-19T12:00:0${index}.000Z`,
+      message: { role: "user", content: `message ${index}`, timestamp: index },
+    })),
+  ];
+}

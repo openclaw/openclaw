@@ -8,7 +8,7 @@ const currentDir = dirname(fileURLToPath(import.meta.url));
 declare const WORKER_DEPLOY_VERSION: string | undefined;
 
 /** Bun compiled binaries use virtual filesystem URLs. */
-export const isBunBinary =
+const isBunBinary =
   import.meta.url.includes("$bunfs") ||
   import.meta.url.includes("~BUN") ||
   import.meta.url.includes("%7EBUN");
@@ -47,13 +47,7 @@ export function getDocsPath(): string {
   return resolve(join(getPackageDir(), "docs"));
 }
 
-export function getExamplesPath(): string {
-  return resolve(join(getPackageDir(), "examples"));
-}
-
 interface PackageJson {
-  name?: string;
-  version?: string;
   openclawConfig?: {
     name?: string;
     configDir?: string;
@@ -62,9 +56,8 @@ interface PackageJson {
 
 const workerVersion = typeof WORKER_DEPLOY_VERSION === "string" ? WORKER_DEPLOY_VERSION : undefined;
 const pkg: PackageJson = workerVersion
-  ? { name: "openclaw", version: workerVersion }
+  ? {}
   : (JSON.parse(readFileSync(join(getPackageDir(), "package.json"), "utf-8")) as PackageJson); // SAFETY: The package owns this metadata contract.
 
 export const APP_NAME: string = pkg.openclawConfig?.name || "openclaw";
 export const CONFIG_DIR_NAME: string = pkg.openclawConfig?.configDir || ".openclaw";
-export const PACKAGE_MANIFEST_VERSION: string = pkg.version || "0.0.0";

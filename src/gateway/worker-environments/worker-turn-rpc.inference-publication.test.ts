@@ -13,7 +13,6 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { dispatchWorkerRequest } from "../server/ws-connection/worker-connection-dispatch.js";
-import { hashWorkerCredential } from "./credential.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
@@ -75,7 +74,7 @@ const done: WorkerInferenceTerminalOutcome = {
 describe("worker inference inventory publication", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it.each(["diagnostic", "credential replacement", "credential revocation"] as const)(
+  it.each(["diagnostic", "credential revocation"] as const)(
     "revalidates provider output while %s commit publication is delayed",
     async (mutationKind) => {
       const { store } = support.testState;
@@ -193,9 +192,7 @@ describe("worker inference inventory publication", () => {
         delivery.command =
           mutationKind === "diagnostic"
             ? "workerEnvironments.recordError"
-            : mutationKind === "credential replacement"
-              ? "workerEnvironments.renewCredential"
-              : "workerEnvironments.revokeEnvironmentCredential";
+            : "workerEnvironments.revokeEnvironmentCredential";
         delivery.afterCommit = async () => {
           committed.resolve();
           await publish.promise;
@@ -207,16 +204,7 @@ describe("worker inference inventory publication", () => {
                 state: "attached",
                 error: "unrelated provider diagnostic",
               })
-            : mutationKind === "credential replacement"
-              ? store.renewCredential({
-                  environmentId,
-                  expectedOwnerEpoch: identity.ownerEpoch,
-                  credentialHash: hashWorkerCredential("replacement-inference-credential"),
-                  sessionId,
-                  rpcSetVersion: 1,
-                  expiresAtMs: support.testState.nowMs + 60_000,
-                })
-              : store.revokeEnvironmentCredential(environmentId);
+            : store.revokeEnvironmentCredential(environmentId);
         await Promise.race([
           committed.promise,
           mutation.then(() => {

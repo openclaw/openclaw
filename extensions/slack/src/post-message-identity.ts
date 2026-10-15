@@ -1,8 +1,6 @@
-// Slack plugin module implements best-effort custom identity fallback for chat.postMessage.
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getSlackWebApiErrorData } from "./errors.js";
@@ -28,30 +26,24 @@ export function buildSlackMessageIdentityPayload(identity?: SlackPostMessageIden
   };
 }
 
-function isSlackCustomizeScopeError(err: unknown): boolean {
+function classifySlackCustomIdentityError(err: unknown): "scope" | "argument" | undefined {
   const data = getSlackWebApiErrorData(err);
-  const code = normalizeLowercaseStringOrEmpty(normalizeOptionalString(data?.error));
-  if (code !== "missing_scope") {
-    return false;
+  const code = normalizeLowercaseStringOrEmpty(data?.error);
+  if (code === "invalid_arguments" || code === "invalid_arg_name") {
+    return "argument";
   }
-  const needed = normalizeLowercaseStringOrEmpty(normalizeOptionalString(data?.needed));
+  if (code !== "missing_scope") {
+    return undefined;
+  }
+  const needed = normalizeLowercaseStringOrEmpty(data?.needed);
   if (needed.includes("chat:write.customize")) {
-    return true;
+    return "scope";
   }
   const scopes = [
     ...normalizeTrimmedStringList(data?.response_metadata?.scopes),
     ...normalizeTrimmedStringList(data?.response_metadata?.acceptedScopes),
   ].map((scope) => normalizeLowercaseStringOrEmpty(scope));
-  return scopes.includes("chat:write.customize");
-}
-
-function isSlackCustomIdentityRejectedError(err: unknown): boolean {
-  if (isSlackCustomizeScopeError(err)) {
-    return true;
-  }
-  const data = getSlackWebApiErrorData(err);
-  const code = normalizeLowercaseStringOrEmpty(normalizeOptionalString(data?.error));
-  return code === "invalid_arguments" || code === "invalid_arg_name";
+  return scopes.includes("chat:write.customize") ? "scope" : undefined;
 }
 
 export function hasSlackMessageIdentity(identity?: SlackPostMessageIdentity): boolean {
@@ -71,18 +63,14 @@ export async function postSlackMessageWithIdentityFallback<T>(params: {
     }
     return await post({ ...basePayload, ...buildSlackMessageIdentityPayload(identity) }, identity);
   } catch (err) {
-    if (
-      !identity ||
-      !hasSlackMessageIdentity(identity) ||
-      !isSlackCustomIdentityRejectedError(err)
-    ) {
+    if (!identity || !hasSlackMessageIdentity(identity)) {
       throw err;
     }
-    if (
-      !isSlackCustomizeScopeError(err) &&
-      identity.username &&
-      (identity.iconUrl || identity.iconEmoji)
-    ) {
+    const rejection = classifySlackCustomIdentityError(err);
+    if (!rejection) {
+      throw err;
+    }
+    if (rejection === "argument" && identity.username && (identity.iconUrl || identity.iconEmoji)) {
       logVerbose("slack send: custom icon rejected, retrying with username only");
       try {
         return await post(
@@ -90,7 +78,7 @@ export async function postSlackMessageWithIdentityFallback<T>(params: {
           { username: identity.username },
         );
       } catch (retryError) {
-        if (!isSlackCustomIdentityRejectedError(retryError)) {
+        if (!classifySlackCustomIdentityError(retryError)) {
           throw retryError;
         }
       }

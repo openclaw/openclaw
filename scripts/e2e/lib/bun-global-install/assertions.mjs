@@ -1,4 +1,3 @@
-// Assertions for Bun global install E2E validation.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -209,8 +208,9 @@ if (mode === "assert-bun-version") {
   }
   const major = Number(match[1]);
   const minor = Number(match[2]);
-  if (major < 1 || (major === 1 && minor < 4)) {
-    throw new Error(`Bun 1.4 or newer is required; found ${version}`);
+  const patch = Number(match[3]);
+  if (major < 1 || (major === 1 && (minor < 4 || (minor === 4 && patch < 3)))) {
+    throw new Error(`Bun 1.4.3 or newer is required; found ${version}`);
   }
   process.exit(0);
 }

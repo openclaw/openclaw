@@ -35,63 +35,59 @@ it("parses all-thread CPU and kernel RSS high-water observations without confusi
   expect(parseTsgoProcessSample(stat(), "", 100)?.peakRssBytes).toBeNull();
 });
 
-it.each(["darwin", "win32"] as const)(
-  "reports resource statistics unavailable on %s without reading procfs",
-  (platform) => {
-    const read = vi.fn();
-    const sampler = createTsgoResourceSampler({ platform, ticksPerSecond: 100, read });
+it.each([
+  "unsupported-platform",
+  "clock-tick-frequency-unavailable",
+  "exit-race",
+  "missing-rss",
+] as const)("preserves resource evidence for %s", (scenario) => {
+  const read = vi.fn<(file: string) => string>();
+  if (scenario === "missing-rss") {
+    read.mockImplementation((file) => (file.endsWith("stat") ? stat() : ""));
+  }
+  if (scenario === "exit-race") {
+    read
+      .mockReturnValueOnce(stat())
+      .mockReturnValueOnce("VmHWM: 1024 kB\n")
+      .mockImplementationOnce(() => {
+        throw new Error("ENOENT");
+      })
+      .mockReturnValueOnce(stat({ user: 500, start: "456" }))
+      .mockReturnValueOnce("VmHWM: 4096 kB\n");
+  }
+  const sampler = createTsgoResourceSampler({
+    platform: scenario === "unsupported-platform" ? "darwin" : "linux",
+    ticksPerSecond: scenario === "clock-tick-frequency-unavailable" ? null : 100,
+    read,
+  });
+  for (let attempt = 0; attempt < (scenario === "exit-race" ? 3 : 1); attempt++) {
     sampler.sample(42);
+  }
+  if (scenario === "exit-race") {
+    expect(read).toHaveBeenCalledTimes(5);
+    expect(sampler.result()).toMatchObject({
+      cpuMs: 150,
+      peakRssBytes: 1048576,
+      samples: 1,
+      accuracy: "sampled-lower-bound",
+    });
+  } else if (scenario === "missing-rss") {
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(sampler.result()).toMatchObject({
+      cpuMs: 150,
+      peakRssBytes: null,
+      unavailableReason: null,
+      peakRssUnavailableReason: "rss-high-water-unavailable",
+    });
+  } else {
     expect(read).not.toHaveBeenCalled();
     expect(sampler.result()).toMatchObject({
       cpuMs: null,
       peakRssBytes: null,
       samples: 0,
-      unavailableReason: "unsupported-platform",
+      unavailableReason: scenario,
     });
-  },
-);
-
-it("keeps lower bounds across exit races and refuses a reused PID", () => {
-  const read = vi
-    .fn()
-    .mockReturnValueOnce(stat())
-    .mockReturnValueOnce("VmHWM: 1024 kB\n")
-    .mockImplementationOnce(() => {
-      throw new Error("ENOENT");
-    })
-    .mockReturnValueOnce(stat({ user: 500, start: "456" }))
-    .mockReturnValueOnce("VmHWM: 4096 kB\n");
-  const sampler = createTsgoResourceSampler({ platform: "linux", ticksPerSecond: 100, read });
-  sampler.sample(42);
-  sampler.sample(42);
-  sampler.sample(42);
-  expect(sampler.result()).toMatchObject({
-    cpuMs: 150,
-    peakRssBytes: 1048576,
-    samples: 1,
-    accuracy: "sampled-lower-bound",
-  });
-  const missing = createTsgoResourceSampler({ platform: "linux", ticksPerSecond: null, read });
-  missing.sample(42);
-  expect(missing.result()).toMatchObject({
-    cpuMs: null,
-    unavailableReason: "clock-tick-frequency-unavailable",
-  });
-});
-
-it("explains a missing RSS high-water mark separately from available CPU", () => {
-  const sampler = createTsgoResourceSampler({
-    platform: "linux",
-    ticksPerSecond: 100,
-    read: (file) => (file.endsWith("stat") ? stat() : ""),
-  });
-  sampler.sample(42);
-  expect(sampler.result()).toMatchObject({
-    cpuMs: 150,
-    peakRssBytes: null,
-    unavailableReason: null,
-    peakRssUnavailableReason: "rss-high-water-unavailable",
-  });
+  }
 });
 
 it("counts roots and transitive inputs only from fresh compiler metadata", () => {
@@ -158,92 +154,104 @@ describe("managed compiler evidence", () => {
     };
   }
 
-  it("preserves command, output policy, callbacks and numeric failure while recording fresh graph/cache evidence", async () => {
-    const { cwd, directory, command, evidence } = fixture();
-    const onReady = vi.fn();
-    vi.mocked(runManagedCommand).mockImplementationOnce(async (options) => {
-      expect(options).toMatchObject(command);
-      expect(options.stdio).toBeUndefined();
-      const child = Object.assign(new EventEmitter(), {
-        pid: undefined,
-        exitCode: null,
-        signalCode: null,
+  it.each([
+    { exitCode: 2, signal: null },
+    { exitCode: 143, signal: "SIGTERM" },
+  ] as const)(
+    "preserves managed outcome $exitCode and its evidence",
+    async ({ exitCode, signal }) => {
+      const { cwd, directory, command, evidence } = fixture();
+      const onReady = vi.fn();
+      const onSignal = vi.fn();
+      vi.mocked(runManagedCommand).mockImplementationOnce(async (options) => {
+        expect(options).toMatchObject(command);
+        expect(options.stdio).toBeUndefined();
+        const child = Object.assign(new EventEmitter(), {
+          pid: undefined,
+          exitCode: null,
+          signalCode: null,
+        });
+        options.onReady?.(child as Parameters<NonNullable<typeof options.onReady>>[0]);
+        if (signal) {
+          options.onSignal?.(signal);
+        } else {
+          fs.writeFileSync(
+            path.join(cwd, "cache.tsbuildinfo"),
+            '{"fileNames":["a.ts","lib.d.ts"],"root":[1]}',
+          );
+        }
+        child.emit("exit", signal ? null : exitCode, signal);
+        return exitCode;
       });
-      options.onReady?.(child as Parameters<NonNullable<typeof options.onReady>>[0]);
-      fs.writeFileSync(
-        path.join(cwd, "cache.tsbuildinfo"),
-        '{"fileNames":["a.ts","lib.d.ts"],"root":[1]}',
-      );
-      child.emit("exit", 2, null);
-      return 2;
-    });
-    expect(await runMeasuredTsgoCommand({ ...command, onReady }, directory)).toBe(2);
-    expect(onReady).toHaveBeenCalledOnce();
-    expect(evidence()).toMatchObject({
-      outcome: { exitCode: 2, errorCode: null },
-      command: { args: command.args },
-      pprofDir: "profiles",
-      graph: { totalFiles: 2, rootFiles: 1, transitiveFiles: 1 },
-      cache: { beforeSha256: null, hit: "unknown", osPageCache: "uncontrolled" },
-    });
-    expect(evidence().wallMs).toBeGreaterThanOrEqual(0);
-    expect(evidence().cache.afterSha256).toMatch(/^[a-f0-9]{64}$/u);
-  });
-
-  it("records forwarded and child signals while leaving the managed result authoritative", async () => {
-    const { directory, command, evidence } = fixture();
-    const onSignal = vi.fn();
-    vi.mocked(runManagedCommand).mockImplementationOnce(async (options) => {
-      const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null });
-      options.onReady?.(child as Parameters<NonNullable<typeof options.onReady>>[0]);
-      options.onSignal?.("SIGTERM");
-      child.emit("exit", null, "SIGTERM");
-      return 143;
-    });
-    expect(await runMeasuredTsgoCommand({ ...command, onSignal }, directory)).toBe(143);
-    expect(onSignal).toHaveBeenCalledWith("SIGTERM");
-    expect(evidence().outcome).toMatchObject({
-      exitCode: 143,
-      exitSignal: "SIGTERM",
-      forwardedSignal: "SIGTERM",
-    });
-  });
-
-  it.each(["ETIMEDOUT", "ENOENT", "EPROCESSGROUP_CLEANUP_FAILED"])(
-    "never replaces %s with an evidence result",
-    async (code) => {
-      const { directory, command, evidence } = fixture();
-      const error = Object.assign(new Error("compiler failure"), { code });
-      vi.mocked(runManagedCommand).mockRejectedValueOnce(error);
-      await expect(runMeasuredTsgoCommand(command, directory)).rejects.toBe(error);
-      expect(evidence().outcome).toMatchObject({ exitCode: null, errorCode: code });
+      expect(
+        await runMeasuredTsgoCommand(
+          { ...command, ...(signal ? { onSignal } : { onReady }) },
+          directory,
+        ),
+      ).toBe(exitCode);
+      if (signal) {
+        expect(onSignal).toHaveBeenCalledWith(signal);
+        expect(evidence().outcome).toMatchObject({
+          exitCode,
+          errorCode: null,
+          exitSignal: signal,
+          forwardedSignal: signal,
+        });
+        return;
+      }
+      expect(onReady).toHaveBeenCalledOnce();
+      expect(evidence()).toMatchObject({
+        outcome: { exitCode: 2, errorCode: null, exitSignal: null, forwardedSignal: null },
+        command: { args: command.args },
+        pprofDir: "profiles",
+        graph: { totalFiles: 2, rootFiles: 1, transitiveFiles: 1 },
+        cache: { beforeSha256: null, hit: "unknown", osPageCache: "uncontrolled" },
+      });
+      expect(evidence().wallMs).toBeGreaterThanOrEqual(0);
+      expect(evidence().cache.afterSha256).toMatch(/^[a-f0-9]{64}$/u);
     },
   );
 
-  it("does not turn unavailable evidence output into a compiler failure or rerun", async () => {
-    const { cwd, command } = fixture();
-    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.mocked(runManagedCommand).mockResolvedValueOnce(7);
-    const calls = vi.mocked(runManagedCommand).mock.calls.length;
-    expect(await runMeasuredTsgoCommand(command, path.join(cwd, "package.json", "metrics"))).toBe(
-      7,
-    );
-    expect(vi.mocked(runManagedCommand).mock.calls.length - calls).toBe(1);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("without metrics"));
+  it("never replaces a managed failure with an evidence result", async () => {
+    const { directory, command, evidence } = fixture();
+    const code = "EPROCESSGROUP_CLEANUP_FAILED";
+    const error = Object.assign(new Error("compiler failure"), { code });
+    vi.mocked(runManagedCommand).mockRejectedValueOnce(error);
+    await expect(runMeasuredTsgoCommand(command, directory)).rejects.toBe(error);
+    expect(evidence().outcome).toMatchObject({ exitCode: null, errorCode: code });
   });
 
-  it("writes separate artifacts for repeated invocations and preserves outcomes if final writing fails", async () => {
-    const { directory, command } = fixture();
-    vi.mocked(runManagedCommand).mockResolvedValue(0);
-    await runMeasuredTsgoCommand(command, directory);
-    await runMeasuredTsgoCommand(command, directory);
-    expect(fs.readdirSync(directory)).toHaveLength(2);
-    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.mocked(runManagedCommand).mockImplementationOnce(async () => {
-      fs.rmSync(directory, { recursive: true });
-      return 9;
-    });
-    expect(await runMeasuredTsgoCommand(command, directory)).toBe(9);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("compiler outcome preserved"));
-  });
+  it.each(["setup", "write"] as const)(
+    "preserves compiler outcomes when evidence %s fails",
+    async (phase) => {
+      const { cwd, directory, command } = fixture();
+      if (phase === "write") {
+        vi.mocked(runManagedCommand).mockResolvedValue(0);
+        await runMeasuredTsgoCommand(command, directory);
+        await runMeasuredTsgoCommand(command, directory);
+        expect(fs.readdirSync(directory)).toHaveLength(2);
+      }
+      const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+      const exitCode = phase === "setup" ? 7 : 9;
+      vi.mocked(runManagedCommand).mockImplementationOnce(async () => {
+        if (phase === "write") {
+          fs.rmSync(directory, { recursive: true });
+        }
+        return exitCode;
+      });
+      const calls = vi.mocked(runManagedCommand).mock.calls.length;
+      expect(
+        await runMeasuredTsgoCommand(
+          command,
+          phase === "setup" ? path.join(cwd, "package.json", "metrics") : directory,
+        ),
+      ).toBe(exitCode);
+      expect(vi.mocked(runManagedCommand).mock.calls.length - calls).toBe(1);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          phase === "setup" ? "without metrics" : "compiler outcome preserved",
+        ),
+      );
+    },
+  );
 });

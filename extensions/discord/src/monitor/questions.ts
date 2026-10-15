@@ -84,7 +84,6 @@ export function createDiscordQuestionButton(params: {
             label: "discord question",
             componentLabel: "button",
             unauthorizedReply: "You are not authorized to answer this question.",
-            defer: false,
           }),
         )),
   });

@@ -42,7 +42,6 @@ import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gate
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
-import { resolveSkillWorkshopApprovalForFinalParams } from "../agent-tools.before-tool-call.approval.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { runWithGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { runWithGatewaySessionSpawnParentExecutionIdentity } from "./gateway-session-spawn-execution-identity.js";
@@ -317,30 +316,36 @@ describe("Gateway tool identity and hosted routing", () => {
     },
   );
 
-  it("scopes signed session-spawn authority to its Gateway call", async () => {
-    await withCaller({ executionIdentityToken: parent }, () =>
-      runWithGatewaySessionSpawnContext(spawnContext, () =>
-        runWithGatewaySessionSpawnParentExecutionIdentity(parent, () => createSession()),
-      ),
-    );
-    await expect(verifyCallIdentity()).resolves.toMatchObject({
-      executionIdentity: parent,
-      sessionSpawnContext: spawnContext,
-    });
-  });
-
-  it("requires explicit forwarded parent evidence", async () => {
-    const identity = await withCaller(
-      { executionIdentityToken: createExecutionIdentityAdmissionToken("run-1") },
-      async () => {
-        await runWithGatewaySessionSpawnContext(lineageContext, () => createSession());
-        return await verifyCallIdentity();
-      },
-    );
-    expect(identity).toBeDefined();
-    expect(identity).not.toHaveProperty("executionIdentity");
-    await expect(verifyCallIdentity()).resolves.toBeUndefined();
-  });
+  it.each([false, true])(
+    "requires explicit forwarded spawn-parent evidence (forwarded=%s)",
+    async (forwarded) => {
+      const identity = await withCaller(
+        {
+          executionIdentityToken: forwarded
+            ? parent
+            : createExecutionIdentityAdmissionToken("run-1"),
+        },
+        async () => {
+          await runWithGatewaySessionSpawnContext(forwarded ? spawnContext : lineageContext, () =>
+            forwarded
+              ? runWithGatewaySessionSpawnParentExecutionIdentity(parent, createSession)
+              : createSession(),
+          );
+          return forwarded ? undefined : await verifyCallIdentity();
+        },
+      );
+      if (forwarded) {
+        await expect(verifyCallIdentity()).resolves.toMatchObject({
+          executionIdentity: parent,
+          sessionSpawnContext: spawnContext,
+        });
+      } else {
+        expect(identity).toBeDefined();
+        expect(identity).not.toHaveProperty("executionIdentity");
+        await expect(verifyCallIdentity()).resolves.toBeUndefined();
+      }
+    },
+  );
 
   it("redeems private spawn lineage once", async () => {
     const result = await withCaller({ executionIdentityToken: parent }, async () => {
@@ -467,35 +472,6 @@ describe("Gateway tool identity and hosted routing", () => {
     });
   });
 
-  it.each([
-    ["apply", "allow-once"],
-    ["reject", "deny"],
-  ] as const)("signs Workshop %s approvals (%s)", async (action, decision) => {
-    mocks.callGateway.mockResolvedValueOnce({ id: "workshop-approval", decision });
-    await withCaller(
-      {
-        sessionKey: "agent:ops:telegram:group:-1001234567890",
-        turnSourceChannel: "telegram",
-        turnSourceTo: "-1001234567890",
-        turnSourceAccountId: "default",
-      },
-      async (caller) => {
-        const result = await resolveSkillWorkshopApprovalForFinalParams({
-          toolName: "skill_workshop",
-          params: { action },
-          ctx: { config: { skills: { workshop: { approvalPolicy: "pending" } } } },
-        });
-        expect(result?.blocked).toBe(decision === "deny");
-        expect(capturedGatewayCall().method).toBe("plugin.approval.request");
-        expect(capturedGatewayCall().params).not.toHaveProperty("pluginId");
-        await expect(verifyCallIdentity()).resolves.toMatchObject({
-          ...caller,
-          approvalOwnerPluginId: "workspace-skills",
-        });
-      },
-    );
-  });
-
   it("rejects approval registration after permission changes", async (test) => {
     const { manager, run, track } = await createPreparedTestApprovalManager(test, {
       validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
@@ -574,22 +550,44 @@ describe("Gateway tool identity and hosted routing", () => {
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
-  it("waits past approval acceptance for the requested final result", async () => {
-    const { entered: accepted, release } = deferHostedResponse(
-      { id: "approval", decision: "allow-once" },
-      { status: "accepted", id: "approval" },
-    );
-    const observed: unknown[] = [];
-    const pending = runHosted(() =>
-      callGatewayTool("exec.approval.request", {}, {}, { expectFinal: true }),
-    );
-    void pending.then((result) => observed.push(result));
-    await accepted.promise;
-    expect(observed).toEqual([]);
-    release.resolve();
-    await expect(pending).resolves.toEqual({ id: "approval", decision: "allow-once" });
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
+  it.each(["final result", "cancellation"])(
+    "keeps approval request authority until %s",
+    async (outcome) => {
+      const cancelled = outcome === "cancellation";
+      const result = cancelled ? { id: "approval" } : { id: "approval", decision: "allow-once" };
+      const { entered, release } = deferHostedResponse(
+        result,
+        cancelled ? undefined : { status: "accepted", id: "approval" },
+      );
+      const controller = new AbortController();
+      const observed: unknown[] = [];
+      const pending = runHosted(() =>
+        callGatewayTool(
+          "exec.approval.request",
+          {},
+          {},
+          cancelled ? { signal: controller.signal } : { expectFinal: true },
+        ),
+      ).then((value) => {
+        observed.push(value);
+        return value;
+      });
+      const settled = cancelled
+        ? expect(pending).rejects.toThrow("approval cancelled")
+        : expect(pending).resolves.toEqual(result);
+      await entered.promise;
+      expect(observed).toEqual([]);
+      if (cancelled) {
+        const identity = hostedRequest().client?.internal?.agentRuntimeIdentity;
+        expect(identity && context.validateAgentRuntimeApprovalAuthority?.(identity)).toBe(true);
+        controller.abort(new Error("approval cancelled"));
+        expect(identity && context.validateAgentRuntimeApprovalAuthority?.(identity)).toBe(false);
+      }
+      release.resolve();
+      await settled;
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+    },
+  );
 
   it("binds one-shot node approval replay to its requester", async (test) => {
     const manager = createTestApprovalManager(test, {
@@ -679,55 +677,35 @@ describe("Gateway tool identity and hosted routing", () => {
     });
   });
 
-  it.each(["run", "caller"])("rejects a retired %s before hosted dispatch", async (owner) => {
-    await expect(
-      runHosted(async (_caller, authority) => {
-        if (owner === "run") {
-          releaseAgentRunDelegatedAuthority(authority);
-        } else {
-          callerActive = false;
-        }
-        return await callGatewayTool("cron.list", {}, {});
-      }),
-    ).rejects.toThrow(/authority.*no longer active|active delegated run authority/);
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(mocks.handleGatewayRequest).not.toHaveBeenCalled();
-  });
-
-  it.each(["run", "gateway"])("rejects pending results after %s replacement", async (owner) => {
-    const { entered, release } = deferHostedResponse({ ok: true });
+  it.each([
+    { owner: "run", pending: false },
+    { owner: "caller", pending: false },
+    { owner: "run", pending: true },
+    { owner: "gateway", pending: true },
+  ])("rejects retired $owner authority (pending=$pending)", async ({ owner, pending }) => {
+    const deferred = pending ? deferHostedResponse({ ok: true }) : undefined;
     await runHosted(async (_caller, authority) => {
-      const pending = callGatewayTool("node.list", {}, {});
-      const rejected = expect(pending).rejects.toThrow(
-        /authority.*no longer active|Gateway instance unavailable/,
-      );
-      await entered.promise;
+      const request = deferred ? callGatewayTool("node.list", {}, {}) : undefined;
+      await deferred?.entered.promise;
       if (owner === "run") {
         releaseAgentRunDelegatedAuthority(authority);
+      } else if (owner === "caller") {
+        callerActive = false;
       } else {
         currentContext = { ...context };
       }
-      release.resolve();
+      const rejected = expect(request ?? callGatewayTool("cron.list", {}, {})).rejects.toThrow(
+        pending
+          ? /authority.*no longer active|Gateway instance unavailable/
+          : /authority.*no longer active|active delegated run authority/,
+      );
+      deferred?.release.resolve();
       await rejected;
     });
     expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
-
-  it("cancels an outstanding approval and retires its request authority", async () => {
-    const { entered, release } = deferHostedResponse({ id: "approval" });
-    const controller = new AbortController();
-    const pending = runHosted(() =>
-      callGatewayTool("exec.approval.request", {}, {}, { signal: controller.signal }),
-    );
-    const rejected = expect(pending).rejects.toThrow("approval cancelled");
-    await entered.promise;
-    const identity = hostedRequest().client?.internal?.agentRuntimeIdentity;
-    expect(identity && context.validateAgentRuntimeApprovalAuthority?.(identity)).toBe(true);
-    controller.abort(new Error("approval cancelled"));
-    expect(identity && context.validateAgentRuntimeApprovalAuthority?.(identity)).toBe(false);
-    release.resolve();
-    await rejected;
-    expect(mocks.callGateway).not.toHaveBeenCalled();
+    if (!pending) {
+      expect(mocks.handleGatewayRequest).not.toHaveBeenCalled();
+    }
   });
 
   it("retains operator scopes and expiry across a bound operation", async (test) => {

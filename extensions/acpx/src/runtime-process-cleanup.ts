@@ -4,7 +4,6 @@ import { readAcpxProcessLeaseIdentity, type AcpxProcessLeaseStore } from "./proc
 import {
   cleanupOpenClawOwnedAcpxPendingLease,
   cleanupOpenClawOwnedAcpxProcessTree,
-  type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
 import {
   type AcpLoadedSessionRecord,
@@ -22,9 +21,8 @@ export async function prepareAcpxProcessCleanup(params: {
   gatewayInstanceId?: string;
   wrapperRoot?: string;
   leaseStore?: AcpxProcessLeaseStore;
-  deps?: AcpxProcessCleanupDeps;
 }): Promise<() => Promise<void>> {
-  const { leaseStore, gatewayInstanceId, wrapperRoot, deps } = params;
+  const { leaseStore, gatewayInstanceId, wrapperRoot } = params;
   // Upstream close may clear the record's PID or replace its command metadata.
   const rootPid = readRecordAgentPid(params.record);
   const rootCommand = params.command ? renderAgentCommand(params.command) : undefined;
@@ -63,14 +61,12 @@ export async function prepareAcpxProcessCleanup(params: {
               expectedLeaseId: lease.leaseId,
               expectedGatewayInstanceId: lease.gatewayInstanceId,
               wrapperRoot: lease.wrapperRoot,
-              deps,
             })
           : await cleanupOpenClawOwnedAcpxPendingLease({
               leaseId: lease.leaseId,
               gatewayInstanceId: lease.gatewayInstanceId,
               wrapperRoot: lease.wrapperRoot,
               wrapperPath: lease.wrapperPath,
-              deps,
             });
       await leaseStore?.markState(
         lease.leaseId,
@@ -95,7 +91,6 @@ export async function prepareAcpxProcessCleanup(params: {
       ...(leaseId ? { expectedLeaseId: leaseId } : {}),
       ...(expectedGatewayInstanceId ? { expectedGatewayInstanceId } : {}),
       wrapperRoot,
-      deps,
     });
   };
 }

@@ -36,9 +36,11 @@ function identityMutationHandler(
   validate: Validator<UsersLinkChannelIdentityParams>,
   action: "link" | "unlink",
 ) {
-  return defineValidatedGatewayMethod(method, validate, async (options) => {
-    const { params, respond } = options;
-    try {
+  return defineValidatedGatewayMethod(
+    method,
+    validate,
+    async (options) => {
+      const { params, respond } = options;
       const assertCurrent = await prepareUserProfileAdministration(options);
       const result = await changeCanonicalUserChannelIdentity(
         action,
@@ -50,10 +52,9 @@ function identityMutationHandler(
         throw new Error("Channel identity mutation returned an unexpected result");
       }
       respond(true, result.kind === "linked" ? result.link : { removed: result.removed });
-    } catch (error) {
-      respond(false, undefined, identityError(error));
-    }
-  });
+    },
+    identityError,
+  );
 }
 
 export const usersChannelIdentityHandlers: GatewayRequestHandlers = {
@@ -72,14 +73,11 @@ export const usersChannelIdentityHandlers: GatewayRequestHandlers = {
     validateUsersListChannelIdentitiesParams,
     async (options) => {
       const { params, respond } = options;
-      try {
-        const assertCurrent = await prepareUserProfileAdministration(options);
-        const links = await listCanonicalUserChannelIdentities(params.profileId);
-        assertCurrent();
-        respond(true, { links });
-      } catch (error) {
-        respond(false, undefined, identityError(error));
-      }
+      const assertCurrent = await prepareUserProfileAdministration(options);
+      const links = await listCanonicalUserChannelIdentities(params.profileId);
+      assertCurrent();
+      respond(true, { links });
     },
+    identityError,
   ),
 };

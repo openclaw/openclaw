@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Client as TeamsApiClient } from "@microsoft/teams.api";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
+import { awaitGateBeforeSettlement, createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { msteamsPlugin } from "./channel.js";
@@ -18,6 +18,17 @@ import { sendPollMSTeams } from "./send.js";
 const { resolveMSTeamsSendContext } = vi.hoisted(() => ({
   resolveMSTeamsSendContext: vi.fn(),
 }));
+type EffectAuthority = ReturnType<
+  typeof import("openclaw/plugin-sdk/fetch-runtime").captureEffectAuthority
+>;
+const effectInput = vi.hoisted(() => ({ current: undefined as EffectAuthority | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => effectInput.current ?? actual.captureEffectAuthority(),
+  };
+});
 
 // Isolate the stored destination and credentials; keep registration, send preparation,
 // retries, Teams App/API/Common, and the Axios HTTP adapter on their real paths.
@@ -30,6 +41,24 @@ const cfg = { channels: { msteams: { enabled: true } } } as OpenClawConfig;
 const destination = { cfg, to: `conversation:${conversationId}` };
 
 let fixture: Awaited<ReturnType<typeof createConnectorFixture>>;
+
+function pauseToken(onStart?: () => void) {
+  const tokenStarted = createDeferred<void>();
+  const releaseToken = createDeferred<void>();
+  fixture.token.mockImplementationOnce(async () => {
+    onStart?.();
+    tokenStarted.resolve();
+    await releaseToken.promise;
+    return fixtureToken;
+  });
+  return { tokenStarted, releaseToken };
+}
+
+function acceptMessage(response: ServerResponse, id: string) {
+  response.writeHead(201, { "content-type": "application/json" });
+  response.end(JSON.stringify({ id }));
+}
+
 function createAuthority() {
   const state = { active: true };
   return {
@@ -58,10 +87,8 @@ async function withInlineImage(
 
 async function createConnectorFixture() {
   const requests: ConnectorRequest[] = [];
-  let respond = (response: ServerResponse) => {
-    response.writeHead(201, { "content-type": "application/json" });
-    response.end(JSON.stringify({ id: `accepted-${requests.length}` }));
-  };
+  let respond = (response: ServerResponse) =>
+    acceptMessage(response, `accepted-${requests.length}`);
   const server = createServer((request, response) => {
     void (async () => {
       const chunks: Buffer[] = [];
@@ -141,23 +168,98 @@ afterEach(async () => {
   try {
     await fixture.close();
   } finally {
+    effectInput.current = undefined;
     resolveMSTeamsSendContext.mockReset();
     vi.restoreAllMocks();
   }
 });
 
 describe("registered Teams delivery handoff", () => {
+  it.each([false, true])(
+    "prepares the SDK continuation before token resolution (allowed=%s)",
+    async (allowed) => {
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const accepted = createDeferred<ServerResponse>();
+      const refusal = new Error("message use refused");
+      let initiating = false;
+      const { tokenStarted, releaseToken } = pauseToken(() => expect(initiating).toBe(true));
+      let handedOff = false;
+      let pendingResponse: ServerResponse | undefined;
+      effectInput.current = {
+        active: true,
+        run: (run) => run(),
+        async initiate(effect) {
+          preparing.resolve();
+          await prepared.promise;
+          if (!allowed) {
+            throw refusal;
+          }
+          initiating = true;
+          try {
+            return effect();
+          } finally {
+            initiating = false;
+            handedOff = true;
+          }
+        },
+      };
+      fixture.setResponder((response) => {
+        pendingResponse = response;
+        accepted.resolve(response);
+      });
+      const onPlatformSendDispatch = vi.fn(async () => {});
+      const completion = sendMSTeamsMessages({
+        replyStyle: "top-level",
+        app: fixture.app,
+        conversationRef: fixture.context.ref,
+        messages: [{ text: "prepared SDK request" }],
+        onPlatformSendDispatch,
+      });
+      try {
+        await awaitGateBeforeSettlement(
+          preparing.promise,
+          Promise.race([completion, tokenStarted.promise]),
+          "SDK skipped preparation",
+        );
+        expect(fixture.token).not.toHaveBeenCalled();
+        expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+        prepared.resolve();
+        if (!allowed) {
+          await expect(completion).rejects.toBe(refusal);
+          expect(fixture.token).not.toHaveBeenCalled();
+          expect(fixture.requests).toEqual([]);
+          return;
+        }
+        await awaitGateBeforeSettlement(tokenStarted.promise, completion, "SDK skipped token wait");
+        expect(handedOff).toBe(true);
+        expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+        releaseToken.resolve();
+        const response = await awaitGateBeforeSettlement(
+          accepted.promise,
+          completion,
+          "SDK did not submit the message",
+        );
+        expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+        acceptMessage(response, "prepared-sdk-request");
+        await expect(completion).resolves.toEqual(["prepared-sdk-request"]);
+      } finally {
+        fixture.setResponder((response) => acceptMessage(response, "cleanup"));
+        if (pendingResponse && !pendingResponse.writableEnded) {
+          acceptMessage(pendingResponse, "cleanup");
+        }
+        prepared.resolve();
+        releaseToken.resolve();
+        await completion.catch(() => {});
+      }
+    },
+  );
+
   it.each([true, false])(
     "preserves handoff through replay contexts with active authority=%s",
     async (keepActive) => {
       const { state, handoff } = createAuthority();
-      const tokenStarted = createDeferred<void>();
-      const releaseToken = createDeferred<void>();
-      fixture.token.mockImplementation(async () => {
-        tokenStarted.resolve();
-        await releaseToken.promise;
-        return fixtureToken;
-      });
+      const { tokenStarted, releaseToken } = pauseToken();
       const context = createMSTeamsReplayContext(
         {
           type: "message",
@@ -202,76 +304,41 @@ describe("registered Teams delivery handoff", () => {
       }
     },
   );
-  it("does not submit a poll Connector request when authority closes during SDK token acquisition", async () => {
+  it("checks poll authority again after dispatch recording waits", async () => {
     const { state, handoff } = createAuthority();
-    const tokenStarted = createDeferred<void>();
-    const releaseToken = createDeferred<void>();
-    fixture.token.mockImplementation(async () => {
-      tokenStarted.resolve();
-      await releaseToken.promise;
-      return fixtureToken;
-    });
+    const dispatchStarted = createDeferred<void>();
+    const releaseDispatch = createDeferred<void>();
     try {
+      const dispatchHandoff = {
+        ...handoff,
+        onPlatformSendDispatch: async () => {
+          dispatchStarted.resolve();
+          await releaseDispatch.promise;
+        },
+      };
       const completion = sendPollMSTeams({
         ...destination,
         question: "Ship?",
         options: ["Yes", "No"],
-        ...handoff,
-      }).then(
-        (result) => ({ result, error: undefined }),
-        (error: unknown) => ({ result: undefined, error }),
-      );
-      await tokenStarted.promise;
+        ...dispatchHandoff,
+      }).catch((error: unknown) => error);
+      expect(
+        await Promise.race([
+          dispatchStarted.promise.then(() => "dispatch"),
+          completion.then(() => "settled"),
+        ]),
+      ).toBe("dispatch");
       state.active = false;
-      releaseToken.resolve();
-      const settled = await completion;
+      releaseDispatch.resolve();
+      expect(await completion).toMatchObject({
+        retryable: false,
+        message: expect.stringContaining("authority closed"),
+      });
       expect(fixture.requests).toEqual([]);
-      expect(settled.error).toEqual(
-        expect.objectContaining({ message: expect.stringContaining("authority closed") }),
-      );
     } finally {
-      releaseToken.resolve();
+      releaseDispatch.resolve();
     }
   });
-
-  it.each(["text", "poll"] as const)(
-    "checks %s authority again after dispatch recording waits",
-    async (kind) => {
-      const { state, handoff } = createAuthority();
-      const dispatchStarted = createDeferred<void>();
-      const releaseDispatch = createDeferred<void>();
-      try {
-        const dispatchHandoff = {
-          ...handoff,
-          onPlatformSendDispatch: async () => {
-            dispatchStarted.resolve();
-            await releaseDispatch.promise;
-          },
-        };
-        const completion = (
-          kind === "poll"
-            ? sendPollMSTeams({
-                ...destination,
-                question: "Ship?",
-                options: ["Yes", "No"],
-                ...dispatchHandoff,
-              })
-            : msteamsPlugin.message!.send!.text!({
-                ...destination,
-                text: "retired during dispatch recording",
-                ...dispatchHandoff,
-              })
-        ).catch((error: unknown) => error);
-        await dispatchStarted.promise;
-        state.active = false;
-        releaseDispatch.resolve();
-        expect(await completion).toMatchObject({ retryable: false });
-        expect(fixture.requests).toEqual([]);
-      } finally {
-        releaseDispatch.resolve();
-      }
-    },
-  );
 
   it("checks at JSON transport submission after earlier SDK interceptors finish", async () => {
     const { state, handoff } = createAuthority();
@@ -313,8 +380,7 @@ describe("registered Teams delivery handoff", () => {
     });
     const response = await accepted.promise;
     state.active = false;
-    response.writeHead(201, { "content-type": "application/json" });
-    response.end(JSON.stringify({ id: "accepted-before-close" }));
+    acceptMessage(response, "accepted-before-close");
     expect(await completion).toMatchObject({
       receipt: {
         platformMessageIds: ["accepted-before-close"],
@@ -346,8 +412,7 @@ describe("registered Teams delivery handoff", () => {
     });
     const response = await submitted.promise;
     state.active = false;
-    response.writeHead(201, { "content-type": "application/json" });
-    response.end(JSON.stringify({ id: "accepted-poll-before-close" }));
+    acceptMessage(response, "accepted-poll-before-close");
     await expect(completion).resolves.toMatchObject({
       messageId: "accepted-poll-before-close",
       conversationId,
@@ -357,14 +422,8 @@ describe("registered Teams delivery handoff", () => {
   });
 
   it("isolates concurrent operations sharing the SDK HTTP client", async () => {
-    const firstToken = createDeferred<void>();
-    const releaseFirst = createDeferred<void>();
+    const { tokenStarted: firstToken, releaseToken: releaseFirst } = pauseToken();
     let firstActive = true;
-    fixture.token.mockImplementationOnce(async () => {
-      firstToken.resolve();
-      await releaseFirst.promise;
-      return fixtureToken;
-    });
     try {
       const firstDispatch = vi.fn(async () => {});
       const first = msteamsPlugin.message!.send!.text!({
@@ -403,40 +462,32 @@ describe("registered Teams delivery handoff", () => {
     }
   });
 
-  it.each([true, false])(
-    "rechecks a rate-limit retry with active authority=%s",
-    async (activeAfterDelay) => {
-      const { state, handoff } = createAuthority();
-      fixture.setResponder((response) => {
-        if (fixture.requests.length === 1) {
-          response.writeHead(429, { "content-type": "application/json", "retry-after": "0.01" });
-          response.end(JSON.stringify({ error: "throttled" }));
-        } else {
-          response.writeHead(201, { "content-type": "application/json" });
-          response.end(JSON.stringify({ id: "accepted-retry" }));
-        }
-      });
-      fixture.context.log.debug.mockImplementation((message: unknown) => {
-        if (message === "retrying send") {
-          state.active = activeAfterDelay;
-        }
-      });
-      const onPlatformSendDispatch = vi.fn(async () => {});
-      const completion = msteamsPlugin.message!.send!.text!({
-        ...destination,
-        text: "throttled delivery",
-        ...handoff,
-        onPlatformSendDispatch,
-      });
-      if (activeAfterDelay) {
-        await expect(completion).resolves.toMatchObject({ messageId: "accepted-retry" });
+  it("rejects a rate-limit retry after authority closes", async () => {
+    const { state, handoff } = createAuthority();
+    fixture.setResponder((response) => {
+      if (fixture.requests.length === 1) {
+        response.writeHead(429, { "content-type": "application/json", "retry-after": "0.01" });
+        response.end(JSON.stringify({ error: "throttled" }));
       } else {
-        await expect(completion).rejects.toMatchObject({ retryable: false });
+        acceptMessage(response, "accepted-retry");
       }
-      expect(fixture.requests).toHaveLength(activeAfterDelay ? 2 : 1);
-      expect(onPlatformSendDispatch).toHaveBeenCalledTimes(activeAfterDelay ? 2 : 1);
-    },
-  );
+    });
+    fixture.context.log.debug.mockImplementation((message: unknown) => {
+      if (message === "retrying send") {
+        state.active = false;
+      }
+    });
+    const onPlatformSendDispatch = vi.fn(async () => {});
+    const completion = msteamsPlugin.message!.send!.text!({
+      ...destination,
+      text: "throttled delivery",
+      ...handoff,
+      onPlatformSendDispatch,
+    });
+    await expect(completion).rejects.toMatchObject({ retryable: false });
+    expect(fixture.requests).toHaveLength(1);
+    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+  });
 
   it.each([true, false])(
     "retains accepted media parts with continued authority=%s",
@@ -493,8 +544,7 @@ describe("registered Teams delivery handoff", () => {
       });
       const response = await submitted.promise;
       state.active = false;
-      response.writeHead(201, { "content-type": "application/json" });
-      response.end(JSON.stringify({ id: "accepted-image" }));
+      acceptMessage(response, "accepted-image");
       await expect(completion).resolves.toMatchObject({
         receipt: {
           parts: [expect.objectContaining({ platformMessageId: "accepted-image", kind: "media" })],
@@ -508,13 +558,7 @@ describe("registered Teams delivery handoff", () => {
     "keeps the %s action fenced through the SDK token wait",
     async (action) => {
       const { state, handoff } = createAuthority();
-      const tokenStarted = createDeferred<void>();
-      const releaseToken = createDeferred<void>();
-      fixture.token.mockImplementation(async () => {
-        tokenStarted.resolve();
-        await releaseToken.promise;
-        return fixtureToken;
-      });
+      const { tokenStarted, releaseToken } = pauseToken();
       try {
         await withInlineImage(async (media) => {
           const onPlatformSendDispatch = vi.fn(async () => {});

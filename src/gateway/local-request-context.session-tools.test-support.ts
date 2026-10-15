@@ -13,6 +13,7 @@ import { setSteeringMessageIdentity } from "../agents/sessions/steering-message-
 import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { withPersonalToolTurn } from "../auto-reply/reply/personal-tool-turn.test-support.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
@@ -21,6 +22,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../sessions/user-turn-transcript-runtime-context.js";
 import type {
   PersistedUserTurnMessage,
@@ -79,6 +81,7 @@ export function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<vo
       tools: { sessions: { visibility: "all" } },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     for (const [agentId, sessionKey, sessionId] of [
       ["main", REQUESTER, "session-tools-requester-id"],
       ["main", TARGET, TARGET_ID],
@@ -90,8 +93,13 @@ export function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<vo
     const resources = new LegacyPluginSdkResourceHost();
     try {
       await resources.run(() =>
-        withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
-          run(cfg),
+        withLocalGatewayRequestScope(
+          { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
+          async () => {
+            // Fixture startup must finish before a tool's request deadline begins.
+            await getPluginRuntimeGatewayRequestScope()?.context?.ensureSessionRowProjection?.();
+            return run(cfg);
+          },
         ),
       );
     } finally {

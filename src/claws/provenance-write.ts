@@ -1,14 +1,10 @@
-import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
-import {
-  captureClawPackageLifecycleWriteAuthority,
-  type MaintainedClawPackageLifecycleLease,
-} from "../state/claw-package-lifecycle-lease.js";
+import type { AgentDeletionWorkerAuthority } from "../state/agent-deletion-worker.types.js";
+import { assertClawPackageLifecycleWriteArtifact } from "../state/claw-package-lifecycle-lease.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import type { OpenClawStateWorkerLeaseContext } from "../state/openclaw-state-lease-context.js";
+import { runWithOpenClawStateLeaseWorker } from "../state/openclaw-state-lease-worker-operation.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import {
-  executeOpenClawStateWorker,
-  runOpenClawStateWorkerOperation,
-} from "../state/openclaw-state-worker-store.js";
+import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
 import type {
   ClawPackageRefStatus,
   PersistedClawPackageRef,
@@ -18,7 +14,8 @@ export async function claimClawPackageRefStatus(
   ref: PersistedClawPackageRef,
   status: ClawPackageRefStatus,
   options: OpenClawStateDatabaseOptions & {
-    lease: MaintainedClawPackageLifecycleLease;
+    lease: OpenClawStateWorkerLeaseContext;
+    deletion?: AgentDeletionWorkerAuthority;
     nowMs?: number;
     assertCurrent?: () => void;
   },
@@ -28,32 +25,41 @@ export async function claimClawPackageRefStatus(
   }
   // Store admission can yield before execute captures the command.
   const capturedRef = structuredClone(ref);
-  const owner = captureClawPackageLifecycleWriteAuthority(options.lease, capturedRef);
-  const input = { ref: capturedRef, status, nowMs: options.nowMs, lease: { ...owner.identity } };
+  const nowMs = options.nowMs;
+  assertClawPackageLifecycleWriteArtifact(options.lease, capturedRef);
+  if (options.deletion) {
+    return await options.deletion.runWithWorker(
+      (scope, deletion, additionalLeases) => {
+        const lease = additionalLeases[0];
+        if (!lease) {
+          throw new Error("Claw package write lost its additional lease");
+        }
+        return scope.execute({
+          type: "clawProvenance.packageStatus",
+          input: { ref: capturedRef, status, nowMs, lease, deletion },
+        });
+      },
+      { additionalLeases: [options.lease], assertCurrent: options.assertCurrent },
+    );
+  }
   const assertCaller = options.assertCurrent?.bind(options);
   const context = captureOpenClawStateWorkerContext({
     ...options,
-    path: options.database?.path ?? options.path ?? owner.path,
+    path: options.database?.path ?? options.path,
   });
   const assertCurrent = () => {
     context.admission.assertCurrent();
-    owner.assertCurrent();
     assertCaller?.();
-    if (context.admission.databasePath !== owner.path) {
-      throw new Error("Package write differs from its lifecycle database.");
-    }
   };
-  const result = await runOpenClawStateWorkerOperation(
+  const result = await runWithOpenClawStateLeaseWorker(
+    options.lease,
     context,
-    (scope) =>
+    (scope, identity) =>
       scope.execute({
         type: "clawProvenance.packageStatus",
-        input,
+        input: { ref: capturedRef, status, nowMs, lease: identity },
       }),
-    {
-      assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [owner.path]),
-    },
+    { assertCurrent },
   );
   assertCurrent();
   return result;

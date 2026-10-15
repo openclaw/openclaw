@@ -39,4 +39,25 @@ describe("resolveQueueSettings runtime defaults", () => {
     });
     expect(getLoadedChannelPluginMock).toHaveBeenCalledWith("telegram");
   });
+
+  it("applies plugin-channel overrides before global mode and plugin debounce defaults", () => {
+    getLoadedChannelPluginMock.mockReturnValueOnce({
+      defaults: { queue: { debounceMs: 125 } },
+    });
+
+    expect(
+      resolveQueueSettings({
+        cfg: {
+          messages: {
+            queue: {
+              mode: "steer",
+              byChannel: { x: "followup" },
+              debounceMsByChannel: { x: 750 },
+            },
+          },
+        },
+        channel: " X ",
+      }),
+    ).toEqual({ mode: "followup", debounceMs: 750, cap: 20, dropPolicy: "summarize" });
+  });
 });

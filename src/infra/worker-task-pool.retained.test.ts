@@ -1,130 +1,41 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { mock } from "node:test";
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { Worker } from "node:worker_threads";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it } from "vitest";
-import { createDeferredCore } from "../shared/deferred.js";
-import type { RetainedOperation } from "./retained-operation.js";
-import {
-  captureRuntimeWorkerSource,
-  withRuntimeWorkerGeneration,
-} from "./runtime-worker-generation.js";
-import { captureRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type {
+  AdmissionTaskInput,
+  AdmissionTaskResult,
+} from "./sqlite-database-admission.task.test-support.js";
 import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
 import type {
   ResourceFixtureInput,
   ResourceFixtureReply,
 } from "./worker-task-pool.resources.test-support.js";
 import type { PoolFixtureInput, PoolFixtureResult } from "./worker-task-pool.test-support.js";
-import type { RetainedWorkerTask, WorkerTaskResponse } from "./worker-task-pool.types.js";
 
 const pools: Array<{ close(): Promise<void> }> = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
 });
 
-it("retains an admitted task when abort reentry targets another worker of a failed source", async () => {
-  await withRuntimeWorkerGeneration(
-    async (bind) => {
-      const marker = new URL("./retained-ref-marker", import.meta.url);
-      const retainedMarker = new URL("?retained", marker);
-      bind((url) => (url.href === marker.href ? retainedMarker : url));
-      const generation = captureRuntimeWorkerSource(marker).runtimeGeneration;
-      if (!generation) {
-        throw new Error("Expected an isolated native source generation");
-      }
-      const source = captureRetainedNativeWorkerSource({ runtimeGeneration: generation });
-      const createPool = () => {
-        const pool = createOwnedWorkerTaskPool<PoolFixtureInput, PoolFixtureResult>(
-          {
-            workerUrl: new URL("./worker-task-pool.test-support.ts", import.meta.url),
-            maxWorkers: 1,
-            idleTimeoutMs: 0,
-          },
-          { retainedTransport: true, nativeSource: source },
-        );
-        source.retain(pool, async () => {
-          try {
-            await pool.close();
-          } catch {
-            // Observe the first stop failure before retrying after the actual supervisor join.
-            await pool.close();
-          }
-        });
-        return pool;
-      };
-      const firstPool = createPool();
-      const secondPool = createPool();
-      const entered = createDeferredCore();
-      const response = createDeferredCore<WorkerTaskResponse>();
-      let reentered: RetainedWorkerTask<PoolFixtureResult> | undefined;
-      let submissionError: unknown;
-      let factoryCalled = false;
-      const registrations = mock.method(Worker.prototype, "on");
-      const first = firstPool.startTask(
-        { label: "first", exchanges: 1 },
-        {
-          onRequest(_value, { signal }) {
-            signal.addEventListener(
-              "abort",
-              () => {
-                try {
-                  reentered = secondPool.startTask(() => {
-                    factoryCalled = true;
-                    return { label: "reentered" };
-                  }, {});
-                } catch (error) {
-                  submissionError = error;
-                }
-              },
-              { once: true },
-            );
-            entered.resolve();
-            return response.promise;
-          },
-        },
-      );
-      const supervisor = registrations.mock.calls
-        .map((call) => call.this)
-        .find((value) => value instanceof Worker);
-      registrations.mock.restore();
-      if (!(supervisor instanceof Worker)) {
-        throw new Error("Expected the actual supervising Worker");
-      }
-      let termination: Promise<number> | undefined;
-      try {
-        await entered.promise;
-        const warm = secondPool.startTask({ label: "warm" }, {});
-        await warm.result;
-        await warm.release().result;
-        expect(secondPool.getSnapshot().pendingTasks).toBe(0);
-        termination = supervisor.terminate();
-        serviceUntil(
-          () => first.service(),
-          () => first.read().status !== "pending",
-        );
-        expect(secondPool.getSnapshot().pendingTasks).toBe(1);
-        expect(factoryCalled).toBe(false);
-        expect(submissionError).toBeUndefined();
-        expect(reentered).toBeDefined();
-        if (!reentered) {
-          throw new Error("Admission lost its retained task handle");
-        }
-        expect(reentered.read().status).toBe("rejected");
-        await termination;
-        await nextTurn();
-        await reentered.release().result.catch(() => undefined);
-        await reentered.release().result;
-        expect(secondPool.getSnapshot().pendingTasks).toBe(0);
-      } finally {
-        response.resolve({ input: null, timeoutMs: 1000 });
-        await (termination ?? supervisor.terminate());
-        await nextTurn();
-      }
+it("preserves workerData through retained task startup", async () => {
+  const workerData = { type: "user data", port: "user port" };
+  const pool = createOwnedWorkerTaskPool<PoolFixtureInput, PoolFixtureResult>(
+    {
+      workerUrl: new URL("./worker-task-pool.test-support.ts", import.meta.url),
+      workerOptions: { workerData },
+      maxWorkers: 1,
+      idleTimeoutMs: 0,
     },
-    async () => {},
+    { retainedTransport: true },
   );
-}, 20_000);
+  pools.push(pool);
+  const reply = await pool.run({ label: "startup", readStartupOptions: true }, {});
+  expect(reply.startupOptions?.data).toEqual(workerData);
+});
 
 function fixture() {
   const pool = createOwnedWorkerTaskPool<ResourceFixtureInput, ResourceFixtureReply>(
@@ -316,4 +227,92 @@ it("answers an earlier task's synchronous host exchange while servicing a queued
   expect(secondReply.label).toBe("second");
   expect(secondReply.threadId).toBe(firstReply.threadId);
   read(second.release({ retire: true }));
+});
+
+it("services a sibling pool's database facts while the host event loop is blocked", async () => {
+  const blockedPool = fixture();
+  const admissionPool = createOwnedWorkerTaskPool<AdmissionTaskInput, AdmissionTaskResult>(
+    {
+      workerUrl: new URL("./sqlite-database-admission.task.test-support.ts", import.meta.url),
+      maxWorkers: 1,
+      idleTimeoutMs: 0,
+    },
+    { retainedTransport: true },
+  );
+  pools.push(admissionPool);
+  await Promise.all([blockedPool.run({}, {}), admissionPool.run({}, {})]);
+  const location = path.join(tempDirs.make("cross-pool-admission-"), "shared.sqlite");
+  const database = new DatabaseSync(location);
+  database.exec("CREATE TABLE proof (value INTEGER)");
+  database.close();
+  const barrier = new Int32Array(new SharedArrayBuffer(8));
+  const blocked = blockedPool.startTask({ wait: barrier.buffer }, {});
+  const admission = admissionPool.startTask({ path: location }, {});
+  let promiseReaction = false;
+  void admission.result.then(
+    () => {
+      promiseReaction = true;
+    },
+    () => undefined,
+  );
+  try {
+    serviceUntil(
+      () => blocked.service(),
+      () => admission.read().status !== "pending",
+    );
+    expect(read(admission).sql.some((sql) => sql.includes("sqlite_schema"))).toBe(true);
+    expect(promiseReaction).toBe(false);
+  } finally {
+    Atomics.store(barrier, 1, 1);
+    Atomics.notify(barrier, 1);
+    read(admission.release());
+    read(blocked);
+    read(blocked.release());
+  }
+});
+
+function ordinaryFixture() {
+  const pool = createOwnedWorkerTaskPool<ResourceFixtureInput, ResourceFixtureReply>({
+    workerUrl: new URL("./worker-task-pool.resources.test-support.ts", import.meta.url),
+    maxWorkers: 1,
+  });
+  pools.push(pool);
+  const run = async (input: ResourceFixtureInput) => {
+    const task = pool.runTask(input, {});
+    try {
+      return await task.result;
+    } finally {
+      await task.close();
+    }
+  };
+  return { pool, run };
+}
+
+it("serializes resource cleanup after an asynchronous task without cancelling it", async () => {
+  const { pool, run } = ordinaryFixture();
+  const first = await run({ retain: "source" });
+  const barrier = new Int32Array(new SharedArrayBuffer(8));
+  const task = pool.runTask({ wait: barrier.buffer }, {});
+  await expect.poll(() => Atomics.load(barrier, 0)).toBe(1);
+  let closed = false;
+  const cleanup = pool.closeResources("source").then(() => {
+    closed = true;
+  });
+  try {
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(closed).toBe(false);
+    Atomics.store(barrier, 1, 1);
+    Atomics.notify(barrier, 1);
+    expect(await task.result).toEqual({ keys: ["source"], threadId: first.threadId });
+    await cleanup;
+    expect(closed).toBe(true);
+  } finally {
+    Atomics.store(barrier, 1, 1);
+    Atomics.notify(barrier, 1);
+    await task.close();
+    await cleanup;
+  }
+  expect(await run({})).toEqual({ keys: [], threadId: first.threadId });
 });

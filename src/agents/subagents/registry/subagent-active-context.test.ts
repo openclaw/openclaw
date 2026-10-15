@@ -3,26 +3,30 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SubagentRunRecordOverrides } from "../../subagent-test-fixtures.test-helpers.js";
 import { buildActiveSubagentRuntimeContext } from "./subagent-active-context.js";
 import {
-  addSubagentRunForTests,
+  seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-/** Keep in sync with module-private RECENT_PROMPT_MAX_ENTRIES. */
-const RECENT_PROMPT_MAX_ENTRIES = 8;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-beforeEach(() => {
-  resetSubagentRegistryForTests();
+beforeEach(async () => {
+  setRuntimeConfigSnapshot({});
+  await resetSubagentRegistryForTests({ persist: false });
 });
 
-afterEach(() => {
-  resetSubagentRegistryForTests();
+afterEach(async () => {
+  await resetSubagentRegistryForTests({ persist: false });
+  clearRuntimeConfigSnapshot();
 });
 
 describe("buildActiveSubagentRuntimeContext", () => {
@@ -38,7 +42,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
         { sessionKey: controllerSessionKey },
         original,
       );
-      addSubagentRunForTests({
+      seedSubagentRunForReadTest({
         runId: "old-child-result",
         childSessionKey: "agent:main:subagent:old-child",
         controllerSessionKey,
@@ -65,15 +69,6 @@ describe("buildActiveSubagentRuntimeContext", () => {
     },
   );
 
-  it("returns nothing without active or recently completed children", async () => {
-    expect(
-      await buildActiveSubagentRuntimeContext({
-        cfg: {} as OpenClawConfig,
-        controllerSessionKey: "agent:main:main",
-      }),
-    ).toBeUndefined();
-  });
-
   it("summarizes active child state without promising collector events", async () => {
     const run = {
       runId: "run-active-context",
@@ -90,7 +85,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
       createdAt: Date.now(),
       execution: { status: "running", startedAt: Date.now() },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(run);
+    seedSubagentRunForReadTest(run);
 
     const prompt = await buildActiveSubagentRuntimeContext({
       cfg: {} as OpenClawConfig,
@@ -106,77 +101,6 @@ describe("buildActiveSubagentRuntimeContext", () => {
     expect(prompt).not.toContain("reports/evidence");
   });
 
-  it("summarizes recently completed children when no active runs remain", async () => {
-    const endedAt = Date.now() - 60_000;
-    addSubagentRunForTests({
-      runId: "run-recent-context",
-      childSessionKey: "agent:main:subagent:recent-context",
-      controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "read email MSG_ID:1546",
-      taskName: "read_email",
-      label: "Email reader",
-      cleanup: "keep",
-      createdAt: endedAt - 120_000,
-      startedAt: endedAt - 120_000,
-      endedAt,
-      outcome: { status: "ok" as const },
-    } satisfies SubagentRunRecordOverrides);
-
-    const prompt = await buildActiveSubagentRuntimeContext({
-      cfg: {} as OpenClawConfig,
-      controllerSessionKey: "agent:main:main",
-    });
-
-    expect(prompt).not.toContain("## Active Subagents");
-    expect(prompt).toContain("## Recently Completed Subagents");
-    expect(prompt).toContain("last 30m");
-    expect(prompt).toContain('taskName_json="read_email"');
-    expect(prompt).toContain("session=agent:main:subagent:recent-context");
-    expect(prompt).toContain("status=done");
-  });
-
-  it("includes both active and recently completed sections when mixed", async () => {
-    const now = Date.now();
-    addSubagentRunForTests({
-      runId: "run-mixed-active",
-      childSessionKey: "agent:main:subagent:mixed-active",
-      controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "still working",
-      taskName: "active_task",
-      cleanup: "keep",
-      createdAt: now,
-      startedAt: now,
-    } satisfies SubagentRunRecordOverrides);
-    addSubagentRunForTests({
-      runId: "run-mixed-recent",
-      childSessionKey: "agent:main:subagent:mixed-recent",
-      controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "already finished",
-      taskName: "recent_task",
-      cleanup: "keep",
-      createdAt: now - 180_000,
-      startedAt: now - 180_000,
-      endedAt: now - 30_000,
-      outcome: { status: "ok" as const },
-    } satisfies SubagentRunRecordOverrides);
-
-    const prompt = await buildActiveSubagentRuntimeContext({
-      cfg: {} as OpenClawConfig,
-      controllerSessionKey: "agent:main:main",
-    });
-
-    expect(prompt).toContain("## Active Subagents");
-    expect(prompt).toContain("## Recently Completed Subagents");
-    expect(prompt).toContain('taskName_json="active_task"');
-    expect(prompt).toContain('taskName_json="recent_task"');
-  });
-
   it("normalizes public main aliases before looking up active children", async () => {
     const run = {
       runId: "run-active-context-alias",
@@ -190,7 +114,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
       createdAt: Date.now(),
       execution: { status: "running", startedAt: Date.now() },
     } satisfies SubagentRunRecordOverrides;
-    addSubagentRunForTests(run);
+    seedSubagentRunForReadTest(run);
 
     const prompt = await buildActiveSubagentRuntimeContext({
       cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
@@ -214,7 +138,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
       createdAt: Date.now(),
       execution: { status: "running", startedAt: Date.now() },
     } satisfies SubagentRunRecordOverrides;
-    addSubagentRunForTests(run);
+    seedSubagentRunForReadTest(run);
 
     const prompt = await buildActiveSubagentRuntimeContext({
       cfg: {} as OpenClawConfig,
@@ -232,7 +156,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
   it("sorts and bounds active runs independently of their insertion order", async () => {
     for (let index = 17; index >= 0; index--) {
       const runId = `run-${String(index).padStart(2, "0")}`;
-      addSubagentRunForTests({
+      seedSubagentRunForReadTest({
         runId,
         childSessionKey: `agent:main:subagent:${runId}`,
         controllerSessionKey: "agent:main:main",
@@ -256,7 +180,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
 
   it("keeps retry/recovery guidance for non-success terminal recent children", async () => {
     const now = Date.now();
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-recent-failed",
       childSessionKey: "agent:main:subagent:recent-failed",
       controllerSessionKey: "agent:main:main",
@@ -270,7 +194,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
       endedAt: now - 90_000,
       outcome: { status: "error" as const, error: "boom" },
     } satisfies SubagentRunRecordOverrides);
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-recent-timeout",
       childSessionKey: "agent:main:subagent:recent-timeout",
       controllerSessionKey: "agent:main:main",
@@ -284,7 +208,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
       endedAt: now - 80_000,
       outcome: { status: "timeout" as const },
     } satisfies SubagentRunRecordOverrides);
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-recent-ok-mixed",
       childSessionKey: "agent:main:subagent:recent-ok-mixed",
       controllerSessionKey: "agent:main:main",
@@ -312,43 +236,6 @@ describe("buildActiveSubagentRuntimeContext", () => {
     expect(prompt).toContain("status=done");
   });
 
-  it("caps recently completed prompt entries to the newest subset", async () => {
-    const now = Date.now();
-    const total = RECENT_PROMPT_MAX_ENTRIES + 4;
-    for (let i = 0; i < total; i += 1) {
-      const endedAt = now - (total - i) * 60_000;
-      addSubagentRunForTests({
-        runId: `run-recent-cap-${i}`,
-        childSessionKey: `agent:main:subagent:recent-cap-${i}`,
-        controllerSessionKey: "agent:main:main",
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        task: `finished task ${i}`,
-        taskName: `cap_task_${i}`,
-        cleanup: "keep",
-        createdAt: endedAt - 30_000,
-        startedAt: endedAt - 30_000,
-        endedAt,
-        outcome: { status: "ok" as const },
-      } satisfies SubagentRunRecordOverrides);
-    }
-
-    const prompt = await buildActiveSubagentRuntimeContext({
-      cfg: {} as OpenClawConfig,
-      controllerSessionKey: "agent:main:main",
-    });
-
-    expect(prompt).toBeDefined();
-    expect(prompt).toContain("## Recently Completed Subagents");
-    // Newest entries (highest i) retained; oldest dropped.
-    // Match with trailing ";" so cap_task_1 does not false-positive on cap_task_10/11.
-    expect(prompt).toContain(`taskName_json="cap_task_${total - 1}";`);
-    expect(prompt).toContain(`taskName_json="cap_task_${total - RECENT_PROMPT_MAX_ENTRIES}";`);
-    for (const dropped of [0, 1, 2, 3]) {
-      expect(prompt).not.toContain(`taskName_json="cap_task_${dropped}";`);
-    }
-  });
-
   it("shows a completed child only on the later parent turn", async () => {
     const firstParentTurn = await buildActiveSubagentRuntimeContext({
       cfg: {} as OpenClawConfig,
@@ -357,7 +244,7 @@ describe("buildActiveSubagentRuntimeContext", () => {
     expect(firstParentTurn).toBeUndefined();
 
     const endedAt = Date.now() - 15_000;
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-later-parent-turn",
       childSessionKey: "agent:main:subagent:later-parent-turn",
       controllerSessionKey: "agent:main:main",
@@ -385,4 +272,44 @@ describe("buildActiveSubagentRuntimeContext", () => {
     expect(laterParentTurn).toContain("run-later-parent-turn");
     expect(laterParentTurn).toContain('taskName_json="summarize_inbox"');
   });
+
+  it.each([
+    { status: "failed", cleaned: true, wake: false, outstanding: false },
+    { status: "failed", cleaned: false, wake: false, outstanding: true },
+    { status: "failed", cleaned: true, wake: true, outstanding: true },
+    { status: "pending", cleaned: true, wake: false, outstanding: true },
+    { status: "in_progress", cleaned: true, wake: false, outstanding: true },
+    { status: "suspended", cleaned: true, wake: false, outstanding: true },
+  ] as const)(
+    "projects $status delivery with cleaned=$cleaned and wake=$wake",
+    async ({ status, cleaned, wake, outstanding }) => {
+      const endedAt = Date.now() - 20_000;
+      seedSubagentRunForReadTest({
+        runId: "failed-delivery",
+        childSessionKey: "agent:main:subagent:failed-delivery",
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        task: "deliver the report",
+        execution: { status: "terminal", endedAt },
+        completion: { required: true, resultText: "child result" },
+        delivery: { status },
+        cleanupCompletedAt: cleaned ? endedAt + 1_000 : undefined,
+        requesterSettleWake: wake
+          ? { status: "pending", attemptCount: 0, rearmGeneration: 1 }
+          : undefined,
+      });
+
+      const prompt = await buildActiveSubagentRuntimeContext({
+        cfg: {},
+        controllerSessionKey: "agent:main:main",
+        includeSpawnContext: false,
+      });
+      if (outstanding) {
+        expect(prompt).toContain("## Child results awaiting delivery");
+        expect(prompt).toContain("child result");
+      } else {
+        expect(prompt).toBeUndefined();
+      }
+    },
+  );
 });

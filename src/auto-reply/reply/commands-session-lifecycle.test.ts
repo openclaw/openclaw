@@ -20,20 +20,6 @@ type ResolveCommandConversationParams = {
   fallbackTo?: string;
 };
 
-type IdleLifecycleScenario = {
-  name: string;
-  createParams: (commandBody: string) => HandleCommandsParams;
-  createBinding: () => SessionBindingRecord;
-  updateBinding: ReturnType<typeof vi.fn>;
-  expectedConversation?: {
-    channel: string;
-    accountId: string;
-    conversationId: string;
-    parentConversationId: string;
-    threadId: string;
-  };
-};
-
 function firstText(values: Array<string | undefined>): string | undefined {
   return values.map((value) => value?.trim() ?? "").find(Boolean) || undefined;
 }
@@ -365,21 +351,6 @@ function createRoomTriggerBinding(overrides?: Partial<SessionBindingRecord>): Se
   });
 }
 
-function expectIdleTimeoutSetReply(
-  mock: ReturnType<typeof vi.fn>,
-  text: string,
-  idleTimeoutMs: number,
-  idleTimeoutLabel: string,
-) {
-  expect(mock).toHaveBeenCalledWith({
-    targetSessionKey: "agent:main:subagent:child",
-    accountId: "default",
-    idleTimeoutMs,
-  });
-  expect(text).toContain(`Idle timeout set to ${idleTimeoutLabel}`);
-  expect(text).toContain("2026-02-20T02:00:00.000Z");
-}
-
 describe("/session conversation bindings", () => {
   beforeEach(() => {
     hoisted.setThreadBindingIdleTimeoutBySessionKeyMock.mockReset();
@@ -402,12 +373,26 @@ describe("/session conversation bindings", () => {
       createParams: createRoomTriggerThreadCommandParams,
       createBinding: createRoomTriggerBinding,
     },
+    {
+      name: "generic conversation without lifecycle support",
+      createParams: (body: string) =>
+        buildSessionCommandParams(body, {
+          Provider: "webchat",
+          Surface: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "chat-1",
+        }),
+      createBinding: () =>
+        createLifecycleBinding({
+          channel: "webchat",
+          accountId: "default",
+          conversationId: "chat-1",
+        }),
+    },
   ])("unbinds only the current $name conversation", async ({ createParams, createBinding }) => {
     const binding = createBinding();
     hoisted.sessionBindingResolveByConversationMock.mockReturnValue(binding);
-
     const result = await handleSessionCommand(createParams("/session unbind"), true);
-
     expect(result?.reply?.text).toBe("✅ Conversation unbound.");
     expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledExactlyOnceWith({
       bindingId: binding.bindingId,
@@ -416,353 +401,236 @@ describe("/session conversation bindings", () => {
     });
   });
 
-  it("unbinds generic current conversations without channel lifecycle support", async () => {
-    const binding = createLifecycleBinding({
-      channel: "webchat",
-      accountId: "default",
-      conversationId: "chat-1",
-    });
+  it.each([
+    { action: "unbind", boundBy: "user-1", message: "Only user-1 can unbind this conversation." },
+    {
+      action: "idle 2h",
+      boundBy: "owner-1",
+      message: "Only owner-1 can update session lifecycle settings",
+    },
+  ])("requires the binding owner for $action", async ({ action, boundBy, message }) => {
+    const binding = createThreadBinding();
+    binding.metadata = { ...binding.metadata, boundBy };
     hoisted.sessionBindingResolveByConversationMock.mockReturnValue(binding);
-    const params = buildSessionCommandParams("/session unbind", {
-      Provider: "webchat",
-      Surface: "webchat",
-      OriginatingChannel: "webchat",
-      OriginatingTo: "chat-1",
-    });
-
-    const result = await handleSessionCommand(params, true);
-
-    expect(result?.reply?.text).toBe("✅ Conversation unbound.");
-    expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledExactlyOnceWith({
-      bindingId: binding.bindingId,
-      scope: binding.conversation,
-      reason: "manual",
-    });
+    const result = await handleSessionCommand(
+      createThreadCommandParams(`/session ${action}`, { SenderId: "other-user" }),
+      true,
+    );
+    expect(result?.reply?.text).toContain(message);
+    expect(hoisted.sessionBindingUnbindMock).not.toHaveBeenCalled();
+    expect(hoisted.setThreadBindingIdleTimeoutBySessionKeyMock).not.toHaveBeenCalled();
   });
 
-  it("requires the binding owner to unbind a conversation", async () => {
+  it.each(["unbind all", "idle 9999999999999"])("rejects invalid /session %s", async (action) => {
     hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createThreadBinding());
-
     const result = await handleSessionCommand(
-      createThreadCommandParams("/session unbind", { SenderId: "other-user" }),
+      createThreadCommandParams(`/session ${action}`),
       true,
     );
-
-    expect(result?.reply?.text).toContain("Only user-1 can unbind this conversation.");
-    expect(hoisted.sessionBindingUnbindMock).not.toHaveBeenCalled();
-  });
-
-  it("does not accept a detach target", async () => {
-    const result = await handleSessionCommand(
-      createThreadCommandParams("/session unbind all"),
-      true,
+    expect(result?.reply?.text).toBe(
+      "Usage: /session idle <duration|off> | /session max-age <duration|off> | /session unbind (example: /session idle 24h)",
     );
-    expect(result?.reply?.text).toContain("Usage:");
     expect(hoisted.sessionBindingUnbindMock).not.toHaveBeenCalled();
+    expect(hoisted.setThreadBindingIdleTimeoutBySessionKeyMock).not.toHaveBeenCalled();
   });
 
   it.each([
     {
-      name: "sets idle timeout for the bound thread-chat session",
-      createParams: createThreadCommandParams,
-      createBinding: createThreadBinding,
-      updateBinding: hoisted.setThreadBindingIdleTimeoutBySessionKeyMock,
-    },
-    {
-      name: "sets idle timeout for the triggering room-chat always-thread turn",
+      action: "idle",
+      value: "2h",
+      durationMs: 2 * 60 * 60 * 1000,
+      durationKey: "idleTimeoutMs",
+      label: "Idle timeout set to 2h",
+      expiry: "2026-02-20T02:00:00.000Z",
+      boundAgeMs: 0,
       createParams: createRoomTriggerThreadCommandParams,
       createBinding: createRoomTriggerBinding,
-      updateBinding: hoisted.setMatrixThreadBindingIdleTimeoutBySessionKeyMock,
-      expectedConversation: {
+      update: hoisted.setMatrixThreadBindingIdleTimeoutBySessionKeyMock,
+    },
+    {
+      action: "max-age",
+      value: "3h",
+      durationMs: 3 * 60 * 60 * 1000,
+      durationKey: "maxAgeMs",
+      label: "Max age set to 3h",
+      expiry: "2026-02-20T01:00:00.000Z",
+      boundAgeMs: 2 * 60 * 60 * 1000,
+      createParams: createRoomThreadCommandParams,
+      createBinding: createRoomBinding,
+      update: hoisted.setMatrixThreadBindingMaxAgeBySessionKeyMock,
+    },
+    {
+      action: "max-age",
+      value: "off",
+      durationMs: 0,
+      durationKey: "maxAgeMs",
+      label: "Max age disabled",
+      expiry: undefined,
+      boundAgeMs: 0,
+      createParams: createThreadCommandParams,
+      createBinding: createThreadBinding,
+      update: hoisted.setThreadBindingMaxAgeBySessionKeyMock,
+    },
+  ])("sets /session $action $value using the binding lifecycle", async (scenario) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
+    const binding = scenario.createBinding({ boundAt: Date.now() - scenario.boundAgeMs });
+    if (scenario.value === "off") {
+      binding.metadata = { ...binding.metadata, maxAgeMs: 2 * 60 * 60 * 1000 };
+    }
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(binding);
+    scenario.update.mockReturnValue([
+      {
+        targetSessionKey: binding.targetSessionKey,
+        boundAt: binding.boundAt,
+        lastActivityAt: Date.now(),
+        [scenario.durationKey]: scenario.durationMs,
+      },
+    ]);
+    const result = await handleSessionCommand(
+      scenario.createParams(`/session ${scenario.action} ${scenario.value}`),
+      true,
+    );
+    if (scenario.action === "idle") {
+      expect(hoisted.sessionBindingResolveByConversationMock).toHaveBeenCalledWith({
         channel: ROOM_CHANNEL,
         accountId: "default",
         conversationId: "$root",
         parentConversationId: "!room:example.org",
         threadId: "$root",
-      },
+      });
+    }
+    expect(scenario.update).toHaveBeenCalledWith({
+      targetSessionKey: "agent:main:subagent:child",
+      accountId: "default",
+      [scenario.durationKey]: scenario.durationMs,
+    });
+    expect(result?.reply?.text).toContain(scenario.label);
+    if (scenario.expiry) {
+      expect(result?.reply?.text).toContain(scenario.expiry);
+    }
+  });
+
+  it.each([
+    {
+      name: "active",
+      lastActivityAt: Date.parse("2026-02-20T00:00:00.000Z"),
+      idleTimeoutMs: 2 * 60 * 60 * 1000,
     },
-  ] satisfies IdleLifecycleScenario[])(
-    "$name",
-    async ({
-      createParams,
-      createBinding,
-      updateBinding,
-      expectedConversation,
-    }: IdleLifecycleScenario) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
-      hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createBinding());
-      updateBinding.mockReturnValue([
-        {
-          targetSessionKey: "agent:main:subagent:child",
-          boundAt: Date.now(),
-          lastActivityAt: Date.now(),
-          idleTimeoutMs: 2 * 60 * 60 * 1000,
-        },
-      ]);
-
-      const result = await handleSessionCommand(createParams("/session idle 2h"), true);
-      if (expectedConversation) {
-        expect(hoisted.sessionBindingResolveByConversationMock).toHaveBeenCalledWith(
-          expectedConversation,
-        );
-      }
-      expectIdleTimeoutSetReply(updateBinding, result?.reply?.text ?? "", 2 * 60 * 60 * 1000, "2h");
+    {
+      name: "out-of-range activity",
+      lastActivityAt: 8_700_000_000_000_000,
+      idleTimeoutMs: 2 * 60 * 60 * 1000,
     },
-  );
-
-  it("rejects unsafe bare-hour lifecycle durations", async () => {
-    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createThreadBinding());
-
-    const result = await handleSessionCommand(
-      createThreadCommandParams("/session idle 9999999999999"),
-      true,
+    {
+      name: "overflowed timeout",
+      lastActivityAt: Date.parse("2026-02-20T00:00:00.000Z"),
+      idleTimeoutMs: Number.MAX_SAFE_INTEGER,
+    },
+  ])("reports $name idle timeout metadata", async ({ lastActivityAt, idleTimeoutMs }) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
+      createThreadBinding({
+        metadata: { boundBy: "user-1", lastActivityAt, idleTimeoutMs, maxAgeMs: 0 },
+      }),
     );
+    const result = await handleSessionCommand(createThreadCommandParams("/session idle"), true);
+    if (idleTimeoutMs === Number.MAX_SAFE_INTEGER) {
+      expect(result?.reply?.text).toBe(
+        "ℹ️ Idle timeout is currently disabled for this bound session.",
+      );
+    } else {
+      expect(result?.reply?.text).toContain("Idle timeout active (2h");
+      expect(result?.reply?.text).toContain("2026-02-20T02:00:00.000Z");
+    }
+  });
 
+  it("does not mutate a binding after cancellation during lookup", async () => {
+    const lookup = createDeferred<SessionBindingRecord>();
+    const started = createDeferred();
+    const controller = new AbortController();
+    const reason = new Error("command canceled during binding lookup");
+    hoisted.sessionBindingResolveByConversationMock.mockImplementationOnce(() => {
+      started.resolve();
+      return lookup.promise;
+    });
+    const params = createThreadCommandParams("/session idle off");
+    params.opts = { abortSignal: controller.signal };
+    const result = handleSessionCommand(params, true);
+    const failure = expect(result).rejects.toBe(reason);
+    await started.promise;
+    controller.abort(reason);
+    lookup.resolve(createThreadBinding());
+    await failure;
     expect(hoisted.setThreadBindingIdleTimeoutBySessionKeyMock).not.toHaveBeenCalled();
-    expect(result?.reply?.text).toBe(
-      "Usage: /session idle <duration|off> | /session max-age <duration|off> | /session unbind (example: /session idle 24h)",
-    );
-  });
-
-  it("shows active idle timeout when no value is provided", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
-
-    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
-      createThreadBinding({
-        metadata: {
-          boundBy: "user-1",
-          lastActivityAt: Date.now(),
-          idleTimeoutMs: 2 * 60 * 60 * 1000,
-          maxAgeMs: 0,
-        },
-      }),
-    );
-
-    const result = await handleSessionCommand(createThreadCommandParams("/session idle"), true);
-    expect(result?.reply?.text).toContain("Idle timeout active (2h");
-    expect(result?.reply?.text).toContain("2026-02-20T02:00:00.000Z");
-  });
-
-  it("falls back to bind time when idle activity timestamp is out of range", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
-
-    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
-      createThreadBinding({
-        metadata: {
-          boundBy: "user-1",
-          lastActivityAt: 8_700_000_000_000_000,
-          idleTimeoutMs: 2 * 60 * 60 * 1000,
-          maxAgeMs: 0,
-        },
-      }),
-    );
-
-    const result = await handleSessionCommand(createThreadCommandParams("/session idle"), true);
-    expect(result?.reply?.text).toContain("Idle timeout active (2h");
-    expect(result?.reply?.text).toContain("2026-02-20T02:00:00.000Z");
-  });
-
-  it("treats overflowed idle timeout metadata as disabled", async () => {
-    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
-      createThreadBinding({
-        metadata: {
-          boundBy: "user-1",
-          lastActivityAt: Date.now(),
-          idleTimeoutMs: Number.MAX_SAFE_INTEGER,
-          maxAgeMs: 0,
-        },
-      }),
-    );
-
-    const result = await handleSessionCommand(createThreadCommandParams("/session idle"), true);
-    expect(result?.reply?.text).toBe(
-      "ℹ️ Idle timeout is currently disabled for this bound session.",
-    );
-  });
-
-  it("sets max age from the original binding time", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
-    const bindingTime = Date.parse("2026-02-19T22:00:00.000Z");
-    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
-      createRoomBinding({ boundAt: bindingTime }),
-    );
-    hoisted.setMatrixThreadBindingMaxAgeBySessionKeyMock.mockReturnValue([
-      {
-        targetSessionKey: "agent:main:subagent:child",
-        boundAt: bindingTime,
-        lastActivityAt: Date.now(),
-        maxAgeMs: 3 * 60 * 60 * 1000,
-      },
-    ]);
-
-    const result = await handleSessionCommand(
-      createRoomThreadCommandParams("/session max-age 3h"),
-      true,
-    );
-    expect(hoisted.setMatrixThreadBindingMaxAgeBySessionKeyMock).toHaveBeenCalledWith({
-      targetSessionKey: "agent:main:subagent:child",
-      accountId: "default",
-      maxAgeMs: 3 * 60 * 60 * 1000,
-    });
-    expect(result?.reply?.text).toContain("Max age set to 3h");
-    expect(result?.reply?.text).toContain("2026-02-20T01:00:00.000Z");
-  });
-
-  it.each(["idle off", "max-age off", "unbind"])(
-    "does not apply /session %s after cancellation during binding lookup",
-    async (action) => {
-      const lookup = createDeferred<SessionBindingRecord>();
-      const started = createDeferred();
-      const controller = new AbortController();
-      const reason = new Error("command canceled during binding lookup");
-      hoisted.sessionBindingResolveByConversationMock.mockImplementationOnce(() => {
-        started.resolve();
-        return lookup.promise;
-      });
-      const params = createThreadCommandParams(`/session ${action}`);
-      params.opts = { abortSignal: controller.signal };
-      const result = handleSessionCommand(params, true);
-      const failure = expect(result).rejects.toBe(reason);
-      await started.promise;
-      controller.abort(reason);
-      lookup.resolve(createThreadBinding());
-      await failure;
-      expect(hoisted.setThreadBindingIdleTimeoutBySessionKeyMock).not.toHaveBeenCalled();
-      expect(hoisted.setThreadBindingMaxAgeBySessionKeyMock).not.toHaveBeenCalled();
-      expect(hoisted.sessionBindingUnbindMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it("disables max age when set to off", async () => {
-    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
-      createThreadBinding({
-        metadata: {
-          boundBy: "user-1",
-          lastActivityAt: Date.now(),
-          idleTimeoutMs: 24 * 60 * 60 * 1000,
-          maxAgeMs: 2 * 60 * 60 * 1000,
-        },
-      }),
-    );
-    hoisted.setThreadBindingMaxAgeBySessionKeyMock.mockReturnValue([
-      {
-        targetSessionKey: "agent:main:subagent:child",
-        boundAt: Date.now(),
-        lastActivityAt: Date.now(),
-        maxAgeMs: 0,
-      },
-    ]);
-
-    const result = await handleSessionCommand(
-      createThreadCommandParams("/session max-age off"),
-      true,
-    );
-
-    expect(hoisted.setThreadBindingMaxAgeBySessionKeyMock).toHaveBeenCalledWith({
-      targetSessionKey: "agent:main:subagent:child",
-      accountId: "default",
-      maxAgeMs: 0,
-    });
-    expect(result?.reply?.text).toContain("Max age disabled");
+    expect(hoisted.setThreadBindingMaxAgeBySessionKeyMock).not.toHaveBeenCalled();
+    expect(hoisted.sessionBindingUnbindMock).not.toHaveBeenCalled();
   });
 
   it.each([
-    { action: "idle", method: "setIdleTimeoutBySessionKeyAsync" },
-    { action: "max-age", method: "setMaxAgeBySessionKeyAsync" },
+    { action: "idle", method: "setIdleTimeoutBySessionKeyAsync", outcome: "success" },
+    { action: "max-age", method: "setMaxAgeBySessionKeyAsync", outcome: "success" },
+    { action: "idle", method: "setIdleTimeoutBySessionKeyAsync", outcome: "failure" },
+    { action: "max-age", method: "setMaxAgeBySessionKeyAsync", outcome: "failure" },
   ] as const)(
-    "waits for $action persistence before acknowledging the update",
-    async ({ action, method }) => {
+    "settles $action persistence before reporting $outcome",
+    async ({ action, method, outcome }) => {
       const mutation = createDeferred<Array<{ boundAt: number; lastActivityAt: number }>>();
-      const started = createDeferred();
-      const asyncUpdate = vi.fn(() => {
-        started.resolve();
-        return mutation.promise;
-      });
-      const bindings = hoisted.runtimeChannelRegistry.channels[0]!.plugin.conversationBindings;
-      bindings[method] = asyncUpdate;
-      hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createThreadBinding());
-      let settled = false;
-      const result = handleSessionCommand(
-        createThreadCommandParams(`/session ${action} off`),
-        true,
-      );
-      void result.then(() => {
-        settled = true;
-      });
-      await started.promise;
-      expect(settled).toBe(false);
-      mutation.resolve([{ boundAt: 1, lastActivityAt: 1 }]);
-      expect((await result)?.reply?.text).toContain(
-        action === "idle" ? "Idle timeout disabled" : "Max age disabled",
-      );
-      expect(hoisted.setThreadBindingIdleTimeoutBySessionKeyMock).not.toHaveBeenCalled();
-      expect(hoisted.setThreadBindingMaxAgeBySessionKeyMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    { action: "idle", method: "setIdleTimeoutBySessionKeyAsync" },
-    { action: "max-age", method: "setMaxAgeBySessionKeyAsync" },
-  ] as const)(
-    "propagates $action persistence failure without acknowledging success",
-    async ({ action, method }) => {
-      const mutation = createDeferred<never>();
       const started = createDeferred();
       hoisted.runtimeChannelRegistry.channels[0]!.plugin.conversationBindings[method] = () => {
         started.resolve();
         return mutation.promise;
       };
       hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createThreadBinding());
+      let settled = false;
       const result = handleSessionCommand(
         createThreadCommandParams(`/session ${action} off`),
         true,
       );
-      const failed = expect(result).rejects.toThrow("binding persistence failed");
+      void result.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      const failure =
+        outcome === "failure"
+          ? expect(result).rejects.toThrow("binding persistence failed")
+          : undefined;
       await started.promise;
-      mutation.reject(new Error("binding persistence failed"));
-      await failed;
+      expect(settled).toBe(false);
+      if (outcome === "failure") {
+        mutation.reject(new Error("binding persistence failed"));
+        await failure;
+      } else {
+        mutation.resolve([{ boundAt: 1, lastActivityAt: 1 }]);
+        expect((await result)?.reply?.text).toContain(
+          action === "idle" ? "Idle timeout disabled" : "Max age disabled",
+        );
+        expect(hoisted.setThreadBindingIdleTimeoutBySessionKeyMock).not.toHaveBeenCalled();
+        expect(hoisted.setThreadBindingMaxAgeBySessionKeyMock).not.toHaveBeenCalled();
+      }
     },
   );
 
-  it("is unavailable outside bindable channels", async () => {
-    const params = buildSessionCommandParams("/session idle 2h");
-    const result = await handleSessionCommand(params, true);
-    expect(result?.reply?.text).toContain(
-      "currently available only on channels that support conversation binding lifecycle updates",
-    );
-  });
-
-  it("requires a bound room-chat thread for lifecycle updates", async () => {
-    const result = await handleSessionCommand(createRoomCommandParams("/session idle 2h"), true);
-
-    expect(result?.reply?.text).toContain("This conversation is not currently bound.");
+  it.each([
+    {
+      name: "channels without lifecycle support",
+      createParams: buildSessionCommandParams,
+      message:
+        "currently available only on channels that support conversation binding lifecycle updates",
+    },
+    {
+      name: "unbound room-chat threads",
+      createParams: createRoomCommandParams,
+      message: "This conversation is not currently bound.",
+    },
+  ])("rejects lifecycle updates for $name", async ({ createParams, message }) => {
+    const result = await handleSessionCommand(createParams("/session idle 2h"), true);
+    expect(result?.reply?.text).toContain(message);
     expect(hoisted.setMatrixThreadBindingIdleTimeoutBySessionKeyMock).not.toHaveBeenCalled();
-  });
-
-  it("requires binding owner for lifecycle updates", async () => {
-    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
-      createThreadBinding({
-        metadata: {
-          boundBy: "owner-1",
-          lastActivityAt: Date.now(),
-          idleTimeoutMs: 24 * 60 * 60 * 1000,
-          maxAgeMs: 0,
-        },
-      }),
-    );
-
-    const result = await handleSessionCommand(
-      createThreadCommandParams("/session idle 2h", {
-        SenderId: "other-user",
-      }),
-      true,
-    );
-
-    expect(hoisted.setThreadBindingIdleTimeoutBySessionKeyMock).not.toHaveBeenCalled();
-    expect(result?.reply?.text).toContain("Only owner-1 can update session lifecycle settings");
   });
 });

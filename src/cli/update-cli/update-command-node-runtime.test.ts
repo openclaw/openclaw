@@ -13,81 +13,61 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("uses an installed target-compatible runtime without fetching or provisioning", async () => {
-  vi.mocked(findUsableNodeRuntime).mockResolvedValue({ nodePath: "/owned/node26", reason: "PATH" });
-  expect(await resolveTargetNodeRuntime({ engine: ">=26.1.0", recovery: { env: {} } })).toBe(
-    "/owned/node26",
-  );
-  expect(fetchMock).not.toHaveBeenCalled();
-});
-
-it("selects an exact compatible even release from unordered upstream metadata", async () => {
-  const installCommand = vi.fn();
-  vi.mocked(findUsableNodeRuntime)
-    .mockResolvedValueOnce(null)
-    .mockResolvedValueOnce({ nodePath: "/owned/private-node", reason: "private runtime" });
-  fetchMock.mockResolvedValue(
-    new Response(
-      JSON.stringify([
-        { version: "v28.2.0" },
-        { version: "v26.1.0" },
-        { version: "v27.9.0" },
-        { version: "v26.8.1" },
-        { version: "v24.20.0" },
-        { version: "invalid" },
-        null,
-      ]),
-    ),
-  );
-  expect(
-    await resolveTargetNodeRuntime({ engine: ">=26.1.0", recovery: { env: {}, installCommand } }),
-  ).toBe("/owned/private-node");
-  const selected = vi.mocked(findUsableNodeRuntime).mock.calls[1]?.[0];
-  expect(selected).toMatchObject({ allowInstall: true, nodeVersion: "26.8.1", installCommand });
-  expect(selected?.acceptVersion?.("24.20.0")).toBe(false);
-  expect(selected?.acceptVersion?.("26.8.1")).toBe(true);
-});
-
-it.each(["no compatible release", "upstream unavailable", "oversized response"] as const)(
-  "does not install an unverified target when %s",
-  async (scenario) => {
-    vi.mocked(findUsableNodeRuntime).mockResolvedValue(null);
+it.each([
+  ["installed", undefined, 30_000],
+  ["discovery", undefined, 30_000],
+  ["discovery", 120_000, 120_000],
+  ["discovery", 2_000, 2_000],
+  ["no compatible release", undefined, 30_000],
+  ["upstream unavailable", undefined, 30_000],
+  ["oversized response", undefined, 30_000],
+] as const)(
+  "resolves a verified runtime: %s (timeout=%s)",
+  async (scenario, timeoutMs, expectedTimeout) => {
+    const installed = scenario === "installed";
+    const discovery = scenario === "discovery";
+    const installCommand = installed ? undefined : vi.fn();
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    vi.mocked(findUsableNodeRuntime)
+      .mockResolvedValue(null)
+      .mockResolvedValueOnce(installed ? { nodePath: "/owned/node26", reason: "PATH" } : null);
+    if (discovery) {
+      vi.mocked(findUsableNodeRuntime).mockResolvedValueOnce({
+        nodePath: "/owned/private-node",
+        reason: "private runtime",
+      });
+    }
+    const releases = discovery
+      ? ["v28.2.0", "v26.1.0", "v27.9.0", "v26.8.1", "v24.20.0", "invalid", null]
+      : ["v24.20.0", "v27.9.0"];
     fetchMock.mockResolvedValue(
       scenario === "upstream unavailable"
         ? new Response("unavailable", { status: 503 })
         : new Response(
             scenario === "oversized response"
               ? "x".repeat(2 * 1024 * 1024 + 1)
-              : JSON.stringify([{ version: "v24.20.0" }, { version: "v27.9.0" }]),
+              : JSON.stringify(releases.map((version) => (version === null ? null : { version }))),
           ),
     );
     expect(
       await resolveTargetNodeRuntime({
-        engine: ">=26.1.0 <27",
-        recovery: { env: {}, installCommand: vi.fn() },
+        engine: installed || discovery ? ">=26.1.0" : ">=26.1.0 <27",
+        timeoutMs,
+        recovery: { env: {}, installCommand },
       }),
-    ).toBeUndefined();
-    expect(findUsableNodeRuntime).toHaveBeenCalledOnce();
-  },
-);
-
-it.each([
-  [undefined, 30_000],
-  [120_000, 120_000],
-  [2_000, 2_000],
-] as const)(
-  "honors runtime metadata timeout %s without extending or capping it",
-  async (timeoutMs, expected) => {
-    const timeout = vi.spyOn(AbortSignal, "timeout");
-    vi.mocked(findUsableNodeRuntime).mockResolvedValue(null);
-    fetchMock.mockResolvedValue(new Response("[]"));
-    await resolveTargetNodeRuntime({
-      engine: ">=26",
-      timeoutMs,
-      recovery: { env: {}, installCommand: vi.fn() },
-    });
-    expect(timeout).toHaveBeenCalledWith(expected);
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(findUsableNodeRuntime).toHaveBeenCalledOnce();
+    ).toBe(installed ? "/owned/node26" : discovery ? "/owned/private-node" : undefined);
+    if (installed) {
+      expect(fetchMock).not.toHaveBeenCalled();
+    } else {
+      expect(timeout).toHaveBeenCalledWith(expectedTimeout);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    }
+    expect(findUsableNodeRuntime).toHaveBeenCalledTimes(discovery ? 2 : 1);
+    if (discovery) {
+      const selected = vi.mocked(findUsableNodeRuntime).mock.calls[1]?.[0];
+      expect(selected).toMatchObject({ allowInstall: true, nodeVersion: "26.8.1", installCommand });
+      expect(selected?.acceptVersion?.("24.20.0")).toBe(false);
+      expect(selected?.acceptVersion?.("26.8.1")).toBe(true);
+    }
   },
 );

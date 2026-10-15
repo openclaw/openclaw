@@ -172,8 +172,6 @@ async function convergePluginReleaseCohortWithLease(
       // Channel synchronization can replace npm paths with bundled sources.
       records: config.plugins?.installs ?? {},
       config,
-      skipDisabledPlugins: true,
-      syncOfficialPluginInstalls: true,
       env: params.env,
     })
   ).filter((entry) => !operatorManagedIds.has(entry.pluginId));
@@ -258,8 +256,6 @@ async function convergePluginReleaseCohortWithLease(
       await collectMissingPluginInstallPayloads({
         records: config.plugins?.installs ?? {},
         config,
-        skipDisabledPlugins: true,
-        syncOfficialPluginInstalls: true,
         env: params.env,
       })
     ).filter((entry) => !operatorManagedIds.has(entry.pluginId)),

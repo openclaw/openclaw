@@ -11,6 +11,7 @@ import {
   resolveOperatorRolePolicy,
 } from "../operator-role-policy.js";
 import { listAgentsForGateway } from "../session-utils.js";
+import { workerInferenceMetadata } from "../worker-environments/inference-placement.js";
 import {
   readPreparedServerMethodModelCatalog,
   readPreparedServerMethodModelCatalogs,
@@ -40,7 +41,7 @@ export const agentListHandler: GatewayRequestHandler = async ({
           ),
         ),
       );
-  const result = await listAgentsForGateway(cfg, undefined, {
+  const result = await listAgentsForGateway(cfg, {
     modelCatalogByAgentId,
     includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
     httpAvatarBasePath:
@@ -64,10 +65,42 @@ export const agentListHandler: GatewayRequestHandler = async ({
     policyConfig: context.getCommittedRuntimeConfig?.() ?? currentConfig,
     client,
   });
+  const required = currentConfig.cloudWorkers?.requiredProfile;
+  const profile = required ? currentConfig.cloudWorkers?.profiles?.[required] : undefined;
+  // Keep legacy replies unchanged. This opt-in bootstrap fact grants no inventory or execution.
+  const projected =
+    params.includeSessionPlacement === true
+      ? {
+          ...result,
+          sessionPlacement: required
+            ? {
+                requiredProfile: {
+                  id: required,
+                  ...(profile
+                    ? {
+                        providerId: profile.provider,
+                        executionModes:
+                          context.workerEnvironmentService?.supportsExecutionMode(
+                            required,
+                            "worker-turn",
+                          ) === true
+                            ? ["worker-turn" as const]
+                            : [],
+                        ...workerInferenceMetadata({
+                          providerId: profile.provider,
+                          profileSnapshot: profile,
+                        }),
+                      }
+                    : {}),
+                },
+              }
+            : {},
+        }
+      : result;
   respond(
     true,
     {
-      ...result,
+      ...projected,
       agents: policy
         ? agents.map((agent) =>
             policy.forAgent(agent.id, modelCatalogByAgentId.get(agent.id)?.entries).agent(agent),

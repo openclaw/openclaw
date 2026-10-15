@@ -110,7 +110,13 @@ function renderCodeBlockElement(element: Record<string, unknown>): string {
     "\n",
   );
   const trailingNewline = code.endsWith("\n") ? "" : "\n";
-  return `\`\`\`${language}\n${code}${trailingNewline}\`\`\``;
+  // The enclosing fence must outlast any literal backtick run in the code.
+  let fenceLength = 3;
+  for (const run of code.matchAll(/`+/g)) {
+    fenceLength = Math.max(fenceLength, run[0].length + 1);
+  }
+  const fence = "`".repeat(fenceLength);
+  return `${fence}${language}\n${code}${trailingNewline}${fence}`;
 }
 
 function renderElement(

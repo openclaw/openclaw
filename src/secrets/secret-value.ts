@@ -1,22 +1,15 @@
 /** Validates resolved secret values against expected value shapes. */
 import { isNonEmptyString, isRecord } from "./shared.js";
-
-/**
- * Describes the resolved value shape a secret target accepts after provider resolution.
- */
-type SecretExpectedResolvedValue = "string" | "string-or-object"; // pragma: allowlist secret
+import type { SecretTargetExpected } from "./target-registry-types.js";
 
 /**
  * Returns whether a resolved provider value satisfies the target's accepted runtime shape.
  */
 export function isExpectedResolvedSecretValue(
   value: unknown,
-  expected: SecretExpectedResolvedValue,
+  expected: SecretTargetExpected,
 ): boolean {
-  if (expected === "string") {
-    return isNonEmptyString(value);
-  }
-  return isNonEmptyString(value) || isRecord(value);
+  return isNonEmptyString(value) || (expected !== "string" && isRecord(value));
 }
 
 /**
@@ -24,12 +17,12 @@ export function isExpectedResolvedSecretValue(
  */
 export function hasConfiguredPlaintextSecretValue(
   value: unknown,
-  expected: SecretExpectedResolvedValue,
+  expected: SecretTargetExpected,
 ): boolean {
-  if (expected === "string") {
-    return isNonEmptyString(value);
-  }
-  return isNonEmptyString(value) || (isRecord(value) && Object.keys(value).length > 0);
+  return (
+    isNonEmptyString(value) ||
+    (expected !== "string" && isRecord(value) && Object.keys(value).length > 0)
+  );
 }
 
 /**
@@ -37,7 +30,7 @@ export function hasConfiguredPlaintextSecretValue(
  */
 export function assertExpectedResolvedSecretValue(params: {
   value: unknown;
-  expected: SecretExpectedResolvedValue;
+  expected: SecretTargetExpected;
   errorMessage: string;
 }): void {
   if (!isExpectedResolvedSecretValue(params.value, params.expected)) {

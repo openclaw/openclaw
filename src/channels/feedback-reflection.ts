@@ -1,13 +1,12 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import {
-  appendTranscriptEvent,
-  loadSessionEntryReadOnly,
-  resolveSessionTranscriptRuntimeTarget,
-} from "../config/sessions/session-accessor.js";
+import { resolveSessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.transcript-target.js";
+import type { TranscriptEvent } from "../config/sessions/session-accessor.types.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { appendPreparedTranscriptEvent } from "../config/sessions/session-transcript-event.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildHostChannelInboundEventContext } from "./inbound-event/context.js";
-import { createChannelInboundEnvelopeBuilder } from "./inbound-event/envelope.js";
+import { createChannelInboundEnvelopeBuilderAsync } from "./inbound-event/envelope.js";
 import { dispatchRoutedChannelTurn } from "./turn/lifecycle.js";
 
 export const DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS = 300_000;
@@ -19,27 +18,37 @@ export async function recordChannelFeedbackEvent(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
-  event: Parameters<typeof appendTranscriptEvent>[1];
+  event: TranscriptEvent;
 }): Promise<boolean> {
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.agentId,
   });
-  const entry = loadSessionEntryReadOnly({
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    storePath,
-  });
-  if (!entry?.sessionId) {
-    return false;
-  }
-  const target = await resolveSessionTranscriptRuntimeTarget({
-    agentId: params.agentId,
-    sessionId: entry.sessionId,
-    sessionKey: params.sessionKey,
-    storePath,
-  });
-  await appendTranscriptEvent(target, params.event);
-  return true;
+  return withSessionEntryReadOnlyInWorker(
+    { agentId: params.agentId, sessionKey: params.sessionKey, storePath },
+    () => {},
+    async (read, owner) => {
+      if (!read.ok) {
+        throw read.error;
+      }
+      if (!read.value?.sessionId) {
+        return false;
+      }
+      const target = await resolveSessionTranscriptRuntimeTarget({
+        ...owner.scope,
+        agentId: params.agentId,
+        sessionId: read.value.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: owner.scope?.storePath ?? storePath,
+      });
+      owner.assertCurrent();
+      await appendPreparedTranscriptEvent(
+        { ...target, env: owner.scope?.env },
+        params.event,
+        owner.assertCurrent,
+      );
+      return true;
+    },
+  );
 }
 
 export type ChannelFeedbackReflectionResult =
@@ -123,10 +132,12 @@ export async function runChannelFeedbackReflection(params: {
   }
   const prompt = buildReflectionPrompt(params);
   const timestamp = Date.now();
-  const body = createChannelInboundEnvelopeBuilder({
-    cfg: params.cfg,
-    route: { agentId: params.agentId, sessionKey: params.sessionKey },
-  })({
+  const body = (
+    await createChannelInboundEnvelopeBuilderAsync({
+      cfg: params.cfg,
+      route: { agentId: params.agentId, sessionKey: params.sessionKey },
+    })
+  )({
     channel: params.channelLabel,
     from: "system",
     body: prompt,

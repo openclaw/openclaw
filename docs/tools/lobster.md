@@ -2,11 +2,11 @@
 summary: "Typed workflow runtime for OpenClaw with resumable approval and input gates."
 title: Lobster
 read_when:
-  - You want deterministic multi-step workflows with approvals or structured questions
+  - You want repeatable multi-step workflows with approvals or structured questions
   - You need to resume a workflow without re-running earlier steps
 ---
 
-Lobster runs multi-step tool pipelines as one deterministic tool call, with
+Lobster runs multi-step tool pipelines as one repeatable tool call, with
 explicit approval/input checkpoints and resume tokens. Checkpoints belong
 to the Lobster runner, not a separate orchestration registry.
 
@@ -103,7 +103,6 @@ Or per-agent:
   "agents": {
     "entries": {
       "main": {
-        "default": true,
         "tools": {
           "alsoAllow": ["lobster"]
         }
@@ -177,7 +176,6 @@ For a **structured LLM step** inside a workflow, enable the optional
   "agents": {
     "entries": {
       "main": {
-        "default": true,
         "tools": { "alsoAllow": ["llm-task"] }
       }
     }
@@ -430,7 +428,7 @@ Markdown vaults (personal, partner, shared). The CLI emits JSON for stats,
 inbox listings, and stale scans; Lobster chains those commands into workflows
 like `weekly-review`, `inbox-triage`, `memory-consolidation`, and
 `shared-task-sync`, each with approval gates. AI handles judgment
-(categorization) when available and falls back to deterministic rules when
+(categorization) when available and falls back to fixed rules when
 not.
 
 - Thread: [https://x.com/plattenschieber/status/2014508656335770033](https://x.com/plattenschieber/status/2014508656335770033)

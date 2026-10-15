@@ -317,7 +317,7 @@ struct OnboardingWelcomeStep: View {
                             Text("Connect Manually")
                                 .font(OpenClawType.subheadSemiBold)
                         }
-                        .buttonStyle(OpenClawSecondaryActionButtonStyle(height: 54, shadowOpacity: 0.018))
+                        .buttonStyle(OpenClawSecondaryActionButtonStyle(height: 54))
                         .disabled(self.isConnecting)
                     }
                 }

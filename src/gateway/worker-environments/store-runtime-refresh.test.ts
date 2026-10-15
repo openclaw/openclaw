@@ -149,7 +149,7 @@ describe("worker environment runtime refresh", () => {
       expect(store.get(environment.environmentId)?.bootstrapReceipt).toEqual(replacement);
       if (placement) {
         expect(
-          createWorkerSessionPlacementStore({ database }).get(placement.sessionId),
+          await createWorkerSessionPlacementStore({ database }).getAsync(placement.sessionId),
         ).toMatchObject({
           workerBundleHash: replacement.bundleHash,
           activeOwnerEpoch: placement.activeOwnerEpoch,
@@ -219,7 +219,7 @@ describe("worker environment runtime refresh", () => {
       if (operation === "destroying") {
         await store.requestDestroy({ environmentId: environment.environmentId, state: "attached" });
       } else if (operation === "moving") {
-        placements.beginPlacementMove({
+        await placements.beginPlacementMove({
           sessionId: placement!.sessionId,
           source: {
             generation: placement!.generation,
@@ -229,7 +229,7 @@ describe("worker environment runtime refresh", () => {
           target: { kind: "gateway" },
         });
       } else {
-        placements.startDrain({
+        await placements.startDrain({
           sessionId: placement!.sessionId,
           environmentId: environment.environmentId,
           ownerEpoch: environment.ownerEpoch,
@@ -256,8 +256,8 @@ describe("worker environment runtime refresh", () => {
         ownerEpoch: environment.ownerEpoch,
       },
     });
-    placements.markWorkspaceResultPending(claim);
-    const pending = placements.listPendingWorkspaceResults();
+    await placements.markWorkspaceResultPending(claim);
+    const pending = await placements.listPendingWorkspaceResultsAsync();
     const beforePlacement = placements.get(placement!.sessionId);
     const binding = {
       sessionId: REQUEST.sessionId,
@@ -267,7 +267,7 @@ describe("worker environment runtime refresh", () => {
     const liveGate = createWorkerSessionPlacementGate(placements);
     await expect(liveGate.prepareWorkerRuntimeRefresh(binding)).rejects.toThrow("current turn");
     const recoveryGate = createWorkerSessionPlacementGate(placements, {
-      rejectExistingWorkerClaims: true,
+      recoveryPlacements: await placements.listAsync(),
     });
     const refresh = await recoveryGate.prepareWorkerRuntimeRefresh(binding);
     try {
@@ -279,9 +279,10 @@ describe("worker environment runtime refresh", () => {
       ...beforePlacement,
       workerBundleHash: replacement.bundleHash,
     });
-    expect(placements.listPendingWorkspaceResults()).toEqual([
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
       { ...pending[0], recoveryRequestedAtMs: nowMs },
     ]);
+    await placements.prepareWorkspaceResultClaim(claim);
     expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
     expect(recoveryGate.validateWorkerTurn(claim)).toBe(false);
     expect(store.getCredential(environment.environmentId)).toBeUndefined();

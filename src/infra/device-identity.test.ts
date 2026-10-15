@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { normalizeLegacyDeviceIdentity } from "./device-identity-legacy.js";
@@ -18,7 +19,6 @@ import {
   deriveDeviceIdFromPublicKey,
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
-  loadOrCreateProcessDeviceIdentity,
   normalizeDevicePublicKeyBase64Url,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
@@ -81,30 +81,31 @@ function waitForChild(child: ChildProcess): Promise<DeviceIdentity> {
   });
 }
 
-async function runConcurrentIdentityLoads(rootDir: string): Promise<DeviceIdentity[]> {
-  const startPath = path.join(rootDir, "identity-start");
+async function runConcurrentIdentityLoads(
+  rootDir: string,
+  readOnly = false,
+): Promise<DeviceIdentity[]> {
   const moduleUrl = resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.deviceIdentity);
   const workerSource = `
-    import fs from "node:fs";
-    const { loadOrCreateDeviceIdentity } = await import(process.env.OPENCLAW_IDENTITY_MODULE);
-    fs.writeFileSync(process.env.OPENCLAW_IDENTITY_READY_PATH, "ready");
-    const deadline = Date.now() + 15_000;
-    while (!fs.existsSync(process.env.OPENCLAW_IDENTITY_START_PATH)) {
-      if (Date.now() >= deadline) {
-        throw new Error("timed out waiting for concurrent identity start");
-      }
-      await new Promise((resolve) => {
-        setTimeout(resolve, 2);
-      });
+    const { loadOrCreateDeviceIdentity, loadDeviceIdentityIfPresent } = await import(process.env.OPENCLAW_IDENTITY_MODULE);
+    if (process.env.OPENCLAW_IDENTITY_READ_ONLY === "1") {
+      const { default: childProcess } = await import("node:child_process");
+      const { syncBuiltinESMExports } = await import("node:module");
+      childProcess.spawnSync = () => { throw new Error("synthetic subprocess capacity exhausted"); };
+      syncBuiltinESMExports();
     }
-    const identity = loadOrCreateDeviceIdentity({
-      env: { ...process.env, OPENCLAW_STATE_DIR: process.env.OPENCLAW_IDENTITY_STATE_DIR },
-      path: process.env.OPENCLAW_IDENTITY_DATABASE_PATH,
+    process.once("message", () => {
+      const load = process.env.OPENCLAW_IDENTITY_READ_ONLY === "1" ? loadDeviceIdentityIfPresent : loadOrCreateDeviceIdentity;
+      const identity = load({
+        env: { ...process.env, OPENCLAW_STATE_DIR: process.env.OPENCLAW_IDENTITY_STATE_DIR },
+        path: process.env.OPENCLAW_IDENTITY_DATABASE_PATH,
+      });
+      console.log(JSON.stringify(identity));
+      process.disconnect();
     });
-    console.log(JSON.stringify(identity));
+    process.send("ready");
   `;
-  const workers = [0, 1].map((index) => {
-    const readyPath = path.join(rootDir, `identity-ready-${index}`);
+  const workers = Array.from({ length: readOnly ? 20 : 2 }, () => {
     const child = spawn(
       process.execPath,
       [
@@ -118,30 +119,25 @@ async function runConcurrentIdentityLoads(rootDir: string): Promise<DeviceIdenti
           ...process.env,
           OPENCLAW_IDENTITY_DATABASE_PATH: path.join(rootDir, "state", "openclaw.sqlite"),
           OPENCLAW_IDENTITY_MODULE: moduleUrl.href,
-          OPENCLAW_IDENTITY_READY_PATH: readyPath,
-          OPENCLAW_IDENTITY_START_PATH: startPath,
+          OPENCLAW_IDENTITY_READ_ONLY: readOnly ? "1" : "0",
           OPENCLAW_IDENTITY_STATE_DIR: rootDir,
         },
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
       },
     );
-    return { child, outcome: waitForChild(child), readyPath };
+    const outcome = waitForChild(child);
+    const ready = new Promise<void>((resolve, reject) => {
+      child.once("message", () => resolve());
+      void outcome.then(() => reject(new Error("identity worker exited before start")), reject);
+    });
+    return { child, outcome, ready };
   });
 
   try {
-    const deadline = Date.now() + 15_000;
-    while (!workers.every((worker) => fs.existsSync(worker.readyPath))) {
-      if (workers.some(({ child }) => child.exitCode !== null || child.signalCode !== null)) {
-        break;
-      }
-      if (Date.now() >= deadline) {
-        throw new Error("timed out waiting for concurrent identity workers");
-      }
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 2);
-      });
+    await Promise.all(workers.map((worker) => worker.ready));
+    for (const { child } of workers) {
+      child.send("start");
     }
-    fs.writeFileSync(startPath, "start");
     return await Promise.all(workers.map((worker) => worker.outcome));
   } finally {
     for (const { child } of workers) {
@@ -260,7 +256,9 @@ describe("device identity SQLite store", () => {
       const databaseDirectory = path.dirname(options.path!);
       const artifactsBeforeRead = fs.readdirSync(databaseDirectory).toSorted();
 
-      expect(loadDeviceIdentityIfPresent(options)).toEqual(created);
+      expect(withArtifactPreservingStateReads(() => loadDeviceIdentityIfPresent(options))).toEqual(
+        created,
+      );
       expect(fs.readdirSync(databaseDirectory).toSorted()).toEqual(artifactsBeforeRead);
     });
   });
@@ -302,7 +300,11 @@ describe("device identity SQLite store", () => {
           }
         });
 
-        expect(loadDeviceIdentityIfPresent(storeOptions(rootDir))).toBeNull();
+        expect(
+          withArtifactPreservingStateReads(() =>
+            loadDeviceIdentityIfPresent(storeOptions(rootDir)),
+          ),
+        ).toBeNull();
         expect(committedDuringRead).toBe(true);
 
         const committed = await creator.outcome;
@@ -394,24 +396,6 @@ describe("device identity SQLite store", () => {
     });
   });
 
-  it("keeps process identities cached by database path and identity key", async () => {
-    await withTempDir("openclaw-device-identity-cache-", async (rootDir) => {
-      const primaryOptions = storeOptions(rootDir);
-      const secondaryOptions = storeOptions(rootDir, "secondary");
-      const primary = loadOrCreateProcessDeviceIdentity(primaryOptions);
-      const secondary = loadOrCreateProcessDeviceIdentity(secondaryOptions);
-
-      expect(loadOrCreateProcessDeviceIdentity(primaryOptions)).toBe(primary);
-      expect(loadOrCreateProcessDeviceIdentity(secondaryOptions)).toBe(secondary);
-      expect(secondary.deviceId).not.toBe(primary.deviceId);
-
-      const claimPath = path.join(rootDir, "identity", "device.json.doctor-importing");
-      writeRetiredIdentity(claimPath);
-      expect(loadOrCreateProcessDeviceIdentity(primaryOptions)).toBe(primary);
-      expect(fs.existsSync(claimPath)).toBe(true);
-    });
-  });
-
   it("keeps canonical SQLite authoritative when retired device.json reappears", async () => {
     await withTempDir("openclaw-device-identity-canonical-", async (rootDir) => {
       const options = storeOptions(rootDir);
@@ -428,14 +412,26 @@ describe("device identity SQLite store", () => {
     });
   });
 
-  it("returns one authoritative winner to concurrent creators", async () => {
-    await withTempDir("openclaw-device-identity-concurrent-", async (rootDir) => {
-      const [first, second] = await runConcurrentIdentityLoads(rootDir);
-
-      expect(second).toEqual(first);
-      expect(loadDeviceIdentityIfPresent(storeOptions(rootDir))).toEqual(first);
+  it("loads existing identities concurrently without requiring subprocess capacity", async () => {
+    await withTempDir("openclaw-device-identity-readers-", async (rootDir) => {
+      const options = storeOptions(rootDir);
+      const identity = loadOrCreateDeviceIdentity(options);
+      closeOpenClawStateDatabaseForTest();
+      const { DatabaseSync } = await import("node:sqlite");
+      const writer = new DatabaseSync(options.path!);
+      writer.exec("BEGIN IMMEDIATE");
+      try {
+        const identities = await runConcurrentIdentityLoads(rootDir, true);
+        expect(identities).toHaveLength(20);
+        for (const loaded of identities) {
+          expect(loaded).toEqual(identity);
+        }
+      } finally {
+        writer.exec("ROLLBACK");
+        writer.close();
+      }
     });
-  }, 30_000);
+  });
 
   it("rechecks pending native import before publishing a generated identity", async () => {
     await withTempDir("openclaw-device-identity-pending-import-", async (rootDir) => {

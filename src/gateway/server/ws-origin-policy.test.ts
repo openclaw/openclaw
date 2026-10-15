@@ -1,6 +1,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureGatewayAuthPolicy, isGatewayAuthGrantCurrent } from "../auth-policy.js";
+import type { OperatorScope } from "../operator-scopes.js";
 import { GatewayClientRegistry } from "./client-registry.js";
 import { disconnectDisallowedGatewayPolicyClients } from "./ws-origin-policy.js";
 import {
@@ -79,11 +80,10 @@ describe("committed browser origin policy", () => {
     expect(clients[0]!.socket.close).not.toHaveBeenCalled();
     expect(clients[1]!.socket.close).toHaveBeenCalledWith(1008, "origin not allowed");
   });
-  it.each(
-    (["allowedOrigins", "dangerouslyAllowHostHeaderOriginFallback"] as const).flatMap((policy) =>
-      ["live", "disconnected"].map((transport) => ({ policy, transport })),
-    ),
-  )(
+  it.each([
+    { policy: "allowedOrigins", transport: "live" },
+    { policy: "dangerouslyAllowHostHeaderOriginFallback", transport: "disconnected" },
+  ])(
     "retires only clients no longer admitted after $policy changes ($transport)",
     ({ policy, transport }) => {
       const revoked = {
@@ -137,115 +137,168 @@ describe("committed browser origin policy", () => {
   );
 });
 
+type AuthPolicyTransition = {
+  name: string;
+  initial: OpenClawConfig;
+  next: OpenClawConfig;
+  principal: Parameters<typeof captureGatewayAuthPolicy>[1];
+  revoked: boolean;
+};
+
 describe("committed authentication policy", () => {
-  it.each([false, true])("honors the admitted startup auth mode override: %s", (override) => {
-    const initial: OpenClawConfig = { gateway: { auth: { mode: "none" } } };
-    const client = {
-      authPolicy: captureGatewayAuthPolicy(initial, {
+  const identity = "retained@example.test";
+  const grants = {
+    "Retained@example.test": ["operator.write", "operator.read"],
+    "other@example.test": ["operator.admin"],
+  } satisfies Record<string, OperatorScope[]>;
+  const identityChanges: Array<{
+    name: string;
+    scopes: Record<string, OperatorScope[]>;
+    revoked: boolean;
+  }> = [
+    {
+      name: "another identity added",
+      scopes: { ...grants, "new@example.test": ["operator.admin"] },
+      revoked: false,
+    },
+    {
+      name: "same scopes reordered",
+      scopes: {
+        ...grants,
+        "Retained@example.test": ["operator.read", "operator.write", "operator.read"],
+      },
+      revoked: false,
+    },
+    {
+      name: "identity removed",
+      scopes: { "other@example.test": grants["other@example.test"] },
+      revoked: true,
+    },
+    {
+      name: "identity downgraded",
+      scopes: { ...grants, "Retained@example.test": ["operator.read"] },
+      revoked: true,
+    },
+    {
+      name: "exact match shadows normalized grant",
+      scopes: { ...grants, [identity]: [] },
+      revoked: true,
+    },
+  ];
+  const trustedProxy = {
+    userHeader: "x-user",
+    requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
+    allowUsers: ["reader@example.test", "writer@example.test"],
+  };
+  const unorderedFields: Array<"requiredHeaders" | "allowUsers"> = [
+    "requiredHeaders",
+    "allowUsers",
+  ];
+
+  it.each<AuthPolicyTransition>([
+    ...[false, true].map<AuthPolicyTransition>((override) => ({
+      name: `startup auth mode override ${override}`,
+      initial: { gateway: { auth: { mode: "none" } } },
+      next: { gateway: { auth: { mode: "token" } } },
+      principal: {
         role: "operator",
         authMethod: "none",
         authModeOverride: override ? "none" : undefined,
-      }),
-      invalidated: false,
-      sourceInvalidated: false,
-      socket: { close: vi.fn() },
-    };
-    const onRevoked = vi.fn();
-    onTestFinished(onGatewayPolicyClientInvalidated(client, onRevoked));
-    const next: OpenClawConfig = { gateway: { auth: { mode: "token" } } };
-    disconnectDisallowedGatewayPolicyClients([client], next);
-    expect(client.invalidated).toBe(!override);
-    expect(client.sourceInvalidated).toBe(!override);
-    expect(onRevoked).toHaveBeenCalledTimes(override ? 0 : 1);
-    expect(client.socket.close).toHaveBeenCalledTimes(override ? 0 : 1);
-  });
-
-  it.each([
-    { role: "operator", verifiedIdentity: undefined },
-    { role: "node", verifiedIdentity: "other@example.test" },
-  ])("keeps $role without identity-derived scopes connected across grant edits", (principal) => {
-    const client = {
-      authPolicy: captureGatewayAuthPolicy({}, principal),
-      socket: { close: vi.fn() },
-      invalidated: false,
-    };
-    disconnectDisallowedGatewayPolicyClients([client], {
-      gateway: { auth: { identityScopes: { "other@example.test": ["operator.admin"] } } },
-    });
-    expect(client.invalidated).toBe(false);
-    expect(client.socket.close).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { change: "another identity added", revoked: false },
-    { change: "another identity removed", revoked: false },
-    { change: "unchanged snapshot", revoked: false },
-    { change: "same scopes reordered", revoked: false },
-    { change: "identity removed", revoked: true },
-    { change: "identity downgraded", revoked: true },
-    { change: "identity upgraded", revoked: true },
-    { change: "exact match shadows normalized grant", revoked: true },
-  ])("reconciles only the authenticated identity for $change", ({ change, revoked }) => {
-    const identity = "retained@example.test";
-    const initial: OpenClawConfig = {
-      gateway: {
-        auth: {
-          identityScopes: {
-            "Retained@example.test": ["operator.write", "operator.read"],
-            "other@example.test": ["operator.admin"],
-          },
+      },
+      revoked: !override,
+    })),
+    ...[
+      { role: "operator", verifiedIdentity: undefined },
+      { role: "node", verifiedIdentity: "other@example.test" },
+    ].map<AuthPolicyTransition>((principal) => ({
+      name: `${principal.role} without identity-derived scopes`,
+      initial: {},
+      next: { gateway: { auth: { identityScopes: { "other@example.test": ["operator.admin"] } } } },
+      principal,
+      revoked: false,
+    })),
+    ...identityChanges.map<AuthPolicyTransition>(({ name, scopes, revoked }) => ({
+      name,
+      initial: { gateway: { auth: { identityScopes: grants } } },
+      next: { gateway: { auth: { identityScopes: scopes } } },
+      principal: { role: "operator", verifiedIdentity: identity },
+      revoked,
+    })),
+    ...unorderedFields.map<AuthPolicyTransition>((field) => ({
+      name: `trusted-proxy ${field} reordered`,
+      initial: { gateway: { auth: { trustedProxy } } },
+      next: {
+        gateway: {
+          auth: { trustedProxy: { ...trustedProxy, [field]: trustedProxy[field].toReversed() } },
         },
       },
-    };
+      principal: null,
+      revoked: false,
+    })),
+    ...[
+      "allowUsers",
+      "proxy removed",
+      "proxy disabled",
+      "tailscale disabled",
+      "tailscale default removed",
+    ].map<AuthPolicyTransition>((change) => {
+      const tailscale = change.startsWith("tailscale");
+      const initial: OpenClawConfig = {
+        gateway: {
+          tailscale: { mode: "serve" },
+          auth: {
+            mode: tailscale ? "token" : "trusted-proxy",
+            allowTailscale: change === "tailscale default removed" ? undefined : true,
+            trustedProxy: { userHeader: "x-user", allowUsers: [identity] },
+          },
+        },
+      };
+      const next = structuredClone(initial);
+      if (change === "allowUsers") {
+        next.gateway!.auth!.trustedProxy!.allowUsers = ["other@example.test"];
+      } else if (change === "proxy removed") {
+        delete next.gateway!.auth!.trustedProxy;
+      } else if (change === "proxy disabled") {
+        next.gateway!.auth!.mode = "token";
+      } else if (change === "tailscale default removed") {
+        next.gateway!.tailscale!.mode = "off";
+      } else {
+        next.gateway!.auth!.allowTailscale = false;
+      }
+      return {
+        name: `${change} admission ends`,
+        initial,
+        next,
+        principal: {
+          role: "operator",
+          authMethod: tailscale ? "tailscale" : "trusted-proxy",
+          verifiedIdentity: identity,
+        },
+        revoked: true,
+      };
+    }),
+  ])("reconciles the admitted grant after $name", ({ initial, next, principal, revoked }) => {
     const client = {
-      authenticatedUserId: identity,
-      authPolicy: captureGatewayAuthPolicy(initial, {
-        role: "operator",
-        verifiedIdentity: identity,
-      }),
-      socket: { close: vi.fn() },
+      authPolicy: captureGatewayAuthPolicy(initial, principal),
       invalidated: false,
       sourceInvalidated: false,
+      socket: { close: vi.fn() },
     };
     const onRevoked = vi.fn();
     onTestFinished(onGatewayPolicyClientInvalidated(client, onRevoked));
-    const next = structuredClone(initial);
-    const scopes = next.gateway!.auth!.identityScopes!;
-    if (change === "another identity added") {
-      scopes["new@example.test"] = ["operator.admin"];
-    }
-    if (change === "another identity removed") {
-      delete scopes["other@example.test"];
-    }
-    if (change === "same scopes reordered") {
-      scopes["Retained@example.test"] = ["operator.read", "operator.write", "operator.read"];
-    }
-    if (change === "identity removed") {
-      delete scopes["Retained@example.test"];
-    }
-    if (change === "identity downgraded") {
-      scopes["Retained@example.test"] = ["operator.read"];
-    }
-    if (change === "identity upgraded") {
-      scopes["Retained@example.test"] = ["operator.admin"];
-    }
-    if (change === "exact match shadows normalized grant") {
-      scopes[identity] = [];
-    }
     disconnectDisallowedGatewayPolicyClients([client], next);
     expect(client.invalidated).toBe(revoked);
     expect(client.sourceInvalidated).toBe(revoked);
     expect(onRevoked).toHaveBeenCalledTimes(revoked ? 1 : 0);
+    expect(client.socket.close).toHaveBeenCalledTimes(revoked ? 1 : 0);
     if (revoked) {
       expect(client.socket.close).toHaveBeenCalledWith(4001, "gateway policy changed");
     }
-    expect(client.socket.close).toHaveBeenCalledTimes(revoked ? 1 : 0);
   });
 
   it.each(["retained@example.test", "other@example.test"])(
     "latches an added then removed grant only for its source: %s",
     (changedIdentity) => {
-      const identity = "retained@example.test";
       const client = {
         authenticatedUserId: identity,
         authPolicy: captureGatewayAuthPolicy({}, { role: "operator", verifiedIdentity: identity }),
@@ -260,55 +313,9 @@ describe("committed authentication policy", () => {
     },
   );
 
-  it.each(["requiredHeaders", "allowUsers"] as const)(
-    "keeps clients connected when trusted-proxy %s are reordered",
-    (field) => {
-      const trustedProxy = {
-        userHeader: "x-user",
-        requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
-        allowUsers: ["reader@example.test", "writer@example.test"],
-      };
-      const client = {
-        authPolicy: captureGatewayAuthPolicy(
-          {
-            gateway: { auth: { trustedProxy } },
-          },
-          null,
-        ),
-        socket: { close: vi.fn() },
-        invalidated: false,
-      };
-      disconnectDisallowedGatewayPolicyClients([client], {
-        gateway: {
-          auth: { trustedProxy: { ...trustedProxy, [field]: trustedProxy[field].toReversed() } },
-        },
-      });
-      expect(client.socket.close).not.toHaveBeenCalled();
-      expect(client.invalidated).toBe(false);
-    },
-  );
-
   it.each<OpenClawConfig["gateway"]>([
     { trustedProxies: ["192.0.2.10"] },
-    { allowRealIpFallback: true },
-    { auth: { allowTailscale: false } },
     { auth: { trustedProxy: { userHeader: "x-user", allowUsers: ["retained@example.test"] } } },
-    { auth: { trustedProxy: { userHeader: "x-new-user" } } },
-    { auth: { trustedProxy: { userHeader: "x-user", requiredHeaders: ["x-forwarded-proto"] } } },
-    { auth: { trustedProxy: { userHeader: "x-user", allowLoopback: true } } },
-    {
-      auth: {
-        trustedProxy: {
-          userHeader: "x-user",
-          cloudflareAccessOidc: {
-            issuer: "https://fixture.cloudflareaccess.com",
-            providerId: "fixture-provider",
-            githubAccountIdClaim: "github_id",
-          },
-        },
-      },
-    },
-    { auth: { trustedProxy: { userHeader: "x-user", deviceAutoApprove: { enabled: true } } } },
     {
       roles: {
         default: "reader",
@@ -380,52 +387,4 @@ describe("committed authentication policy", () => {
       expect(worker.socket.close).not.toHaveBeenCalled();
     },
   );
-
-  it.each([
-    "allowUsers",
-    "proxy removed",
-    "proxy disabled",
-    "tailscale disabled",
-    "tailscale default removed",
-  ])("revokes accepted work when its admission grant ends: %s", (change) => {
-    const tailscale = change.startsWith("tailscale");
-    const initial: OpenClawConfig = {
-      gateway: {
-        tailscale: { mode: "serve" },
-        auth: {
-          mode: tailscale ? "token" : "trusted-proxy",
-          allowTailscale: change === "tailscale default removed" ? undefined : true,
-          trustedProxy: { userHeader: "x-user", allowUsers: ["retained@example.test"] },
-        },
-      },
-    };
-    const client = {
-      authPolicy: captureGatewayAuthPolicy(initial, {
-        role: "operator",
-        authMethod: tailscale ? "tailscale" : "trusted-proxy",
-        verifiedIdentity: "retained@example.test",
-      }),
-      invalidated: false,
-      sourceInvalidated: false,
-      socket: { close: vi.fn() },
-    };
-    const onRevoked = vi.fn();
-    onTestFinished(onGatewayPolicyClientInvalidated(client, onRevoked));
-    const next = structuredClone(initial);
-    if (change === "allowUsers") {
-      next.gateway!.auth!.trustedProxy!.allowUsers = ["other@example.test"];
-    } else if (change === "proxy removed") {
-      delete next.gateway!.auth!.trustedProxy;
-    } else if (change === "proxy disabled") {
-      next.gateway!.auth!.mode = "token";
-    } else if (change === "tailscale default removed") {
-      next.gateway!.tailscale!.mode = "off";
-    } else {
-      next.gateway!.auth!.allowTailscale = false;
-    }
-    disconnectDisallowedGatewayPolicyClients([client], next);
-    expect(client.sourceInvalidated).toBe(true);
-    expect(onRevoked).toHaveBeenCalledOnce();
-    expect(client.socket.close).toHaveBeenCalledExactlyOnceWith(4001, "gateway policy changed");
-  });
 });

@@ -1,18 +1,40 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
+import * as exec from "../process/exec.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
+import { pkgQueryResult } from "./update-freebsd-pkg-ownership.test-support.js";
 import { withRetainedUpdateRuntime } from "./update-retained-runtime.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
-it.each(["symlink", "directory"] as const)(
-  "updates the npm package without traversing a historical package backup %s",
-  async (kind) => {
+it.each(
+  (["symlink", "directory"] as const).flatMap((kind) =>
+    (["missing", "failed"] as const).map((probe) => ({ kind, probe })),
+  ),
+)(
+  "updates the npm package without traversing a historical package backup $kind when pacman is $probe",
+  async ({ kind, probe }) => {
+    mockProcessPlatform("linux");
+    vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(
+      pkgQueryResult(
+        "",
+        probe === "missing"
+          ? {
+              code: null,
+              termination: "error",
+              error: Object.assign(new Error("pacman unavailable"), { code: "ENOENT" }),
+            }
+          : { code: 1 },
+      ),
+    );
     const base = await fs.realpath(dirs.make("retained-package-backup-"));
     const { params, globalRoot, packageRoot: installed } = await createPackageSwapFixture(base);
     const dependency = path.join(globalRoot, "fixture");

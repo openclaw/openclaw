@@ -17,7 +17,7 @@ not replace maintainer judgment.
 
 ## Barnacle
 
-Barnacle is deterministic GitHub triage. It looks for known queue-management
+Barnacle applies fixed rules to GitHub triage. It looks for known queue-management
 cases and responds with labels, comments, or closures.
 
 Barnacle may act when:
@@ -108,6 +108,9 @@ For proof files, prefer linking CI artifacts, GitHub-uploaded screenshots or
 recordings, or a short redacted log excerpt. Do not commit generated proof files
 unless they are part of the actual docs, tests, or product change.
 
+For behavioral changes, use the [boundary-proof guide](/help/testing/writing-tests#prove-behavior-at-the-owning-boundary)
+to review production-path, provider-request, and failure/reconstruction evidence.
+
 Redacting sensitive data is the contributor's responsibility. Remove secrets,
 tokens, private URLs, user data, and unrelated logs before posting proof.
 
@@ -151,6 +154,20 @@ finding needs a severity. Structural validity does not authorize preparation:
 `READY FOR /prepare-pr` still requires completed issue and behavior review,
 resolved substantive findings, and the applicable runtime proof.
 
+When a bounded investigation cannot establish or complete a safe fix for a local
+test failure, preserve `tests.result: "fail"` and record
+`tests.investigatedLocalFailures`. Its `head` must be the exact reviewed commit.
+Its nonempty `failures` array records each original `failure`, nonempty string
+arrays of `reproductionAttempts` and `evidence`, and a nonempty
+`remainingUncertainty`. Describe the commands and observed outcomes, and reference
+the evidence recorded in the PR. A passing replay does not prove a fix.
+
+This completed investigation can accompany a READY recommendation without
+turning the failed proof into a pass. Substantive findings, behavioral review,
+required CI, security checks, and enforced reviews remain independent gates.
+Use `tests.preExistingCi` only for its separate, attributed CI-failure workflow;
+local investigation does not authorize a CI exception.
+
 ## When automation stays quiet
 
 Automation may stay quiet when a maintainer is already handling the item, a
@@ -164,14 +181,14 @@ workflow instead.
 ## Troubleshooting
 
 Maintainers can set `OPENCLAW_PR_TOOLING_ROOT` to a full checkout of this repository
-to source materialized `scripts/pr` dependencies independently of a canonical checkout parked
+to source materialized `scripts/pr` dependencies independently of a primary checkout parked
 on another branch. The environment setting takes precedence over
-`git config openclaw.pr.toolingRoot /path/to/tooling-checkout` in the canonical
+`git config openclaw.pr.toolingRoot /path/to/tooling-checkout` in the primary
 checkout; without either, dependency sourcing stays unchanged. Versions must
 match the wrapper's trust-anchor manifest. On mismatch, a separate clean `main`
 tooling checkout is fetched, fast-forwarded, and installed with
 `pnpm install --frozen-lockfile` once, then rechecked. Dirty or non-main tooling
-checkouts are refused with repair guidance; the canonical checkout is never
+checkouts are refused with repair guidance; the primary checkout is never
 refreshed. The setting applies at both dependency materialization handoffs;
 in-place wrappers keep their checkout's dependency context. Wrapper code selection
 and trust stay unchanged.

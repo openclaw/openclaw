@@ -24,6 +24,7 @@ const commandTransport = vi.hoisted(() => ({
   hostCwd: process.cwd(),
   npmPrefix: "",
 }));
+export const sqliteHostPlatform = commandTransport.hostPlatform;
 
 const isMacosAclInspection = vi.hoisted(
   () => (command: string, args: readonly string[]) =>
@@ -44,7 +45,6 @@ const isPlistStdinConversion = vi.hoisted(
     args[5] === "-",
 );
 
-const sqliteHostPlatform = process.platform;
 const existingHostUri = nodeSqlite.resolveExistingSqliteFileUri;
 const immutableHostUri = nodeSqlite.resolveImmutableSqliteFileUri;
 
@@ -88,7 +88,8 @@ const sourceRuntimeCompletion = vi.hoisted(() =>
   vi.fn<typeof import("./update-cli/update-command-runtime.js").completeSourceUpdateRuntime>(),
 );
 const pluginAvailabilityPreflight = vi.hoisted(() => vi.fn());
-vi.mock("../daemon/service-process-membership.js", () => ({
+vi.mock("../daemon/service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service-process-membership.js")>()),
   inspectServiceProcessMembershipSync: vi.fn(() => "outside"),
 }));
 
@@ -375,15 +376,46 @@ vi.mock("node:child_process", async () => {
   const hostExecPath = process.execPath;
   const brokerUrl = resolveRuntimeProcessEntrypointUrl("spawnBroker");
   const hostBrokerArgv = resolveRuntimeWorkerArgv(brokerUrl);
+  const hostSourcePrefix = resolveRuntimeWorkerArgv(new URL("./worker.ts", import.meta.url)).slice(
+    0,
+    -1,
+  );
+  const hostCompiledPrefix = resolveRuntimeWorkerArgv(
+    new URL("./worker.js", import.meta.url),
+  ).slice(0, -1);
+  const sqliteHostArgv = (argv: readonly string[]) => {
+    const entryIndex = argv.indexOf(SQLITE_READONLY_CHILD_ARG) - 1;
+    const entry = expectDefined(argv[entryIndex], "SQLite worker entrypoint");
+    // Simulated Bun metadata must not select flags for real host SQLite children.
+    const prefix = /\.[cm]?ts$/u.test(entry) ? hostSourcePrefix : hostCompiledPrefix;
+    return [...prefix, ...argv.slice(entryIndex)];
+  };
   return {
     ...actual,
     // SQLite snapshots and their native broker need real IPC; updater/service children stay simulated.
-    execFile: (...args: Parameters<typeof actual.execFile>) =>
-      args[0] === process.execPath &&
-      Array.isArray(args[1]) &&
-      args[1].includes(SQLITE_READONLY_CHILD_ARG)
-        ? actual.execFile(...args)
-        : execFile(...args),
+    spawnSync: (...args: Parameters<typeof actual.spawnSync>) => {
+      if (
+        args[0] === process.execPath &&
+        Array.isArray(args[1]) &&
+        args[1].includes(SQLITE_READONLY_CHILD_ARG)
+      ) {
+        args[0] = hostExecPath;
+        args[1] = sqliteHostArgv(args[1]);
+      }
+      return actual.spawnSync(...args);
+    },
+    execFile: (...args: Parameters<typeof actual.execFile>) => {
+      if (
+        args[0] === process.execPath &&
+        Array.isArray(args[1]) &&
+        args[1].includes(SQLITE_READONLY_CHILD_ARG)
+      ) {
+        args[0] = hostExecPath;
+        args[1] = sqliteHostArgv(args[1]);
+        return actual.execFile(...args);
+      }
+      return execFile(...args);
+    },
     spawn: (...args: Parameters<typeof actual.spawn>) => {
       const brokerArgv = resolveRuntimeWorkerArgv(brokerUrl);
       const childArgs = args[1];
@@ -396,10 +428,15 @@ vi.mock("node:child_process", async () => {
         // Simulated Node selection must not mix runtimes on the real broker's advanced IPC.
         return actual.spawn(hostExecPath, hostBrokerArgv, args[2]);
       }
+      if (
+        args[0] === process.execPath &&
+        Array.isArray(childArgs) &&
+        childArgs.includes(SQLITE_READONLY_CHILD_ARG)
+      ) {
+        return actual.spawn(hostExecPath, sqliteHostArgv(childArgs), args[2]);
+      }
       return Array.isArray(childArgs) &&
-        (isMacosAclInspection(args[0], childArgs) ||
-          isPlistStdinConversion(args[0], childArgs) ||
-          (args[0] === process.execPath && childArgs.includes(SQLITE_READONLY_CHILD_ARG)))
+        (isMacosAclInspection(args[0], childArgs) || isPlistStdinConversion(args[0], childArgs))
         ? actual.spawn(...args)
         : spawn(...args);
     },
@@ -410,8 +447,8 @@ vi.mock("../process/exec.js", async (importOriginal) => {
   const transport = await import("./update-cli/update-command-transport.test-support.js");
   const actual = await importOriginal<typeof import("../process/exec.js")>();
   return {
-    isPlainCommandExitFailure: actual.isPlainCommandExitFailure,
-    runCommandBuffered: transport.runUpdateStateSnapshotFixture,
+    ...actual,
+    runCommandBuffered: transport.runUpdateBufferedCommandFixture,
     runCommandWithTimeout: await transport.createUpdateCommandTransportFixture({
       ...commandTransport,
       get npmPrefix() {
@@ -525,6 +562,12 @@ vi.mock("../config/backup-rotation.js", async (importOriginal) => ({
   createPreUpdateConfigSnapshot: (...args: unknown[]) => createPreUpdateConfigSnapshotMock(...args),
 }));
 
+vi.mock("../daemon/inspect.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/inspect.js")>()),
+  // Service state is fixture-owned; never pair it with the host's installed services.
+  listManagedOpenClawGatewayServices: vi.fn(async () => ({ services: [], errors: [] })),
+}));
+
 vi.mock("../daemon/service.js", async () => {
   const { createUpdateServiceStateReader } =
     await import("./update-cli/update-command-service-state.test-support.js");
@@ -591,6 +634,12 @@ vi.mock("../infra/ports-format.js", () => ({
 vi.mock("../gateway/call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../gateway/call.js")>()),
   callGateway: (opts: CallGatewayOptions) => callGateway(opts),
+}));
+
+// These cases simulate a ready Gateway; no listener is started for HTTP startup probes.
+vi.mock("./daemon-cli/restart-health-probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./daemon-cli/restart-health-probe.js")>()),
+  readGatewayStartupPhase: vi.fn(async () => undefined),
 }));
 
 vi.mock("./daemon-cli/restart-health.js", async (importOriginal) => {
@@ -700,7 +749,6 @@ export {
   serviceStop,
   sourceRuntimeCompletion,
   spawn,
-  sqliteHostPlatform,
   stateSchemaVersions,
   suspendScheduledTaskAutoStartForUpdate,
   syncPluginsForUpdateChannel,

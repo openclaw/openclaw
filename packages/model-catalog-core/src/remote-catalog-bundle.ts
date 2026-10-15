@@ -22,25 +22,17 @@ const pricingTierSchema = z
   })
   .strict();
 
-const costSchema = z
-  .object({
-    input: z.number().finite().nonnegative().optional(),
-    output: z.number().finite().nonnegative().optional(),
-    cacheRead: z.number().finite().nonnegative().optional(),
-    cacheWrite: z.number().finite().nonnegative().optional(),
+const costSchema = pricingTierSchema
+  .omit({ range: true })
+  .partial()
+  .extend({
     tieredPricing: z.array(pricingTierSchema).optional(),
-  })
-  .strict();
+  });
 
-const hostedPricingSchema = z
-  .object({
-    input: z.number().finite().nonnegative(),
-    output: z.number().finite().nonnegative(),
-    cacheRead: z.number().finite().nonnegative().optional(),
-    cacheWrite: z.number().finite().nonnegative().optional(),
-    tieredPricing: z.array(pricingTierSchema).optional(),
-  })
-  .strict();
+const hostedPricingSchema = costSchema.extend({
+  input: pricingTierSchema.shape.input,
+  output: pricingTierSchema.shape.output,
+});
 
 export type RemoteModelCatalogPricing = z.infer<typeof hostedPricingSchema>;
 
@@ -58,7 +50,7 @@ const modelFieldsSchema = z.object({
   api: z.enum(MODEL_CATALOG_APIS).optional(),
   baseUrl: z.string().optional(),
   headers: stringMapSchema.optional(),
-  input: z.array(z.enum(["text", "image", "document"])).optional(),
+  input: z.array(z.enum(["text", "image", "video", "document"])).optional(),
   reasoning: z.boolean().optional(),
   contextWindow: z.number().finite().positive().optional(),
   contextWindows: z

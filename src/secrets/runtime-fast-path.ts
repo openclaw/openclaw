@@ -1,14 +1,14 @@
-/** Detects when secrets runtime preparation can safely use a fast path. */
-import { existsSync } from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { copyCanonicalAuthProfileCredentialObservations } from "../agents/auth-profiles/credential-observation.js";
+import { readAuthProfileDatabaseIdentity } from "../agents/auth-profiles/file-state.js";
 import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotsRevision,
   prepareRuntimeAuthProfileStoreSnapshots,
+  recordRuntimeAuthProfilePersistedStore,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -57,9 +57,6 @@ export function mergeSecretsRuntimeEnv(
   return merged;
 }
 
-/**
- * Collects default and named agent directories that may contain auth profile stores.
- */
 export function collectCandidateAgentDirs(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
@@ -73,9 +70,6 @@ export function collectCandidateAgentDirs(
   return [...dirs];
 }
 
-/**
- * Combines explicit refresh agent dirs with config-derived dirs for runtime refresh.
- */
 export function resolveRefreshAgentDirs(
   config: OpenClawConfig,
   context: SecretsRuntimeRefreshContext,
@@ -87,19 +81,6 @@ export function resolveRefreshAgentDirs(
   return uniqueStrings([...context.explicitAgentDirs, ...configDerived]);
 }
 
-function resolveCandidateAgentDirs(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv | Record<string, string | undefined>;
-  agentDirs?: string[];
-}): string[] {
-  return params.agentDirs?.length
-    ? uniqueStrings(params.agentDirs.map((entry) => resolveUserPath(entry, params.env)))
-    : collectCandidateAgentDirs(params.config, params.env);
-}
-
-/**
- * Creates empty web-tool metadata for snapshots that do not need secret resolution.
- */
 export function createEmptyRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata {
   return {
     search: {
@@ -159,7 +140,6 @@ function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
   });
 }
 
-/** Returns whether current config/auth/plugin state allows skipping full secret preparation. */
 export function canUseSecretsRuntimeFastPath(params: {
   sourceConfig: OpenClawConfig;
   authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
@@ -198,19 +178,26 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
   const sourceConfig = cloneConfigWithResolutionFacts(params.config);
   const resolvedConfig = cloneConfigWithResolutionFacts(params.config);
   const includeAuthStoreRefs = params.includeAuthStoreRefs ?? true;
-  const candidateDirs = resolveCandidateAgentDirs({
-    config: resolvedConfig,
-    env: runtimeEnv,
-    agentDirs: params.agentDirs,
-  });
+  const candidateDirs = params.agentDirs?.length
+    ? uniqueStrings(params.agentDirs.map((entry) => resolveUserPath(entry, runtimeEnv)))
+    : collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
   let authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
   if (includeAuthStoreRefs) {
     if (!params.loadAuthStore) {
+      const databasePaths = uniqueStrings([
+        ...candidateDirs.map(resolveAuthProfileDatabasePath),
+        resolveSharedAuthStorePath(runtimeEnv),
+      ]);
       if (
-        candidateDirs.some((agentDir) => existsSync(resolveAuthProfileDatabasePath(agentDir))) ||
-        existsSync(resolveSharedAuthStorePath(runtimeEnv))
+        databasePaths.some(
+          (pathname) => !readAuthProfileDatabaseIdentity(pathname)?.key.startsWith("path:"),
+        )
       ) {
         return null;
+      }
+      // Empty startup snapshots carry the admitted absence into later session-only creation.
+      for (const pathname of databasePaths) {
+        recordRuntimeAuthProfilePersistedStore(pathname, null);
       }
       authStores = candidateDirs.map((agentDir) => ({
         agentDir,

@@ -2,8 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolvePluginActivationDecisionShared } from "./config-activation-shared.js";
-import { normalizePluginsConfig } from "./config-state.js";
+import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { resolveManifestOwnerBasePolicyBlock } from "./manifest-owner-policy.js";
 import { loadPluginManifest } from "./manifest.js";
 
@@ -35,14 +34,13 @@ describe("mixed-case plugin policy ids", () => {
 
   it("blocks a mixed-case id in shared activation policy", () => {
     expect(
-      resolvePluginActivationDecisionShared({
+      resolveEffectivePluginActivationState({
         id: "Malicious-Scraper",
         origin: "bundled",
         config: normalizePluginsConfig({ deny: ["malicious-scraper"] }),
         enabledByDefault: true,
-        resolveChannelConfigEnablement: () => undefined,
       }),
-    ).toMatchObject({ enabled: false, activated: false, cause: "blocked-by-denylist" });
+    ).toMatchObject({ enabled: false, activated: false, reason: "blocked by denylist" });
   });
 
   it("rejects a mixed-case spelling of a core reserved id", () => {

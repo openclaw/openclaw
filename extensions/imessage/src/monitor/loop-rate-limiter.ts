@@ -7,19 +7,7 @@ const DEFAULT_WINDOW_MS = 60_000;
 const DEFAULT_MAX_HITS = 5;
 const CLEANUP_INTERVAL_MS = 120_000;
 
-type LoopRateLimiter = {
-  /** Returns true if this conversation has exceeded the rate limit. */
-  isRateLimited: (conversationKey: string) => boolean;
-  /** Record an inbound message for a conversation. */
-  record: (conversationKey: string) => void;
-};
-
-export function createLoopRateLimiter(opts?: {
-  windowMs?: number;
-  maxHits?: number;
-}): LoopRateLimiter {
-  const windowMs = opts?.windowMs ?? DEFAULT_WINDOW_MS;
-  const maxHits = opts?.maxHits ?? DEFAULT_MAX_HITS;
+export function createLoopRateLimiter() {
   const conversations = new Map<string, number[]>();
   let lastCleanup = Date.now();
 
@@ -30,7 +18,7 @@ export function createLoopRateLimiter(opts?: {
     }
     lastCleanup = now;
     for (const [key, timestamps] of conversations.entries()) {
-      const recent = timestamps.filter((ts) => now - ts <= windowMs);
+      const recent = timestamps.filter((ts) => now - ts <= DEFAULT_WINDOW_MS);
       if (recent.length === 0) {
         conversations.delete(key);
       } else {
@@ -57,9 +45,9 @@ export function createLoopRateLimiter(opts?: {
         return false;
       }
       const now = Date.now();
-      const recent = timestamps.filter((ts) => now - ts <= windowMs);
+      const recent = timestamps.filter((ts) => now - ts <= DEFAULT_WINDOW_MS);
       conversations.set(conversationKey, recent);
-      return recent.length >= maxHits;
+      return recent.length >= DEFAULT_MAX_HITS;
     },
   };
 }

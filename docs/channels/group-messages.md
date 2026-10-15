@@ -44,7 +44,6 @@ Make display-name pings work even when WhatsApp strips the visual `@` from the t
   agents: {
     entries: {
       main: {
-        default: true,
         groupChat: {
           mentionPatterns: ["@?openclaw", "\\+?15555550123"],
         },
@@ -57,7 +56,7 @@ Make display-name pings work even when WhatsApp strips the visual `@` from the t
 Notes:
 
 - The regexes are case-insensitive and use the same safe-regex guardrails as other config regex surfaces; invalid patterns and unsafe nested repetition are ignored.
-- WhatsApp still sends canonical mentions via `mentionedJids` when someone taps the contact, so the number fallback is rarely needed but is a useful safety net.
+- WhatsApp still sends explicit mentions via `mentionedJids` when someone taps the contact, so the number fallback is rarely needed but is a useful safety net.
 - The pending-context window resolves as `channels.whatsapp.accounts.<id>.historyLimit` → `channels.whatsapp.historyLimit` → `messages.groupChat.historyLimit` → 50.
 
 ### Activation command (owner-only)

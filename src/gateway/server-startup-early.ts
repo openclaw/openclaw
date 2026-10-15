@@ -7,15 +7,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import type { GatewayDiscovery } from "./server-discovery-runtime.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
 type StartGatewayMaintenanceTimers =
   typeof import("./server-maintenance.js").startGatewayMaintenanceTimers;
 type GatewayMaintenanceParams = Parameters<StartGatewayMaintenanceTimers>[0];
-
-const loadRemoteSkillsRuntimeModule = async () => await import("../skills/runtime/remote.js");
 
 /** Start early Gateway side runtimes before the main server is fully ready. */
 export async function startGatewayEarlyRuntime(params: {
@@ -41,23 +41,17 @@ export async function startGatewayEarlyRuntime(params: {
   pluginRegistry?: PluginRegistry;
   pluginRuntimeClaim: GatewayPluginRuntimeClaim;
   broadcast: GatewayMaintenanceParams["broadcast"];
-  nodeSendToAllSubscribed: Parameters<StartGatewayMaintenanceTimers>[0]["nodeSendToAllSubscribed"];
-  getPresenceVersion: GatewayMaintenanceParams["getPresenceVersion"];
-  getHealthVersion: GatewayMaintenanceParams["getHealthVersion"];
-  refreshGatewayHealthSnapshot: GatewayMaintenanceParams["refreshGatewayHealthSnapshot"];
-  restartRunningChannels: GatewayMaintenanceParams["restartRunningChannels"];
-  refreshPresence: GatewayMaintenanceParams["refreshPresence"];
-  resetEventLoopHealth: GatewayMaintenanceParams["resetEventLoopHealth"];
-  logHealth: GatewayMaintenanceParams["logHealth"];
-  clients: GatewayMaintenanceParams["clients"];
-  dedupe: GatewayMaintenanceParams["dedupe"];
-  chatAbortControllers: GatewayMaintenanceParams["chatAbortControllers"];
-  chatQueuedTurns: GatewayMaintenanceParams["chatQueuedTurns"];
-  restartRecoveryCandidates: GatewayMaintenanceParams["restartRecoveryCandidates"];
-  chatRunState: GatewayMaintenanceParams["chatRunState"];
-  removeChatRun: GatewayMaintenanceParams["removeChatRun"];
-  agentRunSeq: GatewayMaintenanceParams["agentRunSeq"];
-  nodeSendToSession: GatewayMaintenanceParams["nodeSendToSession"];
+  maintenance: Omit<
+    GatewayMaintenanceParams,
+    | "scheduler"
+    | "broadcast"
+    | "getRuntimeConfig"
+    | "activeWorkInspectors"
+    | "isNixMode"
+    | "runWorktreeGc"
+    | "runDeliveryQueueMediaGc"
+    | "runManagedOutgoingMediaGc"
+  >;
   getRuntimeConfig: () => OpenClawConfig;
   startupTrace?: GatewayStartupTrace;
 }) {
@@ -97,7 +91,7 @@ export async function startGatewayEarlyRuntime(params: {
   if (startSideRuntimes) {
     const [{ primeRemoteSkillsCache, setSkillsRemoteRegistry }, { startCronMaintenance }] =
       await measureStartup(params.startupTrace, "runtime.early.lazy-runtime-imports", () =>
-        Promise.all([loadRemoteSkillsRuntimeModule(), import("../cron/maintenance.js")]),
+        Promise.all([import("../skills/runtime/remote.js"), import("../cron/maintenance.js")]),
       );
     setSkillsRemoteRegistry(params.nodeRegistry);
     void primeRemoteSkillsCache();
@@ -110,8 +104,9 @@ export async function startGatewayEarlyRuntime(params: {
     ? async () => {}
     : await measureStartup(params.startupTrace, "runtime.early.skills-listener", async () => {
         const skillsRuntimePromise = import("../skills/runtime/refresh.js");
-        const remoteSkillsRuntimePromise = loadRemoteSkillsRuntimeModule();
-        const { closeSkillsWatchers, registerSkillsChangeListener } = await skillsRuntimePromise;
+        const remoteSkillsRuntimePromise = import("../skills/runtime/remote.js");
+        const { closeSkillsWatchers, detachSkillsWatchers, registerSkillsChangeListener } =
+          await skillsRuntimePromise;
         const { refreshRemoteBinsForConnectedNodes } = await remoteSkillsRuntimePromise;
         const unregister = registerSkillsChangeListener((event) => {
           if (params.isClosing()) {
@@ -127,6 +122,7 @@ export async function startGatewayEarlyRuntime(params: {
             params.broadcast("skills.changed", { reason: event.reason });
             return;
           }
+          params.broadcast("skills.changed", { reason: event.reason });
           // Coalesce local skill changes before refreshing connected remote
           // nodes so bulk plugin/skill updates do not stampede node refreshes.
           params.scheduler.schedule({
@@ -143,53 +139,53 @@ export async function startGatewayEarlyRuntime(params: {
                   `failed to refresh remote bins after skills change: ${String(error)}`,
                 );
               }
-              if (!params.isClosing()) {
-                params.broadcast("skills.changed", { reason: event.reason });
-              }
             },
           });
         });
-        return async () => {
+        return async ({ exitAfterClose = false }: { exitAfterClose?: boolean } = {}) => {
           unregister();
-          await closeSkillsWatchers();
+          await (exitAfterClose ? detachSkillsWatchers() : closeSkillsWatchers());
         };
       });
 
-  const startMaintenance = async (activeWorkInspectors: Partial<GatewayActiveWorkInspectors>) => {
+  const startMaintenance = async (
+    activeWorkInspectors: Partial<GatewayActiveWorkInspectors>,
+    resolveGatewayContext?: GatewayContextResolver,
+  ) => {
     // Defer periodic maintenance until the caller has finished ready-state
     // wiring, but keep the lazy import owned by this early-runtime bundle.
     if (!startSideRuntimes || params.isClosing()) {
       return null;
     }
     return await measureStartup(params.startupTrace, "post-ready.maintenance", async () => {
-      const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+      const [{ refreshSkillsDiscovery }, { startGatewayMaintenanceTimers }] = await Promise.all([
+        import("../skills/runtime/refresh.js"),
+        import("./server-maintenance.js"),
+      ]);
       if (params.isClosing()) {
         return null;
       }
-      return startGatewayMaintenanceTimers({
-        scheduler: params.scheduler,
-        broadcast: params.broadcast,
-        nodeSendToAllSubscribed: params.nodeSendToAllSubscribed,
-        getPresenceVersion: params.getPresenceVersion,
-        getHealthVersion: params.getHealthVersion,
-        refreshGatewayHealthSnapshot: params.refreshGatewayHealthSnapshot,
-        restartRunningChannels: params.restartRunningChannels,
-        activeWorkInspectors,
-        refreshPresence: params.refreshPresence,
-        resetEventLoopHealth: params.resetEventLoopHealth,
-        logHealth: params.logHealth,
-        clients: params.clients,
-        dedupe: params.dedupe,
-        chatAbortControllers: params.chatAbortControllers,
-        chatQueuedTurns: params.chatQueuedTurns,
-        restartRecoveryCandidates: params.restartRecoveryCandidates,
-        chatRunState: params.chatRunState,
-        removeChatRun: params.removeChatRun,
-        agentRunSeq: params.agentRunSeq,
-        nodeSendToSession: params.nodeSendToSession,
-        isNixMode,
-        getRuntimeConfig: params.getRuntimeConfig,
-      });
+      try {
+        await refreshSkillsDiscovery({ config: params.getRuntimeConfig() });
+      } catch (error) {
+        params.log.warn(`failed to refresh skills during startup: ${String(error)}`);
+      }
+      if (params.isClosing()) {
+        return null;
+      }
+      return withPluginRuntimeGatewayContextResolver(
+        resolveGatewayContext,
+        () =>
+          startGatewayMaintenanceTimers({
+            ...params.maintenance,
+            scheduler: params.scheduler,
+            broadcast: params.broadcast,
+            activeWorkInspectors,
+            isNixMode,
+            getRuntimeConfig: params.getRuntimeConfig,
+          }),
+        { inheritRequestScope: false },
+      );
     });
   };
 

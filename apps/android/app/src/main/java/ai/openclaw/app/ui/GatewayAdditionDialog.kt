@@ -4,13 +4,13 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.MainViewModel.GatewayAdditionRequest
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.formatGatewayAuthority
+import ai.openclaw.app.hasPermission
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
 import android.Manifest
-import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -42,10 +42,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
-import com.google.mlkit.vision.barcode.BarcodeScannerOptions
-import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -86,12 +82,9 @@ internal fun GatewayAdditionDialog(
   var token by remember(request) { mutableStateOf("") }
   var password by remember(request) { mutableStateOf("") }
   var cameraAllowed by remember {
-    mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
+    mutableStateOf(context.hasPermission(Manifest.permission.CAMERA))
   }
-  val scanner =
-    remember(request) {
-      BarcodeScanning.getClient(BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build())
-    }
+  val scanner = remember(request) { createSetupBarcodeScanner() }
   val handoff by viewModel.gatewayConnectionHandoff.collectAsState()
   val gateways by viewModel.pairedGateways.collectAsState()
 

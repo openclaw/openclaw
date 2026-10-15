@@ -24,6 +24,7 @@ const scriptEntries = productionConfig.workspaces["."].entry.filter(
 
 const repositoryToolEntries = [
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
+  ".github/workflows/labeler.yml!",
   ".github/workflows/plugin-prerelease.yml!",
   "apps/android/scripts/build-release-artifacts.ts!",
   "security/opengrep/check-rule-metadata.mjs!",
@@ -67,8 +68,14 @@ const config = {
     ],
     // Oxlint consumes this required default export through a JSON config path.
     "scripts/oxlint-boundary-guards.mjs": ["exports"],
+    // Boundary lint requires this sole default export; remove with that config entry.
+    "scripts/oxlint-solid-migration.mjs": ["exports"],
+    // Oxlint consumes this required default export through a JSON config path.
+    "tools/solid-lint/index.mjs": ["exports"],
     // Vitest consumes this required default export through the reporter CLI path.
     "scripts/lib/vitest-resource-reporter.mts": ["exports"],
+    // Vitest loads this default class through the report owner's CLI and generated merge config.
+    "scripts/lib/vitest-report-capture.mts": ["exports"],
     // Wrangler consumes the Worker default export and instantiates the Durable
     // Object class by name from wrangler.jsonc; Knip cannot resolve either.
     "scripts/cloudflare/src/index.ts": ["exports"],
@@ -88,6 +95,7 @@ const config = {
         "src/cli/cli-process-child.test-helpers.test.ts!",
         // Core bootstrap packaging and source updates consume shared script owners.
         "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
+        "src/infra/package-dist-inventory.ts!",
         "src/plugin-sdk/api-baseline.ts!",
         "src/cli/update-cli/update-command-{git-admission,runtime}.ts!",
       ],
@@ -101,6 +109,7 @@ const config = {
         "test/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "src/cli/cli-process-child.test-helpers{,.test}.ts!",
         "src/gateway/worker-environments/node-bootstrap-artifact.ts!",
+        "src/infra/package-dist-inventory.ts!",
         "src/plugin-sdk/api-baseline.ts!",
         "src/cli/update-cli/update-command-{git-admission,runtime}.ts!",
       ],

@@ -25,16 +25,21 @@ export type McpOAuthLoginLifecycle = {
   onTokensSaved: () => void;
 };
 
-type McpOAuthMutationAuthority = {
-  assertCurrent: () => void;
-  beforeCommit?: () => void;
-};
-
 function resolveTokenExpiresAt(tokens: OAuthTokens): number | undefined {
   const expiresIn = tokens.expires_in;
   return typeof expiresIn === "number" && Number.isFinite(expiresIn)
     ? Date.now() + expiresIn * 1000
     : undefined;
+}
+
+function canReuseStoredTokens(store: McpOAuthStore): boolean {
+  const discoveredIssuer = store.discoveryState?.authorizationServerUrl;
+  return (
+    !store.tokens?.refresh_token ||
+    discoveredIssuer === undefined ||
+    (store.tokensAuthorizationServerUrl !== undefined &&
+      discoveredIssuer === store.tokensAuthorizationServerUrl)
+  );
 }
 
 function resolveOAuthRedirectUrl(config: McpOAuthConfig, store: McpOAuthStore = {}): string {
@@ -45,21 +50,20 @@ function resolveOAuthRedirectUrl(config: McpOAuthConfig, store: McpOAuthStore = 
   );
 }
 
-function buildOAuthClientMetadata(
-  config: McpOAuthConfig,
-  store: McpOAuthStore = {},
-): OAuthClientMetadata {
-  const redirectUrl = resolveOAuthRedirectUrl(config, store);
-  return {
-    client_name: "OpenClaw MCP",
-    redirect_uris: [redirectUrl],
-    grant_types: ["authorization_code", "refresh_token"],
-    response_types: ["code"],
-    token_endpoint_auth_method: "none",
-    ...(normalizeOptionalString(config.scope)
-      ? { scope: normalizeOptionalString(config.scope) }
-      : {}),
-  };
+function hasRegisteredOAuthRedirect(redirectUris: string[], redirectUrl: string): boolean {
+  if (redirectUris.includes(redirectUrl)) {
+    return true;
+  }
+  const loopback = URL.parse(redirectUrl);
+  if (
+    !loopback ||
+    loopback.protocol !== "http:" ||
+    !["127.0.0.1", "[::1]", "localhost"].includes(loopback.hostname)
+  ) {
+    return false;
+  }
+  // RFC 8252 exempts the port, not other callback bytes changed by URL serialization.
+  return redirectUris.includes(redirectUrl.replace(/^(http:\/\/[^/?#]+):\d+(?=[/?#]|$)/iu, "$1"));
 }
 
 /** Bind OAuth network work to the lease that fences its persisted side effects. */
@@ -85,6 +89,7 @@ export async function createMcpOAuthClientProvider(params: {
   config?: McpOAuthConfig;
   allowAuthorizationRedirect?: boolean;
   suppressStoredTokens?: boolean;
+  replaceAuthorization?: boolean;
   lease: OpenClawStateAsyncLeaseContext;
   login?: McpOAuthLoginLifecycle;
   storeContext: OpenClawStateWorkerContext;
@@ -127,7 +132,7 @@ export async function createMcpOAuthClientProvider(params: {
     params.login?.assertCurrent();
     preparation++;
     const write = ++nextWrite;
-    const authority: McpOAuthMutationAuthority | undefined = params.login
+    const authority = params.login
       ? { assertCurrent: params.login.assertCurrent, beforeCommit: options.beforeCommit }
       : undefined;
     try {
@@ -166,8 +171,17 @@ export async function createMcpOAuthClientProvider(params: {
       return resolveOAuthRedirectUrl(config, preparedStore());
     },
     clientMetadataUrl: normalizeOptionalString(config.clientMetadataUrl),
-    get clientMetadata() {
-      return buildOAuthClientMetadata(config, preparedStore());
+    get clientMetadata(): OAuthClientMetadata {
+      const redirectUrl = resolveOAuthRedirectUrl(config, preparedStore());
+      const scope = normalizeOptionalString(config.scope);
+      return {
+        client_name: "OpenClaw MCP",
+        redirect_uris: [redirectUrl],
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
+        token_endpoint_auth_method: "none",
+        ...(scope ? { scope } : {}),
+      };
     },
     async state() {
       assertAuthorizationRedirectAllowed();
@@ -190,7 +204,28 @@ export async function createMcpOAuthClientProvider(params: {
     async clientInformation() {
       const store = await readStore();
       params.login?.assertCurrent();
-      return store.clientInformation;
+      // The SDK can replace a mismatched client before requesting authorization.
+      // Background refresh must preserve the original registration and tokens;
+      // only an explicit login may start registration with another issuer.
+      if (!canReuseStoredTokens(store)) {
+        assertAuthorizationRedirectAllowed();
+      }
+      const clientInformation = store.clientInformation;
+      // Re-register an unused client when the callback changes. Saved tokens remain
+      // bound to their original client; metadata-document clients have no redirect list.
+      if (
+        !store.tokens &&
+        clientInformation &&
+        "redirect_uris" in clientInformation &&
+        Array.isArray(clientInformation.redirect_uris) &&
+        !hasRegisteredOAuthRedirect(
+          clientInformation.redirect_uris,
+          resolveOAuthRedirectUrl(config, store),
+        )
+      ) {
+        return undefined;
+      }
+      return clientInformation;
     },
     async saveClientInformation(clientInformation) {
       await updateStore({ kind: "clientInformation", clientInformation });
@@ -205,18 +240,16 @@ export async function createMcpOAuthClientProvider(params: {
       }
       const store = await readStore();
       params.login?.assertCurrent();
-      const discoveredAuthorizationServerUrl = store.discoveryState?.authorizationServerUrl;
-      if (!store.tokens?.refresh_token || discoveredAuthorizationServerUrl === undefined) {
-        return store.tokens;
-      }
-      return store.tokensAuthorizationServerUrl !== undefined &&
-        discoveredAuthorizationServerUrl === store.tokensAuthorizationServerUrl
-        ? store.tokens
-        : undefined;
+      return canReuseStoredTokens(store) ? store.tokens : undefined;
     },
     async saveTokens(tokens) {
       await updateStore(
-        { kind: "tokens", tokens, tokenExpiresAt: resolveTokenExpiresAt(tokens) },
+        {
+          kind: "tokens",
+          tokens,
+          tokenExpiresAt: resolveTokenExpiresAt(tokens),
+          ...(params.replaceAuthorization ? { replaceAuthorization: true } : {}),
+        },
         {
           beforeCommit: params.login?.beforeTokensSaved,
           onAcknowledged: params.login?.onTokensSaved,

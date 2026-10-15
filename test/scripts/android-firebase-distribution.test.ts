@@ -196,6 +196,7 @@ function fixture() {
 
 describe("Android Firebase distribution", () => {
   it.each([
+    ["token server failure", "https://oauth2.googleapis.com/token", (): Failure => 503, 500],
     ["preflight connection reset", preflightUrl, (): Failure => reset(), 500],
     ["preflight server failure", preflightUrl, (): Failure => 503, 500],
     [
@@ -218,13 +219,16 @@ describe("Android Firebase distribution", () => {
     "retries a transient %s before completing distribution",
     async (_label, url, failure, minimumDelay) => {
       const test = fixture();
-      vi.spyOn(console, "warn").mockImplementation(() => {});
-      test.failures.set(`GET ${url}`, [failure()]);
+      const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+      test.failures.set(`${url.endsWith("/token") ? "POST" : "GET"} ${url}`, [failure()]);
       const result = await test.client().distribute(test.options);
       expect(result.releases.phone.state).toBe("distributed");
       expect(test.calls.filter((call) => call.url === url)).toHaveLength(2);
       expect(vi.mocked(delay).mock.calls[0]![0]).toBeGreaterThanOrEqual(minimumDelay);
       expect(test.calls.filter((call) => call.url.endsWith(":distribute"))).toHaveLength(2);
+      expect(JSON.stringify(warnings.mock.calls)).not.toMatch(
+        /private|assertion|synthetic-access-token/,
+      );
     },
   );
 
@@ -241,69 +245,62 @@ describe("Android Firebase distribution", () => {
     expect(warnings.mock.calls[0]![0]).toMatch(/ECONNRESET.*2\/4/);
   });
 
-  it.each([401, 403])("does not retry permanent HTTP %s rejection", async (status) => {
+  it.each<[string, () => Failure, string]>([
+    ...[401, 403].map((status): [string, () => Failure, string] => [
+      `HTTP ${status}`,
+      () => status,
+      `HTTP ${status}`,
+    ]),
+    ...["CERT_HAS_EXPIRED", "private-unrecognized-code"].map(
+      (code): [string, () => Failure, string] => [
+        code,
+        () =>
+          new TypeError("private transport details", {
+            cause: Object.assign(new Error("private connection details"), { code }),
+          }),
+        code === "CERT_HAS_EXPIRED" ? code : "REQUEST_FAILED",
+      ],
+    ),
+  ])("does not retry or disclose permanent rejection %s", async (_label, failure, message) => {
     const test = fixture();
-    test.failures.set(`GET ${preflightUrl}`, status);
-    await expect(test.client().preflight()).rejects.toThrow(`HTTP ${status}`);
+    test.failures.set(`GET ${preflightUrl}`, failure());
+    const result = test.client().preflight();
+    await expect(result).rejects.toThrow(message);
+    await expect(result).rejects.not.toThrow(/private/);
     expect(test.calls.filter((call) => call.url === preflightUrl)).toHaveLength(1);
     expect(delay).not.toHaveBeenCalled();
   });
 
-  it("bounds Retry-After by the read retry deadline and releases the failed response body", async () => {
-    const test = fixture();
-    const response = new Response("private provider body", {
-      status: 429,
-      headers: { "Retry-After": "180" },
-    });
-    test.failures.set(`GET ${preflightUrl}`, response);
-    await expect(test.client().preflight()).rejects.toThrow(/HTTP 429.*attempt 1\/4/);
-    expect(test.calls.filter((call) => call.url === preflightUrl)).toHaveLength(1);
-    expect(delay).not.toHaveBeenCalled();
-    expect(response.bodyUsed).toBe(true);
-  });
-
-  it("does not start another read when the backoff consumes the total deadline", async () => {
-    const test = fixture();
-    let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.mocked(delay).mockImplementation(async () => {
-      now += 120_000;
-    });
-    test.failures.set(`GET ${preflightUrl}`, reset());
-    await expect(test.client().preflight()).rejects.toThrow(/ECONNRESET.*attempt 1\/4/);
-    expect(test.calls.filter((call) => call.url === preflightUrl)).toHaveLength(1);
-    expect(delay).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(["CERT_HAS_EXPIRED", "private-unrecognized-code"])(
-    "does not retry permanent or unknown transport errors (%s)",
-    async (code) => {
+  it.each(["Retry-After", "elapsed backoff"])(
+    "stops at the read deadline imposed by %s",
+    async (mode) => {
       const test = fixture();
-      test.failures.set(
-        `GET ${preflightUrl}`,
-        new TypeError("private transport details", {
-          cause: Object.assign(new Error("private connection details"), { code }),
-        }),
+      const response =
+        mode === "Retry-After"
+          ? new Response("private provider body", {
+              status: 429,
+              headers: { "Retry-After": "180" },
+            })
+          : undefined;
+      if (!response) {
+        let now = Date.now();
+        vi.spyOn(Date, "now").mockImplementation(() => now);
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        vi.mocked(delay).mockImplementation(async () => {
+          now += 120_000;
+        });
+      }
+      test.failures.set(`GET ${preflightUrl}`, response ?? reset());
+      await expect(test.client().preflight()).rejects.toThrow(
+        response ? /HTTP 429.*attempt 1\/4/ : /ECONNRESET.*attempt 1\/4/,
       );
-      const failure = test.client().preflight();
-      await expect(failure).rejects.toThrow(code === "CERT_HAS_EXPIRED" ? code : "REQUEST_FAILED");
-      await expect(failure).rejects.not.toThrow(/private/);
       expect(test.calls.filter((call) => call.url === preflightUrl)).toHaveLength(1);
-      expect(delay).not.toHaveBeenCalled();
+      expect(delay).toHaveBeenCalledTimes(response ? 0 : 1);
+      if (response) {
+        expect(response.bodyUsed).toBe(true);
+      }
     },
   );
-
-  it("retries token acquisition without logging credentials", async () => {
-    const test = fixture();
-    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
-    test.failures.set("POST https://oauth2.googleapis.com/token", [503]);
-    await test.client().preflight();
-    expect(test.calls.filter((call) => call.url.endsWith("/token"))).toHaveLength(2);
-    expect(JSON.stringify(warnings.mock.calls)).not.toMatch(
-      /private|assertion|synthetic-access-token/,
-    );
-  });
 
   it("closes preflight connections and uses fresh connections for publishing and failure cleanup", async () => {
     const test = fixture();

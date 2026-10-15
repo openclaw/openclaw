@@ -15,6 +15,7 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -64,7 +65,7 @@ async function withCatalog(
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
       agents: options.agents ?? {
-        list: [{ id: "main", default: true, agentDir: state.agentDir("main") }],
+        entries: { main: { agentDir: state.agentDir("main") } },
       },
     };
     await state.writeConfig(cfg);
@@ -77,7 +78,12 @@ async function withCatalog(
       );
     }
     const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-    const projection = await createSessionRowProjection({ cfg, getConfig: () => cfg, context });
+    const projection = await createSessionRowProjection({
+      cfg,
+      getConfig: () => cfg,
+      context,
+      modelCatalog: [],
+    });
     bindSessionRowProjection(context, () => projection);
     const previous = captureActivePluginRegistrySnapshot();
     const provider: SessionCatalogProvider = {
@@ -120,7 +126,9 @@ async function withCatalog(
 }
 
 it("reads clean local catalog entries from the resident owner without SQLite", async () => {
-  await withCatalog(async ({ list }) => {
+  await withCatalog(async ({ list, setList }) => {
+    const retainedHosts = hosts([session({ pullRequest: { numbers: [1], state: "open" } })]);
+    setList(async () => retainedHosts);
     const first = await list();
     expect(first.mock.calls[0]?.[1]).toMatchObject({
       catalogs: [{ hosts: [{ sessions: [{ sessionKey: key }] }] }],
@@ -130,6 +138,12 @@ it("reads clean local catalog entries from the resident owner without SQLite", a
     );
     const second = await list();
     expect(second.mock.calls[0]?.[1]).toEqual(first.mock.calls[0]?.[1]);
+    const firstHost = first.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0];
+    const secondHost = second.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0];
+    expect(secondHost).toBe(firstHost);
+    expect(Object.isFrozen(firstHost)).toBe(true);
+    expect(Object.isFrozen(firstHost.sessions)).toBe(true);
+    expect(Object.isFrozen(firstHost.sessions[0])).toBe(true);
     expect(
       reads.flatMap((read) =>
         read.mock.contexts.map((statement) =>
@@ -137,8 +151,78 @@ it("reads clean local catalog entries from the resident owner without SQLite", a
         ),
       ),
     ).toEqual([]);
+    retainedHosts[0]!.label = "Updated provider label";
+    retainedHosts[0]!.sessions[0]!.pullRequest!.numbers.push(2);
+    const mutatedSource = await list();
+    const mutatedHost = mutatedSource.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0];
+    expect(mutatedHost).not.toBe(firstHost);
+    expect(mutatedHost.label).toBe("Updated provider label");
+    expect(mutatedHost.sessions[0]?.pullRequest?.numbers).toEqual([1, 2]);
+    expect(firstHost.label).toBe("Fixture");
+    expect(firstHost.sessions[0]?.pullRequest?.numbers).toEqual([1]);
+    setList(async () => {
+      const freshHosts = hosts([session({ pullRequest: { numbers: [1, 2], state: "open" } })]);
+      freshHosts[0]!.label = "Updated provider label";
+      return freshHosts;
+    });
+    const freshSource = await list();
+    expect(freshSource.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]).toBe(mutatedHost);
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: key },
+      {
+        ...original,
+        updatedAt: 2,
+        sessionId: "replacement-instance",
+      },
+    );
+    const replaced = await list();
+    expect(replaced.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]).not.toBe(mutatedHost);
+    expect(
+      replaced.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions[0]?.createdActor,
+    ).toMatchObject(original.createdActor);
+    expect(firstHost.sessions[0]?.createdActor).toMatchObject(original.createdActor);
+    setList(async () => hosts([session({ name: "Updated provider title" })]));
+    const renamed = await list();
+    expect(renamed.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]).not.toBe(
+      replaced.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0],
+    );
+    expect(renamed.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions[0]?.name).toBe(
+      "Updated provider title",
+    );
+    expect(firstHost.sessions[0]?.name).toBeUndefined();
   });
 });
+
+it.each(["planning", "delivery"])(
+  "serves catalog %s without draining unrelated display invalidations",
+  async (phase) => {
+    await withCatalog(
+      async ({ list, setList, projection }) => {
+        const warm = await list();
+        const before = projection.materializedCount;
+        const invalidate = () => {
+          sessionChanges.emit({ all: true, scope: "catalog" });
+          expect(projection.needsMaterialization).toBe(true);
+        };
+        setList(async ({ sessionEntries }) => {
+          expect(sessionEntries?.entriesForCatalog?.()).toHaveLength(41);
+          if (phase === "delivery") {
+            invalidate();
+          }
+          return hosts([session()]);
+        });
+        if (phase === "planning") {
+          invalidate();
+        }
+        const response = await list();
+        expect(response.mock.calls[0]?.[1]).toEqual(warm.mock.calls[0]?.[1]);
+        expect(projection.materializedCount).toBe(before);
+        expect(projection.dirtyRowCount).toBeGreaterThan(0);
+      },
+      { otherEntryCount: 40 },
+    );
+  },
+);
 
 it("reuses unchanged agent selections across catalog polls and refreshes published rows", async () => {
   await withCatalog(
@@ -152,25 +236,29 @@ it("reuses unchanged agent selections across catalog polls and refreshes publish
       };
       replaceSessionEntrySync({ agentId: "main", sessionKey: key }, { ...original, label: "Main" });
       replaceSessionEntrySync({ agentId: "work", sessionKey: workKey }, workEntry);
-      setList(async ({ sessionEntries }) => [
-        {
-          hostId: "gateway:fixture",
-          label: "Fixture",
-          kind: "gateway",
-          connected: true,
-          sessions: (sessionEntries?.entriesForCatalog?.() ?? []).map(
-            ({ agentId, sessionKey, entry }) => ({
-              threadId: `${agentId}:${entry.sessionId}`,
-              sessionKey,
-              title: entry.label,
-              status: "stored",
-              archived: false,
-              canContinue: true,
-              canArchive: false,
-            }),
-          ),
-        },
-      ]);
+      const planningRevisions: Array<object | undefined> = [];
+      setList(async ({ sessionEntries }) => {
+        planningRevisions.push(sessionEntries?.revision);
+        return [
+          {
+            hostId: "gateway:fixture",
+            label: "Fixture",
+            kind: "gateway",
+            connected: true,
+            sessions: (sessionEntries?.entriesForCatalog?.() ?? []).map(
+              ({ agentId, sessionKey, entry }) => ({
+                threadId: `${agentId}:${entry.sessionId}`,
+                sessionKey,
+                title: entry.label,
+                status: "stored",
+                archived: false,
+                canContinue: true,
+                canArchive: false,
+              }),
+            ),
+          },
+        ];
+      });
       const mainSession = {
         threadId: `main:${original.sessionId}`,
         sessionKey: key,
@@ -189,8 +277,8 @@ it("reuses unchanged agent selections across catalog polls and refreshes publish
       });
       const selectEntries = projection.selectEntries.bind(projection);
       let broadRowsRead = 0;
-      vi.spyOn(projection, "selectEntries").mockImplementation((query) => {
-        const rows = selectEntries(query);
+      vi.spyOn(projection, "selectEntries").mockImplementation((query, metadataPrepared) => {
+        const rows = selectEntries(query, metadataPrepared);
         if (!query?.key && !query?.sessionIdOrKey) {
           broadRowsRead += rows.length;
         }
@@ -199,6 +287,14 @@ it("reuses unchanged agent selections across catalog polls and refreshes publish
       const second = await list();
       expect(second.mock.calls[0]?.[1]).toEqual(first.mock.calls[0]?.[1]);
       expect(broadRowsRead).toBe(0);
+      expect(planningRevisions[0]).toBeDefined();
+      expect(planningRevisions[1]).toBe(planningRevisions[0]);
+
+      sessionChanges.emit({ all: true, scope: "catalog" });
+      const catalogRefresh = await list();
+      expect(catalogRefresh.mock.calls[0]?.[1]).toEqual(first.mock.calls[0]?.[1]);
+      expect(broadRowsRead).toBe(0);
+      expect(planningRevisions[2]).toBe(planningRevisions[0]);
 
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: key },
@@ -211,11 +307,13 @@ it("reuses unchanged agent selections across catalog polls and refreshes publish
         ],
       });
       expect(broadRowsRead).toBeGreaterThan(0);
+      expect(planningRevisions[3]).not.toBe(planningRevisions[2]);
       broadRowsRead = 0;
 
       const repeated = await list();
       expect(repeated.mock.calls[0]?.[1]).toEqual(updated.mock.calls[0]?.[1]);
       expect(broadRowsRead).toBe(0);
+      expect(planningRevisions[4]).toBe(planningRevisions[3]);
     },
     { agents: { ownership: "explicit", entries: { main: {}, work: {} } } },
   );
@@ -228,8 +326,8 @@ it("bounds catalog result delivery to returned adoption keys", async () => {
       let deliveryRowsRead = 0;
       setList(async ({ sessionEntries }) => {
         expect(sessionEntries?.entriesForCatalog?.()).toHaveLength(257);
-        vi.spyOn(projection, "selectEntries").mockImplementation((query) => {
-          const rows = selectEntries(query);
+        vi.spyOn(projection, "selectEntries").mockImplementation((query, metadataPrepared) => {
+          const rows = selectEntries(query, metadataPrepared);
           deliveryRowsRead += rows.length;
           return rows;
         });

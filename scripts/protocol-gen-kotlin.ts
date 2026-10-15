@@ -281,7 +281,7 @@ function emitWireModels(): string[] {
         const literal = literalValue(propertySchema);
         const optional = !required.has(wireName);
         const useLiteralDefault =
-          literal !== undefined && (optional || typeof literal !== "boolean");
+          literal !== undefined && !optional && typeof literal !== "boolean";
         const lines = [
           `  val ${propertyName}: ${type}${optional ? "?" : ""}${
             useLiteralDefault ? ` = ${kotlinLiteral(literal)}` : optional ? " = null" : ""

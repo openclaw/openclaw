@@ -98,7 +98,8 @@ describe("session observer model preparation", () => {
       expect(runtimeMocks.completeIsolated).toHaveBeenCalledWith(
         expect.objectContaining({
           ...prepared,
-          timeoutMs: 10_000,
+          purpose: "session-observer",
+          timeoutMs: 30_000,
           abortSignal: expect.any(AbortSignal),
         }),
       );

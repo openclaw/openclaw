@@ -101,17 +101,25 @@ describe("captured plugin registration", () => {
     await Promise.resolve();
   });
 
-  it("rejects runtime access while capturing CLI metadata without activating the real runtime", () => {
+  it.each([
+    { mode: "cli-metadata", property: "state" },
+    { mode: "cli-metadata", property: "capabilities" },
+    { mode: "setup-only", property: "capabilities" },
+  ] as const)("rejects runtime $property during $mode capture", ({ mode, property }) => {
     expect(() =>
       capturePluginRegistration({
         id: "captured-cli-plugin",
-        registrationMode: "cli-metadata",
+        registrationMode: mode,
         register(api) {
-          api.runtime.state.openSyncKeyedStore({ namespace: "example", maxEntries: 1 });
+          if (property === "state") {
+            api.runtime.state.openSyncKeyedStore({ namespace: "example", maxEntries: 1 });
+          } else {
+            void api.runtime.capabilities;
+          }
         },
       }),
     ).toThrow(
-      'Plugin "captured-cli-plugin" runtime is intentionally unavailable during "cli-metadata" registration.',
+      `Plugin "captured-cli-plugin" runtime is intentionally unavailable during "${mode}" registration.`,
     );
   });
 

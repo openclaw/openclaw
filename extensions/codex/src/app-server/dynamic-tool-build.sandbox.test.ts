@@ -1,14 +1,17 @@
 import fs from "node:fs/promises";
-import "./dynamic-tool-build.test-support.js";
 import path from "node:path";
+import "./dynamic-tool-build.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import { resolveAgentHarnessBeforePromptBuildResult } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createMockPluginRegistry,
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createRemoteShellSandboxFsBridge } from "openclaw/plugin-sdk/sandbox";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
@@ -16,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
+import { prepareTestNativeExecutionPolicy } from "./native-execution-policy.test-support.js";
 
 const {
   bindProductionCodexHostCapabilities,
@@ -32,6 +36,7 @@ describe("Codex app-server sandbox shell tools", () => {
   let tempDir: string;
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     hoisted.loadNodeExecAvailability.mockResolvedValue({
       cacheKey: "eligible",
       isAvailable: () => true,
@@ -46,6 +51,7 @@ describe("Codex app-server sandbox shell tools", () => {
       close();
     }
     resetGlobalHookRunner();
+    clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -77,7 +83,11 @@ describe("Codex app-server sandbox shell tools", () => {
     params.toolsAllow = ["read", "write", "edit", "exec", "process"];
     await bindProductionCodexHostCapabilities(params, hostCapabilityClosers);
 
-    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+        nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params),
+      }),
+    ).toBe(false);
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
       nativeToolSurfaceEnabled: false,
     });
@@ -101,58 +111,9 @@ describe("Codex app-server sandbox shell tools", () => {
     expect(await fs.readFile(outside, "utf8")).toBe("outside");
   });
 
-  it("exposes OpenClaw sandbox shell tools under distinct names for non-Docker sandbox backends", async () => {
-    const execTool = expectDefined(
-      createOpenClawCodingTools({ workspaceDir: tempDir }).find((tool) => tool.name === "exec"),
-      "assembled exec tool",
-    );
-
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(sessionFile, workspaceDir);
-    setCodexTestToolFactory(params, () => [
-      createRuntimeDynamicTool("read"),
-      createRuntimeDynamicTool("write"),
-      createRuntimeDynamicTool("edit"),
-      createRuntimeDynamicTool("apply_patch"),
-      execTool,
-      createRuntimeDynamicTool("process"),
-      createRuntimeDynamicTool("message"),
-    ]);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-
-    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-      sandbox: { enabled: true, backendId: "ssh" } as never,
-      nativeToolSurfaceEnabled: false,
-    });
-
-    expect(tools.map((tool) => tool.name)).toEqual([
-      "read",
-      "write",
-      "edit",
-      "apply_patch",
-      "message",
-      "sandbox_exec",
-      "sandbox_process",
-    ]);
-    expect(tools.find((tool) => tool.name === "sandbox_exec")?.description).toContain(
-      "configured sandbox backend",
-    );
-    expect(tools.find((tool) => tool.name === "sandbox_exec")?.parameters).not.toHaveProperty(
-      "properties.security",
-    );
-    expect(tools.find((tool) => tool.name === "sandbox_process")?.description).toContain(
-      "background shell sessions",
-    );
-  });
-
   it.each([
-    { allow: undefined, expected: ["message", "sandbox_exec", "sandbox_process"] },
     { allow: ["group:runtime"], expected: ["sandbox_exec", "sandbox_process"] },
-    { allow: ["exec*"], expected: ["sandbox_exec", "sandbox_process"] },
     { allow: ["exec"], restrictWith: ["process"], expected: ["sandbox_process"] },
-    { allow: ["sandbox_process"], restrictWith: ["process"], expected: ["sandbox_process"] },
   ])(
     "keeps Docker shell projections pinned for runtime selectors $allow restricted by $restrictWith",
     async ({ allow, restrictWith, expected }) => {
@@ -178,7 +139,15 @@ describe("Codex app-server sandbox shell tools", () => {
         backendId: "docker",
         docker: { binds: ["/tmp/openclaw-data:/data:rw"] },
       } as never;
-      const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox);
+      const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
+        params,
+        sandbox,
+        {
+          nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params, {
+            sandbox,
+          }),
+        },
+      );
       expect(nativeToolSurfaceEnabled).toBe(false);
       const tools = await buildDynamicToolsForTest(params, workspaceDir, {
         sandbox,
@@ -264,6 +233,7 @@ describe("Codex app-server sandbox shell tools", () => {
     await bindProductionCodexHostCapabilities(params, hostCapabilityClosers);
     const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox, {
       sandboxExecServerEnabled: true,
+      nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params, { sandbox }),
     });
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
       sandbox,

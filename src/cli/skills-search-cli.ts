@@ -16,7 +16,6 @@ function formatClawHubSearchText(value: string): string {
   return sanitizeForLog(value.replace(/\s+/gu, " ")).trim();
 }
 
-/** Register ClawHub skill search and its terminal/JSON output. */
 export function registerSkillsSearchCli(skills: Command): void {
   skills
     .command("search")

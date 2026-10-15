@@ -4,8 +4,9 @@
 import crypto from "node:crypto";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { filterStringRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
+import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
 import {
   buildMcpOAuthAuthorizationFetch,
@@ -23,10 +24,7 @@ export function resolveMcpAuthProfileId(rawServer: unknown): string | undefined 
   if (!isRecord(rawServer) || rawServer.auth !== "oauth" || !isRecord(rawServer.oauth)) {
     return undefined;
   }
-  const authProfileId = rawServer.oauth.authProfileId;
-  return typeof authProfileId === "string" && authProfileId.trim().length > 0
-    ? authProfileId.trim()
-    : undefined;
+  return normalizeOptionalString(rawServer.oauth.authProfileId);
 }
 
 /** Returns whether a server needs an OpenClaw-managed bearer projected externally. */
@@ -114,13 +112,6 @@ function buildTokenEnvVarName(serverName: string): string {
   return `OPENCLAW_MCP_AUTH_${hash.toUpperCase()}_TOKEN`;
 }
 
-function stripOpenClawOnlyOAuthConfig(server: BundleMcpServerConfig): BundleMcpServerConfig {
-  const next = { ...server };
-  delete next.auth;
-  delete next.oauth;
-  return next;
-}
-
 /** Resolves OAuth-backed MCP servers into bearer headers for external runtimes. */
 export async function resolveMcpBearerBundleConfig(
   params: {
@@ -169,13 +160,14 @@ export async function resolveMcpBearerBundleConfig(
     }
     const headers = withoutMcpAuthorizationHeader(filterStringRecord(server.headers));
     nextServers ??= { ...params.config.mcpServers };
-    nextServers[serverName] = stripOpenClawOnlyOAuthConfig({
-      ...server,
+    const { auth: _auth, oauth: _oauth, ...externalServer } = server;
+    nextServers[serverName] = {
+      ...externalServer,
       headers: {
         ...headers,
         Authorization: authorization,
       },
-    });
+    };
   }
 
   return {

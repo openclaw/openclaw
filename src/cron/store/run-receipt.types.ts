@@ -1,5 +1,4 @@
 import type { CronAgentScope } from "../types-shared.js";
-
 export type CronRunReceiptStatus =
   | "running"
   | "ok"
@@ -57,13 +56,13 @@ export type CronRunReceiptOwnerObservation = Pick<
   "receiptId" | "ownerPid" | "ownerStartTime" | "startedAtMs"
 >;
 
-export type PreparedCronRunReceiptAdjudication = {
-  storeKey: string;
-  observed?: CronRunReceiptOwnerObservation;
-  observedStale: boolean;
-};
-
-export type PreparedCronRunReceiptClaim = PreparedCronRunReceiptAdjudication & {
-  handle: CronRunReceiptHandle;
-  requestRunId?: string;
-};
+export class CronRunReceiptRevisionError extends Error {
+  constructor(
+    readonly receiptId: string,
+    message = "cron run configuration changed",
+    readonly reason: "revision-changed" | "owner-unavailable" = "revision-changed",
+  ) {
+    super(message);
+    this.name = "CronRunReceiptRevisionError";
+  }
+}

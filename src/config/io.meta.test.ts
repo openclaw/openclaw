@@ -21,7 +21,7 @@ const restricted = withModels(models, { allow: Object.keys(models) });
 const perAgent: OpenClawConfig = {
   agents: {
     defaults: legacy.agents?.defaults,
-    list: [{ id: "worker", models: { "anthropic/claude-sonnet-4-6": {} } }],
+    entries: { worker: { models: { "anthropic/claude-sonnet-4-6": {} } } },
   },
 };
 
@@ -49,14 +49,9 @@ describe("config write metadata stamping", () => {
   ];
   it.each(cases)("%s", (_name, previous, next, policy) => {
     const original = structuredClone({ previous, next });
-    const stamped = stampConfigWriteMetadata(
-      next,
-      "2026-07-18T00:00:00.000Z",
-      "2026.7.2",
-      previous,
-    );
+    const stamped = stampConfigWriteMetadata(next, "2026.7.2", previous);
     expect(stamped.agents?.defaults?.modelPolicy).toEqual(policy);
-    expect(stamped.agents?.list).toEqual(next.agents?.list);
+    expect(stamped.agents?.entries).toEqual(next.agents?.entries);
     expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
     expect(stamped.meta?.lastTouchedVersion).toBe("2026.7.2");
     expect({ previous, next }).toEqual(original);
@@ -72,7 +67,7 @@ describe("config write metadata stamping", () => {
       "openrouter:free": {},
     };
     const previous = withModels(modelMap);
-    const stamped = stampConfigWriteMetadata(previous, undefined, undefined, previous);
+    const stamped = stampConfigWriteMetadata(previous, undefined, previous);
     expect(stamped.agents?.defaults?.modelPolicy?.allow).toEqual(Object.keys(modelMap));
     expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBe(true);
     expect(validateConfigObjectRaw(stamped)).toEqual({ ok: true, config: expect.anything() });
@@ -83,7 +78,7 @@ describe("config write metadata stamping", () => {
     (candidateMarker) => {
       const previous = withModels({ bare: {} });
       const next = { ...previous, ...(candidateMarker ? { meta: marker } : {}) };
-      const stamped = stampConfigWriteMetadata(next, undefined, undefined, previous);
+      const stamped = stampConfigWriteMetadata(next, undefined, previous);
       expect(stamped.agents).toEqual(next.agents);
       expect(stamped.meta?.migrations?.modelPolicyAllowlist).toBeUndefined();
       expect(validateConfigObjectRaw(stamped)).toEqual({ ok: true, config: expect.anything() });

@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequests,
@@ -127,34 +131,73 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
 describe("session PR CI details", () => {
-  it("paginates checks and Actions jobs, joins check_run_url instead of IDs, and orders steps", async () => {
-    const h = harness();
-    h.state.checks = Array.from({ length: 101 }, (_, i) =>
-      check(i + 1, i === 100 ? { conclusion: "failure" } : {}),
-    );
-    h.state.jobs = Array.from({ length: 101 }, (_, i) =>
-      job(i + 1, i === 100 ? { conclusion: "failure" } : {}),
-    );
-    const result = await h.load();
-    expect(result.status).toBe("ready");
-    expect(result.checks).toHaveLength(101);
-    expect(result.checks[0]).toMatchObject({
-      id: 101,
-      state: "failed",
-      source: "actions",
-      detailsUrl: "https://github.com/openclaw/openclaw/actions/runs/23/job/1101",
-    });
-    expect(result.checks[0]?.steps?.map((step) => step.number)).toEqual([1, 2, 3]);
-    expect(
-      h.deps.fetchImpl.mock.calls.filter(([input]) => requestUrl(input).includes("/jobs?")),
-    ).toHaveLength(2);
-    expect(h.deps.fetchImpl.mock.calls).toHaveLength(9);
-  });
+  it.each(["github.com", "ghe.example.test"])(
+    "paginates and joins checks on the session host %s",
+    async (host) => {
+      const h = harness();
+      const enterpriseBase = "https://ghe.example.test/api/v3/repos/openclaw/openclaw";
+      if (host !== "github.com") {
+        setRuntimeConfigSnapshot({
+          gateway: {
+            github: { host, apiBaseUrl: "https://ghe.example.test/api/v3" },
+            controlUi: { github: { host, token: "synthetic-enterprise-token" } },
+          },
+        });
+        h.state.snapshot = {
+          ...h.state.snapshot,
+          pullRequests: [{ ...chip, url: chip.url.replace("github.com", host) }],
+        };
+      }
+      h.state.checks = Array.from({ length: 101 }, (_, i) =>
+        check(i + 1, i === 100 ? { conclusion: "failure" } : {}),
+      );
+      h.state.jobs = Array.from({ length: 101 }, (_, i) =>
+        job(i + 1, i === 100 ? { conclusion: "failure" } : {}),
+      );
+      if (host !== "github.com") {
+        h.state.jobs = h.state.jobs.map((row) => ({
+          ...row,
+          check_run_url: row.check_run_url.replace(base, enterpriseBase),
+        }));
+        const originalFetch = h.deps.fetchImpl.getMockImplementation()!;
+        h.deps.fetchImpl.mockImplementation(async (input, options) => {
+          const url = requestUrl(input);
+          expect(url.startsWith(enterpriseBase)).toBe(true);
+          expect(new Headers(options?.headers).get("Authorization")).toBe(
+            "Bearer synthetic-enterprise-token",
+          );
+          const response = await originalFetch(url.replace(enterpriseBase, base), options);
+          const body: unknown = await response.json();
+          // The HTTP fixture represents the admitted Enterprise repository, including its PR URL.
+          return githubJson(
+            JSON.parse(
+              JSON.stringify(body).replaceAll("https://github.com/", "https://ghe.example.test/"),
+            ),
+          );
+        });
+      }
+      const result = await h.load();
+      expect(result.status).toBe("ready");
+      expect(result.checks).toHaveLength(101);
+      expect(result.checks[0]).toMatchObject({
+        id: 101,
+        state: "failed",
+        source: "actions",
+        detailsUrl: `https://${host}/openclaw/openclaw/actions/runs/23/job/1101`,
+      });
+      expect(result.checks[0]?.steps?.map((step) => step.number)).toEqual([1, 2, 3]);
+      expect(
+        h.deps.fetchImpl.mock.calls.filter(([input]) => requestUrl(input).includes("/jobs?")),
+      ).toHaveLength(2);
+      expect(h.deps.fetchImpl.mock.calls).toHaveLength(6);
+    },
+  );
 
   it("keeps non-Actions checks distinct and skips Actions calls for skipped-only suites", async () => {
     const h = harness();
@@ -253,7 +296,7 @@ describe("session PR CI details", () => {
     const h = harness();
     const [a, b] = await Promise.all([h.load(), h.load()]);
     expect(a).toEqual(b);
-    expect(h.deps.fetchImpl).toHaveBeenCalledTimes(6);
+    expect(h.deps.fetchImpl).toHaveBeenCalledTimes(4);
     a.checks.splice(0);
     expect((await h.load()).checks).toHaveLength(1);
     h.state.status = 429;
@@ -288,38 +331,6 @@ describe("session PR CI details", () => {
       await loadControlUiSessionPullRequestChecks({ ...target, headSha: "b".repeat(40) }, h.deps),
     ).toMatchObject({ status: "unavailable", checks: [] });
     expect(h.deps.fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("discards old-head details if the PR advances while Actions jobs are loading", async () => {
-    const h = harness();
-    h.deps.fetchImpl.mockImplementation(async (input, init) => {
-      const response = await h.fetchResponse(input, init);
-      if (requestUrl(input).includes("/jobs?")) {
-        h.state.upstreamHead = "b".repeat(40);
-      }
-      return response;
-    });
-    expect(await h.load()).toMatchObject({
-      status: "unavailable",
-      checks: [],
-      error: expect.stringContaining("head changed"),
-    });
-  });
-
-  it("rejects a rerun that replaces the current check inventory mid-request", async () => {
-    const h = harness();
-    h.deps.fetchImpl.mockImplementation(async (input, init) => {
-      const response = await h.fetchResponse(input, init);
-      if (requestUrl(input).includes("/jobs?")) {
-        h.state.checks = [check(2)];
-      }
-      return response;
-    });
-    expect(await h.load()).toMatchObject({
-      status: "unavailable",
-      checks: [],
-      error: expect.stringContaining("rerun"),
-    });
   });
 
   it("bounds distinct concurrent detail loads without multiplying GitHub requests", async () => {
@@ -376,28 +387,42 @@ describe("session PR CI details", () => {
     expect(h.deps.fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("rechecks each caller's live authority after a coalesced response", async () => {
-    const h = harness();
-    const gate = createDeferred<Response>();
-    const started = createDeferred();
-    h.deps.fetchImpl.mockImplementation(async (input, init) => {
-      if (requestUrl(input).includes("/jobs?")) {
-        started.resolve();
-        return gate.promise;
+  it.each([true, false])(
+    "rechecks live readers of coalesced details (remaining reader=%s)",
+    async (remainingReader) => {
+      const h = harness();
+      const gate = createDeferred<Response>();
+      const started = createDeferred();
+      h.deps.fetchImpl.mockImplementation(async (input, init) => {
+        if (requestUrl(input).includes("/jobs?")) {
+          started.resolve();
+          return gate.promise;
+        }
+        return h.fetchResponse(input, init);
+      });
+      const first = h.load();
+      let active = true;
+      const second = loadControlUiSessionPullRequestChecks(target, {
+        ...h.deps,
+        assertCurrent: () => {
+          if (!active) {
+            throw new Error("Second reader retired");
+          }
+        },
+      });
+      await started.promise;
+      active = remainingReader;
+      h.deps.assertCurrent.mockImplementation(() => {
+        throw new Error("session generation changed");
+      });
+      gate.resolve(githubJson({ total_count: 1, jobs: h.state.jobs }));
+      await expect(first).rejects.toThrow("session generation changed");
+      if (remainingReader) {
+        expect((await second).status).toBe("ready");
+      } else {
+        await expect(second).rejects.toThrow("Second reader retired");
+        expect(h.deps.fetchImpl).toHaveBeenCalledTimes(4);
       }
-      return h.fetchResponse(input, init);
-    });
-    const first = h.load();
-    const second = loadControlUiSessionPullRequestChecks(target, {
-      ...h.deps,
-      assertCurrent: () => {},
-    });
-    await started.promise;
-    h.deps.assertCurrent.mockImplementation(() => {
-      throw new Error("session generation changed");
-    });
-    gate.resolve(githubJson({ total_count: 1, jobs: h.state.jobs }));
-    await expect(first).rejects.toThrow("session generation changed");
-    expect((await second).status).toBe("ready");
-  });
+    },
+  );
 });

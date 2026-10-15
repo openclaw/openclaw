@@ -39,7 +39,11 @@ vi.mock("../../../logging/subsystem.js", async (importOriginal) => {
 
 async function register(runId: string) {
   await registerSubagentRun(
-    createSubagentRunParams({ runId, childSessionKey: `agent:main:subagent:${runId}` }),
+    createSubagentRunParams({
+      runId,
+      childSessionKey: `agent:main:subagent:${runId}`,
+      sessionEntry: { sessionId: `sess-${runId}`, lifecycleRevision: `revision-${runId}` },
+    }),
   );
 }
 
@@ -61,7 +65,7 @@ describe("registered subagent sweeper lifecycle", () => {
 
   afterEach(async () => {
     await vi.dynamicImportSettled();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     resetGatewayWorkAdmission();
     vi.useRealTimers();
   });
@@ -70,7 +74,7 @@ describe("registered subagent sweeper lifecycle", () => {
     await register("released");
     await vi.dynamicImportSettled();
     expect(subagentRuns.has("released")).toBe(true);
-    releaseSubagentRun("released");
+    await releaseSubagentRun("released");
     expect(subagentRuns.size).toBe(0);
     await vi.dynamicImportSettled();
     markGatewayRestartDraining();
@@ -95,6 +99,7 @@ describe("registered subagent sweeper lifecycle", () => {
       await register("retained");
       await activateGatewayRuntime();
       await vi.dynamicImportSettled();
+      recoverRow.mockClear();
       if (suspended) {
         expect(tryBeginGatewaySuspendAdmission(() => {})).not.toBeNull();
       } else {
@@ -144,7 +149,7 @@ describe("registered subagent sweeper lifecycle", () => {
         await advance(1);
         expect(recoverRow).toHaveBeenCalledOnce();
         if (released) {
-          releaseSubagentRun("active");
+          await releaseSubagentRun("active");
           expect(subagentRuns.size).toBe(0);
           await vi.dynamicImportSettled();
           expect(getActiveGatewayRootWorkCount()).toBe(1);

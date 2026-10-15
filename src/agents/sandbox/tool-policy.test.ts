@@ -3,13 +3,14 @@
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { resolveSandboxConfigForAgent as resolveSandboxConfigForAgentBase } from "./config.js";
 import {
   formatSandboxToolPolicyBlockedMessage as formatSandboxToolPolicyBlockedMessageBase,
-  resolveSandboxRuntimeStatus as resolveSandboxRuntimeStatusBase,
+  resolvePreparedSandboxRuntimeStatus,
+  resolveSandboxRuntimeStatusAsync,
 } from "./runtime-status.js";
 import {
   isToolAllowed,
@@ -19,7 +20,7 @@ import {
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-required-sandbox-");
 
 function loadedConfig(config: OpenClawConfig | undefined): OpenClawConfig {
-  return migratePersistedImplicitMainRoster(config ?? {}).config as OpenClawConfig;
+  return createCanonicalAgentConfigFixture(config).config;
 }
 
 function resolveSandboxConfigForAgent(config: OpenClawConfig, agentId: string) {
@@ -31,20 +32,25 @@ function resolveSandboxToolPolicyForAgent(config: OpenClawConfig, agentId: strin
 }
 
 function resolveSandboxRuntimeStatus(
-  params: Parameters<typeof resolveSandboxRuntimeStatusBase>[0],
+  params: Omit<Parameters<typeof resolvePreparedSandboxRuntimeStatus>[0], "preparedSessionEntry">,
 ) {
-  return resolveSandboxRuntimeStatusBase({
+  return resolvePreparedSandboxRuntimeStatus({
     ...params,
     cfg: loadedConfig(params.cfg),
+    preparedSessionEntry: null,
   });
 }
 
 function formatSandboxToolPolicyBlockedMessage(
-  params: Parameters<typeof formatSandboxToolPolicyBlockedMessageBase>[0],
+  params: Omit<
+    Parameters<typeof formatSandboxToolPolicyBlockedMessageBase>[0],
+    "preparedRuntimeStatus"
+  > & { preparedRuntimeStatus?: ReturnType<typeof resolvePreparedSandboxRuntimeStatus> },
 ) {
   return formatSandboxToolPolicyBlockedMessageBase({
     ...params,
     cfg: loadedConfig(params.cfg),
+    preparedRuntimeStatus: params.preparedRuntimeStatus ?? resolveSandboxRuntimeStatus(params),
   });
 }
 
@@ -55,9 +61,8 @@ describe("sandbox/tool-policy", () => {
         defaults: {
           sandbox: { mode: "all", scope: "agent" },
         },
-        list: [
-          {
-            id: "tavern",
+        entries: {
+          tavern: {
             tools: {
               sandbox: {
                 tools: {
@@ -66,7 +71,7 @@ describe("sandbox/tool-policy", () => {
               },
             },
           },
-        ],
+        },
       },
     };
 
@@ -149,9 +154,8 @@ describe("sandbox/tool-policy", () => {
         defaults: {
           sandbox: { mode: "all", scope: "agent" },
         },
-        list: [
-          {
-            id: "tavern",
+        entries: {
+          tavern: {
             tools: {
               sandbox: {
                 tools: {
@@ -160,7 +164,7 @@ describe("sandbox/tool-policy", () => {
               },
             },
           },
-        ],
+        },
       },
       tools: {
         sandbox: {
@@ -193,7 +197,7 @@ describe("sandbox/tool-policy", () => {
         defaults: {
           sandbox: { mode: "non-main", scope: "agent" },
         },
-        list: [{ id: "main" }],
+        entries: { main: {} },
       },
     };
 
@@ -225,11 +229,12 @@ describe("sandbox/tool-policy", () => {
       session: { store: storePath },
       agents: {
         defaults: { sandbox: { mode: "off", scope: "session", workspaceAccess: "rw" } },
-        list: [{ id: "main" }],
+        entries: { main: {} },
       },
     };
 
-    expect(resolveSandboxRuntimeStatus({ cfg, sessionKey })).toMatchObject({
+    const runtime = await resolveSandboxRuntimeStatusAsync({ cfg: loadedConfig(cfg), sessionKey });
+    expect(runtime).toMatchObject({
       sandboxRequired: true,
       isolationSubject: { kind: "session", sessionKey },
       sandboxed: true,
@@ -239,6 +244,7 @@ describe("sandbox/tool-policy", () => {
       cfg,
       sessionKey,
       toolName: "browser",
+      preparedRuntimeStatus: runtime,
     });
     expect(blockedMessage).toContain("create a new session under an authorized role");
     expect(blockedMessage).not.toContain("sandbox.mode=off");
@@ -259,11 +265,11 @@ describe("sandbox/tool-policy", () => {
       session: { store: storePath },
       agents: {
         defaults: { sandbox: { mode: "all", scope: "agent", workspaceAccess: "rw" } },
-        list: [{ id: "main" }],
+        entries: { main: {} },
       },
     };
 
-    const runtime = resolveSandboxRuntimeStatus({ cfg, sessionKey });
+    const runtime = await resolveSandboxRuntimeStatusAsync({ cfg: loadedConfig(cfg), sessionKey });
 
     expect(runtime).toMatchObject({ sandboxRequired: false, sandboxed: true });
     expect(runtime.isolationSubject).toBeUndefined();

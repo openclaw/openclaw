@@ -133,9 +133,10 @@ export const GatewaySuspendResumeResultSchema = closedObject({
   resumed: Type.Boolean(),
 });
 
-/** Arms cleanup for the next SIGTERM; the external host still owns replacement. */
+/** Arms cleanup, or commits the exact host's shutdown before external native stop. */
 export const GatewaySuspendHandoffParamsSchema = closedObject({
   suspensionId: SuspensionTokenSchema,
+  commit: Type.Optional(Type.Literal(true)),
   target: closedObject({
     pid: Type.Integer({ minimum: 1 }),
     processInstanceId: SuspensionTokenSchema,
@@ -143,7 +144,7 @@ export const GatewaySuspendHandoffParamsSchema = closedObject({
 });
 
 export const GatewaySuspendHandoffResultSchema = closedObject({
-  status: Type.Literal("armed"),
+  status: Type.Union([Type.Literal("armed"), Type.Literal("committed")]),
   suspensionId: SuspensionTokenSchema,
   expiresAtMs: CountSchema,
 });

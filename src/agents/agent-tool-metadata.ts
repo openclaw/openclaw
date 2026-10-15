@@ -11,6 +11,7 @@ import { copyChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { copyCodeModeControlToolIdentity } from "./code-mode-control-tools.js";
 import { copyCronScheduledToolProjection } from "./exec-tool-target-pinning.js";
 import { copyInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
+import { resolveCoreToolExecutionLocation } from "./tool-catalog.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
 export type AgentToolActionDescriptor = Readonly<{
@@ -22,6 +23,7 @@ export type AgentToolExecutionLocation =
   | { kind: "placement" }
   | {
       kind: "gateway";
+      unavailableReason?: string;
       replay?: boolean;
       connectionScoped?: true;
       timeout?: WorkerToolSurface["tools"][number]["timeout"];
@@ -70,8 +72,12 @@ export function bindAgentToolExecutionLocation(
   ToolActionMetadata.set(tool, { executionLocation: location });
 }
 
-export function getAgentToolExecutionLocation(tool: AnyAgentTool) {
-  return ToolActionMetadata.get(tool)?.executionLocation;
+export function getAgentToolExecutionLocation(tool: AnyAgentTool): AgentToolExecutionLocation {
+  return (
+    ToolActionMetadata.get(tool)?.executionLocation ?? {
+      kind: resolveCoreToolExecutionLocation(tool.name),
+    }
+  );
 }
 
 export function bindAgentToolActionDescriptor(
@@ -96,6 +102,7 @@ export function copyBeforeToolCallWrapperMetadata(
   // SAFETY: both metadata owners attach to the same runtime tool object shape.
   copyChannelAgentToolMeta(source as never, target as never);
   copyToolTerminalPresentation(source, target);
+  copyCodeModeControlToolIdentity(source, target);
   const state = ToolActionMetadata.get(source);
   if (state) {
     ToolActionMetadata.set(target, state);
@@ -127,7 +134,6 @@ export function copyAgentToolMetadata<T extends AnyAgentTool>(
   }
   copyBeforeToolCallWrapperMetadata(source, target);
   copyBeforeToolCallMetadata(source, target, wrapExecution);
-  copyCodeModeControlToolIdentity(source, target);
   copyCronScheduledToolProjection(source, target);
   copyInternalToolExecutionPreparer(source, target);
   return target;

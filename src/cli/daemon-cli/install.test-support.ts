@@ -32,6 +32,9 @@ const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
 const buildGatewayInstallPlanMock = vi.hoisted(() => vi.fn<typeof createInstallPlanFixture>());
 const isGatewayDaemonRuntimeMock = vi.hoisted(() => vi.fn(() => true));
 const installDaemonServiceAndEmitMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => {}));
+const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
+
+vi.mock("../program/config-guard.js", () => ({ ensureConfigReady: ensureConfigReadyMock }));
 
 const actionState = vi.hoisted(() => ({
   warnings: [] as string[],
@@ -205,6 +208,7 @@ export function setupInstallTests() {
     buildGatewayInstallPlanMock.mockReset();
     isGatewayDaemonRuntimeMock.mockReset();
     installDaemonServiceAndEmitMock.mockReset();
+    ensureConfigReadyMock.mockReset();
     service.isLoaded.mockReset();
     service.stage.mockReset();
     service.install.mockReset();
@@ -258,6 +262,7 @@ export {
   buildGatewayInstallPlanMock,
   expectFields,
   expectLastEmittedResult,
+  ensureConfigReadyMock,
   installDaemonServiceAndEmitMock,
   isGatewayDaemonRuntimeMock,
   readConfigFileSnapshotMock,

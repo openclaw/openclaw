@@ -29,24 +29,29 @@ export type CodexAuthCredential =
       key: string;
     };
 
-export function findMatchingOAuthProfile(
+export function findMatchingAuthProfile(
   store: AuthProfileStore,
-  credential: OAuthCredential,
+  credential: CodexAuthCredential,
 ): string | undefined {
-  const subject = oauthSubject(credential);
-  if (!subject) {
+  const subject = credential.kind === "oauth" ? oauthSubject(credential.credential) : undefined;
+  const provider =
+    credential.kind === "oauth" ? credential.credential.provider : credential.provider;
+  if (credential.kind === "oauth" && !subject) {
     return undefined;
   }
-  for (const [profileId, existing] of Object.entries(store.profiles)) {
-    if (existing.type !== "oauth" || existing.provider !== credential.provider) {
-      continue;
+  return Object.entries(store.profiles).find(([, existing]) => {
+    if (existing.provider !== provider) {
+      return false;
     }
-    const previous = oauthSubject(existing);
-    if (previous?.accountId === subject.accountId && previous.userId === subject.userId) {
-      return profileId;
+    if (credential.kind === "api_key") {
+      return existing.type === "api_key" && existing.key === credential.key;
     }
-  }
-  return undefined;
+    if (subject && existing.type === "oauth") {
+      const previous = oauthSubject(existing);
+      return previous?.accountId === subject.accountId && previous.userId === subject.userId;
+    }
+    return false;
+  })?.[0];
 }
 
 function oauthSubject(credential: OAuthCredential) {
@@ -59,30 +64,17 @@ function oauthSubject(credential: OAuthCredential) {
   return accountId && userId ? { accountId, userId } : undefined;
 }
 
-export function findMatchingApiKeyProfile(
-  store: AuthProfileStore,
-  provider: string,
-  key: string,
-): string | undefined {
-  for (const [profileId, existing] of Object.entries(store.profiles)) {
-    if (existing.type === "api_key" && existing.provider === provider && existing.key === key) {
-      return profileId;
-    }
-  }
-  return undefined;
-}
-
 export function itemProfileTarget(
   credential: CodexAuthCredential,
   store: AuthProfileStore,
   ctx: MigrationProviderContext,
   source: { codexHome: string },
 ): { profileId: string; matchedExisting: boolean } {
+  const matched = findMatchingAuthProfile(store, credential);
+  if (matched) {
+    return { profileId: matched, matchedExisting: true };
+  }
   if (credential.kind === "oauth") {
-    const matched = findMatchingOAuthProfile(store, credential.credential);
-    if (matched) {
-      return { profileId: matched, matchedExisting: true };
-    }
     const legacyProfile = ctx.config.auth?.profiles?.[LEGACY_CODEX_PROFILE_ID];
     // Explicit import can materialize the shipped CLI-backed slot without changing
     // model/session pins. Another source home or managed account must not fill it.
@@ -102,6 +94,5 @@ export function itemProfileTarget(
       matchedExisting: false,
     };
   }
-  const matched = findMatchingApiKeyProfile(store, credential.provider, credential.key);
   return { profileId: matched ?? credential.profileId, matchedExisting: Boolean(matched) };
 }

@@ -16,7 +16,10 @@ import {
   waitForSynchronizedFrameRows,
   type FixtureLogEntry,
 } from "./tui-pty-harness-fixture-test-support.js";
-import { registerTuiReconnectTests } from "./tui-pty-reconnect-test-support.js";
+import {
+  registerTuiDisconnectedDraftTests,
+  registerTuiReconnectTests,
+} from "./tui-pty-reconnect-test-support.js";
 import {
   exerciseStreamingRendering,
   registerToolCardRenderingTests,
@@ -43,6 +46,8 @@ it("rejects rendering oracle false positives", () => {
   expect(streamingPrefixFrame(promptFrame)).toBe(false);
   expect(toolFrame(reversedTool, false)).toBe(false);
 });
+
+registerTuiDisconnectedDraftTests(STARTUP_TIMEOUT_MS, STARTUP_TEST_TIMEOUT_MS);
 
 describe("TUI PTY harness", { concurrent: false }, () => {
   let fixture: Awaited<ReturnType<typeof startTuiFixture>>;
@@ -458,7 +463,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   );
 
   it(
-    "presents and resolves workspace skill approval in the TUI",
+    "presents and resolves plugin approval in the TUI",
     async ({ signal }) => {
       await approveWorkspaceSkill(fixture, "skill approval proof", signal);
     },
@@ -466,7 +471,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   );
 
   it.for(COMPACT_TERMINAL_SIZES)(
-    "presents and resolves workspace skill approval in a %i×%i terminal",
+    "presents and resolves plugin approval in a %i×%i terminal",
     { timeout: STARTUP_TEST_TIMEOUT_MS },
     async ([cols, rows], { signal }) => {
       const compactFixture = await startTuiFixture({
@@ -580,7 +585,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   );
 
   it(
-    "refreshes pending workspace skill approvals after an event gap",
+    "refreshes pending plugin approvals after an event gap",
     async ({ signal }) => {
       await fixture.run.write("skill approval gap proof\r");
       await fixture.waitForLogEntry(
@@ -588,7 +593,7 @@ describe("TUI PTY harness", { concurrent: false }, () => {
           entry.method === "listPluginApprovals" && objectFieldEquals(entry, "pending", true),
         signal,
       );
-      await fixture.run.waitForOutput("workspace skill approval: Apply workspace skill proposal");
+      await fixture.run.waitForOutput("plugin approval: Apply workspace skill proposal");
 
       await fixture.run.write("\x1b[A", { delay: false });
       await fixture.run.write("\r");

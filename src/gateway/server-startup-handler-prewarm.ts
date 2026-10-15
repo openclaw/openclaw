@@ -1,14 +1,11 @@
-import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
+import type { GatewayStartupTrace } from "./server-startup-trace.js";
 
 const GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS = 250;
-
-type StartupTrace = {
-  measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
-};
 
 type GatewayHandlerPrewarmItem = {
   name: string;
@@ -30,7 +27,6 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
         }
       },
     },
-    { name: "connection", load: () => import("./server/ws-connection/message-handler.js") },
     ...["chat.history", "chat.send", "sessions.list"].map((method): GatewayHandlerPrewarmItem => ({
       name: method,
       load: async (isCancelled) => {
@@ -49,30 +45,6 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
     })),
     { name: "agent-events", load: () => import("./server-chat.js") },
     { name: "session-key", load: () => import("./server-session-key.js") },
-    ...listAgentIds(getConfig()).map((agentId): GatewayHandlerPrewarmItem => ({
-      name: `skills.${agentId}`,
-      load: async (isCancelled) => {
-        const [
-          { prepareWorkspaceSkillEntries },
-          { getAgentWorkspaceAccess },
-          { ensureSkillsWatcher },
-        ] = await Promise.all([
-          import("../skills/loading/workspace-skill-loader.js"),
-          import("../agents/workspace-access.js"),
-          import("../skills/runtime/refresh.js"),
-        ]);
-        const config = getConfig();
-        if (isCancelled() || !listAgentIds(config).includes(agentId)) {
-          return;
-        }
-        const workspaceDir = resolveAgentWorkspaceDir(config, agentId);
-        // Remote workspaces retain request-owned discovery and connection lifetimes.
-        if (!getAgentWorkspaceAccess(workspaceDir, "loadSkills")) {
-          ensureSkillsWatcher({ workspaceDir, config, agentId });
-          await prepareWorkspaceSkillEntries(workspaceDir, { config, agentId });
-        }
-      },
-    })),
     {
       name: "context-window-cache",
       notBeforeMs: 5_000,
@@ -116,7 +88,7 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
 export function scheduleGatewayHandlerPrewarm(params: {
   scheduler: GatewayScheduler;
   getConfig: () => OpenClawConfig;
-  startupTrace?: StartupTrace;
+  startupTrace?: Pick<GatewayStartupTrace, "measure">;
   log: { warn: (msg: string) => void };
   items?: readonly GatewayHandlerPrewarmItem[];
   waitForPostReadyWork?: () => Promise<void>;
@@ -130,7 +102,10 @@ export function scheduleGatewayHandlerPrewarm(params: {
   let idleTask: GatewayIdleTaskHandle | undefined;
 
   const scheduleNext = () => {
-    if (stopped || nextIndex >= items.length) {
+    if (stopped) {
+      return;
+    }
+    if (nextIndex >= items.length) {
       return;
     }
     void (async () => {
@@ -184,4 +159,33 @@ export function scheduleGatewayHandlerPrewarm(params: {
       return idleTask?.stop();
     },
   };
+}
+
+export function scheduleGatewayPrewarm(
+  params: Parameters<typeof scheduleGatewayHandlerPrewarm>[0],
+): GatewayIdleTaskHandle[] {
+  return [
+    scheduleGatewayHandlerPrewarm(params),
+    scheduleGatewayIdleTask({
+      id: "startup:dependency-template-prewarm",
+      scheduler: params.scheduler,
+      delayMs: 0,
+      retryDelayMs: GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS,
+      isClosing: () => false,
+      isBusy: () => false,
+      run: async (signal) => {
+        await racePromiseWithAbortSignal(
+          params.waitForPostReadyWork?.() ?? Promise.resolve(),
+          signal,
+        );
+        signal.throwIfAborted();
+        const { prewarmLocalWorkspaceTemplates } =
+          await import("./worker-environments/local-workspace-prewarm.js");
+        signal.throwIfAborted();
+        await prewarmLocalWorkspaceTemplates({ getConfig: params.getConfig, signal });
+      },
+      log: params.log,
+      errorMessage: "post-ready sandbox dependency prewarm failed",
+    }),
+  ];
 }

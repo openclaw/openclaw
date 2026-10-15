@@ -105,14 +105,12 @@ const tempDirs: string[] = [];
 
 export const sharedVerifiedInferenceConfig = {
   agents: {
-    list: [
-      {
-        id: "main",
-        default: true,
+    entries: {
+      main: {
         agentDir: "/tmp/openclaw-openclaw-chat-engine-agent",
         model: "openai/gpt-5.5",
       },
-    ],
+    },
   },
   models: {
     providers: {
@@ -250,7 +248,7 @@ export async function createOAuthVerifiedBinding(
     auth: { authProfileId: profileId, authFingerprint, ...harnessBinding.auth },
     deps: {
       ...harnessBinding.deps,
-      loadAuthProfileStoreForRuntime: vi.fn(() => ({
+      loadAuthProfileStoreForRuntimeAsync: vi.fn(async () => ({
         version: 1,
         profiles: { [profileId]: credential },
       })) as never,

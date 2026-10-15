@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { SubagentRegistryWriteError } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import type * as SubagentRegistry from "../../agents/subagents/registry/subagent-registry.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { markAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import { prepareReplyAgentPayloads } from "./agent-runner-result-payloads.js";
@@ -17,10 +18,6 @@ vi.mock("../../agents/subagents/registry/subagent-registry.js", async (importOri
   ...(await importOriginal<typeof SubagentRegistry>()),
   settleRequesterAfterSessionSpawns: settleRequester,
 }));
-vi.mock("../../agents/live-model-switch.js", () => ({
-  consolidateLiveModelSwitchAfterRun: vi.fn(async () => {}),
-}));
-
 const settleRequester = vi.hoisted(() =>
   vi.fn<typeof SubagentRegistry.settleRequesterAfterSessionSpawns>(async () => true),
 );
@@ -153,15 +150,94 @@ it("delivers an ordinary terminal failure", async () => {
   expect(payloads[0]?.isError).toBe(true);
 });
 
+it("does not capture a suppressed final reply", async () => {
+  const context = createContext();
+  const onRawLlmResponse = vi.fn();
+  context.opts = { onRawLlmResponse };
+  context.followupRun.run.terminalReplyExpectation = "optional";
+  context.execution.result.acceptedSessionSpawns = undefined;
+  context.execution.result.meta = { durationMs: 0 };
+  context.execution.result.payloads = [{ text: SILENT_REPLY_TOKEN }];
+
+  expect(await prepare("ordinary", context)).toEqual([]);
+  expect(onRawLlmResponse).not.toHaveBeenCalled();
+});
+
+it("captures a message-tool sentinel before the empty-payload return", async () => {
+  const context = createContext();
+  const onRawLlmResponse = vi.fn();
+  context.opts = { onRawLlmResponse };
+  context.followupRun.run.terminalReplyExpectation = "optional";
+  context.execution.result.acceptedSessionSpawns = undefined;
+  context.execution.result.meta = { durationMs: 0, finalAssistantRawText: "NO_REPLY" };
+  context.execution.result.payloads = [];
+  context.execution.result.messagingToolSourceReplyPayloads = [
+    { text: "delivered by message tool", sourceReplyFinal: true },
+  ];
+
+  expect(await prepare("ordinary", context)).toEqual([]);
+  expect(onRawLlmResponse).toHaveBeenCalledWith("NO_REPLY");
+});
+
+it("never captures message-tool text when the model wrote no final message", async () => {
+  const context = createContext();
+  const onRawLlmResponse = vi.fn();
+  context.opts = { onRawLlmResponse };
+  context.followupRun.run.terminalReplyExpectation = "optional";
+  context.execution.result.acceptedSessionSpawns = undefined;
+  context.execution.result.meta = { durationMs: 0 };
+  context.execution.result.payloads = [];
+  context.execution.result.messagingToolSentTargets = [
+    { tool: "message", provider: "slack", text: "sent to slack", sourceReplyFinal: true },
+  ];
+
+  await prepare("ordinary", context);
+  expect(onRawLlmResponse).not.toHaveBeenCalled();
+});
+
+it("does not capture hook-block rejection text as a model response", async () => {
+  const context = createContext();
+  const onRawLlmResponse = vi.fn();
+  context.opts = { onRawLlmResponse };
+  context.execution.result.meta = {
+    durationMs: 0,
+    livenessState: "blocked",
+    finalAssistantRawText: "Blocked by before_agent_run policy",
+    error: { kind: "hook_block", message: "Blocked by before_agent_run policy" },
+  };
+  context.execution.result.payloads = [];
+
+  await prepare("ordinary", context);
+  expect(onRawLlmResponse).not.toHaveBeenCalled();
+});
+
+it("captures the model's raw text, never streamed delivery text", async () => {
+  const context = createContext();
+  const onRawLlmResponse = vi.fn();
+  context.opts = { onRawLlmResponse };
+  context.execution.result.acceptedSessionSpawns = undefined;
+  context.execution.result.meta = { durationMs: 0 };
+  context.execution.result.payloads = [{ text: "streamed part" }, { text: "final part" }];
+
+  await prepare("ordinary", context);
+  expect(onRawLlmResponse).not.toHaveBeenCalled();
+});
+
 describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (lane) => {
-  it.each(["explicit acknowledgment", "visible final"])(
-    "preserves %s precedence",
-    async (precedence) => {
+  it.each(["explicit acknowledgment", "visible final", "optional turn", "delivered message"])(
+    "selects waiting status for %s",
+    async (selection) => {
       const context = createContext();
       const onPendingContinuation = vi.fn<(settlement?: PendingContinuationSettlement) => void>();
-      context.opts = { onPendingContinuation };
-      const selected = { text: `${precedence} selected` };
-      if (precedence === "explicit acknowledgment") {
+      if (selection === "explicit acknowledgment" || selection === "visible final") {
+        context.opts = { onPendingContinuation };
+      }
+      const selected = { text: `${selection} selected` };
+      if (selection === "optional turn") {
+        context.followupRun.run.terminalReplyExpectation = "optional";
+      } else if (selection === "delivered message") {
+        context.execution.result.didDeliverSourceReplyViaMessageTool = true;
+      } else if (selection === "explicit acknowledgment") {
         context.execution.result.meta.yieldAcknowledgment = ` ${selected.text} `;
         context.execution.result.payloads = [{ text: "Private plan", isReasoning: true }];
         if (lane === "queued") {
@@ -174,8 +250,12 @@ describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (la
         context.execution.result.payloads = [selected];
       }
       const payloads = await prepare(lane, context);
+      if (selection === "optional turn" || selection === "delivered message") {
+        expect(payloads).toEqual([]);
+        return;
+      }
       expect(payloads.map((payload) => payload.text)).toEqual([selected.text]);
-      if (precedence === "explicit acknowledgment") {
+      if (selection === "explicit acknowledgment") {
         expect(getReplyPayloadMetadata(payloads[0] ?? {})).toMatchObject({
           continuationStatus: true,
           deliverDespiteSourceReplySuppression: true,
@@ -184,19 +264,6 @@ describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (la
           expect(onPendingContinuation.mock.calls).toEqual([[]]);
         }
       }
-    },
-  );
-
-  it.each(["optional turn", "delivered message"])(
-    "does not deliver a waiting status for a %s",
-    async (suppression) => {
-      const context = createContext();
-      if (suppression === "optional turn") {
-        context.followupRun.run.terminalReplyExpectation = "optional";
-      } else {
-        context.execution.result.didDeliverSourceReplyViaMessageTool = true;
-      }
-      expect(await prepare(lane, context)).toEqual([]);
     },
   );
 });

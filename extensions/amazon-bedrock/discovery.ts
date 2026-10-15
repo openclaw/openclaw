@@ -1,8 +1,4 @@
-import type {
-  BedrockClient,
-  ListFoundationModelsCommandOutput,
-  ListInferenceProfilesCommandOutput,
-} from "@aws-sdk/client-bedrock";
+import type { BedrockClient, ListInferenceProfilesCommandOutput } from "@aws-sdk/client-bedrock";
 import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
@@ -162,8 +158,6 @@ const DEFAULT_COST = {
   cacheWrite: 0,
 };
 
-type BedrockModelSummary = NonNullable<ListFoundationModelsCommandOutput["modelSummaries"]>[number];
-
 type InferenceProfileSummary = NonNullable<
   ListInferenceProfilesCommandOutput["inferenceProfileSummaries"]
 >[number];
@@ -174,109 +168,6 @@ type BedrockDiscoveryCacheEntry = {
 };
 
 const discoveryCache = new Map<string, BedrockDiscoveryCacheEntry>();
-
-function includesTextModalities(modalities?: Array<string>): boolean {
-  return (modalities ?? []).some((entry) => normalizeOptionalLowercaseString(entry) === "text");
-}
-
-function mapInputModalities(summary: BedrockModelSummary): Array<"text" | "image"> {
-  const inputs = (summary.inputModalities ?? [])
-    .map(normalizeOptionalLowercaseString)
-    .filter((modality) => modality === "text" || modality === "image");
-  return inputs.length > 0 ? [...new Set(inputs)] : ["text"];
-}
-
-function inferReasoningSupport(summary: BedrockModelSummary): boolean {
-  if (supportsClaudeAdaptiveThinking({ id: summary.modelId })) {
-    return true;
-  }
-  const haystack = normalizeLowercaseStringOrEmpty(
-    `${summary.modelId ?? ""} ${summary.modelName ?? ""}`,
-  );
-  return haystack.includes("reasoning") || haystack.includes("thinking");
-}
-
-function resolveDefaultContextWindow(config?: BedrockDiscoveryConfig): number {
-  const value = Math.floor(config?.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW);
-  return value > 0 ? value : DEFAULT_CONTEXT_WINDOW;
-}
-
-function resolveDefaultMaxTokens(config?: BedrockDiscoveryConfig): number {
-  const value = Math.floor(config?.defaultMaxTokens ?? DEFAULT_MAX_TOKENS);
-  return value > 0 ? value : DEFAULT_MAX_TOKENS;
-}
-
-function matchesProviderFilter(summary: BedrockModelSummary, filter: string[]): boolean {
-  if (filter.length === 0) {
-    return true;
-  }
-  const providerName =
-    summary.providerName ??
-    (typeof summary.modelId === "string" ? summary.modelId.split(".")[0] : undefined);
-  const normalized = normalizeOptionalLowercaseString(providerName);
-  if (!normalized) {
-    return false;
-  }
-  return filter.includes(normalized);
-}
-
-function shouldIncludeSummary(summary: BedrockModelSummary, filter: string[]): boolean {
-  return Boolean(
-    summary.modelId?.trim() &&
-    matchesProviderFilter(summary, filter) &&
-    summary.responseStreamingSupported === true &&
-    !isKnownClaudeMythosPreviewModelId(summary.modelId) &&
-    includesTextModalities(summary.outputModalities) &&
-    typeof summary.modelLifecycle?.status === "string" &&
-    summary.modelLifecycle.status.toUpperCase() === "ACTIVE",
-  );
-}
-
-function toModelDefinition(
-  summary: BedrockModelSummary,
-  defaults: { contextWindow: number; maxTokens: number },
-): ModelDefinitionConfig {
-  const id = summary.modelId?.trim() ?? "";
-  const thinkingLevelMap = resolveBedrockNativeThinkingLevelMap(id);
-  return {
-    id,
-    name: summary.modelName?.trim() || id,
-    reasoning: inferReasoningSupport(summary),
-    input: mapInputModalities(summary),
-    cost: DEFAULT_COST,
-    contextWindow: resolveKnownContextWindow(id) ?? defaults.contextWindow,
-    maxTokens: isClaude5BedrockModel({ id }) ? 128_000 : defaults.maxTokens,
-    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
-  };
-}
-
-/**
- * Resolve the base foundation model ID from an inference profile.
- *
- * System-defined profiles use a region prefix:
- *   "us.anthropic.claude-sonnet-4-6" → "anthropic.claude-sonnet-4-6"
- *
- * Application profiles carry the model ARN in their models[] array:
- *   models[0].modelArn = "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-sonnet-4-6"
- *   → "anthropic.claude-sonnet-4-6"
- */
-function resolveBaseModelId(profile: InferenceProfileSummary): string | undefined {
-  const firstArn = profile.models?.[0]?.modelArn;
-  if (firstArn) {
-    const arnMatch = /foundation-model\/(.+)$/.exec(firstArn);
-    if (arnMatch) {
-      return arnMatch[1];
-    }
-  }
-  if (profile.type === "SYSTEM_DEFINED") {
-    const id = profile.inferenceProfileId ?? "";
-    const prefixMatch = /^(?:us|eu|ap|apac|au|jp|global)\.(.+)$/i.exec(id);
-    if (prefixMatch) {
-      return prefixMatch[1];
-    }
-  }
-  return undefined;
-}
 
 /**
  * Fetch raw inference profile summaries from the Bedrock control plane.
@@ -302,93 +193,11 @@ async function fetchInferenceProfileSummaries(
   return profiles;
 }
 
-/**
- * Convert raw inference profile summaries into model definitions.
- *
- * Each profile inherits capabilities (modalities, reasoning, context window,
- * cost) from its underlying foundation model. This ensures that
- * "us.anthropic.claude-sonnet-4-6" has the same capabilities as
- * "anthropic.claude-sonnet-4-6" — including image input, reasoning support,
- * and token limits.
- *
- * When the foundation model isn't found in the map (e.g. the model is only
- * available via inference profiles in this region), safe defaults are used.
- */
-function resolveInferenceProfiles(
-  profiles: InferenceProfileSummary[],
-  defaults: { contextWindow: number; maxTokens: number },
-  providerFilter: string[],
-  foundationModels: Map<string, ModelDefinitionConfig>,
-): ModelDefinitionConfig[] {
-  const discovered: ModelDefinitionConfig[] = [];
-  for (const profile of profiles) {
-    if (!profile.inferenceProfileId?.trim()) {
-      continue;
-    }
-    if (profile.status !== "ACTIVE") {
-      continue;
-    }
-
-    // Apply provider filter: check if any of the underlying models match.
-    if (providerFilter.length > 0) {
-      const models = profile.models ?? [];
-      const matchesFilter = models.some((m) => {
-        const provider = m.modelArn?.split("/")?.[1]?.split(".")?.[0];
-        return provider
-          ? providerFilter.includes(normalizeOptionalLowercaseString(provider) ?? "")
-          : false;
-      });
-      if (!matchesFilter) {
-        continue;
-      }
-    }
-
-    // Look up the underlying foundation model to inherit its capabilities.
-    const baseModelId = resolveBaseModelId(profile);
-    if (isKnownClaudeMythosPreviewModelId(baseModelId ?? profile.inferenceProfileId)) {
-      continue;
-    }
-    const baseModel = baseModelId
-      ? foundationModels.get(normalizeLowercaseStringOrEmpty(baseModelId))
-      : undefined;
-    const knownThinkingLevelMap = resolveBedrockNativeThinkingLevelMap(
-      baseModelId ?? profile.inferenceProfileId,
-    );
-    const contractModelId = baseModelId ?? profile.inferenceProfileId;
-    const claude5 = isClaude5BedrockModel({ id: contractModelId });
-    const canonicalClaudeId = resolveClaudeModelIdentity({ id: baseModelId });
-
-    discovered.push({
-      id: profile.inferenceProfileId,
-      name: profile.inferenceProfileName?.trim() || profile.inferenceProfileId,
-      reasoning:
-        baseModel?.reasoning ??
-        supportsClaudeAdaptiveThinking({ id: baseModelId ?? profile.inferenceProfileId }),
-      input: baseModel?.input ?? (claude5 ? ["text", "image"] : ["text"]),
-      cost: baseModel?.cost ?? DEFAULT_COST,
-      contextWindow:
-        baseModel?.contextWindow ??
-        resolveKnownContextWindow(contractModelId) ??
-        defaults.contextWindow,
-      maxTokens: baseModel?.maxTokens ?? (claude5 ? 128_000 : defaults.maxTokens),
-      ...(baseModel?.thinkingLevelMap || knownThinkingLevelMap
-        ? { thinkingLevelMap: baseModel?.thinkingLevelMap ?? knownThinkingLevelMap }
-        : {}),
-      ...(canonicalClaudeId.startsWith("claude-")
-        ? { params: { canonicalModelId: canonicalClaudeId } }
-        : {}),
-    });
-  }
-  return discovered;
-}
-
 /** Public discovery is advisory by default; catalog owners opt into strict acquisition. */
 export async function discoverBedrockModels(params: {
   region: string;
   discoveryMode?: "strict";
   config?: BedrockDiscoveryConfig;
-  now?: () => number;
-  clientFactory?: (region: string) => BedrockClient;
 }): Promise<ModelDefinitionConfig[]> {
   const refreshIntervalSeconds = Math.max(
     0,
@@ -397,8 +206,10 @@ export async function discoverBedrockModels(params: {
   const providerFilter = normalizeSortedUniqueTrimmedStringList(
     params.config?.providerFilter?.map(normalizeOptionalLowercaseString),
   );
-  const defaultContextWindow = resolveDefaultContextWindow(params.config);
-  const defaultMaxTokens = resolveDefaultMaxTokens(params.config);
+  const contextWindow = Math.floor(params.config?.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW);
+  const maxTokens = Math.floor(params.config?.defaultMaxTokens ?? DEFAULT_MAX_TOKENS);
+  const defaultContextWindow = contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW;
+  const defaultMaxTokens = maxTokens > 0 ? maxTokens : DEFAULT_MAX_TOKENS;
   const cacheKey = JSON.stringify({
     region: params.region,
     discoveryMode: params.discoveryMode,
@@ -407,7 +218,7 @@ export async function discoverBedrockModels(params: {
     defaultContextWindow,
     defaultMaxTokens,
   });
-  const now = params.now?.() ?? Date.now();
+  const now = Date.now();
 
   if (refreshIntervalSeconds > 0) {
     const cached = discoveryCache.get(cacheKey);
@@ -418,8 +229,7 @@ export async function discoverBedrockModels(params: {
   }
 
   const sdk = await loadBedrockControlPlaneSdk();
-  const clientFactory = params.clientFactory ?? ((region: string) => sdk.createClient(region));
-  const client = clientFactory(params.region);
+  const client = sdk.createClient(params.region);
 
   const discoveryPromise = (async () => {
     try {
@@ -445,29 +255,120 @@ export async function discoverBedrockModels(params: {
       const foundationModels = new Map<string, ModelDefinitionConfig>();
 
       for (const summary of foundationResponse.modelSummaries ?? []) {
-        if (!shouldIncludeSummary(summary, providerFilter)) {
+        if (!summary.modelId?.trim()) {
           continue;
         }
-        const def = toModelDefinition(summary, {
-          contextWindow: defaultContextWindow,
-          maxTokens: defaultMaxTokens,
-        });
+        if (providerFilter.length > 0) {
+          const providerName =
+            summary.providerName ??
+            (typeof summary.modelId === "string" ? summary.modelId.split(".")[0] : undefined);
+          const provider = normalizeOptionalLowercaseString(providerName);
+          if (!provider || !providerFilter.includes(provider)) {
+            continue;
+          }
+        }
+        if (
+          summary.responseStreamingSupported !== true ||
+          isKnownClaudeMythosPreviewModelId(summary.modelId) ||
+          !(summary.outputModalities ?? []).some(
+            (entry) => normalizeOptionalLowercaseString(entry) === "text",
+          ) ||
+          typeof summary.modelLifecycle?.status !== "string" ||
+          summary.modelLifecycle.status.toUpperCase() !== "ACTIVE"
+        ) {
+          continue;
+        }
+        const input = (summary.inputModalities ?? [])
+          .map(normalizeOptionalLowercaseString)
+          .filter((modality) => modality === "text" || modality === "image");
+        const reasoningHint = normalizeLowercaseStringOrEmpty(
+          `${summary.modelId ?? ""} ${summary.modelName ?? ""}`,
+        );
+        const id = summary.modelId?.trim() ?? "";
+        const thinkingLevelMap = resolveBedrockNativeThinkingLevelMap(id);
+        const def: ModelDefinitionConfig = {
+          id,
+          name: summary.modelName?.trim() || id,
+          reasoning:
+            supportsClaudeAdaptiveThinking({ id: summary.modelId }) ||
+            reasoningHint.includes("reasoning") ||
+            reasoningHint.includes("thinking"),
+          input: input.length > 0 ? [...new Set(input)] : ["text"],
+          cost: DEFAULT_COST,
+          contextWindow: resolveKnownContextWindow(id) ?? defaultContextWindow,
+          maxTokens: isClaude5BedrockModel({ id }) ? 128_000 : defaultMaxTokens,
+          ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+        };
         discovered.push(def);
         const normalizedId = normalizeLowercaseStringOrEmpty(def.id);
         seenIds.add(normalizedId);
         foundationModels.set(normalizedId, def);
       }
 
-      const inferenceProfiles = resolveInferenceProfiles(
-        profileSummaries,
-        { contextWindow: defaultContextWindow, maxTokens: defaultMaxTokens },
-        providerFilter,
-        foundationModels,
-      );
-      for (const profile of inferenceProfiles) {
-        const normalizedId = normalizeLowercaseStringOrEmpty(profile.id);
+      for (const profile of profileSummaries) {
+        if (!profile.inferenceProfileId?.trim()) {
+          continue;
+        }
+        if (profile.status !== "ACTIVE") {
+          continue;
+        }
+
+        // Apply provider filter: check if any of the underlying models match.
+        if (providerFilter.length > 0) {
+          const models = profile.models ?? [];
+          const matchesFilter = models.some((m) => {
+            const provider = m.modelArn?.split("/")?.[1]?.split(".")?.[0];
+            return provider
+              ? providerFilter.includes(normalizeOptionalLowercaseString(provider) ?? "")
+              : false;
+          });
+          if (!matchesFilter) {
+            continue;
+          }
+        }
+
+        // Look up the underlying foundation model to inherit its capabilities.
+        const baseModelId =
+          /foundation-model\/(.+)$/.exec(profile.models?.[0]?.modelArn ?? "")?.[1] ??
+          (profile.type === "SYSTEM_DEFINED"
+            ? /^(?:us|eu|ap|apac|au|jp|global)\.(.+)$/i.exec(profile.inferenceProfileId ?? "")?.[1]
+            : undefined);
+        if (isKnownClaudeMythosPreviewModelId(baseModelId ?? profile.inferenceProfileId)) {
+          continue;
+        }
+        const baseModel = baseModelId
+          ? foundationModels.get(normalizeLowercaseStringOrEmpty(baseModelId))
+          : undefined;
+        const knownThinkingLevelMap = resolveBedrockNativeThinkingLevelMap(
+          baseModelId ?? profile.inferenceProfileId,
+        );
+        const contractModelId = baseModelId ?? profile.inferenceProfileId;
+        const claude5 = isClaude5BedrockModel({ id: contractModelId });
+        const canonicalClaudeId = resolveClaudeModelIdentity({ id: baseModelId });
+
+        const definition: ModelDefinitionConfig = {
+          id: profile.inferenceProfileId,
+          name: profile.inferenceProfileName?.trim() || profile.inferenceProfileId,
+          reasoning:
+            baseModel?.reasoning ??
+            supportsClaudeAdaptiveThinking({ id: baseModelId ?? profile.inferenceProfileId }),
+          input: baseModel?.input ?? (claude5 ? ["text", "image"] : ["text"]),
+          cost: baseModel?.cost ?? DEFAULT_COST,
+          contextWindow:
+            baseModel?.contextWindow ??
+            resolveKnownContextWindow(contractModelId) ??
+            defaultContextWindow,
+          maxTokens: baseModel?.maxTokens ?? (claude5 ? 128_000 : defaultMaxTokens),
+          ...(baseModel?.thinkingLevelMap || knownThinkingLevelMap
+            ? { thinkingLevelMap: baseModel?.thinkingLevelMap ?? knownThinkingLevelMap }
+            : {}),
+          ...(canonicalClaudeId.startsWith("claude-")
+            ? { params: { canonicalModelId: canonicalClaudeId } }
+            : {}),
+        };
+        const normalizedId = normalizeLowercaseStringOrEmpty(definition.id);
         if (!seenIds.has(normalizedId)) {
-          discovered.push(profile);
+          discovered.push(definition);
           seenIds.add(normalizedId);
         }
       }
@@ -519,7 +420,6 @@ export async function resolveImplicitBedrockProvider(params: {
   pluginConfig?: { discovery?: BedrockDiscoveryConfig };
   discoveryMode?: "strict";
   env?: NodeJS.ProcessEnv;
-  clientFactory?: (region: string) => BedrockClient;
 }): Promise<ModelProviderConfig | null> {
   const env = params.env ?? process.env;
   const discoveryConfig = params.pluginConfig?.discovery;
@@ -541,7 +441,6 @@ export async function resolveImplicitBedrockProvider(params: {
     region,
     discoveryMode: params.discoveryMode,
     config: discoveryConfig,
-    clientFactory: params.clientFactory,
   });
   if (models.length === 0 && params.discoveryMode !== "strict") {
     return null;

@@ -80,7 +80,6 @@ describe("runDaemonStatus", () => {
     };
     gatherDaemonStatus.mockResolvedValueOnce(gathered);
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
-      target: "2026.7.1",
       version: null,
       nodeEngine: null,
       error: "HTTP 404",
@@ -107,7 +106,7 @@ describe("runDaemonStatus", () => {
       error: {
         type: "cli_error",
         message:
-          "Gateway status failed: --require-rpc needs probing enabled. Remove --no-probe or drop --require-rpc.",
+          "Gateway status failed: --require-rpc needs checking enabled. Remove --no-probe or drop --require-rpc.",
       },
     });
     expect(defaultRuntime.error).not.toHaveBeenCalled();

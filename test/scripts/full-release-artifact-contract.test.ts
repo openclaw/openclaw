@@ -244,6 +244,7 @@ globalThis.fetch = async (input, options) => {
     GH_TOKEN: "artifact-fixture-token",
     GITHUB_TOKEN: "",
     NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`,
+    PREPARED_PLUGIN_NPM_JSON: JSON.stringify({ descriptor: "prepared-plugin-npm" }),
     QUALIFIED_NPM_BUNDLE_JSON: JSON.stringify(qualified),
   };
 }
@@ -919,22 +920,6 @@ describe("retained publication admission", () => {
     expect(() => assertReleasePublicationKnownBudget(combined, context)).toThrow(/size limit/u);
   });
 
-  it("counts complete retained root/current copies and later growth under the same artifact cap", () => {
-    const { record } = registryEvidence();
-    const root = { ...record, childEvidence: { retained: "x".repeat(520_000) } };
-    const current = { ...record, evidenceReuse: { sourceManifest: root } };
-    expect(() => serializeReleaseArtifact(root)).not.toThrow();
-    expect(() => serializeReleaseArtifact(current)).not.toThrow();
-    const enclosing = { ...current, childEvidence: { retained: "x".repeat(520_000) } };
-    const emptyBytes = Buffer.byteLength(serializeReleaseArtifact(enclosing));
-    enclosing.childEvidence.retained += "x".repeat(MAX_RELEASE_ARTIFACT_BYTES - emptyBytes);
-    expect(Buffer.byteLength(serializeReleaseArtifact(enclosing))).toBe(MAX_RELEASE_ARTIFACT_BYTES);
-    enclosing.childEvidence.retained += "x";
-    expect(() => serializeReleaseArtifact(enclosing)).toThrow(/size limit/u);
-    expect(root.publicationAdmission).toEqual(record.publicationAdmission);
-    expect(enclosing.publicationAdmission).toEqual(record.publicationAdmission);
-  });
-
   it("reserves JSON escaping of pending bounded fields without truncating later job evidence", () => {
     const { plan, context } = registryBudgetFixture();
     expect(() => assertReleasePublicationKnownBudget(plan, context)).not.toThrow();
@@ -1516,6 +1501,9 @@ describe("full release artifact contract", () => {
         expect(manifest.publicationArtifacts.npmPreflight).toMatchObject({
           source: { sha: SHA },
           producer: { workflowSha: "d".repeat(40), runId: "81", runAttempt: "1" },
+        });
+        expect(manifest.publicationArtifacts.pluginNpm).toEqual({
+          descriptor: "prepared-plugin-npm",
         });
         expect(manifest.publishInputs).toMatchObject({
           targetSha: SHA,

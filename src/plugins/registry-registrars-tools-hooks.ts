@@ -20,6 +20,7 @@ import {
   resolveConversationAccessAllowed,
   resolvePromptInjectionAllowed,
 } from "./hook-policy-decisions.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import {
   resolveTypedHookTimeoutMs,
   type PluginRegistryState,
@@ -275,12 +276,15 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     if (normalized.length > 0) {
       record.toolNames.push(...normalized);
     }
+    getPluginInstance(record)?.admitFactory(factory);
     registry.tools.push({
       ...createRegistration(record, {
         factory,
         ...(versioned ? { contextVersion: 2 as const } : {}),
         names: normalized,
         optional,
+        workspaceAccess:
+          opts?.workspaceAccess ?? (typeof tool !== "function" && !versioned ? "execute" : true),
         origin: record.origin,
       }),
       // Host-owned membership must not re-enter the callable wrapper's graph walk.

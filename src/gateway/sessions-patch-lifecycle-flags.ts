@@ -1,7 +1,8 @@
 // Applies archive, pin, snooze, and unread facts to the projected session entry.
 import type { ErrorShape, SessionsPatchParams } from "../../packages/gateway-protocol/src/index.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
+import { isSubagentSessionKey } from "../routing/session-key.js";
 import { invalidSessionRequest as invalid } from "./session-request-error.js";
 
 export function applySessionPatchLifecycleFlags(params: {
@@ -13,6 +14,17 @@ export function applySessionPatchLifecycleFlags(params: {
   archivedBy?: SessionEntry["archivedBy"];
 }): ErrorShape | undefined {
   const { patch, next, existingEntry, storeKey, now, archivedBy } = params;
+  if ("sidebarRoot" in patch) {
+    if (patch.sidebarRoot === true) {
+      if (isSubagentSessionKey(storeKey)) {
+        return invalid("cannot promote a hidden subagent run; use a persistent session instead")
+          .error;
+      }
+      next.sidebarRoot = true;
+    } else {
+      delete next.sidebarRoot;
+    }
+  }
   if ("archived" in patch) {
     if (patch.archived === true) {
       // Archived sessions leave the active quick-access set in the same write.
@@ -38,6 +50,8 @@ export function applySessionPatchLifecycleFlags(params: {
   const pinnable = isPinnableSessionEntry(storeKey, next);
   if (!pinnable) {
     delete next.pinnedAt;
+    delete next.snoozedUntil;
+    delete next.snoozedAt;
   }
   if ("snoozedUntil" in patch) {
     const snoozedUntil = patch.snoozedUntil;

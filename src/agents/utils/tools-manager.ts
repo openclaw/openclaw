@@ -8,7 +8,6 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { arch, platform } from "node:os";
 import { join } from "node:path";
-import chalk from "chalk";
 import { extractArchive } from "../../infra/archive.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
@@ -305,64 +304,22 @@ function installTool(tool: "fd" | "rg", toolsDir: string): Promise<string> {
 }
 
 /** Returns the existing or installed binary path, or undefined when unavailable. */
-export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<string | undefined> {
+export async function ensureTool(tool: "fd" | "rg"): Promise<string | undefined> {
   const toolsDir = getBinDir();
   const existingPath = getToolPath(tool, toolsDir);
   if (existingPath) {
     return existingPath;
   }
 
-  const config = TOOLS[tool];
-
-  if (!toolsDir) {
-    if (!silent) {
-      console.log(
-        chalk.yellow(
-          `${config.name} not found. Install it on PATH or select an agent owner before downloading.`,
-        ),
-      );
-    }
-    return undefined;
-  }
-
-  if (isTruthyEnvValue(process.env.OPENCLAW_OFFLINE)) {
-    if (!silent) {
-      console.log(
-        chalk.yellow(`${config.name} not found. Offline mode enabled, skipping download.`),
-      );
-    }
-    return undefined;
-  }
-
   // On Android/Termux, Linux binaries don't work due to Bionic libc incompatibility.
   // Users must install via pkg.
-  if (platform() === "android") {
-    if (!silent) {
-      console.log(
-        chalk.yellow(`${config.name} not found. Install with: pkg install ${config.name}`),
-      );
-    }
+  if (!toolsDir || isTruthyEnvValue(process.env.OPENCLAW_OFFLINE) || platform() === "android") {
     return undefined;
-  }
-
-  if (!silent) {
-    console.log(chalk.dim(`${config.name} not found. Downloading...`));
   }
 
   try {
-    const path = await installTool(tool, toolsDir);
-    if (!silent) {
-      console.log(chalk.dim(`${config.name} installed to ${path}`));
-    }
-    return path;
-  } catch (e) {
-    if (!silent) {
-      console.log(
-        chalk.yellow(
-          `Failed to download ${config.name}: ${e instanceof Error ? e.message : String(e)}`,
-        ),
-      );
-    }
+    return await installTool(tool, toolsDir);
+  } catch {
     return undefined;
   }
 }

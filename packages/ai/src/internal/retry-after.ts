@@ -6,11 +6,6 @@ const HTTP_DATE_MONTH_INDEX = new Map(
 const HTTP_DATE_SHORT_WEEKDAY_INDEX = new Map(
   ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((weekday, index) => [weekday, index]),
 );
-const HTTP_DATE_LONG_WEEKDAY_INDEX = new Map(
-  ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map(
-    (weekday, index) => [weekday, index],
-  ),
-);
 
 const IMF_FIXDATE_RE =
   /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\d{2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$/;
@@ -45,6 +40,7 @@ function ownDataValue(value: unknown, key: string): unknown {
 export function parseRetryAfterHeadersSeconds(
   headers: unknown,
   nowMs = Date.now(),
+  status?: number,
 ): number | undefined {
   if (!headers || typeof headers !== "object") {
     return undefined;
@@ -52,20 +48,31 @@ export function parseRetryAfterHeadersSeconds(
   try {
     let entries: Array<[string, unknown]>;
     try {
-      entries = ["retry-after", "retry-after-ms"].map<[string, unknown]>((key) => [
-        key,
-        Headers.prototype.get.call(headers, key),
-      ]);
+      entries = [
+        "retry-after",
+        "retry-after-ms",
+        "x-ratelimit-remaining-tokens",
+        "x-ratelimit-reset-tokens",
+        "x-ratelimit-remaining-requests",
+        "x-ratelimit-reset-requests",
+        "x-ratelimit-remaining-project-tokens",
+        "x-ratelimit-reset-project-tokens",
+      ].map<[string, unknown]>((key) => [key, Headers.prototype.get.call(headers, key)]);
     } catch {
       entries = Object.getOwnPropertyNames(headers).flatMap<[string, unknown]>((key) => {
         const name = key.toLowerCase();
-        return name === "retry-after" || name === "retry-after-ms"
+        return name === "retry-after" ||
+          name === "retry-after-ms" ||
+          /^x-ratelimit-(?:remaining|reset)-(?:tokens|requests|project-tokens)$/.test(name)
           ? [[name, ownDataValue(headers, key)]]
           : [];
       });
     }
     let floor: number | undefined;
     for (const [key, value] of entries) {
+      if (key.startsWith("x-ratelimit-")) {
+        continue;
+      }
       const text =
         typeof value === "string" ? value.trim() : typeof value === "number" ? String(value) : "";
       const milliseconds = key === "retry-after-ms";
@@ -87,10 +94,48 @@ export function parseRetryAfterHeadersSeconds(
         floor = Math.max(floor ?? 0, seconds);
       }
     }
+    // Reset headers describe a full quota refill, not a wait for every request.
+    // Only a rejected request with an exhausted matching bucket establishes a floor.
+    if (status === 429) {
+      const values = new Map(entries);
+      for (const dimension of ["tokens", "requests", "project-tokens"]) {
+        const remaining = values.get(`x-ratelimit-remaining-${dimension}`);
+        const numericRemaining =
+          typeof remaining === "number"
+            ? remaining
+            : typeof remaining === "string" && /^-?\d+(?:\.\d+)?$/.test(remaining.trim())
+              ? Number(remaining)
+              : Number.NaN;
+        if (!Number.isFinite(numericRemaining) || numericRemaining > 0) {
+          continue;
+        }
+        const reset = values.get(`x-ratelimit-reset-${dimension}`);
+        const seconds = typeof reset === "string" ? parseQuotaResetSeconds(reset) : undefined;
+        if (seconds !== undefined) {
+          floor = Math.max(floor ?? 0, seconds);
+        }
+      }
+    }
     return floor;
   } catch {
     return undefined;
   }
+}
+
+function parseQuotaResetSeconds(value: string): number | undefined {
+  if (!/^(?:\d+(?:\.\d+)?(?:ms|s|m|h))+$/.test(value)) {
+    return undefined;
+  }
+  const scales: Record<string, number> = { ms: 0.001, s: 1, m: 60, h: 3600 };
+  let seconds = 0;
+  for (const match of value.matchAll(/(\d+(?:\.\d+)?)(ms|s|m|h)/g)) {
+    const scale = scales[match[2] ?? ""];
+    if (scale === undefined) {
+      return undefined;
+    }
+    seconds += Number(match[1]) * scale;
+  }
+  return Number.isFinite(seconds) && seconds <= Number.MAX_SAFE_INTEGER ? seconds : Infinity;
 }
 
 /** SDK errors carry native response headers separately from their error body. */
@@ -99,14 +144,26 @@ export function parseRetryAfterErrorSeconds(
   nowMs = Date.now(),
 ): number | undefined {
   try {
-    const direct = parseRetryAfterHeadersSeconds(ownDataValue(error, "headers"), nowMs);
-    const response = parseRetryAfterHeadersSeconds(
-      ownDataValue(ownDataValue(error, "response"), "headers"),
+    const status = ownDataValue(error, "status") ?? ownDataValue(error, "statusCode");
+    const response = ownDataValue(error, "response");
+    const responseStatus = ownDataValue(response, "status") ?? ownDataValue(response, "statusCode");
+    const direct = parseRetryAfterHeadersSeconds(
+      ownDataValue(error, "headers"),
       nowMs,
+      typeof status === "number" ? status : undefined,
     );
-    return direct === undefined && response === undefined
+    const responseSeconds = parseRetryAfterHeadersSeconds(
+      ownDataValue(response, "headers"),
+      nowMs,
+      typeof responseStatus === "number"
+        ? responseStatus
+        : typeof status === "number"
+          ? status
+          : undefined,
+    );
+    return direct === undefined && responseSeconds === undefined
       ? undefined
-      : Math.max(direct ?? 0, response ?? 0);
+      : Math.max(direct ?? 0, responseSeconds ?? 0);
   } catch {
     return undefined;
   }
@@ -122,36 +179,34 @@ export function parseHttpDateInstant(
   value: string,
   nowMs = Date.now(),
 ): HttpDateInstant | undefined {
-  const imfFixdate = IMF_FIXDATE_RE.exec(value);
-  if (imfFixdate) {
-    return parseHttpDateComponents({
-      weekday: HTTP_DATE_SHORT_WEEKDAY_INDEX.get(imfFixdate[1] ?? ""),
-      year: Number.parseInt(imfFixdate[4] ?? "", 10),
-      month: HTTP_DATE_MONTH_INDEX.get(imfFixdate[3] ?? ""),
-      day: Number.parseInt(imfFixdate[2] ?? "", 10),
-      hours: Number.parseInt(imfFixdate[5] ?? "", 10),
-      minutes: Number.parseInt(imfFixdate[6] ?? "", 10),
-      seconds: Number.parseInt(imfFixdate[7] ?? "", 10),
-    });
+  let fields: readonly (string | undefined)[] | undefined = (
+    IMF_FIXDATE_RE.exec(value) ?? OBSOLETE_RFC850_DATE_RE.exec(value)
+  )?.slice(1);
+  if (!fields) {
+    const asctimeDate = OBSOLETE_ASCTIME_DATE_RE.exec(value);
+    if (!asctimeDate) {
+      return undefined;
+    }
+    const [, weekday, month, day, hours, minutes, seconds, year] = asctimeDate;
+    fields = [weekday, day, month, year, hours, minutes, seconds];
   }
-
-  const rfc850Date = OBSOLETE_RFC850_DATE_RE.exec(value);
-  if (rfc850Date) {
+  const [weekday, day, month, year, hours, minutes, seconds] = fields;
+  const components: HttpDateComponents = {
+    weekday: HTTP_DATE_SHORT_WEEKDAY_INDEX.get((weekday ?? "").slice(0, 3)),
+    year: Number.parseInt(year ?? "", 10),
+    month: HTTP_DATE_MONTH_INDEX.get(month ?? ""),
+    day: Number.parseInt(day ?? "", 10),
+    hours: Number.parseInt(hours ?? "", 10),
+    minutes: Number.parseInt(minutes ?? "", 10),
+    seconds: Number.parseInt(seconds ?? "", 10),
+  };
+  if (year?.length === 2) {
     const now = new Date(nowMs);
     if (Number.isNaN(now.getTime())) {
       return undefined;
     }
-    const shortYear = Number.parseInt(rfc850Date[4] ?? "", 10);
-    const candidateYear = Math.floor(now.getUTCFullYear() / 100) * 100 + shortYear;
-    const components = {
-      weekday: HTTP_DATE_LONG_WEEKDAY_INDEX.get(rfc850Date[1] ?? ""),
-      month: HTTP_DATE_MONTH_INDEX.get(rfc850Date[3] ?? ""),
-      day: Number.parseInt(rfc850Date[2] ?? "", 10),
-      hours: Number.parseInt(rfc850Date[5] ?? "", 10),
-      minutes: Number.parseInt(rfc850Date[6] ?? "", 10),
-      seconds: Number.parseInt(rfc850Date[7] ?? "", 10),
-    };
-    const candidate = parseHttpDateCalendarMs({ year: candidateYear, ...components });
+    components.year += Math.floor(now.getUTCFullYear() / 100) * 100;
+    const candidate = parseHttpDateCalendarMs(components);
     if (candidate === undefined) {
       return undefined;
     }
@@ -166,24 +221,11 @@ export function parseHttpDateInstant(
       now.getUTCSeconds(),
       now.getUTCMilliseconds(),
     );
-    const resolvedYear = candidate > fiftyYearsFromNow ? candidateYear - 100 : candidateYear;
-    return parseHttpDateComponents({ year: resolvedYear, ...components });
+    if (candidate > fiftyYearsFromNow) {
+      components.year -= 100;
+    }
   }
-
-  const asctimeDate = OBSOLETE_ASCTIME_DATE_RE.exec(value);
-  if (asctimeDate) {
-    return parseHttpDateComponents({
-      weekday: HTTP_DATE_SHORT_WEEKDAY_INDEX.get(asctimeDate[1] ?? ""),
-      year: Number.parseInt(asctimeDate[7] ?? "", 10),
-      month: HTTP_DATE_MONTH_INDEX.get(asctimeDate[2] ?? ""),
-      day: Number.parseInt((asctimeDate[3] ?? "").trim(), 10),
-      hours: Number.parseInt(asctimeDate[4] ?? "", 10),
-      minutes: Number.parseInt(asctimeDate[5] ?? "", 10),
-      seconds: Number.parseInt(asctimeDate[6] ?? "", 10),
-    });
-  }
-
-  return undefined;
+  return parseHttpDateComponents(components);
 }
 
 function parseHttpDateComponents(components: HttpDateComponents): HttpDateInstant | undefined {

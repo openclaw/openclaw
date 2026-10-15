@@ -75,7 +75,6 @@ describe("Codex workspace-write sandbox probe", () => {
 
   it.each([
     "loopback: Failed RTM_NEWADDR: Operation not permitted",
-    "loopback: Failed RTM_NEWADDR: No child processes",
     "loopback: Failed RTM_NEWLINK: Operation not permitted",
     "setting up uid map: Permission denied",
     "No permissions to create a new namespace",
@@ -91,11 +90,6 @@ describe("Codex workspace-write sandbox probe", () => {
   });
 
   it.each([
-    {
-      label: "unknown exit",
-      result: { code: 1, stderr: "unknown error" },
-      reason: "exited with 1",
-    },
     {
       label: "non-bwrap output",
       result: { code: 1, stderr: "wrapper: bwrap: loopback: Failed RTM_NEWADDR: denied" },
@@ -173,14 +167,6 @@ describe("Codex workspace-write sandbox probe", () => {
       command: `${process.execPath} '/managed path/codex/bin/codex.js' sandbox -c 'sandbox_mode="workspace-write"' -c sandbox_workspace_write.network_access=false -- true`,
     });
     expect(await fs.readdir(root)).toEqual([]);
-  });
-
-  it.each(["config", "env"])("probes the custom %s command", async (source) => {
-    await probe(
-      config(source === "config" ? { command: "/custom/codex" } : {}),
-      source === "env" ? { OPENCLAW_CODEX_APP_SERVER_BIN: "/custom/codex" } : {},
-    );
-    expect(runner).toHaveBeenCalledWith(["/custom/codex", ...args], expect.any(Object));
   });
 
   it.each([

@@ -75,7 +75,6 @@ export function listChannelCatalogEntries(
     const trusted =
       installRecords &&
       resolvePluginTrust({
-        pluginId,
         candidate,
         installRecords,
         env: params.env ?? process.env,

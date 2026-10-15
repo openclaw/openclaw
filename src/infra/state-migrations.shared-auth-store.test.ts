@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as ownership from "../agents/auth-profiles/path-resolve.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../agents/auth-profiles/path-resolve.native.js";
 import * as persisted from "../agents/auth-profiles/persisted.js";
 import { setAuthProfileOrder } from "../agents/auth-profiles/profiles.js";
 import * as paths from "../agents/auth-profiles/shared-main-dir.js";
@@ -16,7 +17,10 @@ import {
 } from "../agents/auth-profiles/store-runtime.js";
 import { upsertAuthProfileWithLockOrThrow } from "../agents/auth-profiles/upsert-with-lock.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import * as stateDb from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
@@ -49,7 +53,9 @@ describe("shared auth store relocation", () => {
     ownerFixtureRun = undefined;
     vi.restoreAllMocks();
     sqlite.closeAuthProfileReadPool();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await stateDb.closeOpenClawStateDatabaseAsync();
     stateDb.closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
     for (const state of ownerStates.splice(0).toReversed()) {
@@ -178,6 +184,7 @@ describe("shared auth store relocation", () => {
     ).toEqual({ sourcePath: fixture.sourcePath, hasLegacy: true });
     const statePath = resolveOpenClawStateSqlitePath(fixture.env);
     expect(fs.existsSync(statePath)).toBe(false);
+    expect(ownership.getPreparedSharedAuthStoreOwnership(fixture.env)).toBeUndefined();
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
     const database = new DatabaseSync(statePath);
     try {
@@ -188,7 +195,7 @@ describe("shared auth store relocation", () => {
     } finally {
       database.close();
     }
-    expect(ownership.resolveSharedAuthStoreOwnership(fixture.env)).toEqual({
+    expect(prepareSharedAuthStoreOwnershipForNative(fixture.env)).toEqual({
       location: "state-db",
     });
   });

@@ -173,16 +173,7 @@ export function isSimpleCommandHelpInvocation(
 
 type HelpNormalizationPositional = { value: string; index: number };
 
-type HelpNormalizationScanResult =
-  | {
-      ok: true;
-      positionals: HelpNormalizationPositional[];
-      rootOptions: string[];
-      helpFlagIndex: number | null;
-    }
-  | { ok: false };
-
-function scanHelpNormalizationArgv(argv: string[]): HelpNormalizationScanResult {
+function scanHelpNormalizationArgv(argv: string[]) {
   const positionals: HelpNormalizationPositional[] = [];
   const rootOptions: string[] = [];
   let helpFlagIndex: number | null = null;
@@ -203,12 +194,41 @@ function scanHelpNormalizationArgv(argv: string[]): HelpNormalizationScanResult 
       continue;
     }
     if (arg.startsWith("-")) {
-      return { ok: false };
+      return { ok: false as const };
     }
     positionals.push({ value: arg, index });
   }
 
-  return { ok: true, positionals, rootOptions, helpFlagIndex };
+  return { ok: true as const, positionals, rootOptions, helpFlagIndex };
+}
+
+export function rewriteUpdateFlagArgv(argv: string[]): string[] {
+  // Preserve the old root --update spelling by rewriting before Commander registration.
+  // Only rewrite --update while scanning the root-option prefix; once a command
+  // or `--` appears, later --update tokens belong to that command's arguments.
+  const updateIndex = argv.indexOf("--update");
+  if (updateIndex === -1) {
+    return argv;
+  }
+
+  for (let i = 2; i < argv.length; i++) {
+    const arg = argv[i];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      return argv;
+    }
+    if (i === updateIndex) {
+      return argv.toSpliced(updateIndex, 1, "update");
+    }
+    const consumed = consumeRootOptionToken(argv, i);
+    if (consumed > 0) {
+      i += consumed - 1;
+      continue;
+    }
+    if (!arg.startsWith("-")) {
+      return argv;
+    }
+  }
+  return argv;
 }
 
 export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
@@ -430,8 +450,8 @@ export function getFlagValue(argv: string[], name: string): string | null | unde
   return value;
 }
 
-export function getVerboseFlag(argv: string[], options?: { includeDebug?: boolean }): boolean {
-  return hasFlag(argv, "--verbose") || Boolean(options?.includeDebug && hasFlag(argv, "--debug"));
+export function getVerboseFlag(argv: string[]): boolean {
+  return hasFlag(argv, "--verbose") || hasFlag(argv, "--debug");
 }
 
 export function getPositiveIntFlagValue(argv: string[], name: string): number | null | undefined {

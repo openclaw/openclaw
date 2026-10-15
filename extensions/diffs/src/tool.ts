@@ -12,13 +12,11 @@ import {
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import type { Static } from "typebox";
-import type { DiffScreenshotter } from "./browser.runtime.js";
 import { resolveDiffImageRenderOptions } from "./config.js";
 import { DiffRenderInputError, renderDiffDocument } from "./render.js";
 import type { DiffArtifactStore } from "./store.js";
 import {
   type DiffArtifactContext,
-  type DiffRenderOptions,
   type DiffRenderTarget,
   type DiffToolDefaults,
   DIFF_IMAGE_QUALITY_PRESETS,
@@ -28,8 +26,6 @@ import {
   DIFF_THEMES,
   type DiffInput,
   type DiffMode,
-  type DiffOutputFormat,
-  type DiffTheme,
 } from "./types.js";
 import { buildViewerUrl, normalizeViewerBaseUrl } from "./url.js";
 
@@ -123,15 +119,8 @@ export function createDiffsTool(params: {
   defaults: DiffToolDefaults;
   viewerBaseUrl?: string;
   languagePackAvailable?: boolean;
-  screenshotter?: DiffScreenshotter;
   context?: OpenClawPluginToolContext;
 }): AnyAgentTool {
-  const loadScreenshotter = async (config: OpenClawConfig) =>
-    params.screenshotter ??
-    new (await loadDiffsBrowserRuntime()).PlaywrightDiffScreenshotter({
-      config,
-    });
-
   return {
     name: "diffs",
     label: "Diffs",
@@ -228,38 +217,51 @@ export function createDiffsTool(params: {
       }
 
       try {
-        const screenshotter = await loadScreenshotter(config);
-        const artifactFile = await renderDiffArtifactFile({
-          screenshotter,
-          store: params.store,
-          html: requireRenderedHtml(rendered.imageHtml, "image"),
-          theme,
-          image,
+        const screenshotter = new (await loadDiffsBrowserRuntime()).PlaywrightDiffScreenshotter({
+          config,
+        });
+        const html = requireRenderedHtml(rendered.imageHtml, "image");
+        const artifactFile = await params.store.createStandaloneFileArtifact({
+          format: image.format,
           ttlMs,
           context: artifactContext,
         });
+        let fileBytes: number;
+        try {
+          await screenshotter.screenshotHtml({
+            html,
+            outputPath: artifactFile.filePath,
+            theme,
+            image,
+          });
+          fileBytes = (await fs.stat(artifactFile.filePath)).size;
+          await params.store.completeFileArtifact(artifactFile.id);
+        } catch (error) {
+          await params.store.deleteFileArtifact(artifactFile.id);
+          throw error;
+        }
 
         return textResult(
-          buildFileArtifactMessage({
-            format: image.format,
-            filePath: artifactFile.path,
-            viewerUrl,
-          }),
+          [
+            ...(viewerUrl ? [`Diff viewer: ${viewerUrl}`] : []),
+            `Diff ${image.format.toUpperCase()} generated at: ${artifactFile.filePath}`,
+            "To send this file, use an available file-sending tool to send it as an attachment.",
+          ].join("\n"),
           {
             ...(viewerDetails ?? {
               changed: true,
-              ...(artifactFile.artifactId ? { artifactId: artifactFile.artifactId } : {}),
-              ...(artifactFile.expiresAt ? { expiresAt: artifactFile.expiresAt } : {}),
+              artifactId: artifactFile.id,
+              expiresAt: artifactFile.expiresAt,
               title: rendered.title,
               inputKind: rendered.inputKind,
               fileCount: rendered.fileCount,
               mode,
               ...(artifactContext ? { context: artifactContext } : {}),
             }),
-            filePath: artifactFile.path,
+            filePath: artifactFile.filePath,
             // `path` mirrors filePath so the message tool can send the artifact directly.
-            path: artifactFile.path,
-            fileBytes: artifactFile.bytes,
+            path: artifactFile.filePath,
+            fileBytes,
             fileFormat: image.format,
             fileQuality: image.qualityPreset,
             fileScale: image.scale,
@@ -304,53 +306,6 @@ function requireRenderedHtml(html: string | undefined, target: DiffRenderTarget)
   throw new Error(`Missing ${target} render output.`);
 }
 
-function buildFileArtifactMessage(params: {
-  format: DiffOutputFormat;
-  filePath: string;
-  viewerUrl?: string;
-}): string {
-  const lines = params.viewerUrl ? [`Diff viewer: ${params.viewerUrl}`] : [];
-  lines.push(`Diff ${params.format.toUpperCase()} generated at: ${params.filePath}`);
-  lines.push("To send this file, use an available file-sending tool to send it as an attachment.");
-  return lines.join("\n");
-}
-
-async function renderDiffArtifactFile(params: {
-  screenshotter: DiffScreenshotter;
-  store: DiffArtifactStore;
-  html: string;
-  theme: DiffTheme;
-  image: DiffRenderOptions["image"];
-  ttlMs?: number;
-  context?: DiffArtifactContext;
-}): Promise<{ path: string; bytes: number; artifactId?: string; expiresAt?: string }> {
-  const fileArtifact = await params.store.createStandaloneFileArtifact({
-    format: params.image.format,
-    ttlMs: params.ttlMs,
-    context: params.context,
-  });
-  try {
-    await params.screenshotter.screenshotHtml({
-      html: params.html,
-      outputPath: fileArtifact.filePath,
-      theme: params.theme,
-      image: params.image,
-    });
-
-    const stats = await fs.stat(fileArtifact.filePath);
-    await params.store.completeFileArtifact(fileArtifact.id);
-    return {
-      path: fileArtifact.filePath,
-      bytes: stats.size,
-      artifactId: fileArtifact.id,
-      expiresAt: fileArtifact.expiresAt,
-    };
-  } catch (error) {
-    await params.store.deleteFileArtifact(fileArtifact.id);
-    throw error;
-  }
-}
-
 function buildArtifactContext(
   context: OpenClawPluginToolContext | undefined,
 ): DiffArtifactContext | undefined {
@@ -358,16 +313,13 @@ function buildArtifactContext(
     return undefined;
   }
 
-  const agentId = normalizeOptionalString(context.agentId);
-  const sessionId = normalizeOptionalString(context.sessionId);
-  const messageChannel = normalizeOptionalString(context.messageChannel);
-  const agentAccountId = normalizeOptionalString(context.agentAccountId);
-  const artifactContext: DiffArtifactContext = {
-    ...(agentId ? { agentId } : {}),
-    ...(sessionId ? { sessionId } : {}),
-    ...(messageChannel ? { messageChannel } : {}),
-    ...(agentAccountId ? { agentAccountId } : {}),
-  };
+  const artifactContext: DiffArtifactContext = {};
+  for (const key of ["agentId", "sessionId", "messageChannel", "agentAccountId"] as const) {
+    const value = normalizeOptionalString(context[key]);
+    if (value) {
+      artifactContext[key] = value;
+    }
+  }
 
   return Object.keys(artifactContext).length > 0 ? artifactContext : undefined;
 }

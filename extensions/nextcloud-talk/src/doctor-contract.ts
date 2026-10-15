@@ -1,20 +1,21 @@
 import type { ChannelDoctorConfigMutation } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  createLegacyPrivateNetworkDoctorContract,
   createLegacyWebhookListenerDoctorContract,
   defineChannelAliasMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import {
+  hasConfiguredNextcloudTalkChannelState,
+  listNextcloudTalkAccountIds,
+  mergeNextcloudTalkAccountConfig,
+} from "../configured-state.js";
 
 const webhookContract = createLegacyWebhookListenerDoctorContract({
   channelKey: "nextcloud-talk",
   defaultHost: "0.0.0.0",
   defaultPort: 8788,
 });
-
-const networkContract = createLegacyPrivateNetworkDoctorContract({
-  channelKey: "nextcloud-talk",
-});
+export const { historicalWebhookListener } = webhookContract;
 
 // Nextcloud Talk's nested streaming schema is delivery-only ({chunkMode,
 // block}); it has no preview mode, so only the delivery flat aliases are
@@ -29,19 +30,36 @@ const streamingAliasMigration = defineChannelAliasMigration({
 
 export const legacyConfigRules = [
   ...webhookContract.legacyConfigRules,
-  ...networkContract.legacyConfigRules,
   ...streamingAliasMigration.legacyConfigRules,
 ];
+
+export function normalizeHistoricalWebhookConfig({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  const webhook = webhookContract.normalizeCompatibilityConfig({ cfg });
+  return {
+    ...webhook,
+    historicalWebhookAccountIds: !hasConfiguredNextcloudTalkChannelState({ cfg })
+      ? []
+      : listNextcloudTalkAccountIds(cfg).filter(
+          (accountId) => mergeNextcloudTalkAccountConfig(cfg, accountId).enabled !== false,
+        ),
+  };
+}
 
 export function normalizeCompatibilityConfig({
   cfg,
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  const webhook = webhookContract.normalizeCompatibilityConfig({ cfg });
-  const network = networkContract.normalizeCompatibilityConfig({ cfg: webhook.config });
-  return streamingAliasMigration.normalizeChannelConfig({
-    cfg: network.config,
-    changes: [...webhook.changes, ...network.changes],
-  });
+  const webhook = normalizeHistoricalWebhookConfig({ cfg });
+  return {
+    ...streamingAliasMigration.normalizeChannelConfig({
+      cfg: webhook.config,
+      changes: webhook.changes,
+    }),
+    historicalWebhookAccountIds: webhook.historicalWebhookAccountIds,
+  };
 }

@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, vi } from "vitest";
 import * as managedChild from "../../scripts/lib/managed-child-process.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import {
   createControlledWorkerCompiler,
   createWorkerArtifactTest,
@@ -34,7 +35,7 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
     workerArtifacts.fixtureLifetime.run(async () => {
       const { runtime } = workerArtifacts.createFixtureCommands();
       const directory = workerArtifacts.fixtureDirectory();
-      const controlled = createControlledWorkerCompiler(directory, process.env);
+      const controlled = createControlledWorkerCompiler(directory, testRunnerFixtureEnv());
       const [compiler, first, input, receipt] = controlled.args(path.join(directory, "first"));
       const result = await runtime([
         "--input-type=module",
@@ -65,7 +66,7 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
         );
         const controlled = createControlledWorkerCompiler(
           directory,
-          process.env,
+          testRunnerFixtureEnv(),
           process.versions.bun ? "bun" : "node",
         );
         const readLines = (name: string) =>
@@ -123,14 +124,15 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
               // The inner owner may already have removed a joined compiler's generation.
               const manifests = (() => {
                 try {
-                  return controlled.read().map(({ directory: generation, ...receipt }) => ({
-                    ...receipt,
-                    generation: path.basename(generation),
-                    manifest:
-                      path.dirname(generation) === path.join(root, ".artifacts", "vitest-workers")
-                        ? readCompilerEvidence(path.join(generation, "manifest.json"))
-                        : { readError: "outside-worker-root" },
-                  }));
+                  return controlled.read().map(({ directory: generation, ...receipt }) =>
+                    Object.assign(receipt, {
+                      generation: path.basename(generation),
+                      manifest:
+                        path.dirname(generation) === path.join(root, ".artifacts", "vitest-workers")
+                          ? readCompilerEvidence(path.join(generation, "manifest.json"))
+                          : { readError: "outside-worker-root" },
+                    }),
+                  );
                 } catch (error) {
                   return { readError: (error as NodeJS.ErrnoException).code ?? "invalid-receipt" };
                 }
@@ -227,7 +229,9 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
             new Set(compilers.map(({ pid, processStartTime }) => `${pid}:${processStartTime}`))
               .size,
           ).toBe(2);
-          expect(new Set(compilers.map(({ directory }) => path.resolve(directory)))).toEqual(
+          expect(
+            new Set(compilers.map(({ directory: generation }) => path.resolve(generation))),
+          ).toEqual(
             new Set(
               [...generations].map((generation) =>
                 path.resolve(fileURLToPath(new URL("../../", generation))),
@@ -236,8 +240,8 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
           );
           for (const compiler of compilers) {
             expect(compiler).toMatchObject({
-              inputs: 2,
-              outputs: 2,
+              inputs: 3,
+              outputs: 3,
               processStartTime: expect.any(Number),
               isMainThread: true,
             });

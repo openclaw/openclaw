@@ -64,7 +64,6 @@ describe("browser unhandled rejection lifecycle", () => {
       const state = await createBrowserRuntimeState({
         resolved: makeBrowserServerState().resolved,
         port: 18791,
-        onWarn: vi.fn(),
       });
       if (acquired) {
         await getGatewayExtensionRelayModule();
@@ -74,7 +73,6 @@ describe("browser unhandled rejection lifecycle", () => {
 
       await stopBrowserRuntime({
         current: state,
-        getState: () => state,
         clearState,
         onWarn: vi.fn(),
       });
@@ -88,7 +86,6 @@ describe("browser unhandled rejection lifecycle", () => {
     const state = await createBrowserRuntimeState({
       resolved: { profiles: {} } as never,
       port: 18791,
-      onWarn: vi.fn(),
     });
     const handler = getUnhandledRejectionHandlers()[0];
     const direct = Object.assign(
@@ -109,7 +106,6 @@ describe("browser unhandled rejection lifecycle", () => {
     expect(handler?.(wrapped)).toBe(true);
     await stopBrowserRuntime({
       current: state,
-      getState: () => state,
       clearState: vi.fn(),
       onWarn: vi.fn(),
     });
@@ -119,7 +115,6 @@ describe("browser unhandled rejection lifecycle", () => {
     const state = await createBrowserRuntimeState({
       resolved: { profiles: {} } as never,
       port: 18791,
-      onWarn: vi.fn(),
     });
     const handler = getUnhandledRejectionHandlers()[0];
     expect(
@@ -131,7 +126,6 @@ describe("browser unhandled rejection lifecycle", () => {
     expect(handler?.(new Error("No dialog is showing"))).toBe(false);
     await stopBrowserRuntime({
       current: state,
-      getState: () => state,
       clearState: vi.fn(),
       onWarn: vi.fn(),
     });
@@ -144,7 +138,6 @@ describe("browser unhandled rejection lifecycle", () => {
     const state = await createBrowserRuntimeState({
       resolved: { profiles: {} } as never,
       port: 18791,
-      onWarn: vi.fn(),
     });
 
     expect(registerUnhandledRejectionHandlerMock).toHaveBeenCalledTimes(1);
@@ -158,7 +151,6 @@ describe("browser unhandled rejection lifecycle", () => {
     const clearState = vi.fn();
     await stopBrowserRuntime({
       current: state,
-      getState: () => state,
       clearState,
       onWarn: vi.fn(),
     });

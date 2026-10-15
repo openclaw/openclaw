@@ -74,11 +74,11 @@ suite.define(() => {
         const response = await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
         expect(response?.status()).toBe(200);
 
-        const engineGroup = page.locator("wa-radio-group.settings-segmented").first();
+        const engineGroup = page.getByRole("radiogroup").first();
         await engineGroup.waitFor();
         await expect
           .poll(async () =>
-            (await engineGroup.locator("wa-radio").allTextContents()).map((label) => label.trim()),
+            (await engineGroup.locator("label").allTextContents()).map((label) => label.trim()),
           )
           .toEqual(["OpenClaw Memory", "Memory LanceDB", "Off"]);
 
@@ -117,7 +117,7 @@ suite.define(() => {
           name: "OpenClaw Memory",
           exact: true,
         });
-        await expect.poll(() => selected.getAttribute("aria-checked")).toBe("true");
+        await expect.poll(() => selected.isChecked()).toBe(true);
         await expect
           .poll(() => page.getByText("Could not change the memory engine").count())
           .toBe(0);
@@ -171,10 +171,7 @@ suite.define(() => {
         const initialCatalogReads = (await gateway.getRequests("plugins.list")).length;
         await gateway.deferNext("plugins.setEnabled");
         await gateway.deferNext("config.get");
-        await page
-          .locator("wa-switch.settings-toggle")
-          .filter({ hasText: "Enable or disable Active memory" })
-          .click();
+        await toggle.click();
 
         const mutation = await gateway.waitForRequest("plugins.setEnabled");
         expect(mutation.params).toEqual({ pluginId: "active-memory", enabled: true });
@@ -200,7 +197,7 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("plugins.list")).length)
           .toBeGreaterThan(initialCatalogReads);
-        await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("true");
+        await expect.poll(() => toggle.isChecked()).toBe(true);
         await page.getByText("Needs attention", { exact: true }).first().waitFor();
         await page
           .getByText(
@@ -243,20 +240,20 @@ suite.define(() => {
         const response = await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
         expect(response?.status()).toBe(200);
 
-        const engineGroup = page.locator("wa-radio-group.settings-segmented").first();
+        const engineGroup = page.getByRole("radiogroup").first();
         await engineGroup.waitFor();
         await expect
           .poll(async () =>
-            (await engineGroup.locator("wa-radio").allTextContents()).map((label) => label.trim()),
+            (await engineGroup.locator("label").allTextContents()).map((label) => label.trim()),
           )
           .toEqual(["OpenClaw Memory (Unavailable)", "Memory LanceDB", "Off"]);
         await expect
           .poll(() =>
             engineGroup
               .getByRole("radio", { name: "OpenClaw Memory (Unavailable)", exact: true })
-              .getAttribute("aria-checked"),
+              .isChecked(),
           )
-          .toBe("true");
+          .toBe(true);
 
         if (captureUiProofEnabled) {
           await page

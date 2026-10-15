@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
 import { ref, type RefOrCallback } from "lit/directives/ref.js";
 import {
   formatKeyboardShortcutParts,
@@ -50,7 +50,7 @@ export function renderKbd(keys: string | number | readonly string[], options: Kb
   >`;
 }
 
-export function renderKeyboardShortcut(
+function renderKeyboardShortcut(
   combo: KeyboardShortcutCombo,
   options: KbdOptions & { separateKeys?: boolean; applePlatform?: boolean } = {},
 ) {
@@ -68,11 +68,4 @@ export function renderKeyboardShortcut(
 /** Shared bare shortcut suffix for noninteractive tooltip content. */
 export function renderShortcutHint(label: string, combo: KeyboardShortcutCombo) {
   return html`${label}${" ("}${renderKeyboardShortcut(combo, { inline: true })})`;
-}
-
-/** Keep translated sentence order while replacing only its explicit shortcut placeholder. */
-export function renderShortcutText(text: string, shortcut: TemplateResult) {
-  return html`${text
-    .split("{shortcut}")
-    .map((part, index) => (index === 0 ? part : html`${shortcut}${part}`))}`;
 }

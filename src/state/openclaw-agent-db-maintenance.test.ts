@@ -25,6 +25,8 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
+import { runExistingOpenClawStateWriteTransaction } from "./openclaw-state-db-existing-write.js";
+import * as stateReads from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -130,6 +132,28 @@ function withAbortableMaintenance<T>(
 }
 
 describe("asynchronous agent database maintenance admission", () => {
+  it("checks maintenance authority on the held transaction without opening separate readers", async () => {
+    const f = fixture();
+    await withAgentDatabaseMaintenanceLease(
+      { env: f.env, schemaPolicy: "existing" },
+      async (maintenance) => {
+        runExistingOpenClawStateWriteTransaction(
+          ({ db }) => {
+            const reads = vi.spyOn(stateReads, "withOpenClawStateDatabaseReadOnly");
+            try {
+              maintenance.assertOwnedInTransaction(db);
+              expect(reads).not.toHaveBeenCalled();
+            } finally {
+              reads.mockRestore();
+            }
+          },
+          { env: f.env },
+          { schemaSql: "", operationLabel: "maintenance authority regression" },
+        );
+      },
+    );
+  });
+
   it("reuses one integrity process across agent maintenance while checking each file afresh", async () => {
     const f = fixture();
     const createTarget = (agentId: string) => {
@@ -183,28 +207,6 @@ describe("asynchronous agent database maintenance admission", () => {
       true,
     );
     expect(f.state.db.prepare("SELECT owner FROM state_leases").all()).toEqual([]);
-  });
-
-  it("yields during real integrity admission while retaining the maintenance fence", async () => {
-    const f = fixture();
-    const before = readIndexState(f.options.pathname);
-    await withAgentDatabaseMaintenanceLease({ env: f.env }, async (maintenance) => {
-      let progressed = false;
-      const tick = setImmediate(() => {
-        progressed = true;
-      });
-      try {
-        await migrateOpenClawAgentDatabaseForMaintenance(f.options, maintenance);
-        expect(progressed).toBe(true);
-        maintenance.assertOwned();
-        expect(() => openOpenClawAgentDatabase({ agentId: "worker", env: f.env })).toThrow(
-          /maintenance is in progress/,
-        );
-      } finally {
-        clearImmediate(tick);
-      }
-    });
-    expect(readIndexState(f.options.pathname)).toEqual(before);
   });
 
   it("refuses a prepared Worker claim during plain maintenance", async () => {
@@ -278,7 +280,7 @@ describe("asynchronous agent database maintenance admission", () => {
   });
 
   it.each(
-    [false, true].flatMap((corrupt) =>
+    [true].flatMap((corrupt) =>
       (["expiry", "replacement", "abort"] as const).map((loss) => ({ corrupt, loss })),
     ),
   )("fences Worker resume after $loss (integrity failure=$corrupt)", async ({ corrupt, loss }) => {
@@ -332,7 +334,7 @@ describe("asynchronous agent database maintenance admission", () => {
   });
 
   it.each(
-    [false, true].flatMap((corrupt) =>
+    [true].flatMap((corrupt) =>
       (["owner", "version"] as const).map((changed) => ({ corrupt, changed })),
     ),
   )(

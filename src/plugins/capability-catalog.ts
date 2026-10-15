@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
 import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
-import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
+import { getPluginValueInstance, wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 
 export const capabilityCatalogFamilies = [
   "speechProviders",
@@ -38,6 +38,13 @@ export function resolvePluginCapabilityCatalog(
   context: PluginCapabilityCatalogHostContext,
 ): PluginCapabilityCatalog {
   const entry = unwrapDefaultModuleExport(module);
+  if (typeof entry === "function") {
+    // Catalog results contain registrations whose callbacks retain their setup inventory's lifetime.
+    getPluginValueInstance(entry)?.admitFactory(
+      // SAFETY: The checked callable accepts catalog host context; its unknown result is validated below.
+      entry as (context: PluginCapabilityCatalogHostContext) => unknown,
+    );
+  }
   const catalog = typeof entry === "function" ? entry(context) : entry;
   if (isPromiseLike(catalog)) {
     void Promise.resolve(catalog).catch(() => {});

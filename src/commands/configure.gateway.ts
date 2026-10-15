@@ -1,4 +1,3 @@
-// Configure wizard Gateway port, bind, auth, and Tailscale prompts.
 import { parseIpAddressOrCidr } from "@openclaw/net-policy/ip";
 import { validateDottedDecimalIPv4Input } from "@openclaw/net-policy/ipv4";
 import {
@@ -34,7 +33,6 @@ import {
 type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 type GatewayTokenInputMode = "plaintext" | "ref";
 
-/** Prompt for local Gateway network/auth settings and return config plus call token. */
 export async function promptGatewayConfig(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
@@ -111,7 +109,6 @@ export async function promptGatewayConfig(
     options: [...TAILSCALE_EXPOSURE_OPTIONS],
   });
 
-  // Detect Tailscale binary before proceeding with serve/funnel setup.
   // Persist the path so getTailnetHostname can reuse it for origin injection.
   let tailscaleBin: string | null = null;
   if (tailscaleMode !== "off") {
@@ -119,10 +116,17 @@ export async function promptGatewayConfig(
     if (!tailscaleBin) {
       note(TAILSCALE_MISSING_BIN_NOTE_LINES.join("\n"), "Tailscale Warning");
     }
+    note(TAILSCALE_DOCS_LINES.join("\n"), "Tailscale");
   }
 
-  if (tailscaleMode !== "off") {
-    note(TAILSCALE_DOCS_LINES.join("\n"), "Tailscale");
+  // Disable incompatible exposure before it rewrites the selected auth or bind.
+  // Same-host proxies still require explicit loopback trust and consent.
+  if (authMode === "trusted-proxy" && tailscaleMode !== "off") {
+    note(
+      "Trusted proxy auth is incompatible with Tailscale serve/funnel. Disabling Tailscale.",
+      "Note",
+    );
+    tailscaleMode = "off";
   }
 
   if (tailscaleMode !== "off" && bind !== "loopback") {
@@ -133,16 +137,6 @@ export async function promptGatewayConfig(
   if (tailscaleMode === "funnel" && authMode !== "password") {
     note("Tailscale funnel requires password auth.", "Note");
     authMode = "password";
-  }
-
-  // trusted-proxy + loopback is valid when the reverse proxy runs on the same
-  // host, with the loopback source in trustedProxies and allowLoopback consent.
-  if (authMode === "trusted-proxy" && tailscaleMode !== "off") {
-    note(
-      "Trusted proxy auth is incompatible with Tailscale serve/funnel. Disabling Tailscale.",
-      "Note",
-    );
-    tailscaleMode = "off";
   }
 
   let gatewayToken: SecretInput | undefined;

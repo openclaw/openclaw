@@ -108,13 +108,16 @@ async function command(
     },
     { type, payload, requestId },
   );
+  let receipt: Record<string, unknown> | undefined;
   await expect
-    .poll(async () =>
-      (await messages(page)).find(
+    .poll(async () => {
+      receipt = (await messages(page)).find(
         (message) => message.type === "command-result" && message.requestId === requestId,
-      ),
-    )
-    .toMatchObject(expected);
+      );
+      return receipt;
+    })
+    .toBeDefined();
+  expect(receipt, JSON.stringify(receipt)).toMatchObject(expected);
 }
 
 async function headerLeadingInset(page: Page) {
@@ -303,7 +306,19 @@ suite.define(() => {
       );
       expect(targetState).toBeGreaterThan(-1);
       expect(targetState).toBeLessThan(navigationResult);
-      await pane.getByRole("link", { name: "Linked conversation", exact: true }).click();
+      const linkedConversation = pane.getByRole("link", {
+        name: "Linked conversation",
+        exact: true,
+      });
+      // An empty native-session preview must not starve the next frame or navigation.
+      await linkedConversation.focus();
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          }),
+      );
+      await linkedConversation.click();
       await expect
         .poll(async () =>
           (await messages(page)).findLast((message) => message.type === "route-changed"),
@@ -602,7 +617,19 @@ suite.define(() => {
             .waitFor();
           expect(new URL(page.url()).pathname).toBe("/settings");
         } else {
-          expect(await headerLeadingInset(page)).toBe(12);
+          if (mode === "dashboard") {
+            const controls = page.locator(".macos-titlebar-controls");
+            await controls.waitFor();
+            const controlsBox = await controls.boundingBox();
+            const leadingBox = await page.locator(".chat-pane__header-leading").boundingBox();
+            expect(controlsBox).not.toBeNull();
+            expect(leadingBox).not.toBeNull();
+            const gap = leadingBox!.x - (controlsBox!.x + controlsBox!.width);
+            expect(gap).toBeGreaterThanOrEqual(0);
+            expect(gap).toBeLessThanOrEqual(8);
+          } else {
+            expect(await headerLeadingInset(page)).toBe(12);
+          }
           expect(await page.locator(".chat-pane__header").boundingBox()).toMatchObject({
             y: 0,
             height: mode === "dashboard" ? 52 : 48,

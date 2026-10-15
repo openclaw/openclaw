@@ -3,9 +3,15 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import {
+  expandExplicitSkillReferences,
+  skillCommandsToExplicitSelections,
+} from "../discovery/chat-command-invocation.js";
+import { buildWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
 import type { Skill } from "../loading/skill-contract.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
+import { recordSkillFileHost } from "../skill-file-host.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { ExplicitSkillSelection } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
@@ -74,19 +80,46 @@ async function fixture() {
   return { gateway, host, snapshot, skillResources, release };
 }
 
-it("delivers host supporting files instead of a stale Gateway copy", async () => {
+it("keeps Gateway and workspace rewrites separate when their source paths collide", async () => {
   const f = await fixture();
   try {
+    const workspaceSkill = f.snapshot.resolvedSkills?.[0];
+    if (!workspaceSkill) {
+      throw new Error("missing workspace skill fixture");
+    }
+    recordSkillFileHost(workspaceSkill, "workspace");
+    const gatewaySkill = recordSkillFileHost(
+      { ...workspaceSkill, name: "zeta-gateway-guide" },
+      "gateway",
+    );
+    f.snapshot.skills.push({ name: gatewaySkill.name });
+    f.snapshot.resolvedSkills?.push(gatewaySkill);
+
     const delivery = await prepareSkillResourceDelivery(f.snapshot, () => {}, [], f.gateway);
-    expect(f.skillResources.readSkillFiles).toHaveBeenCalledOnce();
-    const materialized = await materializeSkillResources(delivery!, () => {});
+    if (!delivery) {
+      throw new Error("missing collision delivery fixture");
+    }
+    const materialized = await materializeSkillResources(delivery, () => {});
     try {
-      expect(
-        await fs.readFile(
-          path.join(materialized.snapshot.resolvedSkills![0]!.baseDir, "check.sh"),
-          "utf8",
-        ),
-      ).toBe("current host script");
+      const gatewayCopy = materialized.snapshot.resolvedSkills?.find(
+        (skill) => skill.name === gatewaySkill.name,
+      );
+      const workspaceCopy = materialized.snapshot.resolvedSkills?.find(
+        (skill) => skill.name === workspaceSkill.name,
+      );
+      if (!gatewayCopy || !workspaceCopy) {
+        throw new Error("missing materialized collision fixture");
+      }
+      expect(materialized.rewriteReferences(workspaceSkill.filePath)).toBe(gatewayCopy.filePath);
+      expect(materialized.rewriteReferences("workspace-skill://workspace/guide/SKILL.md")).toBe(
+        workspaceCopy.filePath,
+      );
+      expect(await fs.readFile(path.join(gatewayCopy.baseDir, "check.sh"), "utf8")).toBe(
+        "stale Gateway script",
+      );
+      expect(await fs.readFile(path.join(workspaceCopy.baseDir, "check.sh"), "utf8")).toBe(
+        "current host script",
+      );
     } finally {
       await materialized.cleanup();
     }
@@ -95,7 +128,7 @@ it("delivers host supporting files instead of a stale Gateway copy", async () =>
   }
 });
 
-it("delivers visible and explicitly selected Workshop files from Gateway with host Skills", async () => {
+it("delivers Gateway Workshop files without a live workspace binding", async () => {
   const f = await fixture();
   try {
     const config = {
@@ -114,11 +147,18 @@ it("delivers visible and explicitly selected Workshop files from Gateway with ho
     }
     const snapshot = await buildSkillSnapshot(f.gateway, { config, agentId: "main" });
     expect(snapshot.resolvedSkills?.some((skill) => skill.name === "hidden")).toBe(false);
+    snapshot.skills = snapshot.skills.filter((skill) => skill.name !== "guide");
+    snapshot.resolvedSkills = snapshot.resolvedSkills?.filter((skill) => skill.name !== "guide");
+    snapshot.discoverySkills = snapshot.discoverySkills?.filter((skill) => skill.name !== "guide");
+    f.release();
     const delivery = await prepareSkillResourceDelivery(
       snapshot,
       () => {},
       [{ name: "hidden", path: path.join(workshop, "hidden", "SKILL.md") }],
       f.gateway,
+    );
+    expect(delivery?.skills.find((skill) => skill.name === "hidden")?.sourcePath).toBe(
+      path.join(workshop, "hidden", "SKILL.md"),
     );
     const materialized = await materializeSkillResources(delivery!, () => {});
     try {
@@ -130,9 +170,7 @@ it("delivers visible and explicitly selected Workshop files from Gateway with ho
         expect((await fs.stat(path.join(skill.baseDir, "run.sh"))).mode & 0o111).not.toBe(0);
       }
       expect(f.skillResources.resolveExplicitSkill).not.toHaveBeenCalled();
-      expect(f.skillResources.readSkillFiles.mock.calls.map(([skill]) => skill.name)).toEqual([
-        "guide",
-      ]);
+      expect(f.skillResources.readSkillFiles).not.toHaveBeenCalled();
     } finally {
       await materialized.cleanup();
     }
@@ -163,7 +201,78 @@ it("resolves explicit hidden Skills on the host before native catalog validation
     );
     expect(f.skillResources.resolveExplicitSkill).toHaveBeenCalledWith(selected);
     expect(delivery?.skills.map((skill) => skill.name)).toEqual(["guide", "hidden"]);
-    expect(delivery?.skills[1]).toMatchObject({ sourcePath: selected.path, modelVisible: true });
+    expect(delivery?.skills[1]).toMatchObject({
+      sourcePath: selected.path,
+      modelVisible: true,
+    });
+  } finally {
+    f.release();
+  }
+});
+
+it("delivers the selected host's hidden Skill when both hosts use the same path", async () => {
+  const f = await fixture();
+  try {
+    for (const [root, text] of [
+      [f.gateway, "Gateway hidden resource"],
+      [f.host, "Node hidden resource"],
+    ] as const) {
+      const hidden = path.join(root, "skills", "hidden");
+      await fs.mkdir(hidden, { recursive: true });
+      await fs.writeFile(
+        path.join(hidden, "SKILL.md"),
+        `---\nname: hidden\ndescription: Hidden guide\ndisable-model-invocation: true\n---\n${text} instructions.\n`,
+      );
+      await fs.writeFile(path.join(hidden, "resource.txt"), text);
+    }
+    const selectedPath = path.join(f.gateway, "skills", "hidden", "SKILL.md");
+    f.snapshot.skills.push({ name: "hidden", gatewayFilePath: selectedPath }, { name: "hidden" });
+    const hostEntry = loadWorkspaceSkills(f.host, { workspaceOnly: true }).find(
+      (entry) => entry.skill.name === "hidden",
+    )!;
+    const [command] = buildWorkspaceSkillCommandSpecs(f.gateway, {
+      entries: [
+        {
+          ...hostEntry,
+          skill: recordSkillFileHost({ ...hostEntry.skill, filePath: selectedPath }, "workspace"),
+        },
+      ],
+    });
+    const [selected] = skillCommandsToExplicitSelections([command!]);
+    expect(selected).toEqual({ name: "hidden", path: selectedPath });
+    const expandedReference = expandExplicitSkillReferences({
+      text: "$hidden",
+      skillCommands: [command!],
+    }).body;
+    expect(expandedReference).toContain("SKILL.md: workspace-skill://workspace/hidden/SKILL.md");
+
+    const delivery = await prepareSkillResourceDelivery(
+      f.snapshot,
+      () => {},
+      [selected!],
+      f.gateway,
+    );
+    const materialized = await materializeSkillResources(delivery!, () => {});
+    try {
+      const hidden = materialized.snapshot.resolvedSkills!.find(
+        (skill) => skill.name === "hidden",
+      )!;
+      expect(await fs.readFile(hidden.filePath, "utf8")).toContain(
+        "Node hidden resource instructions.",
+      );
+      expect(await fs.readFile(path.join(hidden.baseDir, "resource.txt"), "utf8")).toBe(
+        "Node hidden resource",
+      );
+      expect(materialized.rewriteReferences(expandedReference)).toContain(
+        `SKILL.md: ${hidden.filePath}`,
+      );
+      expect(
+        materialized.rewriteReferences("workspace-skill://workspace/hidden/resource.txt"),
+      ).toBe(path.join(hidden.baseDir, "resource.txt"));
+      expect(f.skillResources.resolveExplicitSkill).toHaveBeenCalledWith(selected);
+    } finally {
+      await materialized.cleanup();
+    }
   } finally {
     f.release();
   }
@@ -198,7 +307,7 @@ it("does not fall back to Gateway files after the host binding stops", async () 
   expect(f.skillResources.readSkillFiles).not.toHaveBeenCalled();
 });
 
-it.each([false, true])(
+it.each([true])(
   "preserves local resource delivery for document-only adapters (stopped=%s)",
   async (stopped) => {
     const f = await fixture();

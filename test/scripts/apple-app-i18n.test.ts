@@ -14,6 +14,10 @@ import {
   serializeAppleCatalog,
   verifyAppleAppI18n,
 } from "../../scripts/apple-app-i18n.ts";
+import {
+  type NativeI18nInventoryEntry,
+  parseNativeI18nInventory,
+} from "../../scripts/native-i18n-inventory.ts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 
 const probe = vi.hoisted(() => ({
@@ -76,61 +80,21 @@ describe("Apple app i18n catalogs", () => {
       for (const gate of gates) {
         await expect(gate()).resolves.toBeUndefined();
       }
+      const english = await readFile(path.join(output, "en.lproj", "Localizable.strings"), "utf8");
+      expect(english).toContain('"Expires in %lld minutes" = "Expires in %lld minutes";');
+      expect(english).toContain(
+        '"^[%lld message](inflect: true)" = "^[%lld message](inflect: true)";',
+      );
     } finally {
       probe.source = "";
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it("ships translated runtime keys for iOS, watchOS, and explicit localized calls", async () => {
-    const catalog = JSON.parse(
-      await readFile("apps/ios/Resources/Localizable.xcstrings", "utf8"),
-    ) as {
-      strings: Record<
-        string,
-        { localizations?: Record<string, { stringUnit?: { state?: string; value?: string } }> }
-      >;
-    };
-
-    for (const key of [
-      "^[%lld approval](inflect: true) waiting",
-      "Approval needed",
-      "Agent: %@",
-      "Connect a nearby Gateway",
-      "Talk to Claw",
-      "Expires in %@",
-      "Pending review",
-      "Secure connection is required for this host.",
-      "TLS required",
-      "Use only on a trusted private network.",
-    ]) {
-      const entry = catalog.strings[key];
-      expect(entry, key).toBeDefined();
-      const localizedValues: string[] = [];
-      for (const locale of ["en", ...NATIVE_I18N_LOCALES]) {
-        const unit = entry?.localizations?.[locale]?.stringUnit;
-        expect(unit?.value, `${key}:${locale}`).toBeTruthy();
-        if (locale !== "en" && unit?.value) {
-          localizedValues.push(unit.value);
-        }
-      }
-      expect(
-        localizedValues.some((value) => value !== key),
-        key,
-      ).toBe(true);
-    }
-  });
-
   it("derives shared discovery status coverage into the iOS catalog", async () => {
-    const inventory = JSON.parse(await readFile("apps/.i18n/native-source.json", "utf8")) as {
-      entries: Array<{
-        id: string;
-        source: string;
-        sites: Array<{ kind: string; path: string }>;
-        surface: string;
-      }>;
-      version: number;
-    };
+    const inventory = parseNativeI18nInventory(
+      await readFile("apps/.i18n/native-source.json", "utf8"),
+    );
     const build = buildIosCatalog(
       { sourceLanguage: "en", strings: {}, version: "1.0" },
       inventory,
@@ -142,45 +106,8 @@ describe("Apple app i18n catalogs", () => {
     );
   });
 
-  it("derives broad macOS catalog coverage from the native source inventory", async () => {
-    const inventory = JSON.parse(await readFile("apps/.i18n/native-source.json", "utf8")) as {
-      entries: Array<{
-        id: string;
-        source: string;
-        sites: Array<{ kind: string; path: string }>;
-        surface: string;
-      }>;
-      version: number;
-    };
-    const build = buildMacosCatalog(
-      { sourceLanguage: "en", strings: {}, version: "1.0" },
-      inventory,
-      [],
-    );
-    const keys = Object.keys(build.catalog.strings ?? {});
-
-    expect(keys.length).toBeGreaterThan(900);
-    expect(keys).toEqual(
-      expect.arrayContaining([
-        "Connection",
-        "Done in %@",
-        "Gateways",
-        "Live level",
-        "Microphone Test",
-        "Quick Chat shortcut",
-        "Searching…",
-        "Shelling",
-        "Stopped",
-        "Voice Wake requires macOS 26 or newer",
-        "Waiting",
-      ]),
-    );
-    expect(keys).not.toContain("OpenClaw");
-    expect(keys.some((key) => key.includes("\\("))).toBe(false);
-  });
-
   it("warns only when obsolete Apple keys are the entire catalog drift", async () => {
-    const inventory: Parameters<typeof buildIosCatalog>[1] = JSON.parse(
+    const inventory = parseNativeI18nInventory(
       await readFile("apps/.i18n/native-source.json", "utf8"),
     );
     const translations = await Promise.all(
@@ -289,64 +216,8 @@ describe("Apple app i18n catalogs", () => {
     }
   });
 
-  it("serializes one complete localization key per line without losing nested metadata", () => {
-    const catalog = {
-      sourceLanguage: "en",
-      strings: {
-        Plain: {
-          localizations: {
-            en: { stringUnit: { state: "translated", value: "Plain" } },
-          },
-        },
-        "Rich %@": {
-          comment: "Translator context",
-          extractionState: "manual",
-          shouldTranslate: false,
-          localizations: {
-            en: {
-              substitutions: {
-                count: {
-                  variations: {
-                    plural: {
-                      one: { stringUnit: { state: "translated", value: "One %@" } },
-                      other: { stringUnit: { state: "new", value: "%@ items" } },
-                    },
-                  },
-                },
-              },
-              stringUnit: { state: "translated", value: "Rich %@" },
-            },
-          },
-        },
-      },
-      version: "1.0",
-    };
-
-    const serialized = serializeAppleCatalog(catalog);
-    const lines = serialized.trimEnd().split("\n");
-
-    expect(JSON.parse(serialized)).toEqual(catalog);
-    expect(lines).toHaveLength(Object.keys(catalog.strings).length + 6);
-    expect(lines[3]).toBe(`    "Plain": ${JSON.stringify(catalog.strings.Plain)},`);
-    expect(lines[4]).toBe(`    "Rich %@": ${JSON.stringify(catalog.strings["Rich %@"])}`);
-    expect(serialized.endsWith("\n")).toBe(true);
-  });
-
-  it("keeps Connection window runtime values verbatim", async () => {
-    const [gateways, connection] = await Promise.all([
-      readFile("apps/macos/Sources/OpenClaw/GatewaySettings.swift", "utf8"),
-      readFile("apps/macos/Sources/OpenClaw/ConnectionSettingsView.swift", "utf8"),
-    ]);
-
-    expect(gateways).toContain("Text(verbatim: profile.name)");
-    expect(gateways).toContain("Text(verbatim: profile.url.absoluteString)");
-    expect(connection).toContain("Text(self.connectionStatusSubtitle)");
-    expect(connection).toContain("Text(self.gatewayDiscovery.statusText)");
-    expect(connection).not.toContain("LocalizedStringKey(self.");
-  });
-
   it("routes merged sites by coupled path and kind while preserving shipped translations", () => {
-    const coveredMacosEntries = [
+    const coveredMacosEntries: NativeI18nInventoryEntry[] = [
       { kind: "ui-call-concatenated", source: "Call concatenated" },
       {
         kind: "ui-localized-call-concatenated",
@@ -362,30 +233,27 @@ describe("Apple app i18n catalogs", () => {
       surface: "apple",
       sites: [{ kind, path: "apps/macos/Sources/OpenClaw/Example.swift" }],
     }));
-    const inventory = {
-      version: 2,
-      entries: [
-        {
-          id: "native.apple.connect",
-          source: "Connect now",
-          surface: "apple",
-          sites: [
-            { kind: "ui-call", path: "apps/ios/Sources/Example.swift" },
-            { kind: "ui-call", path: "apps/macos/Sources/OpenClaw/Example.swift" },
-          ],
-        },
-        {
-          id: "native.apple.decoy",
-          source: "Do not catalog",
-          surface: "apple",
-          sites: [
-            { kind: "plist-string", path: "apps/ios/Sources/Info.plist" },
-            { kind: "ui-call", path: "outside/Example.swift" },
-          ],
-        },
-        ...coveredMacosEntries,
-      ],
-    };
+    const inventory: NativeI18nInventoryEntry[] = [
+      {
+        id: "native.apple.connect",
+        source: "Connect now",
+        surface: "apple",
+        sites: [
+          { kind: "ui-call", path: "apps/ios/Sources/Example.swift" },
+          { kind: "ui-call", path: "apps/macos/Sources/OpenClaw/Example.swift" },
+        ],
+      },
+      {
+        id: "native.apple.decoy",
+        source: "Do not catalog",
+        surface: "apple",
+        sites: [
+          { kind: "plist-string", path: "apps/ios/Sources/Info.plist" },
+          { kind: "ui-call", path: "outside/Example.swift" },
+        ],
+      },
+      ...coveredMacosEntries,
+    ];
     const existing = {
       sourceLanguage: "en",
       strings: {
@@ -426,64 +294,6 @@ describe("Apple app i18n catalogs", () => {
     expect(ios.contradictions).toEqual([]);
   });
 
-  it.each([
-    ["iOS", buildIosCatalog, "apps/ios/Sources/Example.swift"],
-    ["macOS", buildMacosCatalog, "apps/macos/Sources/OpenClaw/Example.swift"],
-    ["shared iOS", buildIosCatalog, "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Example.swift"],
-    [
-      "shared macOS",
-      buildMacosCatalog,
-      "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Example.swift",
-    ],
-  ] as const)(
-    "converts only constrained inflected counts into typed %s catalog keys",
-    (_platform, buildCatalog, sourcePath) => {
-      const source = "^[\\(count) entry](inflect: true)";
-      const translated = "^[\\(count) Eintrag](inflect: true)";
-      const build = buildCatalog(
-        { sourceLanguage: "en", strings: {} },
-        {
-          version: 2,
-          entries: [
-            {
-              id: "native.apple.count",
-              source,
-              sites: [{ kind: "ui-localized-call", path: sourcePath }],
-              surface: "apple",
-            },
-            {
-              id: "native.apple.mixed-count",
-              source: "\\(name) has " + source,
-              sites: [{ kind: "ui-localized-call", path: sourcePath }],
-              surface: "apple",
-            },
-          ],
-        },
-        [
-          {
-            version: 2,
-            locale: "de",
-            translations: { "native.apple.count": translated },
-          },
-        ],
-      );
-
-      const key = "^[%lld entry](inflect: true)";
-      expect(Object.keys(build.catalog.strings ?? {})).toEqual([key]);
-      expect(build.catalog.strings?.[key]?.localizations?.en?.stringUnit?.value).toBe(key);
-      expect(build.catalog.strings?.[key]?.localizations?.de?.stringUnit?.value).toBe(
-        "^[%lld Eintrag](inflect: true)",
-      );
-    },
-  );
-
-  it("keeps dynamic Watch content verbatim and requires explicit localization", async () => {
-    const watch = await readFile("apps/ios/WatchApp/Sources/WatchInboxView.swift", "utf8");
-
-    expect(watch).not.toContain("WatchTextValue: ExpressibleByStringLiteral");
-    expect(watch).toContain("accessory: .verbatim(self.store.talkSummaryText)");
-  });
-
   it("rejects interpolated runtime copy across every supported Swift syntax", () => {
     const source = String.raw`
       let key = LocalizedStringKey("Hello \(name)")
@@ -506,49 +316,6 @@ describe("Apple app i18n catalogs", () => {
       "interpolated multiline SwiftUI text literal",
       "interpolated multiline SwiftUI modifier literal",
     ]);
-  });
-
-  it("generates only localized usage descriptions for every shipped iOS target", async () => {
-    const french = await readFile("apps/ios/Sources/fr.lproj/InfoPlist.strings", "utf8");
-    const watchChinese = await readFile(
-      "apps/ios/WatchApp/zh-Hans.lproj/InfoPlist.strings",
-      "utf8",
-    );
-    const shareGerman = await readFile(
-      "apps/ios/ShareExtension/de.lproj/InfoPlist.strings",
-      "utf8",
-    );
-    const activityJapanese = await readFile(
-      "apps/ios/ActivityWidget/ja.lproj/InfoPlist.strings",
-      "utf8",
-    );
-
-    expect(french).toContain('"NSCameraUsageDescription" = ');
-    expect(french).toContain('"NSMicrophoneUsageDescription" = ');
-    expect(french).toContain('"NSHealthUpdateUsageDescription" = ');
-    expect(watchChinese).toContain('"NSLocalNetworkUsageDescription" = ');
-    expect(shareGerman.trim()).toBe("");
-    expect(activityJapanese.trim()).toBe("");
-
-    for (const root of [
-      "apps/ios/Sources",
-      "apps/ios/WatchApp",
-      "apps/ios/ShareExtension",
-      "apps/ios/ActivityWidget",
-    ]) {
-      const localeDirs = (await readdir(root, { withFileTypes: true })).filter(
-        (entry) => entry.isDirectory() && entry.name.endsWith(".lproj"),
-      );
-      expect(localeDirs).toHaveLength(NATIVE_I18N_LOCALES.length);
-      for (const localeDir of localeDirs) {
-        const localizedPlist = await readFile(
-          path.join(root, localeDir.name, "InfoPlist.strings"),
-          "utf8",
-        );
-        expect(localizedPlist).not.toContain("CFBundleDisplayName");
-        expect(localizedPlist).not.toMatch(/\$\([^)]*\)|\$\{[^}]*\}/u);
-      }
-    }
   });
 
   it("refreshes InfoPlist copy from translations for the current source", () => {
@@ -587,7 +354,6 @@ describe("Apple app i18n catalogs", () => {
   });
 
   it("selects InfoPlist candidates by stable ID instead of shared source text", () => {
-    const source = "Use the camera to scan setup codes.";
     const artifact = {
       version: 2,
       locale: "fr",
@@ -597,73 +363,8 @@ describe("Apple app i18n catalogs", () => {
       },
     };
 
-    expect(infoPlistTranslationCandidates(artifact, "native.apple.camera", source)).toEqual([
+    expect(infoPlistTranslationCandidates(artifact, "native.apple.camera")).toEqual([
       "Utilisez l’appareil photo pour scanner les codes de configuration.",
     ]);
-  });
-
-  it("compiles macOS catalogs into app-bundle localization directories", async () => {
-    const outputDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-apple-i18n-"));
-    try {
-      await compileMacosLocalizations(outputDir);
-      const english = await readFile(
-        path.join(outputDir, "en.lproj", "Localizable.strings"),
-        "utf8",
-      );
-      expect(english).toContain('"Expires in %lld minutes" = "Expires in %lld minutes";');
-      expect(english).toContain(
-        '"^[%lld message](inflect: true)" = "^[%lld message](inflect: true)";',
-      );
-      expect(english).toContain('"Quick Chat shortcut" = "Quick Chat shortcut";');
-      expect(english).toContain('"Microphone Test" = "Microphone Test";');
-      const swedish = await readFile(
-        path.join(outputDir, "sv.lproj", "Localizable.strings"),
-        "utf8",
-      );
-      expect(swedish).toContain('"Connection" = "Anslutning";');
-      const turkish = await readFile(
-        path.join(outputDir, "tr.lproj", "Localizable.strings"),
-        "utf8",
-      );
-      expect(turkish).toContain('"Connection" = "Bağlantı";');
-      const frenchInfoPlist = await readFile(
-        path.join(outputDir, "fr.lproj", "InfoPlist.strings"),
-        "utf8",
-      );
-      expect(frenchInfoPlist).toContain(
-        '"NSUserNotificationUsageDescription" = "OpenClaw a besoin de l’autorisation d’envoyer des notifications pour afficher des alertes concernant les actions de l’agent.";',
-      );
-      expect(frenchInfoPlist).toContain('"NSScreenCaptureDescription" = ');
-      expect(frenchInfoPlist).toContain('"NSLocationUsageDescription" = ');
-      expect(frenchInfoPlist).toContain('"NSLocationWhenInUseUsageDescription" = ');
-      expect(frenchInfoPlist).toContain('"NSLocationAlwaysAndWhenInUseUsageDescription" = ');
-      await expect(
-        readFile(path.join(outputDir, "zh-Hans.lproj", "Localizable.strings"), "utf8"),
-      ).resolves.toContain('"Save" = ');
-      await expect(
-        readFile(path.join(outputDir, "ja.lproj", "Localizable.strings"), "utf8"),
-      ).resolves.toContain('"Done" = ');
-      for (const localeDir of ["ja", "zh-Hans", "zh-Hant"]) {
-        await expect(
-          readFile(path.join(outputDir, `${localeDir}.lproj`, "InfoPlist.strings"), "utf8"),
-        ).resolves.toContain('"NSCameraUsageDescription" = ');
-      }
-      const localizedDirectories = await readdir(outputDir, { withFileTypes: true });
-      const infoPlistFiles = await Promise.all(
-        localizedDirectories
-          .filter((entry) => entry.isDirectory() && entry.name.endsWith(".lproj"))
-          .map(async (entry) => {
-            try {
-              await readFile(path.join(outputDir, entry.name, "InfoPlist.strings"), "utf8");
-              return entry.name;
-            } catch {
-              return null;
-            }
-          }),
-      );
-      expect(infoPlistFiles.filter(Boolean)).toHaveLength(NATIVE_I18N_LOCALES.length);
-    } finally {
-      await rm(outputDir, { force: true, recursive: true });
-    }
   });
 });

@@ -12,7 +12,13 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { startBuzzBus, type BuzzBus } from "./buzz-bus.js";
 import { createBuzzRelayFixture } from "./buzz-relay.test-harness.js";
@@ -23,18 +29,21 @@ import { resolveBuzzAccount } from "./types.js";
 let stateDir: string;
 let fixture: Awaited<ReturnType<typeof createBuzzRelayFixture>>;
 let cleanupBus: BuzzBus | undefined;
+let cleanupAccount: (() => Promise<void>) | undefined;
 let messages: string[];
 beforeEach(async () => {
   // openclaw-temp-dir: allow extension tests cannot import root test helpers.
   stateDir = mkdtempSync(path.join(tmpdir(), "openclaw-buzz-socket-"));
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   cleanupBus = undefined;
+  cleanupAccount = undefined;
   messages = [];
   fixture = await createBuzzRelayFixture();
 });
 
 afterEach(async () => {
   try {
+    await cleanupAccount?.();
     await cleanupBus?.close();
   } finally {
     try {
@@ -55,6 +64,7 @@ async function startBus(
   > = {},
 ) {
   cleanupBus = await startBuzzBus({
+    scheduler: createTestPluginServiceScheduler(),
     accountId: randomUUID(),
     relayUrl: fixture.relayUrl,
     privateKey: fixture.botPrivateKey,
@@ -161,16 +171,25 @@ it("keeps removal denied through stale snapshots and accepts a confirmed rejoin"
   expect(fatal).toEqual([]);
 });
 
-it("recovers the Gateway account after silent presence without replaying pre-activation messages", async () => {
+it("recovers the Gateway account after silent presence without replaying pre-activation messages", async ({
+  signal,
+}) => {
   fixture.setPresenceMode("silent");
   fixture.sendMessage("pre-activation", Math.floor(Date.now() / 1000) - 60);
   const runtime = createPluginRuntimeMock();
   runtime.state.openKeyedStore = (options) => createPluginStateKeyedStoreForTests("buzz", options);
   setBuzzRuntime(runtime);
   const handled: string[] = [];
+  const beforeStallDelivered = createDeferred<void>();
+  const reconnectDelivered = createDeferred<void>();
   vi.mocked(runtime.channel.inbound.dispatch).mockImplementation(async (params) => {
     handled.push(String(params.ctxPayload.RawBody));
     await params.delivery.deliver({ text: "gateway socket reply" }, { kind: "final" });
+    if (params.ctxPayload.RawBody === "before stall") {
+      beforeStallDelivered.resolve();
+    } else if (params.ctxPayload.RawBody === "during reconnect") {
+      reconnectDelivered.resolve();
+    }
     return {
       admission: { kind: "dispatch" },
       dispatched: true,
@@ -214,30 +233,43 @@ it("recovers the Gateway account after silent presence without replaying pre-act
       }
     },
   });
-  const lifecycle = startBuzzGatewayAccount(ctx);
+  const clock = createGatewaySchedulerClock(Date.now());
+  const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock));
+  const lifecycle = startBuzzGatewayAccount({
+    ...ctx,
+    scheduler,
+  });
   const stoppedBeforeReady = lifecycle.then(() => {
     throw new Error("Buzz account stopped before becoming ready");
   });
+  cleanupAccount = async () => {
+    abort.abort();
+    try {
+      await lifecycle;
+    } finally {
+      await scheduler.stop();
+    }
+  };
   try {
-    await Promise.race([firstReady.promise, stoppedBeforeReady]);
+    await withinTest(Promise.race([firstReady.promise, stoppedBeforeReady]), signal);
     expect(states).toContain("ready");
     fixture.sendMessage("before stall");
-    await vi.waitFor(() => expect(handled).toContain("before stall"));
-    await vi.waitFor(() => expect(fixture.authenticatedSessions()).toBe(2), { timeout: 8000 });
-    await vi.waitFor(() => expect(handled).toContain("during reconnect"));
+    await withinTest(Promise.race([beforeStallDelivered.promise, stoppedBeforeReady]), signal);
+    expect(handled).toContain("before stall");
+    // Start the silent heartbeat only after the pre-stall message has completed.
+    await withinTest(Promise.resolve(clock.wake()), signal);
     // Replay can dispatch before subscription history and Gateway startup finish.
-    await Promise.race([secondReady.promise, stoppedBeforeReady]);
+    await withinTest(Promise.race([secondReady.promise, stoppedBeforeReady]), signal);
+    await withinTest(Promise.race([reconnectDelivered.promise, stoppedBeforeReady]), signal);
+    expect(fixture.authenticatedSessions()).toBe(2);
     expect(states.filter((state) => state === "ready")).toHaveLength(2);
     expect(states).toContain("recovering");
     expect(handled).toEqual(["before stall", "during reconnect"]);
-    await vi.waitFor(() =>
-      expect(
-        fixture.received.filter((event) => event.content === "gateway socket reply"),
-      ).toHaveLength(2),
-    );
+    expect(
+      fixture.received.filter((event) => event.content === "gateway socket reply"),
+    ).toHaveLength(2);
   } finally {
-    abort.abort();
-    await lifecycle;
+    await cleanupAccount();
   }
 }, 15000);
 

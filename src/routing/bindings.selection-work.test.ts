@@ -5,7 +5,6 @@ import { resolveDefaultAgentBoundAccountId } from "./bindings.js";
 import { resolveFirstBoundAccountId } from "./bound-account-read.js";
 
 function countRoleVisits<T>(memberRoleIds: string[], read: () => T) {
-  const descriptor = Object.getOwnPropertyDescriptor(memberRoleIds, Symbol.iterator);
   const iterate = memberRoleIds[Symbol.iterator].bind(memberRoleIds);
   let iterations = 0;
   let visits = 0;
@@ -23,20 +22,16 @@ function countRoleVisits<T>(memberRoleIds: string[], read: () => T) {
     const value = read();
     return { value, iterations, visits };
   } finally {
-    if (descriptor) {
-      Object.defineProperty(memberRoleIds, Symbol.iterator, descriptor);
-    } else {
-      Reflect.deleteProperty(memberRoleIds, Symbol.iterator);
-    }
+    Reflect.deleteProperty(memberRoleIds, Symbol.iterator);
   }
 }
 
 describe("bound account selection work", () => {
   it.each(["peerless", "default"] as const)(
-    "reads only the winning binding type from 10000 bindings (%s)",
+    "skips ineligible bindings and stops at the first of 10000 eligible bindings (%s)",
     (selector) => {
       let typeReads = 0;
-      const bindings: AgentRouteBinding[] = Array.from({ length: 10_000 }, (_, index) => ({
+      const eligible: AgentRouteBinding[] = Array.from({ length: 10_000 }, (_, index) => ({
         get type() {
           typeReads += 1;
           return "route" as const;
@@ -44,6 +39,17 @@ describe("bound account selection work", () => {
         agentId: "bot-alpha",
         match: { channel: "matrix", accountId: `account-${index}` },
       }));
+      const bindings: AgentBinding[] = [
+        {
+          type: "acp",
+          agentId: "bot-alpha",
+          match: { channel: "matrix", accountId: "acp", peer: { kind: "group", id: "room" } },
+        },
+        { agentId: "bot-alpha", match: { channel: "matrix" } },
+        { agentId: "bot-alpha", match: { channel: "matrix", accountId: "*" } },
+        { agentId: "other", match: { channel: "matrix", accountId: "other" } },
+        ...eligible,
+      ];
       const cfg: OpenClawConfig = {
         agents: { entries: { "bot-alpha": {} } },
         bindings,
@@ -51,76 +57,39 @@ describe("bound account selection work", () => {
 
       const result =
         selector === "peerless"
-          ? resolveFirstBoundAccountId({ cfg, channelId: "matrix", agentId: "bot-alpha" })
-          : resolveDefaultAgentBoundAccountId(cfg, "matrix");
+          ? resolveFirstBoundAccountId({ cfg, channelId: " MATRIX ", agentId: "bot-alpha" })
+          : resolveDefaultAgentBoundAccountId(cfg, " MATRIX ");
       const reads = typeReads;
 
       expect(result).toBe("account-0");
       expect(cfg.bindings).toBe(bindings);
-      expect(bindings).toHaveLength(10_000);
+      expect(bindings).toHaveLength(10_004);
       expect(reads).toBe(1);
     },
   );
 
-  it("visits 1000 caller roles once across 1000 role-scoped candidates", () => {
-    const bindings: AgentRouteBinding[] = Array.from({ length: 1000 }, (_, index) => ({
+  it.each([true, false])("prepares caller roles once only for matching scopes (%s)", (matching) => {
+    const match = (accountId: string, scope: Partial<AgentRouteBinding["match"]> = {}) => ({
       agentId: "bot-alpha",
-      match: {
-        channel: "discord",
-        guildId: "guild-current",
-        roles: [index === 999 ? "role-999" : "missing-role"],
-        accountId: `account-${index}`,
-      },
-    }));
-    const cfg: OpenClawConfig = { bindings };
-    const memberRoleIds = Array.from({ length: 1000 }, (_, index) => `role-${index}`);
-    const result = countRoleVisits(memberRoleIds, () =>
-      resolveFirstBoundAccountId({
-        cfg,
-        channelId: "discord",
-        agentId: "bot-alpha",
-        groupSpace: "guild-current",
-        memberRoleIds,
-      }),
-    );
-
-    expect(result.value).toBe("account-999");
-    expect(cfg.bindings).toBe(bindings);
-    expect(bindings).toHaveLength(1000);
-    expect(memberRoleIds).toEqual(Array.from({ length: 1000 }, (_, index) => `role-${index}`));
-    expect(Object.hasOwn(memberRoleIds, Symbol.iterator)).toBe(false);
-    expect({ iterations: result.iterations, visits: result.visits }).toEqual({
-      iterations: 1,
-      visits: 1000,
+      match: { channel: "discord", accountId, ...scope },
     });
-  });
-
-  it("does not prepare caller roles for mismatched spaces or unscoped bindings", () => {
-    const cfg: OpenClawConfig = {
-      bindings: [
-        {
-          agentId: "bot-alpha",
-          match: {
-            channel: "discord",
-            guildId: "other-guild",
-            roles: ["admin"],
-            accountId: "wrong-guild",
-          },
-        },
-        {
-          agentId: "bot-alpha",
-          match: {
-            channel: "discord",
+    const bindings = matching
+      ? Array.from({ length: 1000 }, (_, index) =>
+          match(`account-${index}`, {
             guildId: "current",
-            teamId: "other-team",
-            roles: ["admin"],
-            accountId: "wrong-team",
-          },
-        },
-        { agentId: "bot-alpha", match: { channel: "discord", accountId: "unscoped" } },
-      ],
-    };
-    const memberRoleIds = ["admin"];
+            roles: [index === 999 ? "role-999" : "missing-role"],
+          }),
+        )
+      : [
+          match("wrong-guild", { guildId: "other-guild", roles: ["admin"] }),
+          match("wrong-team", { guildId: "current", teamId: "other-team", roles: ["admin"] }),
+          match("unscoped"),
+        ];
+    const cfg: OpenClawConfig = { bindings };
+    const expectedRoles = matching
+      ? Array.from({ length: 1000 }, (_, index) => `role-${index}`)
+      : ["admin"];
+    const memberRoleIds = [...expectedRoles];
     const result = countRoleVisits(memberRoleIds, () =>
       resolveFirstBoundAccountId({
         cfg,
@@ -131,68 +100,31 @@ describe("bound account selection work", () => {
       }),
     );
 
-    expect(result.value).toBe("unscoped");
-    expect(memberRoleIds).toEqual(["admin"]);
-    expect(Object.hasOwn(memberRoleIds, Symbol.iterator)).toBe(false);
+    expect(result.value).toBe(matching ? "account-999" : "unscoped");
+    expect(cfg.bindings).toBe(bindings);
+    expect(bindings).toHaveLength(matching ? 1000 : 3);
+    expect(memberRoleIds).toEqual(expectedRoles);
     expect({ iterations: result.iterations, visits: result.visits }).toEqual({
-      iterations: 0,
-      visits: 0,
+      iterations: matching ? 1 : 0,
+      visits: matching ? 1000 : 0,
     });
-  });
-
-  it("reads role and binding changes freshly on each invocation", () => {
-    const cfg: OpenClawConfig = {
-      bindings: [
-        {
+    if (matching) {
+      const select = () =>
+        resolveFirstBoundAccountId({
+          cfg,
+          channelId: "discord",
           agentId: "bot-alpha",
-          match: { channel: "discord", roles: ["admin"], accountId: "admin" },
-        },
-        { agentId: "bot-alpha", match: { channel: "discord", accountId: "general" } },
-      ],
-    };
-    const params = {
-      cfg,
-      channelId: "discord",
-      agentId: "bot-alpha",
-      memberRoleIds: ["member"],
-    };
-    expect(resolveFirstBoundAccountId(params)).toBe("general");
-    params.memberRoleIds[0] = "admin";
-    expect(resolveFirstBoundAccountId(params)).toBe("admin");
-    params.memberRoleIds = ["member"];
-    expect(resolveFirstBoundAccountId(params)).toBe("general");
-    cfg.bindings = [
-      { agentId: "bot-alpha", match: { channel: "discord", accountId: "replacement" } },
-    ];
-    expect(resolveFirstBoundAccountId(params)).toBe("replacement");
+          groupSpace: "current",
+          memberRoleIds,
+        });
+      memberRoleIds[999] = "other-role";
+      expect(select()).toBeUndefined();
+      memberRoleIds[999] = "role-999";
+      expect(select()).toBe("account-999");
+      cfg.bindings = [match("replacement")];
+      expect(select()).toBe("replacement");
+    }
   });
-
-  it.each(["peerless", "default"] as const)(
-    "keeps route type and explicit account requirements (%s)",
-    (selector) => {
-      const bindings: AgentBinding[] = [
-        {
-          type: "acp",
-          agentId: "bot-alpha",
-          match: { channel: "matrix", accountId: "acp", peer: { kind: "group", id: "room" } },
-        },
-        { agentId: "bot-alpha", match: { channel: "matrix" } },
-        { agentId: "bot-alpha", match: { channel: "matrix", accountId: "*" } },
-        { agentId: "other", match: { channel: "matrix", accountId: "other" } },
-        { agentId: "bot-alpha", match: { channel: "matrix", accountId: "selected" } },
-      ];
-      const cfg: OpenClawConfig = {
-        agents: { entries: { "bot-alpha": {} } },
-        bindings,
-      };
-      const result =
-        selector === "peerless"
-          ? resolveFirstBoundAccountId({ cfg, channelId: " MATRIX ", agentId: "bot-alpha" })
-          : resolveDefaultAgentBoundAccountId(cfg, " MATRIX ");
-      expect(result).toBe("selected");
-      expect(cfg.bindings).toBe(bindings);
-    },
-  );
 
   it("retains early channel and default-owner guards without reading binding types", () => {
     let typeReads = 0;

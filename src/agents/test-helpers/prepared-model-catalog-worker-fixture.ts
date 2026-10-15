@@ -32,6 +32,30 @@ import type {
   PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.types.js";
 
+function createJwtWithExp(exp: number, marker?: string): string {
+  const payload = Buffer.from(JSON.stringify({ exp, ...(marker ? { marker } : {}) })).toString(
+    "base64url",
+  );
+  return `header.${payload}.signature`;
+}
+
+export function writeCodexAuth(codexHome: string, marker: string): void {
+  const authPath = path.join(codexHome, "auth.json");
+  fs.writeFileSync(
+    authPath,
+    JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: createJwtWithExp(Math.floor(Date.now() / 1000) + 3600, marker),
+        refresh_token: `refresh-${marker}-not-real`,
+      },
+    }),
+    "utf8",
+  );
+  const future = new Date(Date.now() + 2_000);
+  fs.utimesSync(authPath, future, future);
+}
+
 const waitTimeoutMs = 30_000;
 
 export function usePreparedCatalogWorkerFixtures(
@@ -118,6 +142,7 @@ export function usePreparedCatalogWorkerFixtures(
     });
   });
   return {
+    readCatalogWorkers: (): readonly Worker[] => [...workers],
     makeTempDir: (prefix: string) => tempDirs.make(prefix),
     observeCatalogEntry: (
       receipts: FixtureReceiptChannel,

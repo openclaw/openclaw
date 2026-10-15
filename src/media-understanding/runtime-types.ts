@@ -41,19 +41,14 @@ export type RunMediaUnderstandingFileResult = {
 
 export type DescribeImageFileParams = Omit<RunMediaUnderstandingFileParams, "capability">;
 
-export type DescribeImageFileWithModelParams = {
-  filePath: string;
-  mediaUrl?: string;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  mime?: string;
+export type DescribeImageFileWithModelParams = Omit<
+  RunMediaUnderstandingFileParams,
+  "capability" | "activeModel" | "scopeContext" | "prompt"
+> & {
   provider: string;
   model: string;
   prompt: string;
   maxTokens?: number;
-  timeoutMs?: number;
 };
 
 export type PreparedImageDescriptionInput = ImagesDescriptionInput;

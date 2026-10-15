@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -21,13 +21,18 @@ import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js
 
 // Synchronous fault injection must remain in the transaction or callback under test.
 export function createPlacementTurnClaimFixtureOps(database: OpenClawStateDatabase) {
-  return createPlacementTurnClaimOps({
+  const operations = createPlacementTurnClaimOps({
     path: database.path,
     instanceId: randomUUID(),
     now: Date.now,
     read: () => database.db,
     write: (operation) => runOpenClawStateWriteTransaction(({ db }) => operation(db), { database }),
   });
+  return {
+    ...operations,
+    claimTurn: (input: Parameters<typeof operations.claimTurn>[0]) =>
+      operations.claimTurn(input).claim,
+  };
 }
 
 export async function advancePlacementFixtureToActive(
@@ -55,21 +60,21 @@ export async function advancePlacementFixtureToActive(
     seedAttachedPlacementEnvironment(database, environment);
   }
   let placement = await store.startDispatch(identity);
-  placement = store.transition({
+  placement = await store.transition({
     sessionId: identity.sessionId,
     from: "requested",
     to: "provisioning",
     expectedGeneration: placement.generation,
     patch: { environmentId },
   });
-  placement = store.transition({
+  placement = await store.transition({
     sessionId: identity.sessionId,
     from: "provisioning",
     to: "syncing",
     expectedGeneration: placement.generation,
     patch: { workerBundleHash },
   });
-  placement = store.transition({
+  placement = await store.transition({
     sessionId: identity.sessionId,
     from: "syncing",
     to: "starting",
@@ -79,7 +84,7 @@ export async function advancePlacementFixtureToActive(
   if (seedEnvironment === "before-activation") {
     seedAttachedPlacementEnvironment(database, environment);
   }
-  const active = store.transition({
+  const active = await store.transition({
     sessionId: identity.sessionId,
     from: "starting",
     to: "active",
@@ -98,7 +103,7 @@ type PlacementEnvironmentFixture = Pick<
 > &
   Partial<WorkerEnvironmentRecord>;
 
-export function publishWorkerEnvironmentFixture(db: DatabaseSync, environmentId: string): void {
+export function publishWorkerEnvironmentFixture(db: EngineConnection, environmentId: string): void {
   const owner = workerEnvironmentProjections.get(requireOpenClawStateDatabaseIdentity({ db }));
   if (!owner?.active) {
     return;

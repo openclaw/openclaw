@@ -102,34 +102,29 @@ export async function runAnthropicSetupTokenAuth(
 
 export function validateAnthropicSetupTokenNonInteractive(
   ctx: ProviderAuthMethodNonInteractiveValidationContext,
-): string | null {
+): string {
   if (ctx.opts.secretInputMode === "ref") {
-    ctx.runtime.error(
+    throw new Error(
       "Anthropic setup-token input cannot be stored with --secret-input-mode ref. Use --secret-input-mode plaintext.",
     );
-    ctx.runtime.exit(1);
-    return null;
   }
   const rawToken =
     typeof ctx.opts.token === "string" ? normalizeAnthropicSetupTokenInput(ctx.opts.token) : "";
   const tokenError = validateAnthropicSetupToken(rawToken);
   if (tokenError) {
-    ctx.runtime.error(
+    throw new Error(
       ["Anthropic setup-token auth requires --token with a valid setup-token.", tokenError].join(
         "\n",
       ),
     );
-    ctx.runtime.exit(1);
-    return null;
   }
   try {
     resolveAnthropicSetupTokenExpiry(ctx.opts.tokenExpiresIn);
   } catch (error) {
-    ctx.runtime.error(
+    throw new Error(
       `Invalid --token-expires-in: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
-    ctx.runtime.exit(1);
-    return null;
   }
   return rawToken;
 }
@@ -139,9 +134,6 @@ export async function runAnthropicSetupTokenNonInteractive(
   defaultModel: string,
 ): Promise<ProviderAuthConfig | null> {
   const rawToken = validateAnthropicSetupTokenNonInteractive(ctx);
-  if (!rawToken) {
-    return null;
-  }
 
   const profileId = resolveAnthropicSetupTokenProfileId(ctx.opts.tokenProfileId);
   const expires = resolveAnthropicSetupTokenExpiry(ctx.opts.tokenExpiresIn);
@@ -219,16 +211,23 @@ export function buildAnthropicAuthDoctorHint(params: {
 }
 
 export async function runAnthropicCliMigration(
-  ctx: ProviderAuthContext,
+  ctx: Pick<ProviderAuthContext, "config" | "env">,
 ): Promise<ProviderAuthResult> {
   const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus({ env: ctx.env ?? process.env });
   if (authStatus.status !== "available") {
-    throw new Error(
-      [
-        "Claude CLI is not authenticated on this host.",
-        `Run ${formatCliCommand("claude auth login")} first, then re-run this setup.`,
-      ].join("\n"),
-    );
+    const error =
+      authStatus.status === "missing"
+        ? [
+            "Claude CLI is not authenticated on this host.",
+            `Run ${formatCliCommand("claude auth login")} first, then re-run this setup.`,
+          ]
+        : [
+            authStatus.status === "timeout"
+              ? `Could not verify the installed Claude CLI login within ${authStatus.timeoutMs / 1000} s.`
+              : "Could not verify the installed Claude CLI login.",
+            `Run ${formatCliCommand("claude auth status --json")}, then retry this setup.`,
+          ];
+    throw new Error(error.join("\n"));
   }
   return buildAnthropicCliMigrationResult(ctx.config);
 }
@@ -238,24 +237,7 @@ export async function runAnthropicCliMigrationNonInteractive(ctx: {
   runtime: ProviderAuthContext["runtime"];
   agentDir?: string;
 }): Promise<ProviderAuthContext["config"] | null> {
-  const authStatus = await claudeCliAuth.probeClaudeCliAuthStatus();
-  if (authStatus.status !== "available") {
-    const error =
-      authStatus.status === "unreadable"
-        ? [
-            'Auth choice "anthropic-cli" could not verify the installed Claude CLI login.',
-            `Run ${formatCliCommand("claude auth status")}, then retry.`,
-          ]
-        : [
-            'Auth choice "anthropic-cli" requires Claude CLI auth on this host.',
-            `Run ${formatCliCommand("claude auth login")} first.`,
-          ];
-    ctx.runtime.error(error.join("\n"));
-    ctx.runtime.exit(1);
-    return null;
-  }
-
-  const result = buildAnthropicCliMigrationResult(ctx.config);
+  const result = await runAnthropicCliMigration(ctx);
   const currentDefaults = ctx.config.agents?.defaults;
   const currentModel = currentDefaults?.model;
   const currentFallbacks =

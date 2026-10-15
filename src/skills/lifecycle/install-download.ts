@@ -10,14 +10,12 @@ import { FsSafeError, root as fsRoot, type Root } from "../../infra/fs-safe.js";
 import { assertCanonicalPathWithinBase } from "../../infra/install-safe-path.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { withTempDownloadPath } from "../../infra/temp-download.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { ensureDir, resolveUserPath } from "../../utils.js";
 import { resolveSkillToolsRootDir } from "../runtime/tools-dir.js";
 import type { SkillInstallSpec } from "../types.js";
 import { formatInstallFailureMessage } from "./install-output.js";
 import type { SkillInstallResult } from "./install-types.js";
 
-const extractModuleLoader = createLazyImportLoader(() => import("./install-extract.js"));
 // Skill downloads share ClawHub and marketplace's 256 MiB artifact ceiling;
 // changing this limit is a supported-artifact compatibility decision.
 const MAX_SKILL_DOWNLOAD_BYTES = 256 * 1024 * 1024;
@@ -43,11 +41,52 @@ function resolveDownloadTargetDir(skillKey: string, spec: SkillInstallSpec): str
   return resolved;
 }
 
-function resolveArchiveType(spec: SkillInstallSpec, filename: string): string | undefined {
-  const explicit = normalizeOptionalLowercaseString(spec.archive);
-  if (explicit) {
-    return explicit;
+function parseSkillInstallFileName(header: string | null): string | undefined {
+  const disposition = /^[\t ]*[!#$%&'*+.^_`|~\da-z-]+[\t ]*/i.exec(header ?? "");
+  if (!header || !disposition) {
+    return undefined;
   }
+  const parameter =
+    /;[\t ]*([!#$%&'*+.^_`|~\da-z-]+)[\t ]*=[\t ]*(?:"((?:[\t\x20-\x21\x23-\x5b\x5d-\x7e\x80-\xff]|\\[\t\x20-\x7e\x80-\xff])*)"|([!#$%&'*+.^_`|~\da-z-]+))[\t ]*/giy;
+  let filename: string | undefined;
+  let extended: string | undefined;
+  let offset = disposition[0].length;
+  while (offset < header.length) {
+    parameter.lastIndex = offset;
+    const match = parameter.exec(header);
+    if (!match) {
+      return undefined;
+    }
+    offset = parameter.lastIndex;
+    const name = match[1]!.toLowerCase();
+    if (name === "filename") {
+      if (filename !== undefined) {
+        return undefined;
+      }
+      filename = match[2]?.replace(/\\([\s\S])/g, "$1") ?? match[3]!;
+    } else if (name === "filename*") {
+      if (extended !== undefined || match[2] !== undefined) {
+        return undefined;
+      }
+      const value =
+        /^utf-8'(?:[a-z]{1,8}(?:-[a-z\d]{1,8})*)?'((?:[!#$&+.^_`|~\da-z-]|%[\da-f]{2})*)$/i.exec(
+          match[3]!,
+        );
+      if (!value) {
+        return undefined;
+      }
+      try {
+        extended = decodeURIComponent(value[1]!);
+      } catch {
+        return undefined;
+      }
+    }
+  }
+  // An empty extended filename still overrides filename; the caller then uses the URL.
+  return (extended ?? filename) || undefined;
+}
+
+function detectArchiveType(filename: string | undefined): string | undefined {
   const lower = normalizeOptionalLowercaseString(filename);
   if (!lower) {
     return undefined;
@@ -64,6 +103,21 @@ function resolveArchiveType(spec: SkillInstallSpec, filename: string): string | 
   return undefined;
 }
 
+function resolveArchiveType(
+  spec: SkillInstallSpec,
+  filename: string,
+  headerFileName?: string,
+): string | undefined {
+  const explicit = normalizeOptionalLowercaseString(spec.archive);
+  if (explicit) {
+    return explicit;
+  }
+  return (
+    detectArchiveType(spec.extract === true ? headerFileName : undefined) ??
+    detectArchiveType(filename)
+  );
+}
+
 async function downloadFile(params: {
   url: string;
   relativePath: string;
@@ -71,7 +125,7 @@ async function downloadFile(params: {
   tempPath: string;
   sha256?: string;
   timeoutMs: number;
-}): Promise<{ bytes: number }> {
+}): Promise<{ bytes: number; archiveFileName?: string }> {
   const temporaryRoot = await fsRoot(path.dirname(params.tempPath));
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
@@ -81,6 +135,7 @@ async function downloadFile(params: {
     if (!response.ok || !response.body) {
       throw new Error(`Download failed (${response.status} ${response.statusText})`);
     }
+    const archiveFileName = parseSkillInstallFileName(response.headers.get("content-disposition"));
     // Encoded Content-Length measures wire bytes, not the decoded stream we cap.
     const contentEncoding = normalizeOptionalLowercaseString(
       response.headers.get("content-encoding"),
@@ -119,7 +174,9 @@ async function downloadFile(params: {
       }
     }
     await params.pinnedRoot.copyIn(params.relativePath, params.tempPath);
-    return { bytes: downloadedBytes };
+    return archiveFileName
+      ? { bytes: downloadedBytes, archiveFileName }
+      : { bytes: downloadedBytes };
   } catch (error) {
     if (error instanceof FsSafeError && error.code === "too-large") {
       throw new Error(`Skill download exceeds ${MAX_SKILL_DOWNLOAD_BYTES}-byte limit`, {
@@ -179,6 +236,19 @@ async function publishExtractedTree(params: {
   await publishDirectory("");
 }
 
+function downloadFailure(
+  message: string,
+  details: { stderr?: string; code?: number } = {},
+): SkillInstallResult {
+  return {
+    ok: false,
+    message,
+    stdout: "",
+    stderr: details.stderr ?? message,
+    code: details.code ?? null,
+  };
+}
+
 export async function installDownloadSpec(params: {
   skillKey: string;
   spec: SkillInstallSpec;
@@ -188,13 +258,7 @@ export async function installDownloadSpec(params: {
   const root = resolveSkillToolsRootDir(skillKey);
   const url = spec.url?.trim();
   if (!url) {
-    return {
-      ok: false,
-      message: "missing download url",
-      stdout: "",
-      stderr: "",
-      code: null,
-    };
+    return downloadFailure("missing download url", { stderr: "" });
   }
 
   let filename;
@@ -226,8 +290,7 @@ export async function installDownloadSpec(params: {
     const targetRelativePath = path.relative(root, requestedTargetDir);
     targetDir = path.join(canonicalRoot, targetRelativePath);
   } catch (err) {
-    const message = formatErrorMessage(err);
-    return { ok: false, message, stdout: "", stderr: message, code: null };
+    return downloadFailure(formatErrorMessage(err));
   }
 
   const archivePath = path.join(targetDir, filename);
@@ -238,16 +301,11 @@ export async function installDownloadSpec(params: {
     archiveRelativePath.startsWith(`..${path.sep}`) ||
     path.isAbsolute(archiveRelativePath)
   ) {
-    return {
-      ok: false,
-      message: "invalid download archive path",
-      stdout: "",
-      stderr: "invalid download archive path",
-      code: null,
-    };
+    return downloadFailure("invalid download archive path");
   }
   return await withTempDownloadPath({ prefix: "skill-download" }, async (tempArchivePath) => {
     let downloaded;
+    let archiveFileName: string | undefined;
     try {
       const result = await downloadFile({
         url,
@@ -258,12 +316,12 @@ export async function installDownloadSpec(params: {
         timeoutMs,
       });
       downloaded = result.bytes;
+      archiveFileName = result.archiveFileName;
     } catch (err) {
-      const message = formatErrorMessage(err);
-      return { ok: false, message, stdout: "", stderr: message, code: null };
+      return downloadFailure(formatErrorMessage(err));
     }
 
-    const archiveType = resolveArchiveType(spec, filename);
+    const archiveType = resolveArchiveType(spec, filename, archiveFileName);
     const shouldExtract = spec.extract ?? Boolean(archiveType);
     if (!shouldExtract) {
       return {
@@ -276,19 +334,15 @@ export async function installDownloadSpec(params: {
     }
 
     if (!archiveType) {
-      return {
-        ok: false,
-        message: "extract requested but archive type could not be detected",
-        stdout: "",
+      return downloadFailure("extract requested but archive type could not be detected", {
         stderr: "",
-        code: null,
-      };
+      });
     }
 
     const stagingDir = path.join(path.dirname(tempArchivePath), "extracted");
     try {
       await fs.promises.mkdir(stagingDir, { mode: 0o700 });
-      const { extractSkillDownloadArchive } = await extractModuleLoader.load();
+      const { extractSkillDownloadArchive } = await import("./install-extract.js");
       const extractResult = await extractSkillDownloadArchive({
         archivePath: tempArchivePath,
         archiveType,
@@ -315,8 +369,7 @@ export async function installDownloadSpec(params: {
         code: extractResult.code,
       };
     } catch (err) {
-      const message = formatErrorMessage(err);
-      return { ok: false, message, stdout: "", stderr: message, code: 1 };
+      return downloadFailure(formatErrorMessage(err), { code: 1 });
     }
   });
 }

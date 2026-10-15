@@ -16,7 +16,7 @@ import {
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { SpawnProcessAdapter } from "../process/supervisor/types.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
-import { waitForExecScope } from "./bash-process-registry.js";
+import { getFinishedSession, getSession, waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createProcessTool } from "./bash-tools.process.js";
@@ -291,5 +291,73 @@ describe("registered exec deadline handoff", () => {
     // Drain the deferred supervisor decision before checking background termination.
     await vi.advanceTimersToNextTimerAsync();
     expect(child.kill).toHaveBeenCalledOnce();
+  });
+
+  it("background exec with timeout zero bypasses the default timeout", async () => {
+    const child = createAdapter();
+    mocks.createChildAdapter.mockResolvedValueOnce(child.adapter);
+    const spawn = vi.spyOn(supervisor, "spawn");
+    const scopeKey = "background-without-timeout";
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      allowBackground: true,
+      notifyOnExit: false,
+      timeoutSec: 1,
+      scopeKey,
+    });
+    const result = await tool.execute("background", {
+      command: "build",
+      background: true,
+      timeoutSeconds: 0,
+    });
+    expect(result.details.status).toBe("running");
+    if (result.details.status !== "running") {
+      throw new Error("Expected a background process handle");
+    }
+    expect(spawn.mock.calls[0]?.[0].timeoutMs).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(getFinishedSession(result.details.sessionId)).toBeUndefined();
+    expect(getSession(result.details.sessionId)?.exited).toBe(false);
+    child.completed.resolve({ code: 0, signal: null });
+    await waitForExecScope(scopeKey);
+  });
+
+  it("yieldMs exec without explicit timeout applies the default timeout", async () => {
+    const child = createAdapter();
+    const spawned = createDeferred();
+    mocks.createChildAdapter.mockImplementationOnce(async () => {
+      spawned.resolve();
+      return child.adapter;
+    });
+    const spawn = vi.spyOn(supervisor, "spawn");
+    const scopeKey = "yielded-default-timeout";
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      allowBackground: true,
+      notifyOnExit: false,
+      timeoutSec: 1,
+      scopeKey,
+    });
+    const execution = tool.execute("yielded", { command: "build", yieldMs: 10 });
+    await spawned.promise;
+    await spawn.mock.results[0]?.value;
+    await vi.advanceTimersByTimeAsync(10);
+    const result = await execution;
+    expect(result.details.status).toBe("running");
+    if (result.details.status !== "running") {
+      throw new Error("Expected a background process handle");
+    }
+    expect(spawn.mock.calls[0]?.[0].timeoutMs).toBe(1_000);
+    await vi.advanceTimersByTimeAsync(991);
+    await waitForExecScope(scopeKey);
+    expect(getFinishedSession(result.details.sessionId)).toMatchObject({
+      terminalStatus: "failed",
+      exitReason: "overall-timeout",
+    });
   });
 });

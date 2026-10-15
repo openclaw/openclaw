@@ -1,36 +1,16 @@
-// Workboard tests cover gateway plugin behavior.
 import { DatabaseSync } from "node:sqlite";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { registerWorkboardGatewayMethods } from "./gateway.js";
+import { createGatewayMethodCapture } from "./test/gateway-method-capture.js";
 import { startEmptySessionsBoardService } from "./test/sessions-board.js";
+import { sqliteOnly as test } from "./test/sqlite-only.js";
 import {
   createWorkboardSqliteTestHarness,
   createWorkboardSqliteTestStore,
 } from "./test/sqlite-store.js";
 import { createWorkboardTools } from "./tools.js";
-
-function createGatewayMethodCapture() {
-  type RegisteredMethod = {
-    handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
-    opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
-  };
-  const methods = new Map<string, RegisteredMethod>();
-  const api = {
-    runtime: {
-      state: {
-        openKeyedStore: vi.fn(),
-      },
-    },
-    registerGatewayMethod: vi.fn(
-      (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
-        methods.set(method, { handler, opts });
-      },
-    ),
-  } as unknown as OpenClawPluginApi;
-  return { api, methods, registerGatewayMethod: api.registerGatewayMethod };
-}
 
 describe("workboard gateway methods", () => {
   it("refuses a Sessions board edit after the Gateway caller loses authority", async () => {
@@ -41,7 +21,7 @@ describe("workboard gateway methods", () => {
     registerWorkboardGatewayMethods({ api, store, sessionsBoard });
     const respond = vi.fn();
     await methods.get("workboard.sessionsBoard.update")!.handler({
-      params: { boardId: "sessions", patch: { instructions: "Revoked edit" } },
+      params: { boardId: "sessions", patch: { scope: { includeArchived: true } } },
       hasCurrentClientAuthority: () => false,
       respond,
     } as never);
@@ -53,7 +33,7 @@ describe("workboard gateway methods", () => {
     // Role/scope/profile authorization is rechecked too, not just transport currentness.
     const revokedRole = vi.fn();
     await methods.get("workboard.sessionsBoard.update")!.handler({
-      params: { boardId: "sessions", patch: { instructions: "Scope revoked" } },
+      params: { boardId: "sessions", patch: { scope: { includeArchived: true } } },
       hasCurrentClientAuthority: () => true,
       sessionMutationAuthorization: {
         assertCurrent: () => {
@@ -124,7 +104,8 @@ describe("workboard gateway methods", () => {
     expect(reenabled.mock.calls[0]?.[0]).toBe(true);
   });
 
-  it.each(["card-read", "attachment-write", "attachment-committed", "metadata-write"] as const)(
+  // Inspects committed and orphaned blobs through a native SQLite file handle.
+  test.each(["card-read", "attachment-write", "attachment-committed", "metadata-write"] as const)(
     "rejects attachment bytes when %s observes hot disable",
     async (phase) => {
       const { api, methods } = createGatewayMethodCapture();
@@ -250,18 +231,21 @@ describe("workboard gateway methods", () => {
   );
 
   it("registers CRUD methods with read/write scopes", async () => {
-    const { api, methods } = createGatewayMethodCapture();
+    const { api, methods, invoke } = createGatewayMethodCapture();
 
     const store = createWorkboardSqliteTestStore();
     registerWorkboardGatewayMethods({ api, store });
 
     expect([...methods.keys()]).toEqual([
       "workboard.cards.list",
+      "workboard.cards.list.owner",
       "workboard.cards.create",
+      "workboard.cards.create.owner",
       "workboard.cards.captureSession",
       "workboard.cards.update",
       "workboard.cards.start",
       "workboard.cards.move",
+      "workboard.cards.move.owner",
       "workboard.cards.delete",
       "workboard.cards.comment",
       "workboard.cards.link",
@@ -281,13 +265,14 @@ describe("workboard gateway methods", () => {
       "workboard.cards.diagnostics",
       "workboard.cards.diagnostics.refresh",
       "workboard.cards.dispatch",
+      "workboard.cards.dispatch.owner",
       "workboard.cards.dispatchWithOptions",
+      "workboard.cards.dispatchWithOptions.owner",
       "workboard.boards.list",
       "workboard.boards.upsert",
       "workboard.sessionsBoard.read",
       "workboard.sessionsBoard.update",
       "workboard.sessionsBoard.move",
-      "workboard.sessionsBoard.refresh",
       "workboard.boards.archive",
       "workboard.boards.delete",
       "workboard.cards.stats",
@@ -308,36 +293,39 @@ describe("workboard gateway methods", () => {
       "workboard.cards.archive",
       "workboard.cards.export",
     ]);
-    expect(methods.get("workboard.cards.list")?.opts).toEqual({ scope: "operator.read" });
-    expect(methods.get("workboard.cards.diagnostics")?.opts).toEqual({ scope: "operator.read" });
-    expect(methods.get("workboard.cards.diagnostics.refresh")?.opts).toEqual({
-      scope: "operator.write",
-    });
-    expect(methods.get("workboard.cards.export")?.opts).toEqual({ scope: "operator.read" });
-    expect(methods.get("workboard.cards.create")?.opts).toEqual({ scope: "operator.write" });
-    expect(methods.get("workboard.cards.runs")?.opts).toEqual({ scope: "operator.read" });
-    expect(methods.get("workboard.cards.attachments.get")?.opts).toEqual({
-      scope: "operator.read",
-    });
-    expect(methods.get("workboard.cards.attachments.add")?.opts).toEqual({
-      scope: "operator.write",
-    });
-    expect(methods.get("workboard.boards.upsert")?.opts).toEqual({ scope: "operator.write" });
-    expect(methods.get("workboard.notifications.list")?.opts).toEqual({
-      scope: "operator.read",
-    });
-    expect(methods.get("workboard.notifications.events")?.opts).toEqual({
-      scope: "operator.read",
-    });
-    expect(methods.get("workboard.notifications.advance")?.opts).toEqual({
-      scope: "operator.write",
-    });
+    for (const [scope, names] of [
+      [
+        "operator.read",
+        [
+          "cards.list",
+          "cards.diagnostics",
+          "cards.export",
+          "cards.runs",
+          "cards.attachments.get",
+          "notifications.list",
+          "notifications.events",
+        ],
+      ],
+      [
+        "operator.write",
+        [
+          "cards.diagnostics.refresh",
+          "cards.create",
+          "cards.attachments.add",
+          "boards.upsert",
+          "notifications.advance",
+        ],
+      ],
+    ] as const) {
+      for (const name of names) {
+        expect(methods.get(`workboard.${name}`)?.opts).toEqual({ scope });
+      }
+    }
 
-    const boardRespond = vi.fn();
-    await methods.get("workboard.boards.upsert")?.handler({
-      params: { id: "planning", automationJobId: "job-categorize-planning" },
-      respond: boardRespond,
-    } as never);
+    const boardRespond = await invoke("workboard.boards.upsert", {
+      id: "planning",
+      automationJobId: "job-categorize-planning",
+    });
     expect(boardRespond.mock.calls[0]?.[0]).toBe(true);
     await expect(store.listBoards()).resolves.toMatchObject({
       boards: [
@@ -362,15 +350,11 @@ describe("workboard gateway methods", () => {
     });
     const createdCard = createRespond.mock.calls[0]?.[1]?.card;
     await store.move(createdCard.id, "blocked", 2000);
-    const conflictRespond = vi.fn();
-    await methods.get("workboard.cards.update")?.handler({
-      params: {
-        id: createdCard.id,
-        expectedUpdatedAt: createdCard.updatedAt,
-        patch: { title: "Stale edit" },
-      },
-      respond: conflictRespond,
-    } as never);
+    const conflictRespond = await invoke("workboard.cards.update", {
+      id: createdCard.id,
+      expectedUpdatedAt: createdCard.updatedAt,
+      patch: { title: "Stale edit" },
+    });
     expect(conflictRespond).toHaveBeenCalledWith(
       false,
       undefined,
@@ -392,11 +376,7 @@ describe("workboard gateway methods", () => {
       ]),
     });
 
-    const eventsRespond = vi.fn();
-    await methods.get("workboard.notifications.events")?.handler({
-      params: { advance: true },
-      respond: eventsRespond,
-    } as never);
+    const eventsRespond = await invoke("workboard.notifications.events", { advance: true });
     expect(eventsRespond.mock.calls[0]?.[0]).toBe(false);
     expect(eventsRespond.mock.calls[0]?.[2]?.message).toContain("workboard.notifications.advance");
   });
@@ -406,17 +386,8 @@ describe("workboard gateway methods", () => {
     const store = createWorkboardSqliteTestStore();
     const sessionsBoard = await startEmptySessionsBoardService(store);
     try {
-      const { api, methods } = createGatewayMethodCapture();
+      const { api, methods, invoke } = createGatewayMethodCapture();
       registerWorkboardGatewayMethods({ api, store, sessionsBoard });
-      const invoke = async (name: string, params: Record<string, unknown>) => {
-        const method = methods.get(name);
-        if (!method) {
-          throw new Error(`Missing Gateway method: ${name}`);
-        }
-        const respond = vi.fn();
-        await method.handler({ params, respond } as never);
-        return respond;
-      };
       const created = await invoke("workboard.boards.upsert", {
         id: "sessions",
         kind: "sessions",
@@ -424,7 +395,7 @@ describe("workboard gateway methods", () => {
       expect(created.mock.calls[0]?.[1]).toMatchObject({
         board: { id: "sessions", kind: "sessions", sessions: { columns: expect.any(Array) } },
       });
-      for (const action of ["read", "update", "move", "refresh"]) {
+      for (const action of ["read", "update", "move"]) {
         expect(methods.get(`workboard.sessionsBoard.${action}`)?.opts).toEqual({
           scope: action === "read" ? "operator.read" : "operator.write",
         });
@@ -435,6 +406,37 @@ describe("workboard gateway methods", () => {
         columns: expect.any(Array),
         sessions: [],
       });
+      const snapshot = read.mock.calls[0]?.[1];
+      const unchanged = await invoke("workboard.sessionsBoard.read", {
+        boardId: "sessions",
+        sinceRevision: snapshot.revision,
+      });
+      expect(unchanged.mock.calls[0]?.[1]).toEqual({
+        unchanged: true,
+        revision: snapshot.revision,
+      });
+      for (const mismatch of [
+        { epoch: "retired" },
+        { revision: snapshot.revision.revision - 1 },
+        { boardId: "other-board" },
+        { scope: "other-view" },
+      ]) {
+        const response = await invoke("workboard.sessionsBoard.read", {
+          boardId: "sessions",
+          sinceRevision: { ...snapshot.revision, ...mismatch },
+        });
+        expect(response.mock.calls[0]?.[1]).toEqual(snapshot);
+      }
+      const otherView = await invoke("workboard.sessionsBoard.read", {
+        boardId: "sessions",
+        view: { involvingMe: true },
+        sinceRevision: snapshot.revision,
+      });
+      expect(otherView.mock.calls[0]?.[1]).toMatchObject({
+        sessions: [],
+        columns: snapshot.columns,
+      });
+      expect(otherView.mock.calls[0]?.[1].revision.scope).not.toBe(snapshot.revision.scope);
       using readSpy = vi.spyOn(sessionsBoard, "read");
       for (const view of [
         {},
@@ -447,18 +449,43 @@ describe("workboard gateway methods", () => {
           view,
         });
         expect(response.mock.calls[0]?.[0]).toBe(true);
-        expect(readSpy).toHaveBeenLastCalledWith("sessions", view);
+        expect(readSpy).toHaveBeenLastCalledWith("sessions", view, {
+          assertCurrent: expect.any(Function),
+        });
       }
       const updated = await invoke("workboard.sessionsBoard.update", {
         boardId: "sessions",
-        patch: { instructions: "Keep approval requests in Needs input." },
+        patch: { scope: { includeArchived: true, includeAutomation: true, includeHome: true } },
       });
       expect(updated.mock.calls[0]?.[1]).toMatchObject({
-        board: { sessions: { instructions: "Keep approval requests in Needs input." } },
+        board: {
+          sessions: {
+            scope: { includeArchived: true, includeAutomation: true, includeHome: true },
+          },
+        },
       });
+      const changed = await invoke("workboard.sessionsBoard.read", {
+        boardId: "sessions",
+        sinceRevision: snapshot.revision,
+      });
+      expect(changed.mock.calls[0]?.[1]).toMatchObject({
+        board: { sessions: { scope: { includeArchived: true } } },
+        sessions: [],
+      });
+      expect(changed.mock.calls[0]?.[1].revision.revision).toBeGreaterThan(
+        snapshot.revision.revision,
+      );
       const beforeInvalid = await store.getSessionsBoard("sessions");
       const invalidRequests = [
         ["workboard.sessionsBoard.read", {}, /boardId required/],
+        ...["includeAutomation", "includeHome"].map(
+          (field) =>
+            [
+              "workboard.sessionsBoard.update",
+              { boardId: "sessions", patch: { scope: { [field]: "true" } } },
+              new RegExp(`scope.${field} must be a boolean`),
+            ] as const,
+        ),
         [
           "workboard.sessionsBoard.read",
           { boardId: "sessions", junk: true },
@@ -513,7 +540,6 @@ describe("workboard gateway methods", () => {
           { boardId: "sessions", sessionKey: "agent:main:a", columnId: 2 },
           /columnId required/,
         ],
-        ["workboard.sessionsBoard.refresh", { boardId: "" }, /boardId required/],
         ["workboard.boards.upsert", { id: "sessions", kind: "cards" }, /kind cannot be changed/],
       ] as const;
       for (const [name, input, message] of invalidRequests) {
@@ -647,22 +673,17 @@ describe("workboard gateway methods", () => {
   });
 
   it("stores metadata updates through dedicated card methods", async () => {
-    const { api, methods } = createGatewayMethodCapture();
+    const { api, invoke } = createGatewayMethodCapture();
 
     registerWorkboardGatewayMethods({ api, store: createWorkboardSqliteTestStore() });
 
-    const createRespond = vi.fn();
-    await methods.get("workboard.cards.create")?.handler({
-      params: { title: "Carry metadata" },
-      respond: createRespond,
-    } as never);
+    const createRespond = await invoke("workboard.cards.create", { title: "Carry metadata" });
     const cardId = createRespond.mock.calls[0]?.[1]?.card.id;
 
-    const commentRespond = vi.fn();
-    await methods.get("workboard.cards.comment")?.handler({
-      params: { id: cardId, body: "Waiting on CI" },
-      respond: commentRespond,
-    } as never);
+    const commentRespond = await invoke("workboard.cards.comment", {
+      id: cardId,
+      body: "Waiting on CI",
+    });
 
     expect(commentRespond.mock.calls[0]?.[0]).toBe(true);
     expect(commentRespond.mock.calls[0]?.[1]).toMatchObject({
@@ -674,11 +695,10 @@ describe("workboard gateway methods", () => {
       },
     });
 
-    const oversizedRespond = vi.fn();
-    await methods.get("workboard.cards.comment")?.handler({
-      params: { id: cardId, body: "x".repeat(2001) },
-      respond: oversizedRespond,
-    } as never);
+    const oversizedRespond = await invoke("workboard.cards.comment", {
+      id: cardId,
+      body: "x".repeat(2001),
+    });
 
     expect(oversizedRespond.mock.calls[0]?.[0]).toBe(false);
     expect(oversizedRespond.mock.calls[0]?.[2]).toMatchObject({
@@ -702,42 +722,6 @@ describe("workboard gateway methods", () => {
     expect(respond.mock.calls[0]?.[2]).toMatchObject({
       message: "labels must be 40 characters or fewer.",
     });
-  });
-
-  it("dispatches workboard cards when gateway params are omitted", async () => {
-    const { methods, registerGatewayMethod } = createGatewayMethodCapture();
-    const run = vi.fn().mockResolvedValue({ runId: "run-card" });
-    const api = {
-      runtime: {
-        state: {
-          openKeyedStore: vi.fn(),
-        },
-        subagent: { run },
-      },
-      registerGatewayMethod,
-    } as unknown as OpenClawPluginApi;
-    const store = createWorkboardSqliteTestStore();
-    const card = await store.create({
-      title: "Ready worker",
-      status: "ready",
-      priority: "urgent",
-      workspaceAccess: { unrestricted: true },
-    });
-
-    registerWorkboardGatewayMethods({ api, store });
-
-    const respond = vi.fn();
-    await methods.get("workboard.cards.dispatch")?.handler({ respond } as never);
-
-    expect(respond.mock.calls[0]?.[0]).toBe(true);
-    expect(respond.mock.calls[0]?.[1]).toMatchObject({
-      started: [expect.objectContaining({ cardId: card.id, runId: "run-card" })],
-    });
-    expect(run).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: `subagent:workboard-default-${card.id}`,
-      }),
-    );
   });
 
   it("returns an actionable exact-card admission failure", async () => {
@@ -776,7 +760,7 @@ describe("workboard gateway methods", () => {
     );
   });
 
-  it("threads maxStarts while the legacy method keeps its default cap", async () => {
+  it("threads maxStarts and dispatches omitted params with the legacy default cap", async () => {
     const { methods, registerGatewayMethod } = createGatewayMethodCapture();
     const run = vi.fn(async (input: { idempotencyKey: string }) => ({
       runId: `accepted:${input.idempotencyKey}`,
@@ -811,23 +795,23 @@ describe("workboard gateway methods", () => {
     expect(respond.mock.calls[0]?.[1]?.started).toHaveLength(4);
     expect(run).toHaveBeenCalledTimes(4);
 
-    await Promise.all(
+    const defaultCards = await Promise.all(
       Array.from({ length: 5 }, (_, index) =>
         store.create({
           title: `Legacy ${index}`,
           status: "ready",
           priority: "urgent",
-          agentId: `legacy-${index}`,
-          boardId: "legacy",
+          agentId: index === 0 ? undefined : `legacy-${index}`,
+          boardId: "default",
           workspaceAccess: { unrestricted: true },
         }),
       ),
     );
     const defaultRespond = vi.fn();
-    await methods
-      .get("workboard.cards.dispatch")
-      ?.handler({ params: { boardId: "legacy" }, respond: defaultRespond } as never);
+    await methods.get("workboard.cards.dispatch")?.handler({ respond: defaultRespond } as never);
+    expect(defaultRespond.mock.calls[0]?.[0]).toBe(true);
     expect(defaultRespond.mock.calls[0]?.[1]?.started).toHaveLength(3);
+    await expect(store.get(defaultCards[0]!.id)).resolves.toMatchObject({ status: "running" });
     expect(run).toHaveBeenCalledTimes(7);
     const startedCards = (await store.list()).filter((card) => card.status === "running");
     expect(startedCards).toHaveLength(7);
@@ -835,12 +819,22 @@ describe("workboard gateway methods", () => {
     expect(startedCards.map((card) => card.runId)).toEqual(expect.arrayContaining(expectedRunIds));
     for (const card of startedCards) {
       const runId = card.runId;
+      if (defaultCards.some(({ id }) => id === card.id)) {
+        expect(defaultRespond.mock.calls[0]?.[1]).toMatchObject({
+          started: expect.arrayContaining([expect.objectContaining({ cardId: card.id, runId })]),
+        });
+        expect(run).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionKey: `${card.agentId ? `agent:${card.agentId}:` : ""}subagent:workboard-default-${card.id}`,
+          }),
+        );
+      }
       expect(card).toMatchObject({
         runId,
         execution: { runId },
         metadata: {
           automation: { launch: { phase: "accepted", acceptedRunId: runId } },
-          attempts: [expect.objectContaining({ id: runId, runId })],
+          attempts: [expect.objectContaining({ id: expect.any(String), runId })],
         },
       });
     }
@@ -974,51 +968,57 @@ describe("workboard gateway methods", () => {
     });
   });
 
+  it("preserves the actionable claim refusal in the direct RPC error shape", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const { api, invoke } = createGatewayMethodCapture();
+    registerWorkboardGatewayMethods({ api, store });
+    const parent = await store.create({ title: "Completed parent", status: "done" });
+    const child = await store.create({ title: "Blocked child", parents: [parent.id] });
+    const claimed = await store.claim(child.id, { ownerId: "main" });
+    await store.block(child.id, { token: claimed.token, reason: "Waiting for review" });
+
+    const respond = await invoke("workboard.cards.claim", { id: child.id, ownerId: "main" });
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "workboard_error",
+      message: "card is blocked; use workboard_unblock before claiming.",
+    });
+  });
+
   it("claims, heartbeats, and bulk-updates cards through gateway methods", async () => {
-    const { api, methods } = createGatewayMethodCapture();
+    const { api, methods, invoke } = createGatewayMethodCapture();
 
     registerWorkboardGatewayMethods({ api, store: createWorkboardSqliteTestStore() });
 
-    const createRespond = vi.fn();
-    await methods.get("workboard.cards.create")?.handler({
-      params: { title: "Claim me" },
-      respond: createRespond,
-    } as never);
+    const createRespond = await invoke("workboard.cards.create", { title: "Claim me" });
     const cardId = createRespond.mock.calls[0]?.[1]?.card.id;
 
-    const claimRespond = vi.fn();
-    await methods.get("workboard.cards.claim")?.handler({
-      params: { id: cardId, ownerId: "main" },
-      respond: claimRespond,
-    } as never);
+    const claimRespond = await invoke("workboard.cards.claim", { id: cardId, ownerId: "main" });
     expect(claimRespond.mock.calls[0]?.[1]).toMatchObject({
       card: { status: "running", metadata: { claim: { ownerId: "main" } } },
       token: expect.any(String),
     });
 
-    const heartbeatRespond = vi.fn();
-    await methods.get("workboard.cards.heartbeat")?.handler({
-      params: { id: cardId, ownerId: "main", note: "alive" },
-      respond: heartbeatRespond,
-    } as never);
+    const heartbeatRespond = await invoke("workboard.cards.heartbeat", {
+      id: cardId,
+      ownerId: "main",
+      note: "alive",
+    });
     expect(heartbeatRespond.mock.calls[0]?.[1]).toMatchObject({
       card: { metadata: { comments: [expect.objectContaining({ body: "alive" })] } },
     });
 
-    const bulkRespond = vi.fn();
-    await methods.get("workboard.cards.bulk")?.handler({
-      params: { ids: [cardId], patch: { priority: "urgent" } },
-      respond: bulkRespond,
-    } as never);
+    const bulkRespond = await invoke("workboard.cards.bulk", {
+      ids: [cardId],
+      patch: { priority: "urgent" },
+    });
     expect(bulkRespond.mock.calls[0]?.[1]).toMatchObject({
       cards: [expect.objectContaining({ priority: "urgent" })],
     });
 
-    const completeRespond = vi.fn();
-    await methods.get("workboard.cards.complete")?.handler({
-      params: { id: cardId, summary: "Operator closed it." },
-      respond: completeRespond,
-    } as never);
+    const completeRespond = await invoke("workboard.cards.complete", {
+      id: cardId,
+      summary: "Operator closed it.",
+    });
     expect(completeRespond.mock.calls[0]?.[1]).toMatchObject({
       card: {
         status: "done",
@@ -1030,21 +1030,16 @@ describe("workboard gateway methods", () => {
       },
     });
 
-    const blockedCreateRespond = vi.fn();
-    await methods.get("workboard.cards.create")?.handler({
-      params: { title: "Block me" },
-      respond: blockedCreateRespond,
-    } as never);
+    const blockedCreateRespond = await invoke("workboard.cards.create", { title: "Block me" });
     const blockedCardId = blockedCreateRespond.mock.calls[0]?.[1]?.card.id;
     await methods.get("workboard.cards.claim")?.handler({
       params: { id: blockedCardId, ownerId: "main" },
       respond: vi.fn(),
     } as never);
-    const blockRespond = vi.fn();
-    await methods.get("workboard.cards.block")?.handler({
-      params: { id: blockedCardId, reason: "Operator blocked it." },
-      respond: blockRespond,
-    } as never);
+    const blockRespond = await invoke("workboard.cards.block", {
+      id: blockedCardId,
+      reason: "Operator blocked it.",
+    });
     expect(blockRespond.mock.calls[0]?.[1]).toMatchObject({
       card: { status: "blocked" },
     });

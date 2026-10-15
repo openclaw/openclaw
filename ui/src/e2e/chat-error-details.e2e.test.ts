@@ -114,7 +114,9 @@ suite.define(() => {
         const alert = page.locator(".chat-error");
         await alert.waitFor();
         await captureDiagnosticProof(page, "session-change-collapsed");
-        expect(await alert.locator("summary strong").textContent()).toBe(`Error: ${recovery}`);
+        expect(await alert.locator("summary strong").textContent()).toBe(
+          "Couldn't finish this reply. Check the conversation before trying again.",
+        );
         expect(await page.locator(".chat-thread").textContent()).toContain(prompt);
         await alert.locator("summary").click();
         const details = alert.getByLabel("Error details", { exact: true });
@@ -218,6 +220,12 @@ suite.define(() => {
           await captureDiagnosticProof(currentPage, `run-error-${source}-collapsed`);
           const summary = alert.locator("summary");
           expect(await summary.count()).toBe(1);
+          expect(await summary.textContent()).toContain(
+            "Check the conversation before trying again.",
+          );
+          expect(await summary.textContent()).not.toContain(skillPath);
+          expect(await summary.textContent()).not.toContain("INVALID_BUNDLE");
+          expect(await alert.getByLabel("Error details", { exact: true }).isVisible()).toBe(false);
           await summary.focus();
           await summary.press("Enter");
           const details = alert.getByLabel("Error details", { exact: true });

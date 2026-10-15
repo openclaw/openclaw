@@ -16,6 +16,7 @@ import {
 } from "./prepared-model-runtime-auth.js";
 import {
   advancePreparedModelRuntimeConfig,
+  cancelPreparedModelRuntimeRefresh,
   loadPublishedGatewayReplyDispatchRuntime,
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
@@ -186,33 +187,71 @@ describe("prepared model runtime config stamps", () => {
     ).resolves.toMatchObject({ config: nextConfig });
   });
 
-  it("drops an async startup config supplier superseded before it resolves", async () => {
-    const staleConfig = {};
-    const nextConfig = { gateway: { reload: { mode: "hot" as const } } };
-    const supplierReady = createDeferred();
-    let stalePublication: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
-    let nextPublication: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
-    try {
-      stalePublication = refreshPreparedModelRuntimeSnapshots(async () => {
-        await supplierReady.promise;
-        return staleConfig;
-      });
-      nextPublication = refreshPreparedModelRuntimeSnapshots(nextConfig, {
-        gatewayLifecycle: true,
-      });
+  it.each(["before hydration", "during hydration"])(
+    "keeps reply admission active when startup is superseded %s",
+    async (timing) => {
+      const staleConfig = {};
+      const nextConfig = { gateway: { reload: { mode: "hot" as const } } };
+      const supplierStarted = createDeferred();
+      const supplierReady = createDeferred();
+      let stalePublication: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
+      let nextPublication: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
+      try {
+        stalePublication = refreshPreparedModelRuntimeSnapshots(
+          async () => {
+            supplierStarted.resolve();
+            await supplierReady.promise;
+            return staleConfig;
+          },
+          { gatewayLifecycle: true, startup: true, catalogMode: "static" },
+        );
+        if (timing === "during hydration") {
+          await supplierStarted.promise;
+        }
+        nextPublication = refreshPreparedModelRuntimeSnapshots(nextConfig, {
+          agentIds: new Set(["default"]),
+          catalogMode: "static",
+        });
 
-      supplierReady.resolve();
-      await Promise.all([stalePublication, nextPublication]);
+        supplierReady.resolve();
+        await Promise.all([stalePublication, nextPublication]);
 
-      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+        await expect(
+          prepareModelRuntimeSnapshot(fixture.agentInput("default", nextConfig)),
+        ).resolves.toMatchObject({ config: nextConfig });
+        await expect(
+          loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+        ).resolves.toMatchObject({ agentId: "default", config: nextConfig });
+      } finally {
+        supplierReady.resolve();
+        await Promise.allSettled([stalePublication, nextPublication]);
+      }
+    },
+  );
+
+  it.each(["standalone", "rejected", "shutdown-fenced"])(
+    "does not activate Gateway reply admission for a %s refresh",
+    async (kind) => {
+      const refresh = () =>
+        refreshPreparedModelRuntimeSnapshots(
+          {},
+          {
+            gatewayLifecycle: kind !== "standalone",
+            isPublicationCurrent: () => kind !== "rejected",
+            catalogMode: "static",
+          },
+        );
+      if (kind === "shutdown-fenced") {
+        cancelPreparedModelRuntimeRefresh();
+        expect(refresh).toThrow("shutdown");
+      } else {
+        await refresh();
+      }
       await expect(
-        prepareModelRuntimeSnapshot(fixture.agentInput("default", nextConfig)),
-      ).resolves.toMatchObject({ config: nextConfig });
-    } finally {
-      supplierReady.resolve();
-      await Promise.allSettled([stalePublication, nextPublication]);
-    }
-  });
+        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+      ).resolves.toBeUndefined();
+    },
+  );
 
   it("drops a publication whose lifecycle claim is lost during async config resolution", async () => {
     const initialConfig = {};
