@@ -441,6 +441,8 @@ and finish completion settlement. A child that completes successfully during
 Stop keeps its result. Stop does not cancel a sibling run or a replacement
 session generation. After Stop settles, you can send another message in the same
 chat without reconnecting.
+Stop also retires an already-interrupted child without interrupting its finished
+turn again, so that child cannot keep its parent session blocked.
 If its previous native process is already closing, Stop cancels the waiting run
 without waiting for physical exit. A replacement writer still waits for that exit.
 Session-wide Stop preserves the caller's request ownership, protected-run, and

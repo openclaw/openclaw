@@ -8,11 +8,11 @@ it("filters emoji choices, selects their value, and remounts after removal", asy
   document.body.append(picker);
   try {
     await picker.updateComplete;
-    const search = picker.querySelector<HTMLInputElement>(".agent-emoji-picker__search")!;
+    const search = picker.querySelector<HTMLInputElement>(".emoji-search-panel__search")!;
     search.value = "rocket";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     await picker.updateComplete;
-    const choice = picker.querySelector<HTMLButtonElement>(".agent-emoji-picker__choice")!;
+    const choice = picker.querySelector<HTMLButtonElement>(".emoji-search-panel__choice")!;
     expect(choice.textContent).toBe("🚀");
     choice.click();
     expect(onSelect).toHaveBeenCalledExactlyOnceWith("🚀");
@@ -20,7 +20,7 @@ it("filters emoji choices, selects their value, and remounts after removal", asy
     await Promise.resolve();
     document.body.append(picker);
     await picker.updateComplete;
-    expect(picker.querySelectorAll(".agent-emoji-picker__choice")).toHaveLength(24);
+    expect(picker.querySelectorAll(".emoji-search-panel__choice")).toHaveLength(24);
   } finally {
     picker.remove();
   }

@@ -27,7 +27,9 @@ The icon rail stays separate from the selected navigation list. **Pages** opens
 available built-in pages, dashboards, and plugin destinations, **Sessions** opens conversations,
 and **Users** opens the people list. Its header selects **Online** (the default)
 or **All users**, including offline profiles from the authorized user directory.
-The header is a filter, not a collapse control. Hover or focus an icon for its name.
+The header is a filter, not a collapse control. Pages always hides dashboards from
+archived sessions and has no archive toggle. To find archived sessions in the
+sidebar, use the **Sessions** filter instead. Hover or focus an icon for its name.
 The active agent's avatar sits at the top of the rail and opens the agent menu;
 in team mode it opens the workspace menu. The accented **+**, labeled **New conversation**,
 sits directly below the avatar, separated from navigation by a divider. It stays in
@@ -40,7 +42,14 @@ buttons is selected; click any view to open its list. Selecting a different view
 while the list is open switches directly to that view. Clicking Users again keeps
 its list open; use the collapse button or keyboard shortcut to hide it.
 Home, Inbox, and your account controls stay together at the bottom of the rail.
+Open your account menu and choose **Updates** to go directly to **Settings → Updates**.
+This opens the update settings page without starting an update. For the `stable` and
+`beta` update channels, an **Available** badge appears beside **Updates** when a new
+release is ready. The Inbox also shows an update notice; dismissing it does not hide
+the account-menu badge. The `dev` channel never shows new-update notifications.
 Home toggles the Home panel and shows the active agent’s Home activity and attention state.
+Home navigation and agent switching remain available before a Home session has loaded.
+Home stays a navigation root regardless of its stored session ancestry.
 On desktop, opening Home or a pinned session, page, plugin, or person collapses
 the list while leaving the rail available. The mobile drawer keeps its normal
 navigation behavior.
@@ -191,6 +200,13 @@ opens the home folder. Errors for paths you enter remain visible.
 
 For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, thinking, and fast-mode choices. New sessions restore the last fast-mode choice, including an explicit off choice, for supported providers. The new-session picker also shows recent projects and folders derived only from sessions created by that profile. These conveniences follow the person across browsers; they do not grant access to a project or path.
 
+For a selected project, **Checkout** uses the Gateway's availability decision for
+the chosen agent. If Current checkout is unavailable and a managed checkout is
+allowed, New session selects **New worktree** before submission. **Current checkout**
+stays visible but disabled with an explanation. Allowed saved choices stay selected;
+an unavailable saved choice is corrected without clearing your prompt, model, or
+effort. The Gateway checks access again when the session is created.
+
 Guests with session access can save these choices in their own profile without
 broader Gateway write permission. This does not allow changing another person's
 preferences or private background resources.
@@ -240,7 +256,7 @@ accepts an ordinary browser message, it owns the approved input in durable
 custody. Collect mode consumes the accepted sources with their combined
 transcript entry. Acceptance does not imply that a transcript row already
 exists; the accepted input replaces its local pending copy and later becomes
-one canonical message, including its attachments.
+one saved message, including its attachments.
 Messages keep their queue position through submission, acceptance, reconnects, and
 storage recovery. Changing delivery status does not reorder them; explicit queue
 reordering and steering retain their normal behavior.
@@ -358,7 +374,7 @@ Persistent child conversations and forks stay nested after their turns finish,
 including after a reload or Gateway restart. Archiving hides them from the
 **Active** list; restoring them brings them back under their parent.
 
-Choose the **Show all** tile in the agent switcher to enter **team mode**, which shows every selectable agent as a collapsible session group. It is off by default, and the browser remembers your choice and each agent's collapsed state. Groups start expanded. Headers emphasize the agent's avatar and name. Activity, attention, unread, and workspace indicators sit on the right of session rows; collapsed parents summarize hidden work and outcomes there. Agent headers show their indicators in a wrapping row below the name and controls. A row shows each status once, even when both the parent and a hidden child share that status. Session icons stay to the left of their titles in both sidebar modes; status indicators and actions stay on the right. Nested children indent 16px per level without moving the right edge of the trailing indicators. Groups keep the configured agent order as activity changes. Agent headers have a minimum height of 48px with 36px avatars and grow to fit their metadata; session rows stay on one line at 32px on desktop. Each agent header is its Home entry: selecting the name or avatar opens the main conversation and highlights the header. Home does not appear again as a session row, even when pinned. The header shows Home activity, unread state, and attention while expanded, and summarizes the group's hidden sessions while collapsed. It never shows who created the main session; the agent avatar is the header's only identity. Independent conversations created from Home remain visible beneath the agent.
+Choose the **Show all** tile in the agent switcher to enter **team mode**, which shows every selectable agent as a collapsible session group. This opens the **Sessions** view and expands the sidebar, even if team mode is already selected. It is off by default, and the browser remembers your choice and each agent's collapsed state. Groups start expanded. Headers emphasize the agent's avatar and name. Activity, attention, unread, and workspace indicators sit on the right of session rows; collapsed parents summarize hidden work and outcomes there. Agent headers show their indicators in a wrapping row below the name and controls. A row shows each status once, even when both the parent and a hidden child share that status. Session icons stay to the left of their titles in both sidebar modes; status indicators and actions stay on the right. Nested children indent 16px per level without moving the right edge of the trailing indicators. Groups keep the configured agent order as activity changes. Agent headers have a minimum height of 48px with 36px avatars and grow to fit their metadata; session rows stay on one line at 32px on desktop. Each agent header is its Home entry: selecting the name or avatar opens the main conversation and highlights the header. Home does not appear again as a session row, even when pinned. The header shows Home activity, unread state, and attention while expanded, and summarizes the group's hidden sessions while collapsed. It never shows who created the main session; the agent avatar is the header's only identity. Independent conversations created from Home remain visible beneath the agent.
 
 Session-row owner avatars appear automatically when the signed-in user and session roster identify more than one human. With only one human, owner avatars stay hidden even when agents own or participate in sessions. Agent participants and undisplayed participant counts do not enable attribution. Session icons, channel avatars, and activity indicators keep their usual behavior.
 
@@ -370,7 +386,7 @@ The top rail button becomes a neutral workspace identity with the configured Gat
 
 Agent avatars use the same precedence throughout the dashboard: an identity image (a data or same-origin URL), then the identity emoji, then a generated face. The face is stable for the agent ID, including after a rename, and uses crisp vector artwork in the sidebar, switcher, New conversation menu, Agents home, identity chips, and chat. Configured workspace images also appear beside assistant replies after authenticated loading. A missing or failed image reveals the emoji or generated face. System agents always use the OpenClaw product mark, including in onboarding and custodian conversations; they never use a generated face. People keep their own profile images and initials.
 
-In both sidebar modes, **Home** stays at the bottom of the rail, not in Pages. Click a group header's avatar or name to open that agent's canonical main chat; its separate expand/collapse control folds the group without navigating. The top **+**, labeled **New conversation**, opens a small agent menu with each agent's avatar and name, in the same order as the groups. Choosing an agent opens `/new?agent=<id>`. Each group's **+** opens that link directly. It appears when the header is hovered or contains keyboard focus, and stays available on touch devices. Turning team mode off restores chip mode and its direct **New conversation** button; Home remains in the rail.
+In both sidebar modes, **Home** stays at the bottom of the rail, not in Pages. Click a group header's avatar or name to open that agent's main chat; its separate expand/collapse control folds the group without navigating. The top **+**, labeled **New conversation**, opens a small agent menu with each agent's avatar and name, in the same order as the groups. Choosing an agent opens `/new?agent=<id>`. Each group's **+** opens that link directly. It appears when the header is hovered or contains keyboard focus, and stays available on touch devices. Turning team mode off restores chip mode and its direct **New conversation** button; Home remains in the rail.
 
 Choosing **Show all** defaults the shared page scope to **All agents**. Choosing a named agent tile leaves team mode and scopes pages to that agent. This sets a default once when the mode changes: you can select an individual agent afterward, and page navigation preserves your choice. Automations, Dashboards, Sessions, and Usage support all-agent views. Mixed-agent lists identify the agent on each row with an avatar and name where needed. Each identity chip includes the agent ID in its tooltip and screen-reader label, such as `Molty (agent:main)`, so agents with the same display name remain distinguishable. If no name is available, the label uses `agent:<id>`. In Settings, the agent selector below the sidebar title keeps the same target across Agents, Models, Memory, and Skills; global settings remain global. Skill Workshop uses the agent selected through chat. Open an agent's main chat from its group header to select it for Skill Workshop. Chat actions still target the conversation's agent.
 
@@ -710,7 +726,7 @@ For local worktree sessions, sending the first message opens the admitted sessio
 
 For device and cloud sessions, the submitted prompt also starts background naming as soon as the session is created. The sidebar can show its topic while the worker is still provisioning; the first task turn waits until placement is ready. A prepared title or custom session name keeps precedence. Incognito sessions skip this early naming step.
 
-For a remote target, the Control UI creates the repository or managed-worktree session with an empty initial message and no `execNode`, dispatches it by exact `deviceId`, `autoDevice: true`, or `profileId` (plus an optional cloud machine class), waits for active placement, and then sends the first message and attachments with the same idempotency key used by recovery. Explicit and automatic device dispatch require `operator.write`; cloud profile dispatch requires `operator.admin`. The composer footer chooses the new session's model and reasoning level.
+For a remote target, the Control UI creates the repository or managed-worktree session with an empty initial message and no `execNode`, dispatches it by exact `deviceId`, `autoDevice: true`, or `profileId` (plus an optional cloud machine class), waits for active placement, and then sends the first message and attachments with the same request key used by recovery to prevent duplicate sends. Explicit and automatic device dispatch require `operator.write`; cloud profile dispatch requires `operator.admin`. The composer footer chooses the new session's model and reasoning level.
 
 Model and **Effort** are separate adjacent composer controls in chat and New session, on desktop and mobile. The model picker never contains Effort or Fast-mode controls. Long model labels ellipsize to leave room for the other controls; the full name remains in the open picker and accessible label. Narrow composers, including split panes in wider windows, use compact controls so each picker stays independently clickable. Effort uses a gauge in these layouts whose needle reflects the current level, with a lightning badge when Fast mode is active. In chat, Fast mode stays in the Effort menu, or appears as the adjacent control when reasoning is unavailable. Models with neither available control omit it.
 

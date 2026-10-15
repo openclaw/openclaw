@@ -1,8 +1,7 @@
 /* @vitest-environment jsdom */
 import { render, nothing } from "lit";
 import { afterEach, expect, it, onTestFinished } from "vitest";
-import { flush } from "../../test-helpers/solid-settle.ts";
-import { openDetails } from "../../test-helpers/web-awesome.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
   createComposerProps,
@@ -52,7 +51,10 @@ it("keeps the context popover open and its usage link focused during live usage 
   if (!details || !usageLink) {
     throw new Error("Expected the composer's context usage popover and provider link");
   }
-  await openDetails(details);
+  details.querySelector("summary")!.click();
+  await waitForSolid(() =>
+    expect(details.querySelector("[popover]")?.matches(":popover-open")).toBe(true),
+  );
   usageLink.focus();
   expect(document.activeElement).toBe(usageLink);
 

@@ -158,12 +158,32 @@ describe("SQLite trajectory runtime store", () => {
         sessionId,
         appendedRange: { firstSeq: 0, lastSeq: 1 },
         removedThroughSeq: undefined,
+        windowFacts: {
+          nextSeq: 2,
+          retainedBytes: ["first", "second"].reduce(
+            (bytes, type) =>
+              bytes +
+              Buffer.byteLength(JSON.stringify(createTrajectoryEvent({ sessionId, type }))) +
+              1,
+            0,
+          ),
+        },
       });
       expect(append(["third", "fourth"], true)).toEqual({
         kind: "trajectory-runtime-append",
         sessionId,
         appendedRange: { firstSeq: 2, lastSeq: 3 },
         removedThroughSeq: 1,
+        windowFacts: {
+          nextSeq: 4,
+          retainedBytes: ["third", "fourth"].reduce(
+            (bytes, type) =>
+              bytes +
+              Buffer.byteLength(JSON.stringify(createTrajectoryEvent({ sessionId, type }))) +
+              1,
+            0,
+          ),
+        },
       });
       const last = createTrajectoryEvent({ sessionId, type: "last" });
       expect(append(["last"], false, Buffer.byteLength(JSON.stringify(last), "utf8") + 1)).toEqual({
@@ -171,6 +191,10 @@ describe("SQLite trajectory runtime store", () => {
         sessionId,
         appendedRange: { firstSeq: 4, lastSeq: 4 },
         removedThroughSeq: 3,
+        windowFacts: {
+          nextSeq: 5,
+          retainedBytes: Buffer.byteLength(JSON.stringify(last), "utf8") + 1,
+        },
       });
       expect(readSqliteDatabaseScopedWriteToken(database.db, scopes)).toBe(token);
       expect(loadSqliteTrajectoryRuntimeEventRowsSync({ sessionId, storePath })).toEqual([
@@ -178,6 +202,60 @@ describe("SQLite trajectory runtime store", () => {
       ]);
     },
   );
+
+  it("uses committed window facts until actual byte overflow needs the SQL suffix", () => {
+    const options = { agentId: "main", path: sqlitePath() };
+    const database = openOpenClawAgentDatabase(options);
+    const events = ["first🦞", "later🦞", "final🦞"].map((type) => createTrajectoryEvent({ type }));
+    const maxRuntimeBytes = events
+      .slice(0, 2)
+      .reduce((bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event), "utf8") + 1, 0);
+    const append = (
+      event: TrajectoryEvent,
+      windowFacts?: { nextSeq: number; retainedBytes: number },
+    ) =>
+      appendSqliteTrajectoryRuntimeEventsWithWriter(
+        {
+          sessionId: "session-1",
+          maxRuntimeBytes,
+          windowFacts,
+          events: [{ runId: event.runId, ts: event.ts, line: JSON.stringify(event) }],
+        },
+        (operationLabel, write) =>
+          runOpenClawAgentWriteTransaction(write, options, { operationLabel }),
+      ).receipt.windowFacts;
+    const first = append(events[0]!);
+    let committed = first;
+    const counter = trackSqliteStatementExecutions(database.db, ["window"], (sql) =>
+      /^select\b/i.test(sql) && sql.includes('"trajectory_runtime_events"') ? "window" : null,
+    );
+    try {
+      const second = append(events[1]!, first);
+      expect(counter.counts.window).toBe(0);
+      expect(second).toEqual({ nextSeq: 2, retainedBytes: maxRuntimeBytes });
+      committed = append(events[2]!, second);
+      expect(committed).toEqual({ nextSeq: 3, retainedBytes: maxRuntimeBytes });
+      expect(counter.counts.window).toBe(1);
+      expect(counter.textBytes.window).toBe(0);
+    } finally {
+      counter.restore();
+    }
+    expect(loadSqliteTrajectoryRuntimeEventRowsSync({ sessionId: "session-1", storePath })).toEqual(
+      events.slice(1).map((event, index) => ({ event, seq: index + 1 })),
+    );
+    const empty = append(
+      createTrajectoryEvent({ type: "oversized", payloadSize: maxRuntimeBytes }),
+      committed,
+    );
+    expect(empty).toEqual({ nextSeq: 0, retainedBytes: 0 });
+    expect(append(events[0]!, empty)).toEqual({
+      nextSeq: 1,
+      retainedBytes: Buffer.byteLength(JSON.stringify(events[0]), "utf8") + 1,
+    });
+    expect(loadSqliteTrajectoryRuntimeEventRowsSync({ sessionId: "session-1", storePath })).toEqual(
+      [{ event: events[0], seq: 0 }],
+    );
+  });
 
   it("rolls back a later batch failure and retries without losing or duplicating events", async () => {
     const scope = { sessionId: "session-1", storePath };

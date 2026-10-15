@@ -25,6 +25,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { startCatalogRecoveryMcpServer } from "./agent-bundle-mcp-catalog-recovery.test-support.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import { createConnectionInvalidationMcpFixture } from "./agent-bundle-mcp-invalidation.test-support.js";
@@ -566,6 +567,56 @@ describe("session MCP runtime", () => {
     }
   });
 
+  it("reports initialize authentication refusal with the server name without response secrets", async () => {
+    const server = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        http.createServer((_req, res) => {
+          res.writeHead(401, {
+            "content-type": "application/json",
+            "www-authenticate": 'Bearer realm="test-header-secret"',
+          });
+          res.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: null,
+              error: { code: -32001, message: "expired token: test-body-secret" },
+            }),
+          );
+        }),
+    });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-auth-refusal",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            lab: {
+              transport: "streamable-http",
+              url: `http://127.0.0.1:${server.claim.port}/mcp`,
+              headers: { Authorization: "Bearer test-request-secret" },
+            },
+          },
+        },
+      },
+    });
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.diagnostics).toEqual([
+        expect.objectContaining({
+          serverName: "lab",
+          message: expect.stringContaining("authentication refused (401)"),
+        }),
+      ]);
+      expect(catalog.tools).toEqual([]);
+      expect(JSON.stringify(catalog)).not.toMatch(/test-(?:body|header|request)-secret/);
+    } finally {
+      await runtime.dispose();
+      await server.releaseListener();
+      await server.claim.release();
+    }
+  });
+
   it("redacts credentials from MCP catalog diagnostics", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-diagnostic-redaction-"));
     const serverPath = path.join(tempDir, "diagnostic-redaction.mjs");
@@ -675,21 +726,17 @@ describe("session MCP runtime", () => {
 
       nowMs += 5_001;
       expect(runtime.peekCatalog()).toBe(failedCatalog);
-      const staleCatalog = await withinTest(runtime.getCatalog(), signal);
-      expect(staleCatalog).toBe(failedCatalog);
-      expect(staleCatalog.diagnostics?.[0]?.serverName).toBe("retryServer");
-      await withinTest(receipts.waitFor(retryLogPath, "recv tools/list", 2), signal);
+      const recovery = runtime.getCatalog();
+      await withinTest(
+        fixtureEventBeforeSettlement(retryLogPath, "recv tools/list", recovery, 2),
+        signal,
+      );
       await expect(runtime.callTool("healthyServer", "healthy_tool", {})).resolves.toMatchObject({
         isError: false,
       });
       await fs.writeFile(retryReleasePath, "release", "utf8");
 
-      await waitForRuntimeState(
-        () => staticRuntime.peekCatalog()?.servers.retryServer !== undefined,
-        "background catalog recovery",
-        signal,
-      );
-      const recoveredCatalog = await runtime.getCatalog();
+      const recoveredCatalog = await withinTest(recovery, signal);
 
       expect(recoveredCatalog.diagnostics ?? []).toEqual([]);
       expect(recoveredCatalog.servers.retryServer).toBeDefined();

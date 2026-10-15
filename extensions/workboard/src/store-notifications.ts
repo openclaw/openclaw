@@ -38,10 +38,7 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
     const boardId = normalizeBoardId(input.boardId);
     const cardId = normalizeBoundedString(input.cardId, undefined, 120, "card id");
     const subscriptions = (await this.subscriptionStore.entries({ boardId, cardId }))
-      .flatMap(({ value }) =>
-        value?.version === 1 && value.subscription?.id ? [value.subscription] : [],
-      )
-      .filter((subscription) => !boardId || subscription.boardId === boardId)
+      .map(({ value }) => value.subscription)
       .filter((subscription) => !cardId || subscription.cardId === cardId)
       .toSorted((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
     return { subscriptions };

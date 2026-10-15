@@ -279,6 +279,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/state/openclaw-state-db-legacy-backfills.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["backfillAcpReplayEstimatedBytes"],
+        evidence:
+          "Only ensureAdditiveStateColumns calls this accounting repair, from schema-runtime cold admission/migration and the Doctor schema-repair runner; no Gateway runtime caller.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-replacement-read.ts",
     [
       {
@@ -552,15 +563,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: ["collectRecentSessionHistoryIds"],
+        operations: ["recentSessionHistoryIds"],
         evidence:
-          "Only readHistoricalSessionIdsInDatabase calls this collector, through session-transcript.worker.ts or native reclamation with reclamationMode=in-process. Production selectors of native mode are commands/sessions-cleanup.runtime.ts; the recency probe has its own reviewed reclamation/archive-worker classification.",
-      },
-      {
-        tier: "T3",
-        operations: ["isRecentHistoricalSessionId"],
-        evidence:
-          "Only reclamation.ts and archive.worker.ts materialization call this probe. Reclamation native execution requires an off-thread or schema/agent-maintenance owner; ordinary durable callers dispatch to workers. Archive materialization is called by its same-module batch under the materialize worker message.",
+          "Shared collector/probe query. readHistoricalSessionIdsInDatabase calls the collector through session-transcript.worker.ts or explicit CLI reclamationMode=in-process. Only reclamation.ts and archive.worker.ts materialization call the probe; native reclamation requires an off-thread or schema/agent-maintenance owner, and ordinary durable callers dispatch to workers.",
       },
     ],
   ],
@@ -3045,6 +3050,7 @@ const reviewedOperations = new Map([
         operations: [
           "readLatestTranscriptEntry",
           "readTranscriptEntry",
+          "readTranscriptPage",
           "readStoredTranscriptNotes",
         ],
         evidence:

@@ -634,7 +634,9 @@ suite.define(() => {
       const main = page.getByRole("main");
       const activePane = main.locator('openclaw-chat-pane[aria-hidden="false"]');
       const modelSelect = activePane.locator('[data-chat-model-select="true"]');
-      const modelPopup = activePane.locator('.chat-controls__model-picker wa-popup [part="popup"]');
+      const modelPopup = activePane.locator(
+        ".chat-controls__model-picker > [data-anchored-overlay]",
+      );
       const modelOption = activePane.locator('[data-chat-model-option="openai/gpt-5.6-sol"]');
       const effortSelect = activePane.locator('[data-chat-thinking-select="true"]');
       const thinkingSlider = activePane.locator('[data-chat-thinking-slider="true"]');
@@ -732,7 +734,7 @@ suite.define(() => {
       await thinkingSlider.waitFor({ state: "visible" });
       await capture(
         "codex-luna-reasoning",
-        pane.locator('.chat-controls__effort-picker wa-popup [part="popup"]'),
+        pane.locator(".chat-controls__effort-picker > [data-anchored-overlay]"),
         thinkingSlider,
       );
 

@@ -125,11 +125,11 @@ export function FileDraftRecoveryDialog(props: {
           }}
         </For>
         {error() ? <p role="alert">{error()}</p> : undefined}
-        <div class="exec-approval-actions">
+        <openclaw-modal-actions class="exec-approval-actions">
           <button type="button" class="btn" autofocus onClick={() => props.finish()}>
             {t("chat.detailPanel.draftRecovery.keep")}
           </button>
-        </div>
+        </openclaw-modal-actions>
       </section>
     </openclaw-modal-dialog>
   );

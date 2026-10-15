@@ -81,6 +81,34 @@ describe("Crabbox worker doctor", () => {
     expect(install).not.toHaveBeenCalled();
   });
 
+  it("checks an outdated sandbox-only configuration without installing during detection", async () => {
+    vi.spyOn(managedBinary, "probeCrabboxVersion").mockResolvedValue({
+      status: "outdated",
+      version: "0.76.0",
+    });
+    const install = vi.spyOn(managedBinary, "ensureManagedCrabboxBinary");
+    const ctx: HealthRepairContext = {
+      ...context(),
+      cfg: {
+        plugins: {
+          entries: { crabbox: { config: { sandbox: { binary: process.execPath } } } },
+        },
+      },
+      env: { OPENCLAW_STATE_DIR: tempDirs.make("crabbox-doctor-sandbox-"), PATH: "" },
+    };
+    const before = structuredClone(ctx.cfg);
+    await expect(captureCrabboxDoctorCheck().detect(ctx)).resolves.toEqual([
+      expect.objectContaining({
+        target: "sandbox",
+        message: expect.stringContaining("Crabbox sandbox uses outdated Crabbox 0.76.0"),
+        ocPath: "plugins.entries.crabbox.config.sandbox.binary",
+        requirement: "Crabbox 0.77.0 or newer",
+      }),
+    ]);
+    expect(ctx.cfg).toEqual(before);
+    expect(install).not.toHaveBeenCalled();
+  });
+
   it.each(["windows/wsl2"])(
     "offers the same managed repair for outdated %s profiles without installing during detection",
     async (target) => {

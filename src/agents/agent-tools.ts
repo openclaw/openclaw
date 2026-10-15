@@ -666,6 +666,7 @@ function* assembleOpenClawCodingTools(
       sessionKey: executionSessionKey,
       accountId: gatewayCaller.accountId,
       capabilityProfile,
+      tools: finalizedTools,
       sessionEventSourcePolicy: options?.sessionEventSourcePolicy ?? {
         toolsAllow: finalizedTools.map((tool) => tool.name),
       },

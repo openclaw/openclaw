@@ -146,6 +146,7 @@ describe("session startup catch-up", () => {
       agentId: "main",
       storePath,
       sessionKey,
+      // Keep the synthetic session recent so retention cannot prune it during the test.
       entry: { sessionId, updatedAt: Date.now() },
     });
     const identity = { agentId: "main", sessionId, sessionKey, storePath, cwd: stateDir };

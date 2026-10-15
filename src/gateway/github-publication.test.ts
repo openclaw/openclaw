@@ -465,11 +465,10 @@ describe("Gateway GitHub publication", () => {
     const fallback = mocks.runCommand.getMockImplementation()!;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
       const command = argv.join(" ");
-      if (command === "git rev-parse --verify HEAD^{commit}") {
-        return commandResult(`${"f".repeat(40)}\n`);
-      }
-      if (command === "git show -s --format=%B HEAD") {
-        return commandResult("A later local commit\n");
+      if (command === "git show -s --no-show-signature --format=%H%n%T%n%P%n%B HEAD") {
+        return commandResult(
+          `${"f".repeat(40)}\n${WORKSPACE_TREE}\n${OLD_HEAD}\nA later local commit\n`,
+        );
       }
       return await fallback(argv, options);
     });
@@ -725,21 +724,16 @@ describe("Gateway GitHub publication", () => {
         ) {
           return commandResult(JSON.stringify({ ref: "refs/heads/main", sha: BASE_HEAD }));
         }
-        if (command === "git show -s --format=%B HEAD") {
+        if (command === "git show -s --no-show-signature --format=%H%n%T%n%P%n%B HEAD") {
           return commandResult(
-            bodyOnlyCredit
-              ? `Resume the publication\n\nCo-authored-by: alice <7+alice@users.noreply.github.com>\n\nThe line above is quoted attribution.\n\nOpenClaw-Publication: ${requestId}\n`
-              : `Resume the publication\n\nCo-authored-by: alice <7+alice@users.noreply.github.com>\nOpenClaw-Publication: ${requestId}\n`,
+            `${NEW_HEAD}\n${WORKSPACE_TREE}\n${OLD_HEAD}\n` +
+              (bodyOnlyCredit
+                ? `Resume the publication\n\nCo-authored-by: alice <7+alice@users.noreply.github.com>\n\nThe line above is quoted attribution.\n\nOpenClaw-Publication: ${requestId}\n`
+                : `Resume the publication\n\nCo-authored-by: alice <7+alice@users.noreply.github.com>\nOpenClaw-Publication: ${requestId}\n`),
           );
-        }
-        if (command === "git rev-parse HEAD^{tree}") {
-          return commandResult(`${WORKSPACE_TREE}\n`);
         }
         if (command.endsWith("write-tree")) {
           return commandResult(`${WORKSPACE_TREE}\n`);
-        }
-        if (command === "git rev-parse HEAD^") {
-          return commandResult(`${OLD_HEAD}\n`);
         }
         if (command === "git config --local --includes --bool --get extensions.worktreeConfig") {
           return commandResult("", 1);
@@ -830,6 +824,50 @@ describe("Gateway GitHub publication", () => {
       expect(commands).toHaveLength(commandCount);
     },
   );
+
+  it("reports an in-run publication notice into the requesting run", async () => {
+    await persistPublicationTestSession();
+    const runtime = createGitHubPublicationRuntime({
+      placements: createWorkerSessionPlacementStore({
+        database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
+      }),
+      loadSessionRuntime: async () => {
+        const sessionUtils = await import("./session-utils.js");
+        const worker = await import("./session-utils-store-worker.js");
+        return {
+          resolveCanonicalSessionEntryFromStoreKeys:
+            sessionUtils.resolveCanonicalSessionEntryFromStoreKeys,
+          resolveGatewaySessionStoreTargetInWorker: worker.resolveGatewaySessionStoreTargetInWorker,
+        };
+      },
+      warn: (message) => {
+        throw new Error(message);
+      },
+    });
+
+    const result = await runtime.coordinator.requestForSessionV2({
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+      idempotencyKey: "publish-during-run",
+      expectedRunId: "run-publishing",
+    });
+    expect(result.status).toBe("published");
+    await runtime.reconcilePublications();
+
+    const events = await loadTranscriptEvents({
+      agentId: "main",
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+    });
+    expect(publicationTranscriptMessages(events, result.requestId)).toEqual([
+      expect.objectContaining({
+        message: expect.objectContaining({
+          __openclaw: expect.objectContaining({ runId: "run-publishing" }),
+        }),
+      }),
+    ]);
+    expect(await runtime.coordinator.listUnreportedResultsAsync()).toEqual([]);
+  });
 
   it("projects an accepted worker publication exactly once across transcript-report restart", async () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });

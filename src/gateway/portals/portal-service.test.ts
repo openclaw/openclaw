@@ -297,7 +297,11 @@ describe("gateway portal service", () => {
 
     expect(local.id).toBe("p3000");
     expect(new Set([local.id, worker.id, otherWorker.id, staleWorker.id]).size).toBe(4);
-    expect(worker).toMatchObject({ port: 3000, origin: "Cloud worker A" });
+    expect(worker).toMatchObject({
+      port: 3000,
+      origin: "Cloud worker A",
+      exposure: { kind: "loopback-only", browserReachability: "unverified" },
+    });
     expect(service.list()).toHaveLength(4);
     expect(service.listWorkerPortals("cloud/a", 7)).toEqual([worker]);
     expect(service.listWorkerPortals("cloud/a", 6)).toEqual([staleWorker]);
@@ -389,6 +393,20 @@ describe("gateway portal service", () => {
     expect(httpServers).toEqual([]);
   });
 
+  it("distinguishes configured ingress from its loopback backend without claiming viewer access", async () => {
+    const httpServers: Server[] = [];
+    const service = createGatewayPortalService({
+      httpBindHosts: ["127.0.0.1"],
+      httpServers,
+      ingress: { domain: "previews.example.test", port: 0 },
+    });
+    services.add(service);
+    const portal = await service.open({ targetPort: 3000 });
+    expect(httpServers[0]?.address()).toMatchObject({ address: "127.0.0.1" });
+    expect(portal.exposure).toEqual({ kind: "non-loopback", browserReachability: "unverified" });
+    expect(service.list()[0]?.exposure).toEqual(portal.exposure);
+  });
+
   it.each([
     ["0.0.0.0", "192.168.1.20", "192.168.1.20", "/app?view=one"],
     ["0.0.0.0", null, "127.0.0.1", "/"],
@@ -401,6 +419,11 @@ describe("gateway portal service", () => {
     const portal = await service.open({ targetPort: 3000, path });
 
     expect(portal.publicUrl).toBe(`http://${openableHost}:${portal.listenPort}${path}`);
+    expect(portal.exposure).toEqual({
+      kind: lanHost ? "non-loopback" : "loopback-only",
+      browserReachability: "unverified",
+    });
+    expect(service.list()[0]?.exposure).toEqual(portal.exposure);
     expect(portal.url).toBe(
       `${portal.publicUrl}${path.includes("?") ? "&" : "?"}${portal.tokenQuery}`,
     );
@@ -511,6 +534,11 @@ describe("direct HTTPS portal publication", () => {
       const checkPortal = async (targetPort: number) => {
         const portal = await service.open({ targetPort });
         expect(new URL(portal.publicUrl).hostname).toBe(hostname);
+        // A certificate-valid DNS name cannot expose a loopback-only listener.
+        expect(portal.exposure).toEqual({
+          kind: kind === "LAN" ? "non-loopback" : "loopback-only",
+          browserReachability: "unverified",
+        });
         if (kind === "LAN") {
           expect(await readPortal(portal.url)).toEqual({ status: 200, body: "direct TLS app" });
           expect(service.list()[0]?.publicUrl).toBe(portal.publicUrl);

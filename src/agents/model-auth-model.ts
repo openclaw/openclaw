@@ -261,27 +261,19 @@ export async function getApiKeyForModelCore(params: {
   agentDir?: string;
   workspaceDir?: string;
   lockedProfile?: boolean;
+  forceRefresh?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
   allowAuthProfileFallback?: boolean;
   skipSetupProviderFallback?: boolean;
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
+  const { model, ...authParams } = params;
   return resolveApiKeyForProviderCore({
-    provider: params.model.provider,
-    cfg: params.cfg,
-    profileId: params.profileId,
-    preferredProfile: params.preferredProfile,
-    store: params.store,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    lockedProfile: params.lockedProfile,
-    credentialPrecedence: params.credentialPrecedence,
-    allowAuthProfileFallback: params.allowAuthProfileFallback,
-    skipSetupProviderFallback: params.skipSetupProviderFallback,
-    modelId: params.model.id,
-    modelApi: params.model.api,
-    modelBaseUrl: params.model.baseUrl,
-    secretSentinels: params.secretSentinels,
+    ...authParams,
+    provider: model.provider,
+    modelId: model.id,
+    modelApi: model.api,
+    modelBaseUrl: model.baseUrl,
   });
 }
 
