@@ -48,9 +48,11 @@ export async function readRetiredDeferredPluginMigrationWarnings(
  */
 export async function retainCurrentDeferredPluginMigrationWarnings(
   warnings: readonly string[],
+  finallyReportedPluginIds: ReadonlySet<string> = new Set(),
 ): Promise<string[]> {
-  const retired = await readRetiredDeferredPluginMigrationWarnings(warnings).catch(
-    () => new Set<string>(),
-  );
+  const retired = await readRetiredDeferredPluginMigrationWarnings(
+    warnings,
+    finallyReportedPluginIds,
+  ).catch(() => new Set<string>());
   return warnings.filter((warning) => !retired.has(warning));
 }

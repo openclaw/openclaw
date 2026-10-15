@@ -136,6 +136,53 @@ export function registerConvergenceCompletionTests({
       }
     },
   );
+
+  it("omits settled plugin migration warnings from the candidate update result", async () => {
+    vi.mocked(readPackageVersion).mockResolvedValue(VERSION);
+    const settledWarning =
+      'Plugin "example" data/settings upgrade is unfinished: Package convergence must wait until the updating parent releases its install records.';
+    const unrelatedWarning = "Unrelated Doctor warning.";
+    const pluginUpdate = { ...successfulPluginUpdate, changed: false };
+    vi.mocked(updatePluginsAfterCoreUpdate).mockResolvedValueOnce({
+      ...pluginUpdate,
+      assessment: { kind: "no-payload-repair" },
+    });
+    vi.mocked(completePostCorePluginUpdate).mockImplementationOnce(async (params) => {
+      params.onWarnings?.([settledWarning, unrelatedWarning]);
+      return { pluginUpdate, configSnapshot: validConfigSnapshot };
+    });
+
+    const result = await convergeUpdatePlugins({
+      candidateRuntime: true,
+      coreAlreadyCurrent: false,
+      result: {
+        status: "ok",
+        mode: "git",
+        root: "/tmp/openclaw",
+        before: { version: VERSION },
+        after: { version: VERSION },
+        steps: [],
+        durationMs: 0,
+      },
+      root: "/tmp/openclaw",
+      installKindChanged: false,
+      configSnapshot: validConfigSnapshot,
+      requestedChannel: null,
+      storedChannel: null,
+      channel: "stable",
+      downgradeRisk: false,
+      opts: {},
+      preUpdatePluginInstallRecords: {},
+      startedAt: 1_000,
+      updateStepTimeoutMs: 5_000,
+    });
+
+    const messages = result.resultWithPostUpdate.steps.flatMap((step) =>
+      step.advisory ? [step.advisory.message] : [],
+    );
+    expect(messages).not.toContain(settledWarning);
+    expect(messages).toContain(unrelatedWarning);
+  });
 }
 import fs from "node:fs/promises";
 import path from "node:path";
