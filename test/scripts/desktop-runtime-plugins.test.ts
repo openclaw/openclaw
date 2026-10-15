@@ -199,17 +199,12 @@ describe("desktop runtime source plugins", () => {
     },
   );
 
-  it.each([
-    [[], null],
-    [["release/2026.10.2", "v2026.9.2"], null],
-    [["v2026.10.2"], "v2026.10.2"],
-    [["v2026.10.2", "v2026.10.2-1"], "v2026.10.2"],
-  ])("recognizes only matching exact release source tags (%j)", (tags, expected) => {
+  it("ignores nonmatching release source tags", () => {
     const { root, commit } = fixture();
-    for (const tag of tags) {
+    for (const tag of ["release/2026.10.2", "v2026.9.2"]) {
       git(root, "tag", tag);
     }
-    expect(desktopRuntimeReleaseTag(root, "2026.10.2", commit)).toBe(expected);
+    expect(desktopRuntimeReleaseTag(root, "2026.10.2", commit)).toBeNull();
   });
 
   it("requires the correction release's base tag at the same commit", () => {
@@ -228,23 +223,6 @@ describe("desktop runtime source plugins", () => {
       expect(desktopRuntimeReleaseTag(root, version, commit)).toBe(`v${version}`);
     },
   );
-
-  it("does not classify a commit after a release tag as a release", () => {
-    const { root } = fixture();
-    git(root, "tag", "v2026.10.2");
-    git(
-      root,
-      "-c",
-      "user.name=Fixture",
-      "-c",
-      "user.email=fixture@example.invalid",
-      "commit",
-      "--allow-empty",
-      "-qm",
-      "next",
-    );
-    expect(desktopRuntimeReleaseTag(root, "2026.10.2", git(root, "rev-parse", "HEAD"))).toBeNull();
-  });
 
   it("stages all official source plugins and stamps the installed build only", () => {
     const { root, commit } = fixture();

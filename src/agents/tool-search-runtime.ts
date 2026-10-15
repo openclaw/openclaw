@@ -131,12 +131,6 @@ async function validateCatalogSchemaValue(
   }
   try {
     if (schemaName === "outputSchema") {
-      if (
-        outputSelection &&
-        readToolOutputSchemaVariants(schema)?.inputProperty !== outputSelection.inputProperty
-      ) {
-        throw new Error("Tool output discriminator changed during execution.");
-      }
       schema = selectToolOutputSchema(
         schema,
         outputSelection ? { [outputSelection.inputProperty]: outputSelection.value } : undefined,

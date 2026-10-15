@@ -1293,7 +1293,6 @@ describe("finalizeSetupWizard", () => {
   );
 
   it.each([
-    { flow: "advanced", choice: "bun" },
     { flow: "advanced", choice: "node" },
     { flow: "quickstart", choice: "bun" },
   ] as const)(

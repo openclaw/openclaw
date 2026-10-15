@@ -3,38 +3,20 @@ import { createMemo, createSignal, For } from "solid-js";
 import { parseDurationMs } from "../../../../src/cli/parse-duration.js";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
-import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { useApplication } from "../../lib/reactive/context.ts";
-import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
-import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { CloudWorkerConfigSave } from "./cloud-worker-config-save.ts";
+import { useCloudWorkerConfig } from "./use-cloud-worker-config.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
 type PolicyDraft = { refreshAfter: string; retainUnused: string; keepPrevious: "0" | "1" };
 
 export function CloudWorkerSnapshotPolicy() {
-  const context = useApplication();
   const [draft, setDraft] = createSignal<PolicyDraft | null>(null, { ownedWrite: true });
-  const [saveRevision, setSaveRevision] = createSignal(0, { ownedWrite: true });
-  const configSave = new CloudWorkerConfigSave(() => setSaveRevision((revision) => revision + 1));
-  const runtime = projectRuntimeConfig(context.runtimeConfig);
-  const gateway = useGatewayPage({
-    getGateway: () => context.gateway,
-    invalidateRequests: () => {
-      setDraft(null);
-      configSave.update({ busy: false, error: null, notice: null });
-    },
-  });
-  void context.runtimeConfig.ensureLoaded();
-  const saveState = () => {
-    saveRevision();
-    return configSave.state;
-  };
+  const editor = useCloudWorkerConfig(() => setDraft(null));
+  void editor.ensureLoaded();
+  const saveState = editor.state;
   const policy = createMemo<PolicyDraft>(() => {
-    let value: unknown = resolveEditableSnapshotConfig(runtime.read().state.configSnapshot);
+    let value: unknown = editor.config();
     for (const key of ["plugins", "entries", "crabbox", "config", "warmImages"]) {
       value = isRecord(value) ? value[key] : undefined;
     }
@@ -46,24 +28,13 @@ export function CloudWorkerSnapshotPolicy() {
     };
   });
   const values = () => draft() ?? policy();
-  const canSave = () => {
-    const config = runtime.read().state;
-    return Boolean(
-      canCallGatewayMethod(gateway.snapshot, "config.patch", "operator.admin") &&
-      config.configSnapshot?.hash &&
-      !config.configLoading &&
-      !config.configSaving &&
-      !saveState().busy,
-    );
-  };
+  const canSave = () => editor.editable() && !editor.loading();
   function edit(patch: Partial<PolicyDraft>) {
     setDraft((current) => ({ ...(current ?? policy()), ...patch }));
-    configSave.update({ error: null, notice: null });
+    editor.update({ error: null, notice: null });
   }
   async function save() {
-    const scope = gateway.capture();
-    const runtimeConfig = context.runtimeConfig;
-    if (!scope || !canSave()) {
+    if (!canSave()) {
       return;
     }
     const current = values();
@@ -75,12 +46,11 @@ export function CloudWorkerSnapshotPolicy() {
         !/^[1-9][0-9]{0,7}(m|h|d)(?![\s\S])/.test(current[key]) ||
         parseDurationMs(current[key]) < minimum
       ) {
-        configSave.update({ error: t(`cloudWorkersPage.snapshots.${key}Invalid`) });
+        editor.update({ error: t(`cloudWorkersPage.snapshots.${key}Invalid`) });
         return;
       }
     }
-    const isCurrent = () => gateway.isCurrent(scope) && context.runtimeConfig === runtimeConfig;
-    await configSave.save(runtimeConfig, isCurrent, {
+    await editor.save({
       build: () => ({
         patch: {
           plugins: {
@@ -99,8 +69,6 @@ export function CloudWorkerSnapshotPolicy() {
         },
       }),
       note: "cloud workers: update snapshot retention policy",
-      canDispatch: () =>
-        isCurrent() && canCallGatewayMethod(gateway.snapshot, "config.patch", "operator.admin"),
       failed: () => t("cloudWorkersPage.snapshots.policySaveFailed"),
       success: () => {
         setDraft(null);

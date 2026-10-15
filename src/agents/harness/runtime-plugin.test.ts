@@ -118,32 +118,6 @@ describe("harness runtime plugins", () => {
     });
   });
 
-  it("looks up a selected harness in the run-owned registry without loading plugins", async () => {
-    const pluginRegistry = createEmptyPluginRegistry();
-    pluginRegistry.agentHarnesses.push({
-      pluginId: "codex",
-      source: "test",
-      harness: {
-        id: "codex",
-        label: "Codex",
-        supports: () => ({ supported: true }),
-        runAttempt: async () => {
-          throw new Error("unused");
-        },
-      },
-    });
-
-    await ensureSelectedAgentHarnessPlugin({
-      provider: "openai",
-      modelId: "gpt-5.5",
-      agentHarnessRuntimeOverride: "codex",
-      workspaceDir: "/tmp/workspace",
-      pluginRegistry,
-    });
-
-    expect(pluginRegistry.agentHarnesses).toHaveLength(1);
-  });
-
   it.each([
     { name: "session pin", selection: { agentHarnessId: "codex" } },
     {

@@ -50,12 +50,6 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
-Task pools whose canonical database access is entirely read-only declare
-`databaseAccess: "read-only"`. The transcript reader, memory retrieval, and chunk-preparation pools
-use this declaration so ordinary worker retirement preserves the store's admitted
-facts. A worker that may write still invalidates admission if it exits with an
-open database, because committed changes may lack their final publication receipt.
-
 Complete single-statement effects can use SQLite autocommit through
 `runSqliteSingleStatementSync`. Prepare the result, admission, and commit receipt
 before the statement, then install committed facts before notifying observers.
@@ -159,11 +153,9 @@ agent ownership checks, and destructive cleanup authority remain in place.
 
 The Gateway is the single runtime owner of its databases. Load physical format,
 schema, integrity, and canonical-index facts through the shared admission owner,
-then reuse them across handles and workers for the physical store's process
-lifetime. Closing the final handle preserves those facts for the next open.
-Write receipts and explicit invalidation refresh the affected facts. Fresh quarantine
-inspection rereads the decision row while reusing the admitted schema version;
-tracked DDL invalidates that version.
+then reuse them across handles and workers while admission retains a live
+reference. An idle reopen can reuse facts retained by another handle; closing
+the final handle retires those facts, so the next open admits the database again.
 Replacement files also require new admission; migration and repair owners publish
 replacement facts after committed DDL. Doctor and explicit verification retain
 their checks. See [integrity admission](/reference/database-schemas/integrity-and-recovery).
@@ -366,6 +358,9 @@ persist its final validity with the entry. They do not enqueue or reread their o
 row for session certification. Offline import, Doctor repair, and main-key
 policy changes explicitly queue validation and revoke the shared readiness cell
 and persisted receipt; rollback may conservatively leave readiness revoked.
+Startup uses this receipt to skip the legacy run-outcome scan on certified
+stores. Uncertified stores still normalize historical `running` and `queued`
+outcomes before canonical validation; current writers cannot persist those states.
 Those operations require exclusive offline or startup maintenance custody.
 Physical integrity admission remains valid independently of session readiness.
 The schema 25 migration seeds every existing node before admission; see
@@ -859,11 +854,10 @@ SQLite format, schema-version, integrity, required-index, and
 table-existence validation is shared across open handles and workers for each
 physical database. The first opener publishes admitted facts through the
 existing worker bootstrap and broker channel. Later handles, worker isolates,
-scopes, and requests reuse those facts even after every connection closes.
-Native close releases handle references without retiring admission facts. Worker
-exit removes its references; an exit with open handles also invalidates write,
-schema, and admission facts because committed changes may lack published receipts.
-Identity is the file's volume, inode, and stable birthtime, checked with
+scopes, and requests reuse those facts while an admitted connection remains open.
+The final native close or worker exit retires the facts and removes them from
+worker bootstrap snapshots. Reopening after every connection closes validates
+the database again. Identity is the file's volume, inode, and stable birthtime, checked with
 `fstat`; path equality or SQL version probes do not establish physical identity.
 A replaced or restored file requires its own first validation.
 The identity owner retains a descriptor for the process lifetime and checks its
@@ -871,10 +865,9 @@ The identity owner retains a descriptor for the process lifetime and checks its
 change time as birthtime, the existing normalized unknown-birthtime value remains
 in use; retaining the original descriptor prevents that inode from being reused
 for a replacement file. This descriptor holds identity custody; it is separate
-from SQLite's native connection descriptor. Identity, schema, and row-write
-metadata survive ordinary close; writes and explicit invalidation update the
-applicable facts. Explicit database removal or maintenance can retire admission
-and the descriptor after joining its native consumers.
+from SQLite's native connection descriptor. This small identity record survives
+ordinary close; schema and row-write metadata do not. Explicit database removal
+or maintenance can retire the descriptor after joining its native consumers.
 This cleanup changes no persisted data, schema, or update procedure.
 
 Synchronous admission exchanges carry the requested physical database's facts and
@@ -1842,12 +1835,17 @@ FIFO, refusal, timeout, stored data, and update behavior are unchanged.
 A cold actor read hydrates its entry, participants, membership, pending-input
 custody, and transcript metadata in one autocommit statement. A cold phase
 command uses that same statement inside its own write transaction, without a
-preceding read request. The versioned hot state
-includes exact anchors, idempotency identities, model-context membership, and
-the entry's lifecycle, recovery, and final-delivery fields. Anchor availability
-is explicit when the display projection is unready. When canonical facts
-cannot prove model context, it remains explicitly unavailable; an empty context
-is a different result. Payload history keeps its existing reader. Hydration and
+preceding read request. Transcript navigation, identities, and active rows are
+limited to a 512-row tail window, also retained after each commit. The append
+owner carries sequence, rewrite watermark, and index-state facts independently
+of that window. Identities and retry keys not retained in a partial window use
+their indexed readers; full-tree history and branch resolution stay with the
+history reader. Partial windows never publish complete context metadata or
+claim historical absence. The versioned hot state carries the entry's lifecycle,
+recovery, and final-delivery fields, transcript watermarks, and complete
+projection facts when available. Anchor and model-context availability remain
+explicit; unavailable context differs from an empty context. Payload history
+keeps its existing reader. Hydration and
 actor reads reuse process-wide schema and integrity admission without new format
 checks or foreign-commit probes.
 

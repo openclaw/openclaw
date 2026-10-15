@@ -5,21 +5,11 @@ type IdentityHeaderInput = {
   name?: string;
 };
 
-const emojiSegmenter =
-  typeof Intl !== "undefined" && "Segmenter" in Intl
-    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
-    : null;
+const emojiSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 const keycapEmojiPattern = /^[0-9#*]\uFE0F?\u20E3$/u;
 const emojiLikeSegmentPattern =
   /[\p{Emoji_Presentation}\p{Extended_Pictographic}\p{Regional_Indicator}]/u;
-
-function splitGraphemes(input: string): string[] {
-  if (!emojiSegmenter) {
-    return Array.from(input);
-  }
-  return Array.from(emojiSegmenter.segment(input), (segment) => segment.segment);
-}
 
 function isEmojiSegment(segment: string): boolean {
   return keycapEmojiPattern.test(segment) || emojiLikeSegmentPattern.test(segment);
@@ -30,7 +20,9 @@ export function resolveFeishuIdentityEmoji(raw: string | undefined): string | un
   if (!trimmed) {
     return undefined;
   }
-  const emoji = splitGraphemes(trimmed).filter(isEmojiSegment).join("");
+  const emoji = Array.from(emojiSegmenter.segment(trimmed), (segment) => segment.segment)
+    .filter(isEmojiSegment)
+    .join("");
   return emoji || undefined;
 }
 

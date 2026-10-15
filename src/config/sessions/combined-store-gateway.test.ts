@@ -328,48 +328,17 @@ it.each(["ops", "main"])(
   },
 );
 
-it.each(["global", "unknown"])("projects the recorded aggregate %s owner", async (sessionKey) => {
-  await withOpenClawTestState({ label: "combined-list-owner" }, async () => {
-    const cfg: OpenClawConfig = {
-      session: { scope: "global" },
-      agents: {
-        entries: {
-          main: { model: { primary: "openai/gpt-5.4" } },
-          research: { model: { primary: "openai/gpt-5.5" } },
-        },
-      },
-    };
-    replaceSessionEntrySync(
-      { agentId: "research", sessionKey },
-      { sessionId: "research-only", updatedAt: 42 },
-    );
-    const combined = loadCombinedSessionStoreForGatewayCore(cfg);
-    expect(combined.targetsBySessionKey.get(sessionKey)?.agentId).toBe("research");
-    await withResidentRows(cfg, async (projection) => {
-      const opts = { includeGlobal: true, includeUnknown: true };
-      const result = await listProjectedSessions({ projection, opts });
-      expect
-        .soft(result.sessions)
-        .toMatchObject([
-          { key: sessionKey, sessionId: "research-only", agentId: "research", model: "gpt-5.5" },
-        ]);
-      const searched = await listProjectedSessions({
-        projection,
-        opts: { ...opts, search: "gpt-5.5" },
-      });
-      expect.soft(searched.sessions.map((row) => row.sessionId)).toEqual(["research-only"]);
-      expect(searched.defaults).toEqual(result.defaults);
-    });
-  });
-});
-
 it("projects shared rows under their logical owner while retaining the physical database owner", async () => {
   await withOpenClawTestState({ label: "combined-store-owner" }, async (state) => {
     const storePath = state.statePath("shared.sqlite");
     const cfg: OpenClawConfig = {
       agents: {
         ownership: "explicit",
-        entries: { main: {}, ops: {}, worker: {} },
+        entries: {
+          main: {},
+          ops: { model: { primary: "openai/gpt-5.5" } },
+          worker: {},
+        },
         defaults: { sessionStore: { agentId: "ops" } },
       },
       session: { scope: "global", store: storePath },
@@ -454,13 +423,14 @@ it("projects shared rows under their logical owner while retaining the physical 
           expect.objectContaining({
             kind: "global",
             agentId: "ops",
+            model: "gpt-5.5",
             sessionId: "session-global",
             derivedTitle: "Shared physical global title",
             lastMessagePreview: "Shared physical global preview",
           }),
         );
         expect(listed.sessions).toContainEqual(
-          expect.objectContaining({ kind: "unknown", agentId: "ops" }),
+          expect.objectContaining({ kind: "unknown", agentId: "ops", model: "gpt-5.5" }),
         );
         const globalRow = listed.sessions.find((row) => row.kind === "global")!;
         expect(

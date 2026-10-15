@@ -66,12 +66,10 @@ export function createSessionPrefetchFixture() {
   vi.stubGlobal("indexedDB", new IDBFactory());
   let visibility: DocumentVisibilityState = "visible";
   vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
-  const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
   vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) =>
     window.setTimeout(() => callback({ didTimeout: false, timeRemaining: () => 50 }), 0),
   );
   vi.stubGlobal("cancelIdleCallback", (handle: number) => window.clearTimeout(handle));
-  Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
   const cache: ChatMessageCache = new Map();
   const store = new SessionSnapshotStore(cache);
   store.connect();
@@ -152,11 +150,6 @@ export function createSessionPrefetchFixture() {
       store.disconnect();
       await store.whenIdle();
       await clearStoredChatSnapshots();
-      if (originalLocks) {
-        Object.defineProperty(navigator, "locks", originalLocks);
-      } else {
-        Reflect.deleteProperty(navigator, "locks");
-      }
       vi.useRealTimers();
       vi.restoreAllMocks();
       vi.unstubAllGlobals();

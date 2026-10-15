@@ -145,6 +145,24 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     }
   });
 
+  it("replaces a legacy immutable thumbnail rendition before loading its preview", async () => {
+    const container = mount(500);
+    const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/thumbnail?v=2`;
+    const fetchMock = vi.fn(async (url: string) => {
+      // Model the old immutable response separately from the new bounded rendition.
+      return new URL(url, location.href).searchParams.get("v") === "2"
+        ? svgResponse(2400, 1200)
+        : svgResponse(400, 200);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    drawImages(container, { images: [{ url: source, alt: "Versioned preview" }] });
+    const image = await admittedImage(container);
+    await image.decode();
+    expect(image.naturalWidth).toBe(400);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(new URL(fetchMock.mock.calls[0]![0], location.href).searchParams.get("v")).toBe("3");
+  });
+
   it("keeps a horizontally clipped image keyboard reachable before admission", async () => {
     const { userEvent } = await import("vitest/browser");
     const container = mount(132);

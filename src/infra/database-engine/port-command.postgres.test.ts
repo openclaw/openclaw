@@ -57,9 +57,32 @@ it("redacts unresolved connection SecretRefs", async () => {
     },
   };
   const result = runWorkboardPortTask({ operation: "preflight", config, probe: false }, scope);
-  await expect(result).rejects.toThrow("preflight:");
+  await expect(result).rejects.toThrow("preflight: workboard, logbook, team-reports:");
   await expect(result).rejects.not.toThrow("OPENCLAW_PORT_TEST_UNRESOLVED_CONNECTION");
 });
+
+it.skipIf(!connection)(
+  "preflights PostgreSQL while optional plugin artifacts are absent",
+  async () => {
+    const empty = tempDirs.make("port-preflight-empty-bundled-");
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", empty);
+    vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+    try {
+      await expect(
+        runWorkboardPortTask(
+          {
+            operation: "preflight",
+            probe: false,
+            config: { database: { engine: "postgres", postgres: { connection: connection! } } },
+          },
+          scope,
+        ),
+      ).resolves.toMatchObject({ encoding: "UTF8", privilegesChecked: false });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  },
+);
 
 describe.skipIf(!connection)("workboard port PostgreSQL refusal boundaries", () => {
   it("probes real privileges, refuses occupied/wrong-owner/RLS sources, and resumes verified staging", async (context) => {

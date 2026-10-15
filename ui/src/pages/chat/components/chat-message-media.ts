@@ -18,6 +18,7 @@ import { isCrossOriginHttpSource } from "./chat-attachment-href.ts";
 export type ImageBlock = {
   factIndex?: number;
   fileName?: string;
+  mimeType?: string;
   openUrl?: string;
   alt?: string;
   sizeBytes?: number;
@@ -572,7 +573,7 @@ export function projectMessageMedia(
     const blockImages: ImageBlock[] = [];
     const blockAttachments = new Set<string>();
     for (const source of item.sources) {
-      const { url: sourceUrl, dataUrl, preferData, mimeType: _mimeType, ...metadata } = source;
+      const { url: sourceUrl, dataUrl, preferData, ...metadata } = source;
       if (sourceUrl !== undefined) {
         positionedSources.add(sourceUrl);
       }
@@ -631,6 +632,7 @@ export function projectMessageMedia(
       const projected: ImageBlock = {
         url: mediaPath,
         fileName,
+        ...(typeof mediaType === "string" ? { mimeType: mediaType } : {}),
         sizeBytes,
         width,
         height,

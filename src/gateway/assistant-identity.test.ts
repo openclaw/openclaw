@@ -10,9 +10,34 @@ import type { OpenClawConfig } from "../config/config.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import {
+  DEFAULT_ASSISTANT_IDENTITY,
+  resolveAssistantIdentity,
+  resolveAssistantIdentityAvatar,
+  resolveAssistantIdentityName,
+} from "./assistant-identity.js";
 
 describe("resolveAssistantIdentity", () => {
+  it.each([
+    { avatar: " https://example.com/avatar.png ", expected: "https://example.com/avatar.png" },
+    { emoji: "🦞", expected: "🦞" },
+    { avatar: "slack://avatar.png", emoji: "🦞", expected: "🦞" },
+    { avatar: "slack://avatar.png", expected: "workspace.png" },
+    { avatar: " ", expected: "workspace.png" },
+  ])("preserves avatar-only source precedence: $expected", async ({ expected, ...identity }) => {
+    const read = vi
+      .spyOn(identityFiles, "loadAgentIdentityFromWorkspaceAsync")
+      .mockResolvedValue({ avatar: "workspace.png" });
+    try {
+      const cfg: OpenClawConfig = { agents: { entries: { main: { identity } } } };
+      expect(
+        await resolveAssistantIdentityAvatar({ cfg, workspaceDir: "/synthetic/workspace" }),
+      ).toEqual({ agentId: "main", avatar: expected });
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   it("reads workspace fallbacks only when configured identity leaves a field unresolved", async () => {
     const read = vi
       .spyOn(identityFiles, "loadAgentIdentityFromWorkspaceAsync")
@@ -139,19 +164,21 @@ describe("resolveAssistantIdentity", () => {
   );
 
   it("does not leave a lone surrogate when truncating an overlong name", async () => {
-    const resolveName = async (name: string) =>
-      (
-        await resolveAssistantIdentity({
-          cfg: { agents: { entries: { main: { identity: { name } } } } },
-          agentId: "main",
-          workspaceDir: "",
-        })
-      ).name;
-    const prefix = "x".repeat(49);
-    const name = await resolveName(`${prefix}🚀suffix`);
-    expect(name).toBe(prefix);
-    expect(name.endsWith("\ud83d")).toBe(false);
-    expect(await resolveName(`${"x".repeat(48)}🚀suffix`)).toBe(`${"x".repeat(48)}🚀`);
+    for (const resolve of [resolveAssistantIdentity, resolveAssistantIdentityName]) {
+      const resolveName = async (name: string) =>
+        (
+          await resolve({
+            cfg: { agents: { entries: { main: { identity: { name } } } } },
+            agentId: "main",
+            workspaceDir: "",
+          })
+        ).name;
+      const prefix = "x".repeat(49);
+      const name = await resolveName(`${prefix}🚀suffix`);
+      expect(name).toBe(prefix);
+      expect(name.endsWith("\ud83d")).toBe(false);
+      expect(await resolveName(`${"x".repeat(48)}🚀suffix`)).toBe(`${"x".repeat(48)}🚀`);
+    }
   });
 
   it("refreshes prepared identities after workspace replacement and config changes", async () => {
@@ -164,12 +191,20 @@ describe("resolveAssistantIdentity", () => {
       const first = await resolveAssistantIdentity({ cfg, agentId: "main" });
       expect(first.name).toBe("First");
       expect(first.nameSource).toBe("workspace");
+      expect(await resolveAssistantIdentityName({ cfg, agentId: "main" })).toEqual({
+        agentId: "main",
+        name: "First",
+      });
       expect(await resolveAssistantIdentity({ cfg, agentId: "main" })).toBe(first);
       await fs.writeFile(`${file}.replacement`, "- Name: Other\n");
       await fs.rename(`${file}.replacement`, file);
       const replaced = await resolveAssistantIdentity({ cfg, agentId: "main" });
       expect(replaced.name).toBe("Other");
       expect(replaced).not.toBe(first);
+      expect(await resolveAssistantIdentityName({ cfg, agentId: "main" })).toEqual({
+        agentId: "main",
+        name: "Other",
+      });
       const configIdentity = cfg.agents?.entries?.main?.identity;
       if (!configIdentity) {
         throw new Error("Missing fixture identity");
@@ -178,6 +213,10 @@ describe("resolveAssistantIdentity", () => {
       expect(await resolveAssistantIdentity({ cfg, agentId: "main" })).toMatchObject({
         name: "Configured",
         nameSource: "agent",
+      });
+      expect(await resolveAssistantIdentityName({ cfg, agentId: "main" })).toEqual({
+        agentId: "main",
+        name: "Configured",
       });
     });
   });

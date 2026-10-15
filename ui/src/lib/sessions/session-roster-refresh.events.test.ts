@@ -552,7 +552,6 @@ describe("session roster event traffic", () => {
 
   it.each([
     "snapshot",
-    "patch",
     "active-message",
     "terminal-message",
     "invalidation",
@@ -792,6 +791,76 @@ describe("session roster event traffic", () => {
       vi.useRealTimers();
     }
   });
+  it("refreshes whole-roster owner counts when an unseen session changes below the sampled page", async () => {
+    vi.useFakeTimers();
+    const sampled = session("main", 100, {
+      key: "agent:main:sampled",
+      sessionId: "sampled",
+      label: "Latest conversation",
+    });
+    const unseen = session("main", 10, {
+      key: "agent:main:unseen",
+      sessionId: "unseen",
+      label: "Older conversation",
+      hasActiveRun: false,
+      status: "done",
+    });
+    const query = { includeOwnerSessionCounts: true, limit: 1, excludeSubagents: true };
+    let open = 8;
+    let running = 0;
+    const summaryRequest = vi.fn();
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      expect(method).toBe("sessions.list");
+      if (!Value.Check(SessionsListParamsSchema, params)) {
+        throw new Error("Invalid sessions.list request");
+      }
+      if (params.includeOwnerSessionCounts) {
+        summaryRequest();
+      }
+      return {
+        ...sessionsResult([sampled], 1),
+        ownerSessionCounts: [{ profileId: "ada", open, running }],
+        totalCount: open,
+        hasMore: true,
+        nextOffset: 1,
+      };
+    });
+    const { gateway, emitEvent } = createSessionGatewayHarness(createTestGatewayClient(request));
+    const sessions = createTestSessionCapability(gateway);
+    const observation = sessions.observeList(query, () => {});
+    try {
+      await observation.refresh();
+      for (const [index, fields] of [
+        { hasActiveRun: true, status: "running" as const },
+        { hasActiveRun: false, status: "done" as const },
+        { archived: true },
+      ].entries()) {
+        running = index === 0 ? 1 : 0;
+        open = index === 2 ? 7 : 8;
+        emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: {
+            sessionKey: unseen.key,
+            agentId: "main",
+            reason: "patch",
+            ancestorSessions: [],
+            session: { ...unseen, ...fields, updatedAt: 11 + index },
+          },
+        });
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(summaryRequest).toHaveBeenCalledTimes(2 + index);
+        expect(sessions.listSnapshot(query).result?.ownerSessionCounts).toEqual([
+          { profileId: "ada", open, running },
+        ]);
+      }
+    } finally {
+      observation.dispose();
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("retains owner counts for title updates but refreshes changed run contributions", async () => {
     vi.useFakeTimers();
     const row = {

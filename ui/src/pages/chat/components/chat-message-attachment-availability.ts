@@ -378,6 +378,7 @@ export function retainAssistantImage(
         availability.mediaTicket,
         options,
         filename,
+        "thumbnail",
       )
   ) {
     resource.retainedImage = image;

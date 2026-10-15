@@ -6,9 +6,9 @@ import {
 
 const suite = createNewSessionPageE2eSuite();
 suite.define(() => {
-  it("does not rebuild model options while typing a draft with a large catalog", async () => {
+  it("keeps model options stable while typing with unrelated session updates", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
         models: [
           { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
           ...Array.from({ length: 2000 }, (_, index) => ({
@@ -20,7 +20,9 @@ suite.define(() => {
         ],
         sessions: Array.from({ length: 500 }, (_, index) => ({
           key: "agent:main:dashboard:typing-" + index,
+          sessionId: "typing-" + index,
           kind: "direct",
+          childOwnerSessionKeys: [],
           label: "Research session " + index,
           updatedAt: 1000 + index,
         })),
@@ -40,6 +42,8 @@ suite.define(() => {
       );
       const observation = await page.evaluateHandle(() => {
         let catalogLabelReads = 0;
+        const textarea = document.querySelector(".new-session-page__message");
+        const modelOption = document.querySelector('[data-chat-model-option="fixture/model-1999"]');
         // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the original receiver.
         const original = String.prototype.toLocaleLowerCase;
         // Count preparation even when Solid suppresses identical DOM writes.
@@ -57,12 +61,34 @@ suite.define(() => {
           finish() {
             // oxlint-disable-next-line no-extend-native -- Restore the page-local instrumentation.
             String.prototype.toLocaleLowerCase = original;
-            return catalogLabelReads;
+            return {
+              catalogLabelReads,
+              sameTextarea: textarea === document.querySelector(".new-session-page__message"),
+              sameModelOption:
+                modelOption ===
+                document.querySelector('[data-chat-model-option="fixture/model-1999"]'),
+            };
           },
         };
       });
       const samples: number[] = [];
+      const sessionKey = "agent:main:dashboard:typing-0";
+      const row = await gateway.getSessionRow(sessionKey);
+      const requestsBefore = await gateway.getRequests();
       for (const key of "abcdefghij") {
+        await gateway.emitGatewayEvent("sessions.changed", {
+          agentId: "main",
+          sessionKey,
+          reason: "patch",
+          ancestorSessions: [],
+          session: {
+            ...row,
+            label: "Background update " + key,
+            displayName: "Background update " + key,
+            updatedAt: Date.now(),
+            snapshotAt: Date.now(),
+          },
+        });
         const start = performance.now();
         await input.press(key);
         await page.evaluate(
@@ -77,7 +103,20 @@ suite.define(() => {
       // not a wall-clock threshold sensitive to the machine running this test.
       console.log("New Session key + two frames (ms)", samples);
       expect(await input.inputValue()).toBe("Warmup abcdefghij");
-      expect(await observation.evaluate((value) => value.finish())).toBe(0);
+      expect(await observation.evaluate((value) => value.finish())).toEqual({
+        catalogLabelReads: 0,
+        sameTextarea: true,
+        sameModelOption: true,
+      });
+      await expect
+        .poll(() =>
+          page
+            .locator('aside.sidebar [data-session-key="' + sessionKey + '"]')
+            .first()
+            .textContent(),
+        )
+        .toContain("Background update j");
+      expect((await gateway.getRequests()).slice(requestsBefore.length)).toEqual([]);
       await observation.dispose();
     });
   });

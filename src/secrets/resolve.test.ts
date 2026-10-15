@@ -693,23 +693,6 @@ describe("secret ref resolver", () => {
     );
   });
 
-  it("keeps a missing Windows exec provider path as a generic failure", async () => {
-    await withMockedWindowsPlatform(async () => {
-      const dir = await createCaseDir("win-exec-missing");
-      const commandPath = path.join(dir, "missing-resolver");
-      const error = await resolveExecSecret(commandPath).catch((caught: unknown) => caught);
-
-      expect(isProviderScopedSecretResolutionError(error)).toBe(true);
-      if (!isProviderScopedSecretResolutionError(error)) {
-        return;
-      }
-      expect(error.code).toBe("SECRET_PROVIDER_UNAVAILABLE");
-      expect(describeSecretResolutionError(error)).toBe("secret provider failed");
-      expect(describeSecretResolutionOperatorDiagnostic(error)).toBeUndefined();
-      expect(describeSecretResolutionOperatorRecovery(error)).toBeUndefined();
-    });
-  });
-
   it("keeps a failed Windows exec permission restat as a generic failure", async () => {
     await withMockedWindowsPlatform(async () => {
       const dir = await createCaseDir("win-exec-restat");

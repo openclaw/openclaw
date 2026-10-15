@@ -17,13 +17,6 @@ type TelegramThreadBindingsState = {
   bindingsByAccountConversation: Map<string, TelegramThreadBindingRecord>;
 };
 
-// Source plugin reloads can retain the registry created before queued mutations existed.
-type TelegramThreadBindingsReloadState = Pick<
-  TelegramThreadBindingsState,
-  "managersByAccountId" | "bindingsByAccountConversation"
-> &
-  Partial<Pick<TelegramThreadBindingsState, "queues" | "pendingMutations">>;
-
 /**
  * Keep Telegram thread binding state shared across bundled chunks so routing,
  * binding lookups, and binding mutations all observe the same live registry.
@@ -35,19 +28,19 @@ export function getThreadBindingsState(): TelegramThreadBindingsState {
   if (threadBindingsState) {
     return threadBindingsState;
   }
-  const state = resolveGlobalSingleton<TelegramThreadBindingsReloadState>(
+  threadBindingsState = resolveGlobalSingleton<TelegramThreadBindingsState>(
     TELEGRAM_THREAD_BINDINGS_STATE_KEY,
     () => ({
       managersByAccountId: new Map<string, TelegramThreadBindingManager>(),
+      queues: new Map<string, StoreWriterQueue>(),
+      pendingMutations: new WeakMap<
+        TelegramThreadBindingManager,
+        Map<string, PendingBindingMutation>
+      >(),
       bindingsByAccountConversation: new Map<string, TelegramThreadBindingRecord>(),
     }),
   );
-  return (threadBindingsState = Object.assign(state, {
-    queues: state.queues ?? new Map<string, StoreWriterQueue>(),
-    pendingMutations:
-      state.pendingMutations ??
-      new WeakMap<TelegramThreadBindingManager, Map<string, PendingBindingMutation>>(),
-  }));
+  return threadBindingsState;
 }
 
 export function finishBindingMutationScope(manager: TelegramThreadBindingManager) {

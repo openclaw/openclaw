@@ -2,13 +2,19 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import "./subagent-registry.persistence.mocks.test-support.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import {
+  applySessionEntryLifecycleMutation,
+  listSessionEntriesCore,
+} from "../../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
+import { hasErrnoCode } from "../../../infra/errno.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import {
@@ -16,8 +22,11 @@ import {
   registerOpenClawStateDatabaseAsyncResource,
 } from "../../../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import { captureEnv } from "../../../test-utils/env.js";
-import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
+import { captureEnv, withEnvAsync } from "../../../test-utils/env.js";
+import {
+  cleanupSessionStateForTest,
+  drainSessionStateForTest,
+} from "../../../test-utils/session-state-cleanup.js";
 import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
@@ -34,8 +43,8 @@ import {
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-vi.mock("../announce/subagent-announce.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../announce/subagent-announce.js")>()),
+// mock-isolation: Registry recovery owns both announcement exports without loading delivery state.
+vi.mock("../announce/subagent-announce.js", () => ({
   captureSubagentCompletionReply: vi.fn(async () => undefined),
   runSubagentAnnounceFlow: vi.fn<
     typeof import("../announce/subagent-announce.js").runSubagentAnnounceFlow
@@ -64,7 +73,9 @@ export function makeRestartRecoveryRun(
   );
 }
 
-export function useSubagentRestartRecoveryFixture() {
+export function useSubagentRestartRecoveryFixture(
+  options: { reuseDatabaseWorkers?: boolean } = {},
+) {
   const dispatchAgent = vi.fn();
   const gatewayRuntime: GatewayRecoveryRuntime = {
     prepareRestartRecovery: () => undefined,
@@ -87,16 +98,68 @@ export function useSubagentRestartRecoveryFixture() {
 
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   let tempStateDir: string | null = null;
+  let sharedStateDir: string | undefined;
   let settleRootWork: ReturnType<typeof observeRootWork>;
   const settle = (keepObserving = true) =>
     settleSubagentRegistryPersistenceWork(() => settleRootWork(keepObserving));
+
+  async function resetSessions(stateDir: string) {
+    await drainSessionStateForTest({ stateDir });
+    const agents = await fs
+      .readdir(path.join(stateDir, "agents"), { withFileTypes: true })
+      .catch((error: unknown) => {
+        if (hasErrnoCode(error, "ENOENT")) {
+          return [];
+        }
+        throw error;
+      });
+    for (const agent of agents) {
+      if (!agent.isDirectory()) {
+        continue;
+      }
+      const target = {
+        agentId: agent.name,
+        storePath: resolveSessionStorePathCore(undefined, { agentId: agent.name }),
+      };
+      const removals = listSessionEntriesCore(target).map(({ sessionKey }) => ({
+        sessionKey,
+        deleteOwnedWindows: true,
+      }));
+      if (removals.length === 0) {
+        continue;
+      }
+      // Reused identities must lose their old transcript windows as well as their entries.
+      await applySessionEntryLifecycleMutation({ ...target, removals, skipMaintenance: true });
+    }
+    await drainSessionStateForTest({ stateDir });
+  }
+
+  afterAll(async () => {
+    const stateDir = sharedStateDir;
+    if (!stateDir || tempStateDir !== null) {
+      return;
+    }
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      setRuntimeConfigSnapshot({ session: { store: undefined } } as never);
+      try {
+        await cleanupSessionStateForTest({ stateDir });
+        await fs.rm(stateDir, { recursive: true, force: true });
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    });
+  });
 
   beforeEach(async () => {
     // Retained stores still belong to the previous case until its cleanup succeeds.
     if (tempStateDir !== null) {
       throw new Error("Previous restart recovery fixture cleanup is incomplete");
     }
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-orphan-integ-"));
+    tempStateDir =
+      sharedStateDir ?? (await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-orphan-integ-")));
+    if (options.reuseDatabaseWorkers) {
+      sharedStateDir = tempStateDir;
+    }
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
     setRuntimeConfigSnapshot({ session: { store: undefined } } as never);
     vi.mocked(runSubagentAnnounceFlow).mockReset();
@@ -117,10 +180,14 @@ export function useSubagentRestartRecoveryFixture() {
     // Preserve stores and their environment while detached delivery still owns them.
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
-        await resetSubagentRegistryForTests({ persist: false });
-        await cleanupSessionStateForTest({ stateDir: tempStateDir ?? undefined });
+        await resetSubagentRegistryForTests({ persist: options.reuseDatabaseWorkers === true });
+        if (options.reuseDatabaseWorkers && tempStateDir) {
+          await resetSessions(tempStateDir);
+        } else {
+          await cleanupSessionStateForTest({ stateDir: tempStateDir ?? undefined });
+        }
         clearRuntimeConfigSnapshot();
-        if (tempStateDir) {
+        if (tempStateDir && !options.reuseDatabaseWorkers) {
           // Resource cleanup finished; removal failure must not retain a retired owner.
           try {
             await fs.rm(tempStateDir, {

@@ -124,6 +124,7 @@ declare module "@solidjs/web" {
         "prop:content"?: Tooltip["content"];
         "prop:contentTemplate"?: Tooltip["contentTemplate"];
         "prop:describe"?: Tooltip["describe"];
+        "prop:pointerThrough"?: Tooltip["pointerThrough"];
         "prop:openOnClick"?: Tooltip["openOnClick"];
         "prop:disabled"?: Tooltip["disabled"];
         "prop:anchor"?: Tooltip["anchor"];

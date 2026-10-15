@@ -613,6 +613,9 @@ async function waitForGatewayReady(
       }
     }
     signal?.throwIfAborted();
+    if (hasChildExited(proc)) {
+      throw exitedBeforeReadinessError();
+    }
     throw startupError(`timeout waiting for gateway readiness on port ${port}`);
   } catch (error) {
     signal?.throwIfAborted();

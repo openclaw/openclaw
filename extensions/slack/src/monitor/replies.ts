@@ -331,17 +331,10 @@ export function createSlackReplyDeliveryPlan(params: {
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasRepliedRef: { value: boolean };
-  isThreadReply?: boolean;
+  isThreadReply: boolean;
 }) {
-  // Older/internal callers may not pass explicit thread classification. Keep
-  // genuine thread replies sticky, but do not let Slack's auto-populated
-  // top-level thread_ts override the configured replyToMode.
-  const effectiveIsThreadReply =
-    params.isThreadReply ??
-    Boolean(params.incomingThreadTs && params.incomingThreadTs !== params.messageTs);
-  const effectiveMode = effectiveIsThreadReply ? "all" : params.replyToMode;
   const replyReference = createReplyReferencePlanner({
-    replyToMode: effectiveMode,
+    replyToMode: params.isThreadReply ? "all" : params.replyToMode,
     existingId: params.incomingThreadTs,
     startId: params.messageTs,
     hasReplied: params.hasRepliedRef.value,

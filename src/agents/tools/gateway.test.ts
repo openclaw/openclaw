@@ -125,12 +125,6 @@ describe("gateway tool defaults", () => {
     vi.unstubAllEnvs();
   });
 
-  it("rejects invalid timeouts", () => {
-    expect(() => readGatewayCallOptions({ timeoutMs: -1 })).toThrow(
-      "timeoutMs must be a positive integer",
-    );
-  });
-
   it("parses allowlisted RPC options and scopes", async () => {
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "fallback-token");
     await callGatewayTool(

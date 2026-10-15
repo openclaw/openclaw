@@ -110,6 +110,11 @@ export async function downloadArtifact(
     }
     return isCurrent() ? { ...download, blob } : null;
   } catch {
+    // A failed preview must not silently download the original over WebSocket.
+    // Explicit full-size actions retain the ordinary transport fallback below.
+    if (variant === "thumbnail") {
+      return null;
+    }
     // Some proxies serve the UI and WebSocket but omit media routes. Reauthorize
     // inline delivery on the same connection instead of probing or retargeting.
     return await request(false);

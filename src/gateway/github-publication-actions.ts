@@ -270,7 +270,11 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     }
   };
   assertHead(before);
-  if (before.state === "merged" || (params.action === "ready" && before.state === "open")) {
+  if (
+    before.state === "merged" ||
+    (params.action === "ready" && before.state === "open") ||
+    (params.action === "close" && before.state === "closed")
+  ) {
     return present(before);
   }
   if (before.state === "closed") {
@@ -309,8 +313,12 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   try {
     await runPublicationCommand(
       githubPublicationApiArgs(
-        params.action === "ready" ? "graphql" : `${endpoint}/merge`,
-        params.action === "ready" ? "POST" : "PUT",
+        params.action === "ready"
+          ? "graphql"
+          : params.action === "close"
+            ? endpoint
+            : `${endpoint}/merge`,
+        params.action === "ready" ? "POST" : params.action === "close" ? "PATCH" : "PUT",
         host,
       ),
       {
@@ -323,13 +331,15 @@ export async function performSessionGitHubAction(options: Options): Promise<void
                   "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id } } }",
                 variables: { id: before.nodeId },
               }
-            : {
-                sha: params.expectedHeadCommit,
-                merge_method: params.mergeMethod,
-                ...(attribution?.attribution?.trailers.length
-                  ? { commit_message: attribution.attribution.trailers.join("\n") }
-                  : {}),
-              },
+            : params.action === "close"
+              ? { state: "closed" }
+              : {
+                  sha: params.expectedHeadCommit,
+                  merge_method: params.mergeMethod,
+                  ...(attribution?.attribution?.trailers.length
+                    ? { commit_message: attribution.attribution.trailers.join("\n") }
+                    : {}),
+                },
         ),
       },
     );
@@ -338,8 +348,17 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   }
   const after = await read();
   assertHead(after);
-  if (after.state === "merged" || (params.action === "ready" && after.state === "open")) {
+  if (
+    after.state === "merged" ||
+    (params.action === "ready" && after.state === "open") ||
+    (params.action === "close" && after.state === "closed")
+  ) {
     return present(after);
+  }
+  if (params.action === "close") {
+    throw new Error(
+      "GitHub has not confirmed close; inspect the PR state and repository permissions before retrying. Saved work is unchanged.",
+    );
   }
   throw new Error(
     `GitHub has not confirmed ${params.action}; inspect the PR's required reviews, checks, conflicts and repository permissions before retrying. Saved work is unchanged.`,

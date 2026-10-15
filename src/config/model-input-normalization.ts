@@ -90,58 +90,38 @@ function normalizeAgentModelScope(value: unknown): unknown {
     return value;
   }
 
-  let next = value;
-  const assign = (key: string, candidate: unknown) => {
-    if (candidate === next[key]) {
-      return;
-    }
-    next = { ...next, [key]: candidate };
-  };
-
+  let next: unknown = value;
   for (const key of MODEL_SELECTION_KEYS) {
-    if (Object.hasOwn(value, key)) {
-      assign(key, normalizeAgentModelSelectionForConfig(value[key]));
-    }
+    next = normalizeNestedModelField(next, key, normalizeAgentModelSelectionForConfig);
   }
-  if (Object.hasOwn(value, "utilityModel")) {
-    assign("utilityModel", normalizeStringModelRef(value.utilityModel));
-  }
-  const originalMediaModels = value.mediaModels;
-  if (isRecord(originalMediaModels)) {
-    let mediaModels: unknown = originalMediaModels;
+  next = normalizeNestedModelField(next, "utilityModel", normalizeStringModelRef);
+  next = normalizeNestedModelField(next, "mediaModels", (mediaModels) => {
+    let nextMediaModels = mediaModels;
     for (const key of MEDIA_MODEL_KEYS) {
-      mediaModels = normalizeNestedModelField(
-        mediaModels,
+      nextMediaModels = normalizeNestedModelField(
+        nextMediaModels,
         key,
         normalizeAgentModelSelectionForConfig,
       );
     }
-    assign("mediaModels", mediaModels);
-  }
-  assign("heartbeat", normalizeNestedModelField(value.heartbeat, "model", normalizeStringModelRef));
-  assign(
-    "subagents",
-    normalizeNestedModelField(value.subagents, "model", normalizeAgentModelSelectionForConfig),
+    return nextMediaModels;
+  });
+  next = normalizeNestedModelField(next, "heartbeat", (heartbeat) =>
+    normalizeNestedModelField(heartbeat, "model", normalizeStringModelRef),
   );
-
-  if (isRecord(value.compaction)) {
-    let compaction = normalizeNestedModelField(value.compaction, "model", normalizeStringModelRef);
-    if (isRecord(compaction)) {
-      const memoryFlush = normalizeNestedModelField(
-        compaction.memoryFlush,
-        "model",
-        normalizeStringModelRef,
-      );
-      if (memoryFlush !== compaction.memoryFlush) {
-        compaction = { ...compaction, memoryFlush };
-      }
-    }
-    assign("compaction", compaction);
-  }
-  if (isRecord(value.models)) {
-    assign("models", normalizeAgentModelMapForConfig(value.models));
-  }
-  return next;
+  next = normalizeNestedModelField(next, "subagents", (subagents) =>
+    normalizeNestedModelField(subagents, "model", normalizeAgentModelSelectionForConfig),
+  );
+  next = normalizeNestedModelField(next, "compaction", (compaction) =>
+    normalizeNestedModelField(
+      normalizeNestedModelField(compaction, "model", normalizeStringModelRef),
+      "memoryFlush",
+      (memoryFlush) => normalizeNestedModelField(memoryFlush, "model", normalizeStringModelRef),
+    ),
+  );
+  return normalizeNestedModelField(next, "models", (models) =>
+    isRecord(models) ? normalizeAgentModelMapForConfig(models) : models,
+  );
 }
 
 function normalizeAgentScopes(agents: unknown): unknown {

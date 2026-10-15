@@ -79,10 +79,12 @@ function prepareWorkerRuntime(
   } = {},
 ) {
   const { enabled = true, containerImage, ...runtimeOptions } = options;
+  const workerRuns = { enabled, isolation, containerImage };
   return prepareNodeHostRuntime({
-    config: {
-      nodeHost: { skills: { enabled: false }, workerRuns: { enabled, isolation, containerImage } },
-    },
+    config:
+      !enabled || isolation === "container"
+        ? configThatRejectsModelAccess(workerRuns)
+        : { nodeHost: { skills: { enabled: false }, workerRuns } },
     env: { PATH: "/usr/bin" },
     ...runtimeOptions,
   });
@@ -91,6 +93,7 @@ function prepareWorkerRuntime(
 function configThatRejectsModelAccess(workerRuns: {
   enabled: boolean;
   isolation?: "container";
+  containerImage?: string;
 }): OpenClawConfig {
   const config: OpenClawConfig = {
     nodeHost: { skills: { enabled: false }, workerRuns },
@@ -104,30 +107,6 @@ function configThatRejectsModelAccess(workerRuns: {
 }
 
 describe("node-host worker manifest", () => {
-  it.each([
-    { name: "disabled worker hosting", enabled: false },
-    { name: "rejected worker hosting", enabled: true, admissionFailure: true },
-    { name: "container-isolated worker hosting", enabled: true, isolation: "container" as const },
-  ])(
-    "does not inspect models or advertise native inference for $name",
-    async ({ enabled, isolation, admissionFailure }) => {
-      if (admissionFailure) {
-        mocks.checkWorkspaceAdmission.mockRejectedValueOnce(
-          new Error("workspace admission failed"),
-        );
-      }
-      const prepared = await prepareNodeHostRuntime({
-        config: configThatRejectsModelAccess({ enabled, isolation }),
-        env: { PATH: "/usr/bin" },
-        platform: "linux",
-      });
-      expect(prepared.nativeInferenceEnabled).toBe(false);
-
-      const runtime = prepared.start({ client });
-      await runtime.close();
-    },
-  );
-
   it("advertises native inference after unisolated worker hosting is admitted", async () => {
     const prepared = await prepareNodeHostRuntime({
       config: {
@@ -171,6 +150,7 @@ describe("node-host worker manifest", () => {
     const runtime = prepared.start({ client, onWorkerHostingDisabled });
     try {
       expect(prepared.workerHostingEnabled).toBe(false);
+      expect(prepared.nativeInferenceEnabled).toBe(false);
       expect(prepared.workerHostingDisabledReason).toBeUndefined();
       expect(mocks.resolveContainerEngine).not.toHaveBeenCalled();
       expect(createNodeWorkerSupervisor).not.toHaveBeenCalled();
@@ -186,6 +166,7 @@ describe("node-host worker manifest", () => {
     mocks.checkWorkspaceAdmission.mockRejectedValueOnce(new Error(reason));
     const prepared = await prepareWorkerRuntime("container");
     expect(prepared.workerHostingEnabled).toBe(false);
+    expect(prepared.nativeInferenceEnabled).toBe(false);
     expect(prepared.workerHostingDisabledReason).toBe(reason);
     expect(mocks.resolveContainerEngine).not.toHaveBeenCalled();
     const runtime = prepared.start({ client });
@@ -216,6 +197,7 @@ describe("node-host worker manifest", () => {
     });
 
     expect(prepared.workerHostingEnabled).toBe(true);
+    expect(prepared.nativeInferenceEnabled).toBe(false);
     expect(mocks.resolveContainerEngine).toHaveBeenCalledOnce();
     expect(mocks.initializeWorkerSupervisor).toHaveBeenCalledOnce();
     const onRunnerCapacityChanged = vi.fn();

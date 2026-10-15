@@ -113,7 +113,6 @@ import {
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   invalidateSessionAutomationIndex,
-  claimSessionAutomationEpoch,
   registerSessionAutomationSource,
   unregisterSessionAutomationSource,
 } from "./session-automation-index.js";
@@ -1157,7 +1156,6 @@ export function buildGatewayCronService(params: {
     getJobs: () => cron.getLoadedJobs(),
     getDefaultAgentId: () => cron.getDefaultAgentId(),
   };
-  const automationEpoch = claimSessionAutomationEpoch();
   const stopCron = cron.stop.bind(cron);
   const stopCronLifecycle = (preserveExitWatchers = false) => {
     settleExitWatcherHandoff(false);
@@ -1246,9 +1244,7 @@ export function buildGatewayCronService(params: {
     if (lifecycleChanged()) {
       return;
     }
-    // Register only once started, under the build-time epoch, so a stale lazy
-    // service resolving after a config reload cannot clobber the replacement.
-    registerSessionAutomationSource(automationSource, automationEpoch);
+    registerSessionAutomationSource(automationSource);
     // Nudge subscribed clients into a canonical list refresh so automation
     // badges match this scheduler's bindings — including clearing them when a
     // reload lands on an empty or disabled store.

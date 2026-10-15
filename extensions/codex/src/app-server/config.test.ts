@@ -7,9 +7,7 @@ import { codexAppServerStartOptionsKey } from "./config-runtime.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexSandboxPolicyForTurn,
-  isCodexSandboxExecServerEnabled,
   readCodexPluginConfig,
-  resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,
   resolveCodexSupervisionAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
@@ -17,7 +15,6 @@ import {
   resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexPluginsPolicy,
   shouldAutoApproveCodexAppServerApprovals,
-  withMcpElicitationsApprovalPolicy,
 } from "./config.js";
 import { expectFields, expectRuntimePolicy, resolveRuntimeForTest } from "./config.test-support.js";
 
@@ -35,20 +32,6 @@ const userReviewPolicy = { ...autoReviewPolicy, approvalsReviewer: "user" };
 const readOnlyAutoReviewPolicy = { ...autoReviewPolicy, sandbox: "read-only" };
 const readOnlyUserReviewPolicy = { ...userReviewPolicy, sandbox: "read-only" };
 const perCommandPolicy = { ...fullAccessPolicy, approvalPolicy: "untrusted" };
-
-describe("withMcpElicitationsApprovalPolicy", () => {
-  it("returns every field required by Codex granular approval policy", () => {
-    expect(withMcpElicitationsApprovalPolicy("never")).toEqual({
-      granular: {
-        mcp_elicitations: true,
-        request_permissions: false,
-        rules: false,
-        sandbox_approval: false,
-        skill_approval: false,
-      },
-    });
-  });
-});
 
 function resolveAppServer(
   appServer: unknown,
@@ -275,18 +258,6 @@ describe("Codex app-server config", () => {
     expect(runtime.start.clearEnv).toEqual(["OPENAI_API_KEY"]);
   });
 
-  it.each([{ enableUltrafast: undefined, expected: true }])(
-    "resolves the Ultrafast disable switch $enableUltrafast",
-    ({ enableUltrafast, expected }) => {
-      const runtime = resolveCodexAppServerRuntimeOptions({
-        pluginConfig: { appServer: { serviceTier: "fast", enableUltrafast } },
-        env: {},
-      });
-      expect(runtime.enableUltrafast).toBe(expected);
-      expect(runtime.serviceTier).toBe("priority");
-    },
-  );
-
   it("preserves future service tier values", () => {
     expect(resolveAppServer({ serviceTier: "batch-preview" }).serviceTier).toBe("batch-preview");
   });
@@ -336,26 +307,6 @@ describe("Codex app-server config", () => {
       }),
     ).toThrow(
       "remote Codex app-server WebSocket URLs require appServer.authToken or an Authorization header",
-    );
-  });
-
-  it("does not let private-QA environment flags override native sandbox policy", () => {
-    const privateQaCodexEnv = {
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_QA_FORCE_RUNTIME: "codex",
-    };
-    const runtime = resolveAppServer(
-      {
-        mode: "yolo",
-        approvalPolicy: "never",
-        sandbox: "danger-full-access",
-      },
-      { env: privateQaCodexEnv },
-    );
-
-    expectRuntimePolicy(runtime, fullAccessPolicy);
-    expect(codexSandboxPolicyForTurn(runtime.sandbox, "/qa/workspace", runtime.start.args)).toEqual(
-      { type: "dangerFullAccess" },
     );
   });
 
@@ -589,12 +540,6 @@ describe("Codex app-server config", () => {
 
     expectRuntimePolicy(runtime, userReviewPolicy);
     expect(shouldAutoApproveCodexAppServerApprovals(runtime)).toBe(false);
-  });
-
-  it("enables sandbox execution for remote placement", () => {
-    expect(
-      isCodexSandboxExecServerEnabled(undefined, { placementExecutionMode: "remote-exec" }),
-    ).toBe(true);
   });
 
   it("parses auto native Codex plugin destructive policy", () => {

@@ -100,7 +100,7 @@ describe("remote model catalog overlay", () => {
   });
 
   it.each([false, true])(
-    "publishes a paired generation while retaining startup absence=%s",
+    "publishes valid rows and prices, skipping duplicates while retaining startup absence=%s",
     async (absent) => {
       if (absent) {
         mocks.read.mockReturnValue(undefined);
@@ -113,7 +113,11 @@ describe("remote model catalog overlay", () => {
         bundle_json: JSON.stringify({
           ...bundle,
           generatedAt: 300,
-          providers: { anthropic: { models: [{ id: "downloaded" }] } },
+          providers: {
+            anthropic: {
+              models: [{ id: "downloaded" }, { id: "downloaded", name: "ignored duplicate" }],
+            },
+          },
           pricing: { "openai/gpt-external": { input: 5, output: 20 } },
         }),
       });
@@ -152,15 +156,6 @@ describe("remote model catalog overlay", () => {
 
   it.each([
     { name: "invalid JSON", bundleJson: "{", error: SyntaxError },
-    {
-      name: "duplicate nested model IDs",
-      bundleJson: JSON.stringify({
-        ...bundle,
-        generatedAt: 300,
-        providers: { anthropic: { models: [{ id: "duplicate" }, { id: "duplicate" }] } },
-      }),
-      error: ZodError,
-    },
     {
       name: "invalid nested pricing",
       bundleJson: JSON.stringify({
