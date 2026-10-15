@@ -21,8 +21,6 @@ import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { PageLayout } from "../page-layout.tsx";
 import { pluginDetailLocation } from "../plugins/detail-tabs.ts";
 import {
   labFeatureMergePatch,
@@ -32,7 +30,7 @@ import {
   type LabFeature,
 } from "./labs-registry.ts";
 
-function LabsPageContent() {
+export function LabsPage() {
   const context = useApplication();
   const config = projectRuntimeConfig(untrack(() => context.runtimeConfig));
   const lifecycle = createGatewayConnectionLifecycle(untrack(() => context.gateway.snapshot));
@@ -361,7 +359,7 @@ function LabsPageContent() {
     );
   }
   return (
-    <>
+    <openclaw-labs-page>
       <SettingsPageHeader
         title={t("tabs.labs")}
         subtitle={
@@ -387,16 +385,6 @@ function LabsPageContent() {
           </SettingsSection>
         </SettingsPage>
       </SettingsWorkspace>
-    </>
+    </openclaw-labs-page>
   );
 }
-
-export const LabsPage = defineSolidBridge(
-  "openclaw-labs-page",
-  (_props, host) => (
-    <PageLayout host={host}>
-      <LabsPageContent />
-    </PageLayout>
-  ),
-  { properties: {} },
-);

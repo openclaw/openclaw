@@ -1,24 +1,46 @@
 // @vitest-environment jsdom
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
+import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
-import "../../../lib/toast-host.ts";
+import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as payloads from "../attachment-payload-store.ts";
+import "../../../lib/toast-host.ts";
 import {
   chatAttachmentBatchBytes,
   resolveChatAttachmentLimits,
 } from "./chat-attachment-admission.ts";
+import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { ChatAttachmentReadLifecycle } from "./chat-attachment-reads.ts";
 import {
   appendChatAttachmentFiles,
   chatAttachmentFromDataUrl,
   handleChatAttachmentPaste,
-  renderAttachmentPreview,
 } from "./chat-attachments.ts";
+import { AttachmentPreview } from "./chat-attachments.tsx";
+
+function mountPreview(container: HTMLDivElement) {
+  let update!: (props: ChatAttachmentControlsProps) => void;
+  let revision = 0;
+  const mounted = mountSolid(
+    () => {
+      const [props, setProps] = createSignal<
+        ChatAttachmentControlsProps & { readRevision: number }
+      >({ readRevision: revision });
+      update = (next) => {
+        setProps({ ...next, readRevision: ++revision });
+        flush();
+      };
+      return <AttachmentPreview {...props()} />;
+    },
+    { container },
+  );
+  return { update, unmount: mounted.unmount };
+}
 
 it("memoizes each advertised policy and derives the default decoded frame budget", () => {
   const policy = {
@@ -243,25 +265,23 @@ describe("chat attachment read failures", () => {
     }
     let attachments: ChatAttachment[] = [];
     const container = document.createElement("div");
+    const preview = mountPreview(container);
     const redraw = () =>
-      render(
-        renderAttachmentPreview({
-          attachments,
-          attachmentReads: reads,
-          getAttachments: () => attachments,
-          onAttachmentsChange: (next) => {
-            attachments = next;
-            redraw();
-          },
-        }),
-        container,
-      );
+      preview.update({
+        attachments,
+        attachmentReads: reads,
+        getAttachments: () => attachments,
+        onAttachmentsChange: (next) => {
+          attachments = next;
+          redraw();
+        },
+      });
     const reads = new ChatAttachmentReadLifecycle(redraw);
     const signal = reads.readSignal;
     onTestFinished(() => {
       reads.abortReads();
       payloads.releaseChatAttachmentPayloads(attachments);
-      render(null, container);
+      preview.unmount();
     });
     handleChatAttachmentPaste(pasteEventWithFiles(files), {
       attachments,
@@ -698,27 +718,28 @@ describe("attachment removal names", () => {
     const onDraftChange = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
+    const preview = mountPreview(container);
     const redraw = () =>
-      render(
-        renderAttachmentPreview({
-          attachments,
-          getAttachments: () => attachments,
-          draft: "Keep this draft",
-          onDraftChange,
-          onAttachmentsChange: (next) => {
-            attachments = next;
-            redraw();
-          },
-        }),
-        container,
-      );
+      preview.update({
+        attachments,
+        getAttachments: () => attachments,
+        draft: "Keep this draft",
+        onDraftChange,
+        onAttachmentsChange: (next) => {
+          attachments = next;
+          redraw();
+        },
+      });
     onTestFinished(() => {
-      render(null, container);
+      preview.unmount();
       container.remove();
     });
     redraw();
-    const first = container.querySelector<HTMLElement>("openclaw-chat-pasted-text");
-    await (first as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+    const first = expectDefined(
+      container.querySelector<SolidBridgeElement<object>>("openclaw-chat-pasted-text"),
+      "pasted text attachment",
+    );
+    await first.updateComplete;
     const remove = first?.querySelector<HTMLButtonElement>(".chat-attachment-remove");
     expect(remove?.getAttribute("aria-label")).toBe("Remove pasted-text-123.txt");
     remove?.click();
@@ -744,18 +765,16 @@ describe("attachment removal names", () => {
     const originals = [...attachments];
     const container = document.createElement("div");
     const released = vi.spyOn(payloads, "releaseChatAttachmentPayload");
+    const preview = mountPreview(container);
     const redraw = () =>
-      render(
-        renderAttachmentPreview({
-          attachments,
-          getAttachments: () => attachments,
-          onAttachmentsChange: (next) => {
-            attachments = next;
-            redraw();
-          },
-        }),
-        container,
-      );
+      preview.update({
+        attachments,
+        getAttachments: () => attachments,
+        onAttachmentsChange: (next) => {
+          attachments = next;
+          redraw();
+        },
+      });
     redraw();
     const buttons = [...container.querySelectorAll<HTMLButtonElement>(".chat-attachment-remove")];
     const labels = names.map((name) => (name?.trim() ? "Remove " + name : "Remove attachment"));
@@ -768,7 +787,7 @@ describe("attachment removal names", () => {
       originals.filter((_, index) => index !== 2).map(({ id }) => id),
     );
     expect(released).toHaveBeenCalledExactlyOnceWith("named-2");
-    render(null, container);
+    preview.unmount();
     released.mockRestore();
   });
 });

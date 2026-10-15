@@ -47,7 +47,7 @@ import "./chat-audio-player.tsx";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import "./chat-video-player.tsx";
 import { openResolvedImage } from "./chat-message-image-open.ts";
-import { isPdfAttachment } from "./chat-pdf-preview.ts";
+import { ChatPdfPreview, isPdfAttachment } from "./chat-pdf-preview.tsx";
 import type {
   AttachmentSidebarRuntime,
   SidebarContent,
@@ -168,12 +168,12 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
           !isCrossOriginHttpSource(model().src ?? "")
         }
       >
-        <openclaw-chat-pdf-preview
-          prop:src={model().src ?? ""}
-          prop:sourceIdentity={model().sourceIdentity}
-          prop:label={props.content.title}
-          prop:mimeType={props.content.mimeType ?? ""}
-          prop:sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
+        <ChatPdfPreview
+          src={model().src ?? ""}
+          sourceIdentity={model().sourceIdentity}
+          label={props.content.title}
+          mimeType={props.content.mimeType ?? ""}
+          sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
         />
       </Match>
       <Match

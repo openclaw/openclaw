@@ -1,9 +1,9 @@
-import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { resolveTypefaces, syncTypefaceStylesheets } from "../../../app/typography.ts";
-import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { renderMessageGroup } from "./chat-message-group.test-support.ts";
+import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { MessageGroup } from "./chat-message-group-view.tsx";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/startup-layout.css";
@@ -12,6 +12,24 @@ import "../../../styles/chat/grouped.css";
 import "../../../styles/chat/text.css";
 
 let host: HTMLDivElement;
+type ReplyProps = Parameters<typeof MessageGroup>[0] & { after?: boolean };
+function ReplyFixture(props: ReplyProps) {
+  return (
+    <>
+      <MessageGroup group={props.group} options={props.options} />
+      {props.after ? <div class="after">Next</div> : undefined}
+    </>
+  );
+}
+let view: ReturnType<typeof mountSolid<ReplyProps>> | undefined;
+function drawGroup(group: MessageGroupData, options: ReplyProps["options"], after = false) {
+  const props = { group, options, after };
+  if (view) {
+    view.update(props);
+  } else {
+    view = mountSolid(ReplyFixture, props, host);
+  }
+}
 
 beforeEach(async () => {
   const typefaces = resolveTypefaces("claw");
@@ -21,18 +39,20 @@ beforeEach(async () => {
       Boolean(document.querySelector<HTMLLinkElement>(`#openclaw-typeface-${typefaces.ui}`)?.sheet),
     )
     .toBe(true);
+  view = undefined;
   host = document.body.appendChild(document.createElement("div"));
   host.className = "chat-thread";
 });
 
 afterEach(async () => {
-  render(null, host);
+  view?.dispose();
+  view = undefined;
   host.remove();
   await page.viewport(1280, 720);
 });
 
 async function draw(name: string, source = true, onOpenReply = vi.fn()) {
-  const group: MessageGroup = {
+  const group: MessageGroupData = {
     kind: "group",
     key: "answer",
     role: "assistant",
@@ -54,23 +74,20 @@ async function draw(name: string, source = true, onOpenReply = vi.fn()) {
       },
     ],
   };
-  render(
-    renderMessageGroup(group, {
-      showReasoning: false,
-      showToolCalls: false,
-      avatarPlacement: "gutter",
-      onOpenReply,
-      resolveReplyPreview: () => ({
-        messageId: "prompt",
-        sourceMessageId: "prompt",
-        senderLabel: name,
-        sender: { id: "casey", name },
-        agentAvatar: { avatar: null, textAvatar: "🦀" },
-        text: "Original question",
-      }),
+  drawGroup(group, {
+    showReasoning: false,
+    showToolCalls: false,
+    avatarPlacement: "gutter",
+    onOpenReply,
+    resolveReplyPreview: () => ({
+      messageId: "prompt",
+      sourceMessageId: "prompt",
+      senderLabel: name,
+      sender: { id: "casey", name },
+      agentAvatar: { avatar: null, textAvatar: "🦀" },
+      text: "Original question",
     }),
-    host,
-  );
+  });
   await document.fonts.ready;
   const row = host.querySelector<HTMLElement>(".chat-reply-attribution--reply")!;
   return {
@@ -216,30 +233,27 @@ it("updates a mounted reply across the mobile breakpoint without losing navigati
 it("keeps the unavailable-original label visible inside an own reply without a sender name", async () => {
   await page.viewport(1440, 800);
   host.style.width = "720px";
-  render(
-    renderMessageGroup(
-      {
-        kind: "group",
-        key: "own-missing-reply",
-        role: "user",
-        timestamp: 1,
-        isStreaming: false,
-        visibleContent: "text",
-        messages: [
-          {
-            key: "reply-paged",
-            hasVisibleContent: true,
-            message: {
-              role: "user",
-              content: "Follow up on the earlier synthetic answer.",
-              __openclaw: { id: "reply-paged", replyToId: "earlier-answer" },
-            },
+  drawGroup(
+    {
+      kind: "group",
+      key: "own-missing-reply",
+      role: "user",
+      timestamp: 1,
+      isStreaming: false,
+      visibleContent: "text",
+      messages: [
+        {
+          key: "reply-paged",
+          hasVisibleContent: true,
+          message: {
+            role: "user",
+            content: "Follow up on the earlier synthetic answer.",
+            __openclaw: { id: "reply-paged", replyToId: "earlier-answer" },
           },
-        ],
-      },
-      { showReasoning: false, resolveReplyPreview: () => ({ missing: true }) },
-    ),
-    host,
+        },
+      ],
+    },
+    { showReasoning: false, resolveReplyPreview: () => ({ missing: true }) },
   );
   await document.fonts.ready;
   const fallback = host.querySelector<HTMLElement>(
@@ -263,37 +277,34 @@ it.each([1440, 390])(
     for (const direction of ["ltr", "rtl"]) {
       host.dir = direction;
       host.style.width = width - 32 + "px";
-      render(
-        renderMessageGroup(
-          {
-            kind: "group",
-            key: "own",
-            role: "user",
-            timestamp: 1,
-            isStreaming: false,
-            visibleContent: "text",
-            messages: [
-              {
-                key: "reply",
-                hasVisibleContent: true,
-                message: {
-                  role: "user",
-                  content: "OK",
-                  __openclaw: {
-                    id: "reply",
-                    replyToId: "source",
-                    replyToPreview: {
-                      senderLabel: "Casey Morgan",
-                      text: "Please review the release checklist. ".repeat(20),
-                    },
+      drawGroup(
+        {
+          kind: "group",
+          key: "own",
+          role: "user",
+          timestamp: 1,
+          isStreaming: false,
+          visibleContent: "text",
+          messages: [
+            {
+              key: "reply",
+              hasVisibleContent: true,
+              message: {
+                role: "user",
+                content: "OK",
+                __openclaw: {
+                  id: "reply",
+                  replyToId: "source",
+                  replyToPreview: {
+                    senderLabel: "Casey Morgan",
+                    text: "Please review the release checklist. ".repeat(20),
                   },
                 },
               },
-            ],
-          },
-          { showReasoning: false, onOpenReply },
-        ),
-        host,
+            },
+          ],
+        },
+        { showReasoning: false, onOpenReply },
       );
       await document.fonts.ready;
       const row = host.querySelector<HTMLElement>(".chat-reply-attribution--inline")!;
@@ -321,7 +332,7 @@ it.each([1440, 390])(
     await page.viewport(width, 800);
     host.style.width = `${width - 32}px`;
     type Lookup = ReturnType<
-      NonNullable<Parameters<typeof renderMessageGroup>[1]["resolveReplyPreview"]>
+      NonNullable<Parameters<typeof MessageGroup>[0]["options"]["resolveReplyPreview"]>
     >;
     const pending: Lookup = { pending: true };
     const missing: Lookup = { missing: true };
@@ -384,7 +395,7 @@ it.each([1440, 390])(
       });
     try {
       for (const outcome of outcomes) {
-        const group: MessageGroup = {
+        const group: MessageGroupData = {
           kind: "group",
           key: "answer",
           role: "assistant",
@@ -409,16 +420,16 @@ it.each([1440, 390])(
           ],
         };
         const drawLookup = (lookup: Lookup) =>
-          render(
-            html`${renderMessageGroup(group, {
-                showReasoning: false,
-                showToolCalls: false,
-                avatarPlacement: "gutter",
-                onOpenReply: vi.fn(),
-                resolveReplyPreview: () => lookup,
-              })}
-              <div class="after">Next</div>`,
-            host,
+          drawGroup(
+            group,
+            {
+              showReasoning: false,
+              showToolCalls: false,
+              avatarPlacement: "gutter",
+              onOpenReply: vi.fn(),
+              resolveReplyPreview: () => lookup,
+            },
+            true,
           );
         const measure = () => {
           const row = host.querySelector(".chat-reply-attribution--reply")!.getBoundingClientRect();
@@ -429,7 +440,8 @@ it.each([1440, 390])(
             after: host.querySelector(".after")!.getBoundingClientRect().top,
           };
         };
-        render(null, host);
+        view?.dispose();
+        view = undefined;
         drawLookup(outcome.steps[0]);
         await document.fonts.ready;
         await frame();

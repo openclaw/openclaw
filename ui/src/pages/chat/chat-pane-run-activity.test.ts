@@ -1,17 +1,19 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { nothing, render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { createComposerProps } from "./chat-composer.test-support.ts";
+import {
+  createComposerContainer,
+  createComposerProps,
+  renderComposerInto,
+} from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { renderChatPropsInto } from "./chat-view.test-helpers.ts";
-import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 import { resetChatComposerState } from "./components/chat-composer.tsx";
 import {
   installTranscriptDomMocks,
@@ -171,9 +173,7 @@ describe("composer run status", () => {
           subagentSessionsHydrated: hydrated,
           onOpenSubagent,
         });
-        await container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-          "openclaw-chat-subagent-activity",
-        )?.updateComplete;
+        flush();
         expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
       };
       await draw([], false);
@@ -213,15 +213,11 @@ describe("composer run status", () => {
 
   it("keeps the composer free of duplicate working status across run and access states", () => {
     const { context } = createRefreshChatPane();
-    const container = document.body.appendChild(createApplicationContextProvider(context));
-    onTestFinished(() => {
-      render(nothing, container);
-      container.remove();
-    });
+    const container = createComposerContainer();
+    container.setContext(context);
     const props = createComposerProps();
     const draw = () => {
-      render(renderChatComposer(props), container);
-      flush();
+      renderComposerInto(container, props);
     };
     draw();
     expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();

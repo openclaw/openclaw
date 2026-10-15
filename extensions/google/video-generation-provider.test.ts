@@ -122,6 +122,15 @@ function fetchInputUrl(fetchMock: ReturnType<typeof vi.fn>, index: number): stri
 let ssrfMock: { mockRestore: () => void } | undefined;
 
 describe("google video generation provider", () => {
+  it("rejects a duration that rounds to zero before submission", async () => {
+    mockGoogleApiKeyAuth();
+    await expect(generateVideo({ durationSeconds: 0.4 })).rejects.toThrow(
+      "durationSeconds must be a positive duration",
+    );
+    expect(generateVideosMock).not.toHaveBeenCalled();
+    expect(createGoogleGenAIMock).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     ssrfMock = mockPinnedHostnameResolution();
   });
