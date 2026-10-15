@@ -41,6 +41,8 @@ function fixture(
     unbound?: boolean;
     materializedSessionId?: string;
     remembered?: boolean;
+    sessionKey?: string;
+    rememberedAgentId?: string;
   } = {},
 ) {
   if (options.send) {
@@ -50,6 +52,7 @@ function fixture(
     vi.stubGlobal("requestAnimationFrame", () => 1);
     vi.stubGlobal("cancelAnimationFrame", () => undefined);
   }
+  const sessionKey = options.sessionKey ?? "global";
   const result = createSessionsListResult({
     model: "original",
     modelProvider: "fixture",
@@ -57,7 +60,7 @@ function fixture(
   });
   result.sessions[0] = {
     ...result.sessions[0],
-    key: "global",
+    key: sessionKey,
     kind: "direct",
     updatedAt: 1,
     sessionId: options.materializedSessionId ?? recovery.sessionId,
@@ -78,13 +81,13 @@ function fixture(
   let sends = 0;
   const receipt: SessionsPatchResult = {
     ok: true,
-    key: "global",
+    key: sessionKey,
     path: "",
     entry: { sessionId: recovery.sessionId, permissionMode: "full", updatedAt: 2 },
     resolved: { model: options.unbound ? "original" : "selected", modelProvider: "fixture" },
   };
   const host = makeChatHost({
-    sessionKey: "global",
+    sessionKey,
     assistantAgentId: "selected-agent",
     agentsList: { defaultId: "main", scope: "global", agents: [{ id: "selected-agent" }] },
     hello: sessionMutationGatewayHello(options.scopes),
@@ -98,7 +101,9 @@ function fixture(
         config: {
           agents: {
             entries: {
-              "selected-agent": { nativeRuntimeConsent: options.remembered ? ["opencode"] : [] },
+              [options.rememberedAgentId ?? "selected-agent"]: {
+                nativeRuntimeConsent: options.remembered ? ["opencode"] : [],
+              },
             },
           },
         },
@@ -211,18 +216,43 @@ it.each([false, true])(
   },
 );
 
-it("uses remembered native permissions without prompting or writing session consent", async () => {
-  const { host } = fixture({ remembered: true });
-  await expect(switchChatModel(host, "fixture/selected", "global", "opencode")).resolves.toBe(true);
-  expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-  const patches = requestCalls(host.request, "sessions.patch");
-  expect(patches[1]?.[1]).toMatchObject({
-    agentRuntime: "opencode",
-    permissionMode: "full",
-    sandboxMode: "off",
+it.each([
+  { sessionKey: "global", rememberedAgentId: "selected-agent" },
+  { sessionKey: "agent:selected-agent:chat", rememberedAgentId: "selected-agent" },
+  { sessionKey: "agent:other-agent:chat", rememberedAgentId: "other-agent" },
+])(
+  "uses the owning agent's remembered permissions for $sessionKey without prompting",
+  async ({ sessionKey, rememberedAgentId }) => {
+    const { host } = fixture({ remembered: true, sessionKey, rememberedAgentId });
+    await expect(switchChatModel(host, "fixture/selected", sessionKey, "opencode")).resolves.toBe(
+      true,
+    );
+    expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+    const patches = requestCalls(host.request, "sessions.patch");
+    expect(patches[1]?.[1]).toMatchObject({
+      key: sessionKey,
+      agentRuntime: "opencode",
+      permissionMode: "full",
+      sandboxMode: "off",
+    });
+    expect(patches[1]?.[1]).not.toHaveProperty("nativeRuntimeConsent");
+    expect(requestCalls(host.request, "config.patch")).toHaveLength(0);
+  },
+);
+
+it("requires confirmation when only the UI-selected agent remembers consent", async () => {
+  const sessionKey = "agent:other-agent:chat";
+  const { host } = fixture({
+    remembered: true,
+    sessionKey,
+    rememberedAgentId: "selected-agent",
   });
-  expect(patches[1]?.[1]).not.toHaveProperty("nativeRuntimeConsent");
-  expect(requestCalls(host.request, "config.patch")).toHaveLength(0);
+  const selection = switchChatModel(host, "fixture/selected", sessionKey, "opencode");
+  const modal = await dialog();
+  expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
+  click(modal, "Cancel");
+  await expect(selection).resolves.toBe(false);
+  expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
 });
 
 it.each([

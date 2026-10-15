@@ -87,6 +87,7 @@ import { createChannelQuestionPromptDelivery } from "./tools/question-prompt-sen
 import { createScreenTool } from "./tools/screen-tool.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
+import { createSessionsCreateTool } from "./tools/sessions-create-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
@@ -483,6 +484,7 @@ function* createOpenClawToolsSteps(
             creatorAuthorityUnavailableReason: options?.cronCreatorAuthorityUnavailableReason,
             selfRemoveOnlyJobId: options?.cronSelfRemoveOnlyJobId,
           }),
+          createSessionsCreateTool({ sessionControlAuthority: options?.sessionControlAuthority }),
           createSessionsTool({
             ...options,
             stopAllowed: options?.swarmCollector !== true,

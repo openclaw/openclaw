@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveConfigWriteTargetFromPath } from "../../channels/plugins/config-writes.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
@@ -7,7 +8,7 @@ import {
   setConfigValueAtPath,
 } from "../../config/config-paths.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
-import { redactConfigObject, redactConfigSnapshot } from "../../config/redact-snapshot.js";
+import { redactConfigObject } from "../../config/redact-snapshot.js";
 import {
   getConfigOverrides,
   resetConfigOverrides,
@@ -97,14 +98,13 @@ export const handleConfigCommand: CommandHandler = defineAuthorizedTextCommand(
     }
 
     const snapshot = await readConfigFileSnapshot();
-    if (!snapshot.valid || !snapshot.parsed || typeof snapshot.parsed !== "object") {
+    if (!snapshot.valid || !isRecord(snapshot.parsed)) {
       return commandReply("⚠️ Config file is invalid; fix it before using /config.");
     }
     const schema = loadGatewayRuntimeConfigSchema();
-    const redactedSnapshot = redactConfigSnapshot(snapshot, schema.uiHints);
-    const parsedBase = structuredClone(redactedSnapshot.parsed as Record<string, unknown>);
 
     if (configCommand.action === "show") {
+      const parsedBase = redactConfigObject(snapshot.parsed, schema.uiHints);
       const pathRaw = normalizeOptionalString(configCommand.path);
       if (pathRaw) {
         const parsedPath = parseConfigPath(pathRaw);

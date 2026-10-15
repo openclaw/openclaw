@@ -98,6 +98,8 @@ export type MenuProps = {
   /** Override the destination when Tab exits the menu; dismissal stays owned here. */
   tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
   onSelect?: (item: MenuItem, event: CustomEvent<MenuItem>) => void;
+  onNavigate?: (link: { href: string; value: string }) => void;
+  pointerFocus?: "menu" | "trigger";
   onOpenChange?(open: boolean): void;
   onBeforeShow?(event: Event): void;
   onAfterShow?(event: Event): void;
@@ -196,6 +198,9 @@ export function Menu(props: BranchProps): JSX.Element {
     if (!overlay.surface.dispatchEvent(event)) {
       return;
     }
+    if (item.href) {
+      props.onNavigate?.({ href: item.href, value: item.id });
+    }
     if (item.closeOnSelect !== false) {
       menuRoot.request(false, "return");
     }
@@ -203,6 +208,7 @@ export function Menu(props: BranchProps): JSX.Element {
   onSettled(() => overlay.bindSurface(surface));
   const binding = useMenuMachine(overlay, direction, activate, identity.binding?.service, {
     ids: { trigger: identity.triggerId },
+    pointerFocus: () => props.pointerFocus ?? "menu",
   });
   const [opened, setOpened] = createSignal(false);
   const connectControl = useOverlayControl(overlay, props);
@@ -402,6 +408,7 @@ export function Menu(props: BranchProps): JSX.Element {
                         title: item().attributes?.title,
                       }}
                       onSelect={props.onSelect}
+                      onNavigate={props.onNavigate}
                     >
                       {item().content}
                     </Menu>

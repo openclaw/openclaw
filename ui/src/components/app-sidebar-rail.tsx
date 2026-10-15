@@ -434,9 +434,12 @@ function RailSessionGlyph(props: { session: SidebarRecentSession; label: string 
           </span>
         )
       }
-      running={props.session.hasActiveRun || props.session.runningChildCount > 0}
+      running={
+        (props.session.isRunVisuallyActive ?? props.session.hasActiveRun) ||
+        props.session.runningChildCount > 0
+      }
       queued={
-        props.session.hasActiveRun &&
+        (props.session.isRunVisuallyActive ?? props.session.hasActiveRun) &&
         props.session.status === "queued" &&
         props.session.runningChildCount === 0
       }

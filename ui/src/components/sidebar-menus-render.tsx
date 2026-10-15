@@ -132,10 +132,11 @@ export function renderSidebarAgentMenuForController(
         query: controller.agentMenuQuery,
         onQueryChange: (query) => controller.setAgentMenuQuery(query),
         rosterMode: host.sidebarAgentsMode === "roster",
-        onToggleRoster: () => {
-          patchSettings({
-            sidebarAgentsMode: host.sidebarAgentsMode === "roster" ? "chip" : "roster",
-          });
+        onShowAllAgents: () => {
+          host.navigationView = "sessions";
+          host.sessionDataContext?.navigation.update({ navCollapsed: false });
+          patchSettings({ sidebarAgentsMode: "roster" });
+          host.requestUpdate();
           void host.updateComplete.then(() => {
             host
               .querySelector<HTMLElement>(

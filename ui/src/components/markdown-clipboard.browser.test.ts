@@ -6,7 +6,7 @@ import { renderMessageMarkdown } from "../pages/chat/components/chat-message-tex
 import { exportWidget } from "../pages/chat/components/widget-export.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "../pages/chat/components/browser-tab-card.tsx";
-import { renderCopyButton } from "./copy-button.ts";
+import { renderCopyAsMarkdownButton } from "./copy-button.ts";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import "./markdown-mermaid.tsx";
 import { handleMarkdownTableInteraction, releaseMarkdownTables } from "./markdown-tables.ts";
@@ -97,7 +97,7 @@ async function mountCopy(surface: "code" | "table" | "mermaid" | "message") {
     await waitForDiagram(diagram);
     button = diagram.querySelector(".copy-button");
   } else {
-    render(renderCopyButton("Current message"), owner);
+    render(renderCopyAsMarkdownButton("Current message"), owner);
     button = owner.querySelector("button");
   }
   if (!button) {
