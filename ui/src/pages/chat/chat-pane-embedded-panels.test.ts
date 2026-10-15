@@ -103,6 +103,37 @@ afterEach(() => {
 });
 
 describe("chat pane embedded panels", () => {
+  it("renders and updates the workspace rail inside the Files panel", async () => {
+    const { list, mount, renderPanels, sessions, state } = createReviewFixture();
+    state.updateSidebarLayout(openSlot(state.sidebarLayout, "workspace"));
+    loadSessionWorkspace(state, getSessionWorkspace(state), true);
+    list.resolve({
+      sessionKey: state.sessionKey,
+      root: "/synthetic/workspace",
+      files: [{ kind: "read", name: "notes.txt", path: "notes.txt", missing: false }],
+      artifacts: [],
+    });
+    await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
+    await renderPanels();
+    const rail = expectDefined(
+      mount.querySelector("openclaw-chat-files-panel .chat-workspace-rail"),
+      "Workspace rail inside Files",
+    );
+    expect(rail.querySelector('button[aria-label="notes.txt"]')).not.toBeNull();
+    getSessionWorkspace(state).browserSearch = "notes";
+    await renderPanels();
+    expect(mount.querySelector(".chat-workspace-rail")).toBe(rail);
+    expect(rail.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe("notes");
+    const file = expectDefined(
+      rail.querySelector<HTMLButtonElement>('button[aria-label="notes.txt"]'),
+      "Workspace file after refresh",
+    );
+    file.click();
+    expect(sessions.getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "notes.txt", {
+      agentId: "main",
+    });
+  });
+
   it("navigates an existing file tab to an explicit line without resetting its editor or draft", async () => {
     const descriptors = ["getClientRects", "getBoundingClientRect"].map(
       (key) => [key, Object.getOwnPropertyDescriptor(Range.prototype, key)] as const,
