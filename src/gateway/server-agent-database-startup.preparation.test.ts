@@ -120,6 +120,7 @@ function createFleet(
     }
   });
   mocks.journal.mockResolvedValue("absent");
+  mocks.refreshModels.mockResolvedValue(undefined);
   mocks.modelSnapshot.mockReturnValue({});
   mocks.migrate.mockImplementation(async ({ assertCurrent }) => assertCurrent());
   mocks.revision.mockImplementation(() => revision);
