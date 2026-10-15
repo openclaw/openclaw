@@ -1,11 +1,15 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { vi } from "vitest";
 import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentMeta } from "../../agents/embedded-agent-runner/types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import type { ReplyPayload } from "../types.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
 import type { AgentTurnCompletion } from "./agent-runner-completion.types.js";
@@ -53,18 +57,23 @@ export async function createAgentAccountingPersistenceFixture({
   storePath,
   root,
   fixtureId,
+  incognito = false,
   registerOperation,
 }: {
   storePath: string;
   root: string;
   fixtureId: number;
+  incognito?: boolean;
   registerOperation: (operation: ReplyOperation) => void;
 }) {
-  const sessionKey = `agent:main:accounting-${fixtureId}`;
+  const sessionKey = incognito
+    ? `agent:main:dashboard:incognito-accounting-${fixtureId}`
+    : `agent:main:accounting-${fixtureId}`;
   const sessionId = `accounting-session-${fixtureId}`;
   const runId = `context-pressure-run-${fixtureId}`;
   const entry: InternalSessionEntry = {
     sessionId,
+    ...(incognito ? { incognito: true } : {}),
     lifecycleRevision: "generation-1",
     activeWriterRunId: runId,
     updatedAt: 1,
@@ -342,6 +351,82 @@ export async function createAgentAccountingPersistenceFixture({
         turn.preflightCompactionApplied = context.preflightCompactionApplied === true;
         await withCompletion((completion) => accountQueued(context.execution, completion));
       }
+    },
+  };
+}
+
+export function observeCompletionCommands(
+  options: {
+    hideCommittedReceipt?: boolean;
+    beforeCommit?: () => void;
+    afterRead?: () => void | Promise<void>;
+  } = {},
+) {
+  const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
+  const commands: string[] = [];
+  const execution = vi
+    .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
+    .mockImplementation((...args) => {
+      const owner = capture(...args);
+      return {
+        ...owner,
+        get fileIdentity() {
+          return owner.fileIdentity;
+        },
+        runExisting: (source, run, runOptions) =>
+          owner.runExisting(
+            source,
+            (worker) =>
+              run({
+                execute(command, commandOptions) {
+                  commands.push(command.type);
+                  const result = worker.execute(command, commandOptions);
+                  return command.type === "session.actor.read" && options.afterRead
+                    ? result.then(async (value) => {
+                        await options.afterRead?.();
+                        return value;
+                      })
+                    : result;
+                },
+              }),
+            runOptions,
+          ),
+      };
+    });
+  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+  const admission = vi
+    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((authorize, attachment) => {
+      let terminalCommit = false;
+      const owner = createAdmission((request, grant) => {
+        if (
+          request.stage === "commit" &&
+          isRecord(request.facts) &&
+          isRecord(request.facts.publication) &&
+          request.facts.publication.kind === "session-actor-admission" &&
+          request.facts.publication.final === true
+        ) {
+          terminalCommit = true;
+          options.beforeCommit?.();
+        }
+        return authorize(request, grant);
+      }, attachment);
+      if (options.hideCommittedReceipt) {
+        const committed = Object.getOwnPropertyDescriptor(owner, "committed")!;
+        Object.defineProperty(owner, "committed", {
+          get() {
+            const receipt = committed.get!.call(owner);
+            return terminalCommit ? undefined : receipt;
+          },
+        });
+      }
+      return owner;
+    });
+  return {
+    commands,
+    restore() {
+      admission.mockRestore();
+      execution.mockRestore();
     },
   };
 }

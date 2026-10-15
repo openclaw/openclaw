@@ -1,4 +1,4 @@
-import { ContextNotFoundError, createErrorBoundary } from "@solidjs/signals";
+import { createErrorBoundary } from "@solidjs/signals";
 import type { JSX as SolidJSX } from "@solidjs/web";
 import {
   createEffect,
@@ -11,7 +11,6 @@ import {
   Match,
   untrack,
 } from "solid-js";
-import type { ApplicationContext } from "../../app/context.ts";
 import {
   ensureCustomElementDefined,
   isOptionalElementDefined,
@@ -28,7 +27,7 @@ import {
   pluginIdForWidgetKind,
 } from "../../lib/board/widgets/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { useApplication } from "../../lib/reactive/context.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -36,6 +35,7 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-brid
 import { CustomPluginUiDisabled } from "../../plugins/control-ui-disabled.solid.tsx";
 import { PluginContribution } from "../../plugins/control-ui-view.solid.tsx";
 import { LazyViewError } from "../solid/lazy-view-error.tsx";
+import type { MenuHandle } from "../solid/menu.tsx";
 import { BoardMcpAppContent } from "./board-mcp-app-content.tsx";
 import { BoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
 import {
@@ -44,7 +44,6 @@ import {
 } from "./board-widget-capabilities.solid.tsx";
 import {
   BOARD_SIZE_PRESETS,
-  closeBoardWidgetMenu,
   type BoardWidgetCellHandle,
   type BoardWidgetCellMethods,
   type BoardWidgetCellProps,
@@ -52,12 +51,11 @@ import {
 import {
   BoardDisabledPlugin,
   BoardCoreWidget,
-  BoardWidgetError,
-  BoardWidgetMenu,
   BoardWidgetRejected,
 } from "./board-widget-cell-render.solid.tsx";
+import { BoardWidgetError } from "./board-widget-error.tsx";
 import { BoardWidgetFrameLifecycle } from "./board-widget-frame.tsx";
-import "../web-awesome.ts";
+import { BoardWidgetMenu } from "./board-widget-menu.tsx";
 
 const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
 const cells = new WeakMap<HTMLElement, BoardWidgetCellHandle>();
@@ -66,15 +64,7 @@ function BoardWidgetCellContent(
   props: BoardWidgetCellProps,
   host: SolidBridgeElement<BoardWidgetCellProps, BoardWidgetCellMethods>,
 ) {
-  let context: ApplicationContext | undefined;
-  try {
-    context = useApplication();
-  } catch (error) {
-    // Standalone capless cells have no application provider.
-    if (!(error instanceof ContextNotFoundError)) {
-      throw error;
-    }
-  }
+  const context = useOptionalApplication();
   Object.defineProperty(host, "presentationReady", {
     configurable: true,
     get: () => cells.get(host)?.presentationReady ?? false,
@@ -88,6 +78,7 @@ function BoardWidgetCellContent(
   };
   let actionError = "";
   let actionPending = false;
+  let menu: MenuHandle | undefined;
   let bodyErrored = false;
   let resetBodyError: (() => void) | undefined;
   let connected = true;
@@ -163,7 +154,7 @@ function BoardWidgetCellContent(
     actionPending = true;
     actionError = "";
     requestUpdate();
-    closeBoardWidgetMenu(host);
+    menu?.close();
     try {
       await action();
     } catch (error) {
@@ -611,7 +602,10 @@ function BoardWidgetCellContent(
                 widget={props.widget!}
                 tabs={props.tabs ?? []}
                 disabled={props.busy || state().pending}
-                onSelect={(event) => selectMenuItem(event.detail.item.value)}
+                onSelect={selectMenuItem}
+                ref={(handle) => {
+                  menu = handle;
+                }}
               />
             </Show>
           </header>

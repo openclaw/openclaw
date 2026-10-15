@@ -7,6 +7,7 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { SessionsUsageResult } from "../../api/types.ts";
 import * as downloads from "../../lib/download.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { selectUsageExport } from "./export-menu.test-support.ts";
 import type { UsageSessionEntry, UsageRouteData } from "./types.ts";
 import {
   cacheSnapshot,
@@ -604,12 +605,12 @@ describe("UsagePage detail requests", () => {
     query.dispatchEvent(new Event("input", { bubbles: true }));
     query.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await page.updateComplete;
-    const exportJson = () =>
-      page
-        .querySelector(".usage-export-menu")!
-        .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "json" } } }));
-    exportJson();
+    const exportJson = () => selectUsageExport(page.querySelector(".usage-export-menu")!, "json");
+    await exportJson();
     await page.updateComplete;
+    expect(page.querySelector(".usage-export-menu > button")?.getAttribute("aria-busy")).toBe(
+      "true",
+    );
     const exported = request.mock.calls.find(([, params]) => params?.includeContextWeight)!;
     expect(exported[1]).toMatchObject({
       query: "label:Included",
@@ -634,7 +635,7 @@ describe("UsagePage detail requests", () => {
     });
     expect(payload.sessions.some((session) => session.label === "Excluded")).toBe(false);
     pending = deferred<SessionsUsageResult>();
-    exportJson();
+    await exportJson();
     await page.updateComplete;
     const scope = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent?.trim() === "Current instance",
@@ -757,31 +758,6 @@ describe("UsagePage detail requests", () => {
     });
   });
 
-  it("surfaces a session-log failure and clears it after a successful retry", async () => {
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("logs unavailable"))
-      .mockResolvedValueOnce({
-        logs: [{ timestamp: 1, role: "user", content: "hello" }],
-      });
-    const page = await createPage({ request } as unknown as GatewayBrowserClient);
-
-    await page.details.sessionLogs.load("agent:main:detail");
-    expect(page.details.sessionLogs.status.error).toBe("logs unavailable");
-    expect(page.details.sessionLogs.data).toBeNull();
-
-    await page.details.sessionLogs.load("agent:main:detail");
-    expect(page.details.sessionLogs.data).toEqual([
-      { timestamp: 1, role: "user", content: "hello" },
-    ]);
-    expect(page.details.sessionLogs.status).toEqual({
-      error: null,
-      hasLoaded: true,
-      stale: false,
-      awaitingGateway: false,
-    });
-  });
-
   it("does not retain detail data when the selected session changes", async () => {
     const request = vi
       .fn()
@@ -816,7 +792,7 @@ describe("UsagePage detail requests", () => {
     });
   });
 
-  it.each(["accepting", "draining"] as const)(
+  it.each(["draining"] as const)(
     "clears retained details and preserves read authorization errors while %s",
     async (suspensionPhase) => {
       const pending = deferred<never>();

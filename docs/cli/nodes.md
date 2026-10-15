@@ -18,6 +18,13 @@ For numeric options such as `--location-timeout`, `--max-age`, and `--quality`, 
 the flag to use its default. An explicit empty or whitespace-only value is invalid
 and fails before node lookup or Gateway requests.
 
+For `camera clip` and `screen record`, `--duration` accepts milliseconds or unit
+suffixes such as `500ms`, `10s`, and `1m`. The parsed value must round to a positive
+safe integer in milliseconds (1–9007199254740991). Zero, negative, malformed, and
+sub-millisecond values that round to zero fail before node lookup or capture.
+Omitting the flag keeps the defaults: 3000ms for camera clips and 10000ms for screen
+recordings. Nodes may impose their own capture limits.
+
 ## Status
 
 ```bash
@@ -86,7 +93,7 @@ Flags:
 
 The invocation timeout covers Gateway checks, node wake-up, readiness retries, and the node response. Clock adjustments do not reset or extend this elapsed-time budget.
 
-`system.run` and `system.run.prepare` are blocked here. Use the `exec` tool with `host=node` for shell execution instead. `system.which` is allowed through `invoke`.
+`system.run` and `system.run.prepare` are blocked here. Use the `exec` tool with `host=node` for shell execution instead. `system.which` is allowed through `invoke`. `fs.listDir` returns sub-directories only (the new-session folder picker contract); use the `exec` tool with `host=node` to list files or full directory contents.
 
 ## Notify, push, location, screen
 

@@ -1,14 +1,13 @@
 // Control UI tests cover scalar identity and nullable enum behavior.
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   renderNumberInputFixture,
   renderTextInputFixture,
   renderSelectFixture,
   renderAnalyzedFormFixture,
-} from "../test-helpers/config-form-fixtures.ts";
-import { renderNumberInput, renderTextInput } from "./config-form.node.scalar.ts";
-import { analyzeConfigSchema, type JsonSchema } from "./config-form.ts";
+} from "../test-helpers/config-form-fixtures.tsx";
+import type { JsonSchema } from "./config-form.shared.ts";
+import { analyzeConfigSchema } from "./config-form.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
   expect(element instanceof Element, label).toBe(true);
@@ -18,7 +17,76 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
   return element;
 }
 
+const multilinePlaceholder = "Default guidance.\nSecond line.";
+const multilineSchema: JsonSchema = { type: "string", maxLength: 4000 };
+const multilineHints = {
+  reviewInstructions: {
+    label: "Review instructions",
+    multiline: true,
+    placeholder: multilinePlaceholder,
+  },
+};
+
 describe("config form scalar integrity", () => {
+  it.each([false, true])("edits multiline string hints with commitOnBlur=%s", (commitOnBlur) => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    const path = ["reviewInstructions"];
+    renderTextInputFixture(container, {
+      schema: multilineSchema,
+      value: undefined,
+      path,
+      inputType: "text",
+      hints: multilineHints,
+      commitOnBlur,
+      onPatch,
+    });
+    const textarea = expectElement(
+      container.querySelector<HTMLTextAreaElement>("textarea"),
+      "review instructions",
+    );
+    expect(textarea.getAttribute("aria-label")).toBe("Review instructions");
+    expect(textarea.placeholder).toBe(multilinePlaceholder);
+    expect(textarea.value).toBe("");
+    expect(onPatch).not.toHaveBeenCalled();
+    textarea.value = "Look for scope drift.\nPreserve required checks.";
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    if (commitOnBlur) {
+      expect(onPatch).not.toHaveBeenCalled();
+      textarea.dispatchEvent(new FocusEvent("blur"));
+    }
+    expect(onPatch).toHaveBeenLastCalledWith(path, textarea.value);
+    textarea.value = "x".repeat(4001);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    textarea.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(textarea.getAttribute("aria-invalid")).toBe("true");
+    expect(onPatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("separates boolean help from its default description", () => {
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        runtime: {
+          type: "object",
+          properties: {
+            enabled: {
+              type: "boolean",
+              default: true,
+              description: "Controls runtime processing.",
+            },
+          },
+        },
+      },
+    });
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { runtime: { enabled: false } },
+      onPatch: vi.fn(),
+    });
+    expect(container.textContent).toContain("Controls runtime processing. Default: true");
+  });
+
   it("keeps a focused in-flight edit through a snapshot identity refresh", () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -112,13 +180,14 @@ describe("config form scalar integrity", () => {
     const onRemove = vi.fn();
 
     renderNumberInputFixture(container, {
-      schema: { type: "integer", default: 3 },
+      schema: { type: "integer", default: 3, description: "Controls retry attempts." },
       value: 9,
       path: ["retries"],
       onPatch,
       onRemove,
     });
     expect(container.textContent).toContain("Default: 3");
+    expect(container.textContent).toContain("Controls retry attempts. Default: 3");
     const numberInput = expectElement(
       container.querySelector<HTMLInputElement>("input[type='number']"),
       "number input",
@@ -246,16 +315,15 @@ describe("config form scalar integrity", () => {
         disabled: false,
         onPatch,
       };
-      render(
-        kind === "mixed"
-          ? renderTextInput({
-              ...params,
-              schema: { anyOf: [{ type: "string" }, { type: "number" }] },
-              inputType: "text",
-            })
-          : renderNumberInput({ ...params, schema: { type: "integer" } }),
-        container,
-      );
+      if (kind === "mixed") {
+        renderTextInputFixture(container, {
+          ...params,
+          schema: { anyOf: [{ type: "string" }, { type: "number" }] },
+          inputType: "text",
+        });
+      } else {
+        renderNumberInputFixture(container, { ...params, schema: { type: "integer" } });
+      }
       const input = expectElement(
         container.querySelector<HTMLInputElement>(
           `input[type='${kind === "mixed" ? "text" : "number"}']`,

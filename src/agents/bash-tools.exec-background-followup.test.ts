@@ -1,9 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
@@ -11,7 +9,10 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
@@ -57,12 +58,12 @@ beforeAll(async () => {
     plugins: { enabled: false },
     skills: { load: { watch: false } },
   };
-  setRuntimeConfigSnapshot(config);
   await state.writeConfig(config);
   openOpenClawStateDatabase();
 });
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot(config);
   model.mockReset().mockImplementation(async (params: RunEmbeddedAgentParams) => {
     await expectDefined(params.preparedRunAdmission, "real completion admission").admit(
       "gateway",
@@ -141,6 +142,82 @@ test("does not advertise detached continuation when process is unavailable", asy
   expect(result.details).not.toHaveProperty("followUp");
 });
 
+test.for(["ordinary", "live cron", "ended cron", "cron ended during admission"])(
+  "keeps exec completion bound to its origin: %s",
+  async (scenario, { signal }) => {
+    const cron = scenario !== "ordinary";
+    const sessionKey = cron ? "agent:main:cron:nightly:run:abc123" : "agent:main:main";
+    await seedOrigin(sessionKey);
+    const claim = claimAgentRunContext(
+      "cron-run-followup",
+      { sessionKey, sessionId: sessionKey.replaceAll(":", "-"), agentId: "main" },
+      { trackOwner: true },
+    );
+    const release = () => releaseAgentRunContext("cron-run-followup", claim);
+    vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation((text, options) => {
+      expect(options.sessionKey).toBe(sessionKey);
+      if (scenario === "ended cron") {
+        release();
+      }
+      const receipt = enqueue(text, options);
+      receipts.push(receipt);
+      if (scenario === "cron ended during admission") {
+        release();
+      }
+      return receipt;
+    });
+    const exec = createExecTool({
+      config,
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      agentId: "main",
+      sessionKey,
+      scopeKey: sessionKey,
+      notifyOnExit: true,
+      allowBackground: true,
+    });
+    try {
+      const started = await exec.execute("cron-followup", {
+        command: nodeCommand('process.stdout.write("CRON_EXEC_DONE")'),
+        background: true,
+      });
+      expect(started.details.status).toBe("running");
+      await withinTest(waitForExecScope(sessionKey), signal);
+      if (scenario.includes("ended")) {
+        if (scenario === "cron ended during admission") {
+          expect(receipts).toHaveLength(1);
+          const receipt = expectDefined(receipts[0], "cron completion receipt");
+          expect(await withinTest(receipt.settled, signal)).toMatchObject({
+            status: "failed",
+            executionStarted: false,
+            error: expect.stringContaining("Originating cron run ended"),
+          });
+        } else {
+          expect(receipts).toHaveLength(0);
+        }
+        expect(model).not.toHaveBeenCalled();
+      } else {
+        await completion(signal);
+        expect(receipts).toHaveLength(1);
+        expect(model).toHaveBeenCalledOnce();
+        const [params] = expectDefined(model.mock.calls[0], "completion turn");
+        expect(params.sessionKey).toBe(sessionKey);
+      }
+      if (started.details.status !== "running") {
+        throw new Error("Expected a background process");
+      }
+      const result = await createProcessTool({ scopeKey: sessionKey }).execute("collect", {
+        action: "log",
+        sessionId: started.details.sessionId,
+      });
+      expect(result.content).toContainEqual({ type: "text", text: "CRON_EXEC_DONE" });
+    } finally {
+      release();
+    }
+  },
+);
+
 test("starts and notifies when identity enrichment fails, then resolves child identity again", async ({
   signal,
 }) => {
@@ -190,36 +267,29 @@ test("starts and notifies when identity enrichment fails, then resolves child id
   }
 });
 
-test("reports manual collection after real destination capture fails, then recovers on the same tool", async ({
+test("reports manual collection after destination capture fails, then recovers on the same tool", async ({
   signal,
 }) => {
   const sessionKey = "agent:main:exec-capture-failure";
   await seedOrigin(sessionKey);
-  let faults = 0;
-  const failRead = (value: unknown) => {
-    if (
-      !isRecord(value) ||
-      !isRecord(value.input) ||
-      value.input.kind !== "session-entry-read" ||
-      !isRecord(value.input.scope) ||
-      value.input.scope.sessionKey !== sessionKey ||
-      faults
-    ) {
-      return;
-    }
-    faults++;
-    throw new Error("session worker transport unavailable");
-  };
-  // oxlint-disable-next-line typescript/unbound-method -- Called below with the real Worker receiver.
-  const threadPost = Worker.prototype.postMessage;
-  vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-    this: Worker,
-    value,
-    transferList,
-  ) {
-    failRead(value);
-    threadPost.call(this, value, transferList);
+  // Force a cold destination read so the transport fault cannot be bypassed by writer receipts.
+  sessionChanges.invalidate({
+    agentId: "main",
+    sessionKey,
+    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+    factsInvalidated: true,
   });
+  let faults = 0;
+  const capture = sessionEvents.captureSessionEventTargetForHost;
+  vi.spyOn(sessionEvents, "captureSessionEventTargetForHost").mockImplementation(
+    async (...args) => {
+      if (args[0] === "main" && args[1] === sessionKey && faults === 0) {
+        faults++;
+        throw new Error("session event destination unavailable");
+      }
+      return capture(...args);
+    },
+  );
   const exec = createExecTool({
     config,
     host: "gateway",

@@ -421,7 +421,7 @@ describeControlUiE2e("Board split transcript restore", () => {
         await page.screenshot({ path: path.join(proofDir, "01-side-chat-added.png") });
       }
 
-      await sidePanel.locator("wa-tab").filter({ hasText: "Side chat" }).click();
+      await sidePanel.locator(".tabstrip-tab").filter({ hasText: "Side chat" }).click();
       await sidePanel.locator('[data-panel-slot="companion"]:not([hidden])').waitFor();
       await expect
         .poll(() =>
@@ -474,7 +474,7 @@ describeControlUiE2e("Board split transcript restore", () => {
       const layoutMenu = await openChatLayoutMenu(page);
       await expect
         .poll(() =>
-          layoutMenu.locator("wa-dropdown-item").filter({ hasText: "Discussion" }).count(),
+          layoutMenu.locator('[role^="menuitem"]').filter({ hasText: "Discussion" }).count(),
         )
         .toBe(0);
       if (recordProof) {

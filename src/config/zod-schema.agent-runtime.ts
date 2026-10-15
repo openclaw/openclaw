@@ -651,6 +651,7 @@ const AgentToolsSchema = z
   .optional();
 
 export const AgentEntrySchema = AgentEntryBaseSchema.extend({
+  nativeRuntimeConsent: z.array(z.string().trim().min(1)).optional(),
   memory: z
     .strictObject({
       search: MemorySearchSchema,
@@ -691,6 +692,8 @@ export const ToolsSchema = z
          * - "all": any session (default; cross-agent access is governed by tools.agentToAgent)
          */
         visibility: z.enum(["self", "tree", "agent", "all"]).optional(),
+        /** Allow sessions_send to target thread/topic sessions (default: false). */
+        allowThreadTargets: z.boolean().optional(),
       })
       .optional(),
     loopDetection: ToolLoopDetectionSchema,

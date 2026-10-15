@@ -431,6 +431,7 @@ function collectCoreSourceFiles(): string[] {
       normalizedFullPath.includes(".test-utils.") ||
       normalizedFullPath.includes(".test-harness.") ||
       normalizedFullPath.includes(".test-helpers.") ||
+      normalizedFullPath.includes(".test-support.") ||
       entryName.endsWith("-test-helpers.ts") ||
       entryName === "test-manager-helpers.ts" ||
       normalizedFullPath.includes(".mock-harness.") ||
@@ -640,6 +641,7 @@ describe("channel import guardrails", () => {
     'export { client } from "../../extensions/feishu/src/client.js";',
     'require("../../extensions/feishu/src/client.js");',
     'import client = require("../../extensions/feishu/src/client");',
+    'new URL("../../extensions/feishu/src/client.js", import.meta.url);',
   ])("rejects core plugin-private module references: %s", (source) => {
     expect(() =>
       expectNoCorePluginPrivateSrcImports(parser.parseSourceFile("source.ts", source)),

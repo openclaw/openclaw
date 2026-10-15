@@ -35,8 +35,8 @@ import type { UpdateDatabaseGenerations } from "./update-database-generations.js
 
 async function existingFile(file: string) {
   try {
-    const info = await fs.lstat(file);
-    if (!info.isFile() || info.nlink !== 1) {
+    const info = await fs.lstat(file, { bigint: true });
+    if (!info.isFile() || info.nlink !== 1n) {
       throw new Error(`Database recovery requires a regular, unaliased file: ${file}`);
     }
     return info;
@@ -183,6 +183,33 @@ export async function restoreUpdateDatabaseBackup(params: {
         );
         const shared = backup.databases.find((entry) => entry.path === sharedPath);
         const sources = [...backup.databases];
+        for (const entry of sources) {
+          if (entry.engine !== "postgres") {
+            continue;
+          }
+          if (!entry.exportDirectory || !entry.storeId || !entry.namespace) {
+            throw new Error("PostgreSQL rollback is missing its matched capture identity.");
+          }
+          const { createConfigIO } = await import("../config/io.js");
+          const { config } = await createConfigIO({
+            env: params.env,
+            observe: false,
+            pluginValidation: "core-only",
+            shellEnvFallback: "defer",
+          }).readConfigFileSnapshot();
+          const { preparePostgresRestore } = await import("../snapshot/database-backup.js");
+          const snapshotPath = `${entry.snapshotPath}.restored-${params.runId}`;
+          const prepared = await preparePostgresRestore({
+            directory: entry.exportDirectory,
+            anchorPath: snapshotPath,
+            config,
+            profile: "exact",
+            expectedSource: { storeId: entry.storeId, namespace: entry.namespace },
+            assertCurrent: assertOwned,
+          });
+          sources[sources.indexOf(entry)] = { ...entry, ...prepared, snapshotPath };
+          displaced.push(`PostgreSQL namespace ${entry.namespace}`);
+        }
         if (paths.includes(sharedPath)) {
           if (!shared) {
             throw new Error(
@@ -244,7 +271,7 @@ export async function restoreUpdateDatabaseBackup(params: {
         // The shared source contains the actual current history, not its baseline size.
         for (const entry of sources) {
           assertOwned();
-          const sourceIdentity = await fs.lstat(entry.snapshotPath);
+          const sourceIdentity = await fs.lstat(entry.snapshotPath, { bigint: true });
           assertOwned();
           outputs.push(
             await prepareVerifiedSqliteFile({

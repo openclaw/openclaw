@@ -204,12 +204,13 @@ export async function loadAgentTranscriptReadOperations() {
 }
 
 export async function loadAgentReplacementOperations() {
-  const [kernel, { sealSessionEntryPublicationSource }, nativeBindings, transfers] =
+  const [kernel, { sealSessionEntryPublicationSource }, nativeBindings, transfers, predicates] =
     await Promise.all([
       import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
       import("../config/sessions/session-entry-publication-source.js"),
       import("../config/sessions/session-native-binding.worker.js"),
       import("../config/sessions/session-entry-patch.worker.js"),
+      import("../config/sessions/session-source-predicate.worker.js"),
     ]);
   return {
     "session.entries.replace": (
@@ -221,8 +222,22 @@ export async function loadAgentReplacementOperations() {
         const result = kernel.commitSessionEntryReplacementsInDatabase(
           current,
           input,
-          () =>
-            initializeReplacementTranscript(current, context.options, input.initializeTranscript),
+          () => {
+            if (input.sources?.length) {
+              const sourceValidation = predicates.readSessionSourceValidation(
+                current,
+                input.sources,
+              );
+              context.admit("transaction", {
+                kind: "session-entry-replacements-validated",
+                sourceValidation,
+              });
+              if (sourceValidation.refusedSource) {
+                throw new Error("Session source refusal was not rejected");
+              }
+            }
+            initializeReplacementTranscript(current, context.options, input.initializeTranscript);
+          },
           undefined,
           undefined,
           postimages,
@@ -385,14 +400,14 @@ export async function loadAgentTrajectoryOperations() {
       input: Parameters<typeof kernel.appendSqliteTrajectoryRuntimeEventsWithWriter>[0],
       { writeTransaction, admit },
     ) => {
-      kernel.appendSqliteTrajectoryRuntimeEventsWithWriter(input, (label, write) =>
+      return kernel.appendSqliteTrajectoryRuntimeEventsWithWriter(input, (label, write) =>
         writeTransaction(label, "Trajectory append", (current) => {
           const result = write(current);
-          deferSqliteWorkerCommitReceipt(current.db, { kind: "trajectory-runtime-append" });
+          deferSqliteWorkerCommitReceipt(current.db, result.receipt);
           admit("commit");
           return result;
         }),
-      );
+      ).receipt.windowFacts;
     },
     "trajectory.retention.begin": (_input: undefined, { open }) => {
       return retention.beginTrajectoryRuntimeRetention(
@@ -628,45 +643,65 @@ export async function loadConversationRegistryOperations() {
   } satisfies Handlers;
 }
 
+export async function loadSessionRowBackfillOperations() {
+  const [{ backfillSessionRowTranscriptFieldsInDatabase }, { withSqliteDatabaseWriteScope }] =
+    await Promise.all([
+      import("../gateway/session-row-transcript-backfill.worker.js"),
+      import("../infra/sqlite-database-admission.js"),
+    ]);
+  return {
+    "session.rowTranscript.backfill": (
+      input: Parameters<typeof backfillSessionRowTranscriptFieldsInDatabase>[1],
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("session.rowTranscript.backfill", "Session row backfill", (database) => {
+        // Derived cache bytes do not invalidate transcript snapshots or session metadata.
+        const fields = withSqliteDatabaseWriteScope(database.db, [], () =>
+          backfillSessionRowTranscriptFieldsInDatabase(database, input),
+        );
+        admit("commit");
+        return fields;
+      }),
+  } satisfies Handlers;
+}
+
 export async function loadUsageCacheOperations() {
-  const kernel = await import("../infra/session-cost-usage-cache.kernel.js");
+  const [
+    { pruneSessionCostUsageRollupsInDatabase, writeSessionCostUsageRollupInDatabase },
+    { withSqliteDatabaseWriteScope },
+  ] = await Promise.all([
+    import("../infra/session-cost-usage-cache.kernel.js"),
+    import("../infra/sqlite-database-admission.js"),
+  ]);
+  // Usage cache and partition writes do not change resident session facts.
   return {
     "usageCache.writeRollup": (
-      input: Parameters<typeof kernel.writeSessionCostUsageRollupInDatabase>[1],
+      input: Parameters<typeof writeSessionCostUsageRollupInDatabase>[1],
       { writeTransaction, admit },
     ) =>
       writeTransaction("session-cost-usage.rollup.write", "Usage cache", ({ db }) => {
-        const result = kernel.writeSessionCostUsageRollupInDatabase(db, input);
+        const result = withSqliteDatabaseWriteScope(db, [], () =>
+          writeSessionCostUsageRollupInDatabase(db, input),
+        );
         admit("commit");
         return result;
       }),
     "usageCache.prune": (
-      input: Parameters<typeof kernel.pruneSessionCostUsageRollupsInDatabase>[1],
+      input: Parameters<typeof pruneSessionCostUsageRollupsInDatabase>[1],
       { writeTransaction, admit },
     ) =>
       writeTransaction("session-cost-usage.rollup.prune", "Usage cache", ({ db }) => {
-        kernel.pruneSessionCostUsageRollupsInDatabase(db, input);
-        admit("commit");
-      }),
-    "usageCache.acquireLock": (
-      input: Parameters<typeof kernel.acquireSessionCostUsageRefreshLockInDatabase>[1],
-      { writeTransaction, admit },
-    ) =>
-      writeTransaction("session-cost-usage.refresh-lock.acquire", "Usage cache", ({ db }) => {
-        const result = kernel.acquireSessionCostUsageRefreshLockInDatabase(db, input);
-        admit("commit");
-        return result;
-      }),
-    "usageCache.releaseLock": (input: string, { writeTransaction, admit }) =>
-      writeTransaction("session-cost-usage.refresh-lock.delete", "Usage cache", ({ db }) => {
-        kernel.deleteSessionCostUsageRefreshLockInDatabase(db, input);
+        withSqliteDatabaseWriteScope(db, [], () =>
+          pruneSessionCostUsageRollupsInDatabase(db, input),
+        );
         admit("commit");
       }),
   } satisfies Handlers;
 }
 
 export type RegisteredAgentWorkerOperations = WorkerOperations<
-  Awaited<ReturnType<typeof loadUsageCacheOperations>> &
+  Awaited<ReturnType<typeof loadSessionRowBackfillOperations>> &
+    Awaited<ReturnType<typeof loadUsageCacheOperations>> &
     Awaited<ReturnType<typeof loadAgentVoiceSessionOperations>> &
     Awaited<ReturnType<typeof loadAgentTranscriptOperations>> &
     Awaited<ReturnType<typeof loadAgentTranscriptReadOperations>> &

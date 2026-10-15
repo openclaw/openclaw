@@ -22,6 +22,7 @@ import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { readJsonIfExists, writeJsonAtomic, writeTextAtomic } from "../../infra/json-files.js";
 import { removePackageUpdatePath } from "../../infra/package-update-filesystem.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
+import { readExistingStateRootMode } from "../../infra/private-dir-mode.js";
 import {
   createUpdateDatabaseBackup,
   UpdateDatabaseBackupSchema,
@@ -74,6 +75,7 @@ const ReceiptSchema = z.object({
   error: z.string().optional(),
 });
 type Receipt = z.infer<typeof ReceiptSchema>;
+type FileIdentity = Pick<BackupSqliteSnapshotFact, "dev" | "ino">;
 
 function receiptPath(backupRoot: string): string {
   if (!path.isAbsolute(backupRoot)) {
@@ -105,9 +107,9 @@ async function saveReceipt(file: string, receipt: Receipt) {
 }
 
 async function readIdentities(databases: readonly string[]) {
-  const identities: Receipt["databaseIdentities"] = {};
+  const identities: Record<string, FileIdentity> = {};
   for (const database of databases) {
-    const info = await fs.stat(database).catch((error: unknown) => {
+    const info = await fs.stat(database, { bigint: true }).catch((error: unknown) => {
       if (hasNodeErrorCode(error, "ENOENT")) {
         return undefined;
       }
@@ -120,9 +122,22 @@ async function readIdentities(databases: readonly string[]) {
   return identities;
 }
 
+function toReceiptIdentities(
+  identities: Record<string, FileIdentity>,
+): Receipt["databaseIdentities"] {
+  return Object.fromEntries(
+    Object.entries(identities).map(([file, identity]) => [
+      file,
+      { dev: Number(identity.dev), ino: Number(identity.ino) },
+    ]),
+  );
+}
+
 async function readConfigIdentity(configPath: string): Promise<Receipt["configIdentity"]> {
   const identity = (await readIdentities([configPath]))[configPath];
-  return identity ? { path: configPath, ...identity } : null;
+  return identity
+    ? { path: configPath, dev: Number(identity.dev), ino: Number(identity.ino) }
+    : null;
 }
 
 /** The external supervisor owns drain/start; the candidate owns backup and schema repair. */
@@ -171,6 +186,7 @@ export async function updateMigrateCommand(backupRoot: string): Promise<void> {
         stateDir: resolveStateDir(env),
         config: source.config,
         env,
+        stopped: true,
       });
       lock.assertCurrent();
       const databases = [
@@ -186,7 +202,7 @@ export async function updateMigrateCommand(backupRoot: string): Promise<void> {
         status: "backed-up",
         backup,
         databases,
-        databaseIdentities,
+        databaseIdentities: toReceiptIdentities(databaseIdentities),
         configIdentity: await readConfigIdentity(resolveConfigPath(env)),
         configFiles: [config, ...(config.includedFiles ?? [])].map((entry) => {
           const pathSnapshot =
@@ -251,7 +267,7 @@ export async function updateMigrateCommand(backupRoot: string): Promise<void> {
       );
     }
     receipt.status = "migrated";
-    receipt.databaseIdentities = await readIdentities(receipt.databases);
+    receipt.databaseIdentities = toReceiptIdentities(await readIdentities(receipt.databases));
     receipt.configIdentity = await readConfigIdentity(receipt.configPath);
     await saveReceipt(file, receipt);
   } catch (error) {
@@ -286,7 +302,7 @@ export async function updateRestoreCommand(backupRoot: string): Promise<void> {
         assertCurrent: () => {},
       });
       receipt.status = "restoring-config";
-      receipt.databaseIdentities = await readIdentities(receipt.databases);
+      receipt.databaseIdentities = toReceiptIdentities(await readIdentities(receipt.databases));
       await saveReceipt(file, receipt);
     }
     const lock = await acquireGatewayLock({
@@ -343,7 +359,11 @@ export async function updateRestoreCommand(backupRoot: string): Promise<void> {
             // Keep the selected config readable until its original is atomically restored.
             const staged = `${target}.pending-${randomUUID()}`;
             try {
-              await writeTextAtomic(staged, current.raw, { mode: 0o600, durable: true });
+              await writeTextAtomic(staged, current.raw, {
+                mode: 0o600,
+                dirMode: readExistingStateRootMode(path.dirname(staged), receipt.stateDir),
+                durable: true,
+              });
               const identity = await fs.lstat(staged);
               assertCurrent();
               await publishFileExclusive({
@@ -368,6 +388,7 @@ export async function updateRestoreCommand(backupRoot: string): Promise<void> {
           if (config.raw !== null) {
             await writeTextAtomic(configPath, config.raw, {
               mode: 0o600,
+              dirMode: readExistingStateRootMode(path.dirname(configPath), receipt.stateDir),
               durable: true,
               beforeRename: async () => assertCurrent(),
             });
@@ -388,7 +409,7 @@ export async function updateRestoreCommand(backupRoot: string): Promise<void> {
       await lock.release();
     }
     receipt.status = "restored";
-    receipt.databaseIdentities = await readIdentities(receipt.databases);
+    receipt.databaseIdentities = toReceiptIdentities(await readIdentities(receipt.databases));
     receipt.configIdentity = await readConfigIdentity(receipt.configPath);
     delete receipt.error;
     await saveReceipt(file, receipt);

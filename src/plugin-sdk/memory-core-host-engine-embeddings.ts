@@ -38,6 +38,7 @@ export {
   postJsonWithRetry,
   readEmbeddingBatchJsonl,
   resolveEmbeddingEndpointUrl,
+  resolveEmbeddingProviderSsrFPolicy,
   resolveEmbeddingInputFormatVersion,
   resolveRemoteEmbeddingBearerClient,
   resolveRemoteEmbeddingClient,
@@ -56,6 +57,7 @@ export type {
   EmbeddingInput,
   ProviderBatchOutputLine,
   RemoteEmbeddingClient,
+  RemoteEmbeddingRequestAuth,
 } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
 export { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
 export { registerRuntimeAuthProfileStoreMutationListener } from "../agents/auth-profiles/runtime-snapshots.js";

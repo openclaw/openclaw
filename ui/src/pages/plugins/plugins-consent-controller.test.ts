@@ -1,12 +1,11 @@
 /* @vitest-environment jsdom */
 
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { i18n } from "../../i18n/index.ts";
+import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import type { PluginInstallRequest, PluginListResult } from "../../lib/plugins/index.ts";
-import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { PluginRowMessage } from "./plugin-row-message.tsx";
 import { PluginsConsentController } from "./plugins-consent-controller.ts";
@@ -26,21 +25,10 @@ function createConsentHarness(
   refreshConfig: ReturnType<typeof createContext>["runtimeConfig"]["refresh"],
 ) {
   const { gateway: applicationGateway } = createGateway(client);
-  const controllers = new Set<ReactiveController>();
-  const host: ReactiveControllerHost = {
-    addController: (controller) => {
-      controllers.add(controller);
-    },
-    removeController: (controller) => {
-      controllers.delete(controller);
-    },
-    requestUpdate: vi.fn(),
-    updateComplete: Promise.resolve(true),
-  };
-  const gateway = new GatewayPageController(host, { getGateway: () => applicationGateway });
-  for (const controller of controllers) {
-    controller.hostConnected?.();
-  }
+  const gateway = new GatewayPageBinding(vi.fn(), {
+    getGateway: () => applicationGateway,
+  });
+  gateway.connect();
   let result = initialResult;
   let messages: Record<string, PluginRowMessage> = {};
   const busy = new Set<string>();
@@ -89,11 +77,7 @@ function createConsentHarness(
       return messages;
     },
     refreshCatalog,
-    dispose: () => {
-      for (const registered of controllers) {
-        registered.hostDisconnected?.();
-      }
-    },
+    dispose: () => gateway.dispose(),
   };
 }
 

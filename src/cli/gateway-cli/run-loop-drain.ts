@@ -60,6 +60,11 @@ export async function drainGatewayActiveWork({
         }
 
         reportDrainSnapshot(initialSnapshot);
+        if (request.interruptAfterDrain) {
+          logger.info("external restart owner already drained; interrupting remaining work");
+          runtime.abortActiveCronTaskRuns();
+          return;
+        }
         const remainingDrainTimeoutMs =
           restartDrainDeadlineAt === undefined
             ? undefined
@@ -78,7 +83,7 @@ export async function drainGatewayActiveWork({
         recordWarning(warning);
         logger.warn(warning);
         // Connection work can retain cron cleanup; cancel before close joins it.
-        runtime.abortActiveCronTaskRuns("Gateway restarting.");
+        runtime.abortActiveCronTaskRuns();
       },
       () => [
         ["activeWork", activeWorkAtDrainStart],

@@ -560,6 +560,41 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test
+    func `gateway connect keeps its identity after an unrelated shared schema upgrade`() async throws {
+        let fixture = DeviceIdentityMigrationFixture(databasePath: "state/openclaw.sqlite")
+        try Self.seedCanonicalSchema(fixture.databaseURL, nodeOwned: true)
+        let original = try fixture.load()
+        try Self.execute(fixture.databaseURL, """
+        PRAGMA user_version = 2147483647;
+        UPDATE schema_meta SET schema_version = 2147483647;
+        CREATE TABLE unrelated_gateway_state (value TEXT) STRICT;
+        INSERT INTO unrelated_gateway_state VALUES ('preserved');
+        """)
+
+        try await DeviceIdentityStore.withStateDirectory(fixture.destination) {
+            let identity = try #require(try GatewayChannelActor.loadDeviceIdentityForConnect(
+                includeDeviceIdentity: true,
+                profile: .primary))
+            #expect(identity.deviceId == original.deviceId)
+            #expect(identity.publicKey == original.publicKey)
+            #expect(identity.privateKey == original.privateKey)
+            #expect(identity.createdAtMs == original.createdAtMs)
+            #expect(DeviceIdentityStore.signPayload("gateway-challenge", identity: identity) != nil)
+        }
+        // A different native identity can still be persisted without migrating backend state.
+        let node = try fixture.load(profile: .node)
+        #expect(try fixture.load(profile: .node).deviceId == node.deviceId)
+        #expect(try Self.scalarInt(fixture.databaseURL, "PRAGMA user_version") == 2_147_483_647)
+        #expect(try Self.scalarInt(
+            fixture.databaseURL,
+            "SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'") ==
+            2_147_483_647)
+        #expect(try Self.scalarText(
+            fixture.databaseURL,
+            "SELECT value FROM unrelated_gateway_state") == "preserved")
+    }
+
+    @Test
     func `gateway identity failure names corrupt row and state directory without rotating it`() async throws {
         let fixture = DeviceIdentityMigrationFixture(databasePath: "state/openclaw.sqlite")
         try Self.seedCanonicalSchema(fixture.databaseURL)

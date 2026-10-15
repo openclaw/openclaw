@@ -1,7 +1,15 @@
+import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql, type AliasableExpression } from "kysely";
+import {
+  jsonPathValue,
+  jsonRemovePaths,
+  jsonSetPath,
+  jsonValid,
+} from "../../infra/database-engine/json-values.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import {
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
@@ -19,29 +27,33 @@ import {
 } from "./transcript-payload.js";
 
 /** Admit suffix repairs against their projected bytes without decoding opaque bodies. */
-export function transcriptRetainedDataBytesSql(retainedIds: readonly string[]) {
+export function transcriptRetainedDataBytesSql(
+  database: DatabaseSync,
+  retainedIds: readonly string[],
+) {
   if (retainedIds.length === 0) {
     return transcriptEventReadBytesSql();
   }
-  const event = transcriptEventNavigationSql();
-  return /* kysely-allow-raw: mirror the retained-data projection's SQLite-first member matching. */ sql<number>`CASE WHEN json_valid(${event}) THEN
-    CASE WHEN json_extract(${event}, '$.type') = 'custom'
-      AND json_extract(${event}, '$.id') IN (${sql.join(retainedIds)})
-      THEN ${transcriptEventWithoutCustomDataBytesSql()} ELSE ${transcriptEventReadBytesSql()} END
+  const event = transcriptEventNavigationSql(database);
+  return /* kysely-allow-raw: mirror the retained-data projection's SQLite-first member matching. */ sql<number>`CASE WHEN ${jsonValid(database, event)} THEN
+    CASE WHEN ${jsonPathValue(database, event, sql.lit("$.type"))} = 'custom'
+      AND ${jsonPathValue(database, event, sql.lit("$.id"))} IN (${sql.join(retainedIds)})
+      THEN ${transcriptEventWithoutCustomDataBytesSql(database)} ELSE ${transcriptEventReadBytesSql()} END
     ELSE ${transcriptEventReadBytesSql()} END`;
 }
 
 /** Custom data is opaque to topology and indexing; cleanup keeps it in SQLite. */
 export function projectTranscriptRetainedDataSql(
+  database: DatabaseSync,
   event: AliasableExpression<string>,
   retainedIds: readonly string[],
 ): AliasableExpression<string> {
   return retainedIds.length === 0
     ? event
-    : /* kysely-allow-raw: bound cleanup planning to navigation while retaining opaque custom data in its original row. */ sql<string>`CASE WHEN json_valid(${event}) THEN
-        CASE WHEN json_extract(${event}, '$.type') = 'custom'
-          AND json_extract(${event}, '$.id') IN (${sql.join(retainedIds)})
-        THEN json_remove(${event}, '$.data') ELSE ${event} END
+    : /* kysely-allow-raw: bound cleanup planning to navigation while retaining opaque custom data in its original row. */ sql<string>`CASE WHEN ${jsonValid(database, event)} THEN
+        CASE WHEN ${jsonPathValue(database, event, sql.lit("$.type"))} = 'custom'
+          AND ${jsonPathValue(database, event, sql.lit("$.id"))} IN (${sql.join(retainedIds)})
+        THEN ${jsonRemovePaths(database, event, [sql.lit("$.data")])} ELSE ${event} END
       ELSE ${event} END`;
 }
 
@@ -148,7 +160,12 @@ export function copyRetainedTranscriptPayload(
                 const eventJson: AliasableExpression<string | null> =
                   parentId === undefined
                     ? eb.ref("event_json")
-                    : /* kysely-allow-raw: reparent only the envelope; oversized identity data stays in SQLite. */ sql<string>`json_set(${transcriptEventJsonSql(database.db)}, '$.parentId', ${parentId})`;
+                    : jsonSetPath(
+                        database.db,
+                        transcriptEventJsonSql(database.db),
+                        sql.lit("$.parentId"),
+                        sql.val(parentId),
+                      );
                 return [
                   eb.val(sessionId).as("session_id"),
                   eb.val(destinationSeq).as("seq"),
@@ -156,9 +173,11 @@ export function copyRetainedTranscriptPayload(
                   parentId === undefined
                     ? eb.ref("event_zstd").as("event_zstd")
                     : eb.val(null).as("event_zstd"),
-                  parentId === undefined
-                    ? eb.ref("event_utf8_bytes").as("event_utf8_bytes")
-                    : eb.val(null).as("event_utf8_bytes"),
+                  parentId !== undefined && isPostgresSqlConnection(database.db)
+                    ? eb.fn<number>("octet_length", [eventJson]).as("event_utf8_bytes")
+                    : (parentId === undefined ? eb.ref("event_utf8_bytes") : eb.val(null)).as(
+                        "event_utf8_bytes",
+                      ),
                   parentId === undefined
                     ? eb.ref("navigation_json").as("navigation_json")
                     : eb.val(null).as("navigation_json"),

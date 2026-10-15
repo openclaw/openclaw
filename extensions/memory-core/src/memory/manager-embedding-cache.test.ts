@@ -6,6 +6,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import {
   collectMemoryCachedEmbeddings,
+  countMemoryEmbeddingCache,
   loadMemoryEmbeddingCache,
   pruneMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
@@ -33,6 +34,7 @@ describe("memory embedding cache", () => {
     try {
       upsertMemoryEmbeddingCache({
         db,
+        cacheSize: 0,
         provider: { id: "openai", model: "text-embedding-3-small" },
         providerKey: "provider-key",
         entries: () => [
@@ -212,6 +214,7 @@ describe("memory embedding cache", () => {
         }
         upsertMemoryEmbeddingCache({
           db,
+          cacheSize: countMemoryEmbeddingCache(db),
           provider: { id: identity.provider, model: identity.model },
           providerKey: identity.providerKey,
           entries: () => [
@@ -272,6 +275,7 @@ describe("memory embedding cache", () => {
     try {
       upsertMemoryEmbeddingCache({
         db,
+        cacheSize: countMemoryEmbeddingCache(db),
         provider,
         providerKey: "fixture",
         entries: () => [
@@ -286,6 +290,7 @@ describe("memory embedding cache", () => {
       db.exec("BEGIN IMMEDIATE");
       upsertMemoryEmbeddingCache({
         db,
+        cacheSize: countMemoryEmbeddingCache(db),
         provider,
         providerKey: "fixture",
         maxEntries: 2,
@@ -329,6 +334,7 @@ describe("memory embedding cache", () => {
       ]) {
         upsertMemoryEmbeddingCache({
           db,
+          cacheSize: countMemoryEmbeddingCache(db),
           provider: identity,
           providerKey: identity.key,
           entries: () => identity.hashes.map((hash) => ({ hash, embedding: [1] })),
@@ -340,6 +346,7 @@ describe("memory embedding cache", () => {
         WHEN (SELECT COUNT(*) FROM memory_embedding_cache) >= ${maxEntries}
         BEGIN SELECT RAISE(ABORT, 'cache overflow'); END;`);
       db.exec("BEGIN IMMEDIATE");
+      const cacheSize = before.length;
       const executions = (["get", "all", "run", "iterate"] as const).map((method) =>
         vi.spyOn(StatementSync.prototype, method),
       );
@@ -347,6 +354,7 @@ describe("memory embedding cache", () => {
       try {
         upsertMemoryEmbeddingCache({
           db,
+          cacheSize,
           provider,
           providerKey: "fixture",
           maxEntries,
@@ -385,11 +393,7 @@ describe("memory embedding cache", () => {
       const deletes = queries.filter((query) => /^delete\b/iu.test(query));
       expect(deletes).toHaveLength(evicted > 0 ? 2 : 1);
       expect(queries.filter((query) => /^insert\b/iu.test(query))).toHaveLength(2);
-      const count = queries.find((query) => /^select count\(\*\)/iu.test(query));
-      expect(count).toBeDefined();
-      expect(db.prepare(`EXPLAIN ${count}`).all()).toEqual(
-        expect.arrayContaining([expect.objectContaining({ opcode: "Count" })]),
-      );
+      expect(queries.filter((query) => /^select count\(\*\)/iu.test(query))).toEqual([]);
       if (evicted) {
         const eviction = deletes.find((query) => /\browid\b/iu.test(query));
         expect(eviction).toBeDefined();
@@ -423,6 +427,7 @@ describe("memory embedding cache", () => {
     try {
       upsertMemoryEmbeddingCache({
         db,
+        cacheSize: countMemoryEmbeddingCache(db),
         provider: { id: "local", model: "fixture" },
         providerKey: "fixture",
         entries: () =>
@@ -430,14 +435,14 @@ describe("memory embedding cache", () => {
         now: 1,
       });
       db.exec("BEGIN IMMEDIATE");
-      pruneMemoryEmbeddingCache(db, 2);
+      expect(pruneMemoryEmbeddingCache(db, 103, 2)).toBe(3);
       expect(db.prepare("SELECT hash FROM memory_embedding_cache ORDER BY rowid").all()).toEqual([
         { hash: "100" },
         { hash: "101" },
         { hash: "102" },
       ]);
       db.exec("COMMIT; BEGIN IMMEDIATE");
-      pruneMemoryEmbeddingCache(db, 2);
+      expect(pruneMemoryEmbeddingCache(db, 3, 2)).toBe(2);
       db.exec("COMMIT");
       expect(db.prepare("SELECT hash FROM memory_embedding_cache ORDER BY rowid").all()).toEqual([
         { hash: "101" },
@@ -456,6 +461,7 @@ describe("memory embedding cache", () => {
     try {
       upsertMemoryEmbeddingCache({
         db,
+        cacheSize: countMemoryEmbeddingCache(db),
         provider: { id: "local", model: "hf:owner/default.gguf" },
         providerKey: "provider-key-current",
         entries: () => [
@@ -470,6 +476,7 @@ describe("memory embedding cache", () => {
       );
       upsertMemoryEmbeddingCache({
         db,
+        cacheSize: countMemoryEmbeddingCache(db),
         provider: { id: "local", model: "/cache/default.gguf" },
         providerKey: "provider-key-alias",
         entries: () =>
@@ -480,6 +487,7 @@ describe("memory embedding cache", () => {
       });
       upsertMemoryEmbeddingCache({
         db,
+        cacheSize: countMemoryEmbeddingCache(db),
         provider: { id: "local", model: "/other/default.gguf" },
         providerKey: "provider-key-arbitrary",
         entries: () => [{ hash: "arbitrary", embedding: [0.3, 0.4] }],
@@ -532,6 +540,7 @@ describe("memory embedding cache", () => {
         for (const [index, identity] of providerIdentities.entries()) {
           upsertMemoryEmbeddingCache({
             db,
+            cacheSize: countMemoryEmbeddingCache(db),
             provider: { id: identity.provider, model: identity.model },
             providerKey: identity.providerKey,
             entries: () =>
@@ -582,6 +591,7 @@ describe("memory embedding cache", () => {
       const identity = { provider: "local", model: "fixture", providerKey: "fixture" };
       upsertMemoryEmbeddingCache({
         db,
+        cacheSize: countMemoryEmbeddingCache(db),
         provider: { id: identity.provider, model: identity.model },
         providerKey: identity.providerKey,
         entries: () => [

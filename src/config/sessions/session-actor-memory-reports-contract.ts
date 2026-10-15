@@ -17,10 +17,21 @@ import type {
   PreparedTranscriptReport,
   TranscriptReportWorkerOperations,
 } from "./session-accessor.sqlite-transcript-reports.types.js";
+import type { SessionTranscriptManualTrimResult } from "./session-accessor.types.js";
+import type { SessionSourcePredicate } from "./session-source-authority.js";
 import type {
+  SessionMessageRewriteSelection,
+  SessionMessageRewriteSnapshot,
+  SessionMessageRewriteCommitted,
   SessionTranscriptCorrectionCommitted,
   SessionTranscriptCorrectionInput,
 } from "./session-transcript-mutation.types.js";
+
+export type SessionActorMemoryWorkerTranscriptLedger = {
+  environmentId: string;
+  nextSeq: number;
+  receipts: Map<number, { requestHash: string; outcome: WorkerTranscriptCommitOutcome }>;
+};
 
 type Target = { scope: SessionTranscriptWriteScope & { sessionId: string } };
 export type SessionActorMemoryReportsReads = {
@@ -34,6 +45,10 @@ export type SessionActorMemoryReportsReads = {
         >
       >;
     };
+  };
+  "session.rewrite.prepare": {
+    input: Target & Pick<SessionMessageRewriteSelection, "target" | "expectedEntry">;
+    output: SessionMessageRewriteSnapshot | null;
   };
   "session.report.prepare": {
     input: Target & { selection: TranscriptReportWorkerOperations["prepare"]["input"] };
@@ -56,12 +71,27 @@ export type SessionActorMemoryReportsWrites = {
     output: TranscriptReportWorkerOperations[Key]["output"];
   };
 } & {
+  "session.event.append": {
+    input: Target & { eventJson: string };
+    output: boolean;
+  };
   "session.report.append": {
     input: Target & {
       version: SessionTranscriptContextVersion;
       report: TranscriptReportWorkerOperations["append"]["input"];
     };
     output: TranscriptReportWorkerOperations["append"]["output"];
+  };
+  "session.rewrite.commit": {
+    input: SessionActorMemoryReportsReads["session.rewrite.prepare"]["input"] & {
+      expected: SessionMessageRewriteSnapshot;
+      message: unknown;
+    };
+    output: SessionMessageRewriteCommitted;
+  };
+  "session.transcript.manualCompact": {
+    input: Target & { maxLines: number; nowMs?: number; sources?: SessionSourcePredicate[] };
+    output: SessionTranscriptManualTrimResult;
   };
   "session.correction.commit": {
     input: Target & Omit<SessionTranscriptCorrectionInput, "scope" | "fence">;
@@ -80,3 +110,7 @@ export type SessionActorMemoryReportsWrites = {
     };
   };
 };
+type Operations = SessionActorMemoryReportsReads & SessionActorMemoryReportsWrites;
+export type SessionActorMemoryReportsCommand = {
+  [Key in keyof Operations]: { type: Key; input: Operations[Key]["input"] };
+}[keyof Operations];

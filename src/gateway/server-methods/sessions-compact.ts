@@ -10,14 +10,12 @@ import {
   resolveSessionWorkStartError,
   isSessionWorkStartInvalidatedError,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
-  type SessionEntry,
 } from "../../config/sessions.js";
 import {
-  applySessionPatchProjection,
   preflightSessionTranscriptForManualCompact,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
-import { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
+import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { readTranscriptStatsAsync } from "../../config/sessions/session-transcript-stats.js";
@@ -36,7 +34,6 @@ import {
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "../session-request-agent.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
-import { resolveCanonicalGatewaySessionStoreKey } from "../session-utils.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -100,31 +97,8 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       const abortSignal =
         signal && sourceSignal ? AbortSignal.any([signal, sourceSignal]) : (signal ?? sourceSignal);
       assertRequestCurrent();
-      // Lock + read in a short critical section; transcript work happens outside.
-      // The projection resolver re-runs gateway key migration on the writer
-      // snapshot so alias promotion/pruning persists through the accessor.
-      let compactPrimaryKey = target.canonicalKey;
-      const compactRead = await applySessionPatchProjection({
-        agentId: target.agentId,
-        assertCurrent: assertRequestCurrent,
-        sessionKeys: target.storeKeys,
-        storePath,
-        resolveTarget: ({ store }) => {
-          const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
-            cfg,
-            key,
-            store: store as Record<string, SessionEntry>,
-            agentId: requestedAgentId,
-          });
-          compactPrimaryKey = primaryKey;
-          return { primaryKey, candidateKeys: migratedTarget.storeKeys };
-        },
-        // Read-only projection: persist the resolved row unchanged so the alias
-        // migration above is saved even when compaction bails out below.
-        project: ({ existingEntry }) =>
-          existingEntry ? { ok: true, entry: existingEntry } : { ok: false },
-      });
-      const entry = compactRead.ok ? compactRead.entry : undefined;
+      const compactPrimaryKey = target.canonicalKey;
+      const entry = target.store[compactPrimaryKey];
       const sessionId = entry?.sessionId;
       const respondNotCompacted = (details: { ok?: boolean; kept?: number; reason?: string }) => {
         respond(
@@ -162,13 +136,6 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-      } else {
-        const transcriptStats = await readTranscriptStatsAsync(transcriptScope);
-        assertRequestCurrent();
-        if (transcriptStats.eventCount === 0) {
-          respondNotCompacted({ reason: "no transcript" });
-          return;
-        }
       }
 
       const lifecycleRevision = entry.lifecycleRevision;
@@ -189,6 +156,8 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       const lifecycleIdentities = [...queueIdentities, lifecycleRevision];
       let admissionError: ReturnType<typeof errorShape> | undefined;
       let compactionNoopReason: string | undefined;
+      let preparedEntry: InternalSessionEntry | undefined;
+      let noTranscript = false;
       const terminalSettled = await waitForTerminalSessionRunSettlement({
         context,
         storePath,
@@ -207,15 +176,21 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
         prepare: async () => {
           assertRequestCurrent();
           if (maxLines === undefined) {
-            const latestEntry = await readCurrentEntry();
-            if (!latestEntry) {
+            preparedEntry = await readCurrentEntry();
+            if (!preparedEntry) {
               admissionError = sessionChangedError();
+              return;
+            }
+            const transcriptStats = await readTranscriptStatsAsync(transcriptScope);
+            assertRequestCurrent();
+            noTranscript = transcriptStats.eventCount === 0;
+            if (noTranscript) {
               return;
             }
             compactionNoopReason = (
               await preflightGatewaySessionCompaction({
                 cfg,
-                entry: latestEntry,
+                entry: preparedEntry,
                 agentId: target.agentId,
                 sessionId,
                 sessionKey: target.canonicalKey,
@@ -261,6 +236,10 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
           assertRequestCurrent();
           if (admissionError) {
             respond(false, undefined, admissionError);
+            return;
+          }
+          if (noTranscript) {
+            respondNotCompacted({ reason: "no transcript" });
             return;
           }
           if (compactionNoopReason) {
@@ -317,15 +296,10 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             return;
           }
 
-          const latestEntry = await readCurrentEntry();
+          // The lifecycle owner spans preparation and execution.
+          const latestEntry = preparedEntry;
           if (!latestEntry) {
             respond(false, undefined, sessionChangedError());
-            return;
-          }
-          const transcriptStats = await readTranscriptStatsAsync(transcriptScope);
-          assertRequestCurrent();
-          if (transcriptStats.eventCount === 0) {
-            respondNotCompacted({ reason: "no transcript" });
             return;
           }
           emitSessionOperation(context, {
@@ -374,38 +348,29 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               },
             );
             if (result.ok && result.compacted) {
-              // Skip terminal persistence when session ownership rotated during compaction.
-              const persistProjection = await applySessionPatchProjection({
-                agentId: target.agentId,
-                assertCurrent: assertActive,
-                sessionKeys: [compactPrimaryKey],
-                storePath,
-                resolveTarget: () => ({ primaryKey: compactPrimaryKey }),
-                project: ({ existingEntry }) => {
-                  if (
-                    !existingEntry ||
-                    existingEntry.sessionId !== expectedEntry.sessionId ||
-                    existingEntry.lifecycleRevision !== expectedEntry.lifecycleRevision ||
-                    existingEntry.activeWriterRunId !== expectedEntry.activeWriterRunId ||
-                    resolveSessionWorkStartError(target.canonicalKey, existingEntry)
-                  ) {
-                    return { ok: false };
-                  }
-                  return {
-                    ok: true,
-                    entry: {
-                      ...existingEntry,
-                      ...projectCompactionAccountingPatch(existingEntry, {
-                        compactionKind: result.compactionKind,
-                        tokensAfter: result.result?.tokensAfter,
-                        transcriptByteCompactionLatch:
-                          result.compactionKind === "native-harness" ? undefined : null,
-                      }),
-                    },
-                  };
+              const persistedEntry = await applySessionEntryOperation(
+                transcriptScope,
+                {
+                  kind: "compaction-accounting",
+                  expected: {
+                    sessionId: expectedEntry.sessionId,
+                    lifecycleRevision: expectedEntry.lifecycleRevision,
+                    activeWriterRunId: expectedEntry.activeWriterRunId,
+                  },
+                  accounting: {
+                    compactionKind: result.compactionKind,
+                    tokensAfter: result.result?.tokensAfter,
+                    transcriptByteCompactionLatch:
+                      result.compactionKind === "native-harness" ? undefined : null,
+                  },
                 },
-              });
-              persisted = persistProjection.ok;
+                { skipMaintenance: true, assertCommitAllowed: assertActive },
+              );
+              persisted =
+                persistedEntry !== null &&
+                persistedEntry.sessionId === expectedEntry.sessionId &&
+                persistedEntry.lifecycleRevision === expectedEntry.lifecycleRevision &&
+                persistedEntry.activeWriterRunId === expectedEntry.activeWriterRunId;
             }
           } catch (err) {
             emitCompactionEnd(false, formatErrorMessage(err));

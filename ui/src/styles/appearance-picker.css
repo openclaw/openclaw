@@ -1,0 +1,18 @@
+openclaw-appearance-glyph {
+  color: var(--appearance-color, inherit);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  height: 1em;
+}
+
+openclaw-appearance-glyph svg,
+openclaw-appearance-glyph img {
+  width: 100%;
+  height: 100%;
+}
+
+openclaw-appearance-glyph img {
+  object-fit: contain;
+}

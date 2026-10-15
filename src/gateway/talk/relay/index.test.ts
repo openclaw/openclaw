@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { setActiveEmbeddedRun } from "../../../agents/embedded-agent-runner/runs.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
@@ -113,7 +114,7 @@ async function createTalkRealtimeRelaySession(
       chatAbortControllers: request.context.chatAbortControllers ?? new Map(),
     },
     cfg,
-    sessionTarget: prepareTalkSessionTarget(cfg, sessionKey ?? "agent:main:main"),
+    sessionTarget: await prepareTalkSessionTarget(cfg, sessionKey ?? "agent:main:main"),
   });
   activeRelaySessions.set(session.relaySessionId, connId);
   return session;
@@ -801,6 +802,7 @@ describe("talk realtime gateway relay", () => {
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     const tempDir = tempDirs.make("openclaw-relay-voice-overflow-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    setRuntimeConfigSnapshot({});
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
     const bridgeClose = vi.fn();
     const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
@@ -986,7 +988,7 @@ describe("talk realtime gateway relay", () => {
           providerConfig: {},
           instructions: "brief",
           tools: [],
-          sessionTarget: prepareTalkSessionTarget(runtimeConfig, sessionKey),
+          sessionTarget: await prepareTalkSessionTarget(runtimeConfig, sessionKey),
         });
         activeRelaySessions.set(session.relaySessionId, "conn-owner-pin");
         runtimeConfig = createRelayAgentConfig("ops");
@@ -3138,6 +3140,8 @@ describe("talk realtime gateway relay", () => {
   it.each([
     { source: "turn", reason: "barge-in" },
     { source: "session", reason: "relay-closed" },
+    { source: "abort", reason: "relay-closed" },
+    { source: "detach", reason: undefined },
     { source: "provider", reason: "relay-error" },
     { source: "disconnect", reason: undefined },
   ] as const)("settles linked agent runs on $source termination", async ({ source, reason }) => {
@@ -3158,10 +3162,11 @@ describe("talk realtime gateway relay", () => {
         turnId: "turn-1",
       });
       expect(removeChatRun).toHaveBeenCalledWith("run-1", "run-1", "main");
-    } else if (source === "session") {
+    } else if (source === "session" || source === "abort" || source === "detach") {
       void stopTalkRealtimeRelaySession({
         relaySessionId: session.relaySessionId,
         connId: "conn-1",
+        ...(source !== "session" ? { disposition: source } : {}),
       });
     } else if (source === "provider") {
       bridgeRequest?.onClose?.("error");
@@ -4830,9 +4835,11 @@ describe("talk realtime gateway relay", () => {
           bridgeRequest?.onClose?.(ending === "provider-error" ? "error" : "completed");
         }
         expect(close).toHaveBeenCalledExactlyOnceWith({
-          disposition: ending === "explicit-abort" ? "abort" : "detach",
+          disposition: ending === "explicit-abort" || ending === "client-stop" ? "abort" : "detach",
         });
-        expect(abortController.signal.aborted).toBe(ending === "explicit-abort");
+        expect(abortController.signal.aborted).toBe(
+          ending === "explicit-abort" || ending === "client-stop",
+        );
         expect(relaySessions.has(session.relaySessionId)).toBe(false);
         expect(() =>
           resolveTalkVoiceSession({

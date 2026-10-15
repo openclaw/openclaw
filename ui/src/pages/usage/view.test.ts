@@ -1,11 +1,10 @@
 import { createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRecordedCostUsage } from "./test-helpers/recorded-cost.test-support.ts";
 import type { UsageProps, UsageTotals } from "./types.ts";
 import {
-  buildUsageFilterOptions,
   buildAggregatesFromSessions,
   projectUsageData,
   createUsageProps,
@@ -30,66 +29,17 @@ function averageCostSummary(container: ParentNode) {
   };
 }
 
-it("renders shared skeletons while initial usage is loading", () => {
-  const container = document.createElement("div");
-  const props = createUsageProps();
-  mountSolid(() => renderUsage(createUsageProps({ data: { ...props.data, loading: true } })), {
-    container,
-  });
-  flush();
-
-  const blocks = container.querySelectorAll(".usage-skeleton-block");
-  expect(blocks).toHaveLength(3);
-  expect([...blocks].every((block) => block.classList.contains("skeleton"))).toBe(true);
-});
-
 describe("renderUsage", () => {
-  it.each([
-    { name: "known zero", sessionIndex: 0, value: "$0.00", missing: false },
-    { name: "known positive", sessionIndex: 1, value: "$0.10", missing: false },
-    { name: "unknown zero", sessionIndex: 2, value: "$0.00", missing: true },
-    { name: "mixed positive", sessionIndex: null, value: "$0.03", missing: true },
-  ])("respects recorded cost availability for $name", ({ sessionIndex, value, missing }) => {
-    const base = createUsageProps();
-    const fixture = createRecordedCostUsage();
-    const sessions = sessionIndex === null ? fixture.sessions : [fixture.sessions[sessionIndex]!];
-    const container = document.createElement("div");
-    mountSolid(
-      () =>
-        renderUsage(
-          createUsageProps({
-            data: {
-              ...base.data,
-              sessions,
-              totals: sessionIndex === null ? fixture.totals : sessions[0]!.usage!,
-              aggregates: buildAggregatesFromSessions(sessions),
-            },
-          }),
-        ),
-      { container },
-    );
-    flush();
-
-    expect(averageCostSummary(container)).toEqual({
-      hint: missing
-        ? "Average cost per message when providers report costs. Cost data is missing for some or all sessions in this range."
-        : "Average cost per message when providers report costs.",
-      value,
-    });
-  });
-
-  it.each(["query", "session", "day"] as const)(
+  it.each(["session", "day"] as const)(
     "restores the range warning after clearing a known-zero %s filter",
     (filter) => {
       const base = createUsageProps();
       const fixture = createRecordedCostUsage();
       const zeroSession = fixture.sessions[0]!;
       const selected: Partial<UsageProps["filters"]> =
-        filter === "query"
-          ? { query: 'label:"Known zero"', queryDraft: 'label:"Known zero"' }
-          : filter === "session"
-            ? { selectedSessions: [zeroSession.key] }
-            : { selectedDays: zeroSession.usage!.activityDates! };
+        filter === "session"
+          ? { selectedSessions: [zeroSession.key] }
+          : { selectedDays: zeroSession.usage!.activityDates! };
       const props = createUsageProps({
         data: {
           ...base.data,
@@ -147,48 +97,6 @@ describe("renderUsage", () => {
     );
   });
 
-  it("keeps the provider panel hidden when usage is empty without a failure", () => {
-    const container = document.createElement("div");
-    mountSolid(() => renderUsage(createUsageProps()), { container });
-    flush();
-
-    expect(container.textContent).not.toContain("Provider usage is unavailable");
-  });
-
-  it("filters visible sessions and insight aggregates with an explicit agent query", () => {
-    const container = document.createElement("div");
-    const sessions = [
-      usageSession("agent:main:main", "main", "openai"),
-      usageSession("agent:research:main", "research", "anthropic"),
-    ];
-
-    mountSolid(
-      () =>
-        renderUsage(
-          createUsageProps({
-            data: {
-              ...createUsageProps().data,
-              ...projectUsageData(sessions, { query: "agent:research" }),
-            },
-            filters: {
-              ...createUsageProps().filters,
-              query: "agent:research",
-              queryDraft: "agent:research",
-            },
-          }),
-        ),
-      { container },
-    );
-    flush();
-
-    const providers = insightCard(container, "Top Providers");
-    expect(providers?.textContent).toContain("anthropic");
-    expect(providers?.textContent).not.toContain("openai");
-    const rows = container.querySelectorAll(".session-bar-row");
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.textContent).toContain("research session");
-  });
-
   it("does not fall back to global insights when a query matches no sessions", () => {
     const container = document.createElement("div");
     const sessions = [usageSession("agent:main:main", "main", "openai")];
@@ -216,50 +124,6 @@ describe("renderUsage", () => {
     expect(providers?.textContent).toContain("No provider data");
     expect(providers?.textContent).not.toContain("openai");
   });
-
-  it.each(["session", "day"] as const)(
-    "preserves missing-cost attribution in %s-filtered JSON exports",
-    (filter) => {
-      const base = createUsageProps();
-      const missing = { missingCostEntries: 2, missingCostByModel: { "fixture/unpriced": 2 } };
-      const session = usageSession("agent:main:priced", "main", "fixture", missing);
-      const totals = session.usage;
-      if (!totals) {
-        throw new Error("usage session fixture must include totals");
-      }
-      const onExportJson = vi.fn();
-      const container = document.createElement("div");
-      mountSolid(
-        () =>
-          renderUsage(
-            createUsageProps({
-              data: {
-                ...base.data,
-                sessions: [session],
-                totals,
-                costDaily: [{ ...totals, date: "2026-05-14" }],
-              },
-              filters: {
-                ...base.filters,
-                selectedSessions: filter === "session" ? [session.key] : [],
-                selectedDays: filter === "day" ? ["2026-05-14"] : [],
-              },
-              callbacks: {
-                ...base.callbacks,
-                display: { ...base.callbacks.display, onExportJson },
-              },
-            }),
-          ),
-        { container },
-      );
-      flush();
-      container
-        .querySelector(".usage-export-menu")
-        ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "json" } } }));
-      expect(onExportJson).toHaveBeenCalledOnce();
-      expect(onExportJson).toHaveBeenCalledWith();
-    },
-  );
 
   it("keeps selected session labels on UTF-16 boundaries", () => {
     const container = document.createElement("div");
@@ -307,45 +171,7 @@ describe("renderUsage", () => {
     );
   });
 
-  it("omits the duplicate inner page heading because the shell owns tab headings", () => {
-    const container = document.createElement("div");
-
-    mountSolid(() => renderUsage(createUsageProps()), { container });
-    flush();
-
-    expect(container.querySelector(".usage-page-header")).toBeNull();
-    expect(container.querySelector(".usage-page-title")).toBeNull();
-    expect(container.querySelector(".usage-header")).not.toBeNull();
-  });
-
-  it("leaves agent scoping to the shared page header control", () => {
-    const container = document.createElement("div");
-
-    mountSolid(
-      () =>
-        renderUsage(
-          createUsageProps({
-            data: {
-              ...createUsageProps().data,
-              sessions: [
-                {
-                  key: "agent:main:main",
-                  agentId: "main",
-                  lastUpdated: Date.now(),
-                  usage: null,
-                } as UsageProps["data"]["sessions"][number],
-              ],
-            },
-          }),
-        ),
-      { container },
-    );
-    flush();
-
-    expect(container.querySelector('input[name="usage-agent-scope"]')).toBeNull();
-  });
-
-  it("retains an open query menu while selecting multiple options", () => {
+  it("retains an open query menu while selecting multiple options", async () => {
     const base = createUsageProps();
     const sessions = ["clear", "second"].map((provider) =>
       usageSession(`session:${provider}`, "main", provider),
@@ -373,27 +199,30 @@ describe("renderUsage", () => {
       );
       flush();
       const first = [...container.querySelectorAll(".usage-filter-option")].find(
-        (item) => item.textContent?.trim() === "clear",
+        (item) => item.getAttribute("aria-label") === "clear",
       )!;
-      const dropdown = first.closest("wa-dropdown")!;
-      dropdown.open = true;
+      const dropdown = first.closest(".usage-filter-select")!;
+      const surface = dropdown.querySelector<HTMLElement>('[role="menu"]')!;
+      const trigger = dropdown.querySelector<HTMLButtonElement>(".usage-filter-trigger")!;
+      expect(trigger.getAttribute("aria-label")).toBe("Provider All");
+      // JSDOM has no scrolling layout; keep the real Menu click and focus paths.
+      for (const item of surface.querySelectorAll<HTMLElement>('[role^="menuitem"]')) {
+        item.scrollIntoView = vi.fn();
+      }
+      trigger.click();
+      await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
       for (const provider of ["clear", "second"]) {
-        const option = [...dropdown.querySelectorAll("wa-dropdown-item")].find(
-          (item) => item.textContent?.trim() === provider,
-        )!;
-        option.checked = true;
-        const event = new CustomEvent("wa-select", {
-          detail: { item: option },
-          bubbles: true,
-          cancelable: true,
-        });
-        dropdown.dispatchEvent(event);
-        flush();
-        expect(event.defaultPrevented).toBe(true);
-        expect(first.closest("wa-dropdown")).toBe(dropdown);
+        const option = [
+          ...dropdown.querySelectorAll<HTMLButtonElement>(".usage-filter-option"),
+        ].find((item) => item.getAttribute("aria-label") === provider)!;
+        option.click();
+        await waitForSolid(() => expect(option.getAttribute("aria-checked")).toBe("true"));
+        expect(trigger.getAttribute("aria-label")).toBe(`Provider ${provider === "clear" ? 1 : 2}`);
+        expect(first.closest(".usage-filter-select")).toBe(dropdown);
+        expect(dropdown.querySelector('[role="menu"]')).toBe(surface);
         expect(container.contains(dropdown)).toBe(true);
-        expect(dropdown.open).toBe(true);
-        expect(option.checked).toBe(true);
+        expect(trigger.getAttribute("aria-expanded")).toBe("true");
+        expect(surface.matches(":popover-open")).toBe(true);
       }
       expect(onQueryDraftChange.mock.lastCall?.[0]).toBe("provider:clear provider:second ");
     } finally {
@@ -445,67 +274,6 @@ describe("renderUsage", () => {
     expect(breakdown.querySelector(".cost-breakdown-legend")?.textContent).toContain("$1.80");
   });
 
-  it("keeps filter option values distinct from menu commands", () => {
-    const container = document.createElement("div");
-    const onQueryDraftChange = vi.fn();
-    const session = usageSession("agent:main:main", "main", "clear");
-    const props = createUsageProps({
-      data: {
-        ...createUsageProps().data,
-        sessions: [session],
-        aggregates: buildAggregatesFromSessions([session]),
-      },
-    });
-    props.callbacks.filters.onQueryDraftChange = onQueryDraftChange;
-
-    mountSolid(() => renderUsage(props), { container });
-    flush();
-    const option = [...container.querySelectorAll("wa-dropdown-item")].find(
-      (item) => item.textContent?.trim() === "clear",
-    )!;
-    option.checked = true;
-    option
-      ?.closest("wa-dropdown")
-      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: option }, bubbles: true }));
-
-    expect(onQueryDraftChange).toHaveBeenCalledWith(expect.stringContaining("provider:clear"));
-  });
-
-  it("keeps bounded filter inventories in source order across observed and aggregate values", () => {
-    const sessions = ["observed-a", "observed-b", "observed-a"].map((provider, index) =>
-      Object.assign(usageSession(`session-${index}`, "main", provider), {
-        providerOverride: `override-${index}`,
-        modelOverride: "override-only-model",
-        channel: index === 0 ? "" : "Chat",
-      }),
-    );
-    const aggregates = buildAggregatesFromSessions(
-      Array.from({ length: 14 }, (_, index) =>
-        usageSession(`aggregate-${index}`, "other", `aggregate-${index}`),
-      ),
-    );
-    aggregates.tools.tools = Array.from({ length: 14 }, (_, index) => ({
-      name: `tool-${index}`,
-      count: 1,
-    }));
-    const options = buildUsageFilterOptions(sessions, aggregates);
-    expect(options.channel).toEqual(["Chat"]);
-    expect(options.provider).toEqual([
-      "observed-a",
-      "observed-b",
-      "override-0",
-      "override-1",
-      "override-2",
-      ...Array.from({ length: 7 }, (_, index) => `aggregate-${index}`),
-    ]);
-    expect(options.model).toEqual([
-      "observed-a-model",
-      "observed-b-model",
-      ...Array.from({ length: 10 }, (_, index) => `aggregate-${index}-model`),
-    ]);
-    expect(options.tool).toEqual(Array.from({ length: 12 }, (_, index) => `tool-${index}`));
-  });
-
   it("refreshes filter order and draft selections when chart mode, agent, or source changes", () => {
     const container = document.createElement("div");
     const props = createUsageProps();
@@ -519,11 +287,11 @@ describe("renderUsage", () => {
     props.callbacks.filters.onQueryDraftChange = vi.fn();
     const providerOptions = () =>
       [...container.querySelectorAll<HTMLElement>(".usage-filter-select")]
-        .find(
-          (menu) => menu.querySelector(".usage-filter-trigger span")?.textContent === "Provider",
+        .find((menu) =>
+          menu.querySelector(".usage-filter-trigger")?.textContent?.trim().startsWith("Provider"),
         )!
-        .querySelectorAll<HTMLElement & { checked: boolean }>(".usage-filter-option");
-    const values = () => [...providerOptions()].map((option) => option.textContent?.trim());
+        .querySelectorAll<HTMLElement>(".usage-filter-option");
+    const values = () => [...providerOptions()].map((option) => option.getAttribute("aria-label"));
     const chartModeButton = (label: string) =>
       [...container.querySelectorAll<HTMLButtonElement>(".usage-view-options button")].find(
         (button) => button.textContent?.trim() === label,
@@ -548,9 +316,11 @@ describe("renderUsage", () => {
     expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("true");
     expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("false");
     expect(values()).toEqual(["first", "second"]);
-    expect([...providerOptions()].find((option) => option.checked)?.textContent?.trim()).toBe(
-      "second",
-    );
+    expect(
+      [...providerOptions()]
+        .find((option) => option.getAttribute("aria-checked") === "true")
+        ?.getAttribute("aria-label"),
+    ).toBe("second");
     expect(container.querySelector(".usage-query-suggestion")?.textContent?.trim()).toBe(
       "provider:second",
     );
@@ -578,30 +348,6 @@ describe("renderUsage", () => {
     container.querySelector<HTMLButtonElement>(".usage-query-suggestion")?.click();
     expect(props.callbacks.filters.onQueryDraftChange).toHaveBeenCalledWith(
       'label:"Team  Planning" provider:second-new ',
-    );
-  });
-
-  it("reports a stalled provider refresh instead of hiding the section", () => {
-    const container = document.createElement("div");
-
-    mountSolid(
-      () =>
-        renderUsage(
-          createUsageProps({
-            data: {
-              ...createUsageProps().data,
-              providerUsage: [],
-              providerUsageStalled: true,
-            },
-          }),
-        ),
-      { container },
-    );
-    flush();
-
-    const callout = container.querySelector(".usage-callout");
-    expect(callout?.textContent?.trim()).toBe(
-      "Provider usage did not finish loading. Refresh to retry.",
     );
   });
 

@@ -212,9 +212,7 @@ suite.define(() => {
                 },
                 expanded: element.querySelector("button")?.getAttribute("aria-expanded"),
                 query: element.querySelector<HTMLInputElement>(".picker-select__search")?.value,
-                placement: element
-                  .querySelector("wa-popup")
-                  ?.getAttribute("data-current-placement"),
+                placement: rect.bottom <= triggerBounds.top ? "top" : "bottom",
                 menu: {
                   x: rect.x,
                   y: rect.y,
@@ -350,9 +348,18 @@ suite.define(() => {
           await page.mouse.wheel(0, topAnchor.y - 530);
           await expect.poll(async () => (await trigger.boundingBox())?.y).toBeGreaterThan(500);
           await press("ArrowDown");
+          await picker.locator(".picker-select__menu").waitFor({ state: "visible" });
           await expect
-            .poll(() => picker.locator("wa-popup").getAttribute("data-current-placement"))
-            .toMatch(/^top-/u);
+            .poll(() =>
+              picker.evaluate((element) => {
+                const menu = element.querySelector(".picker-select__menu")!.getBoundingClientRect();
+                const pickerTriggerBounds = element
+                  .querySelector(".picker-select__trigger")!
+                  .getBoundingClientRect();
+                return menu.bottom <= pickerTriggerBounds.top;
+              }),
+            )
+            .toBe(true);
           await capture("draft-top-opening", picker);
           await press("Escape");
           await page.setViewportSize({ width: 390, height: 844 });

@@ -17,7 +17,7 @@ import { prepareControlUiSessionPrRead } from "../control-ui-session-pr-read.js"
 import {
   prepareCurrentGitHubPublicationOptionsIdentity,
   hasSupportedGitHubPublicationTarget,
-  readGitHubPublicationSession,
+  prepareGitHubPublicationSession,
   type PublicationSessionIdentity,
 } from "../github-publication-availability.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
@@ -194,16 +194,19 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
           sessionKey: params.sessionKey,
           agentId,
         });
-        try {
-          const result = await coordinator.requestPersonalForSessionV2(params, admitted.action);
-          admitted.action.assertCurrent();
-          respond(true, result);
-        } finally {
-          admitted.release();
-        }
+        using _ = { [Symbol.dispose]: () => admitted.release() };
+
+        const result = await coordinator.requestPersonalForSessionV2(params, admitted.action);
+        admitted.action.assertCurrent();
+        respond(true, result);
+
         return;
       }
-      const loaded = readGitHubPublicationSession(sessionKey, agentId ? { agentId } : undefined);
+      using selectedSession = await prepareGitHubPublicationSession(sessionKey, {
+        agentId,
+        assertCurrent: () => sessionMutationAuthorization?.assertCurrent(),
+      });
+      const loaded = selectedSession.loaded;
       if (!loaded.entry?.sessionId) {
         respond(
           false,
@@ -218,20 +221,18 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         agentId: caller?.agentId ?? loaded.agentId,
       };
       const admitted = await prepareGitHubPublicationRequesterV2(options, session);
-      try {
-        const result = await coordinator.requestForSessionV2({
-          ...params,
-          ...session,
-          requester: admitted.requester,
-          ...(caller?.operationalRunInstance?.runId
-            ? { expectedRunId: caller.operationalRunInstance.runId }
-            : {}),
-        });
-        sessionMutationAuthorization?.assertCurrent();
-        respond(true, result);
-      } finally {
-        admitted.release();
-      }
+      using _ = { [Symbol.dispose]: () => admitted.release() };
+
+      const result = await coordinator.requestForSessionV2({
+        ...params,
+        ...session,
+        requester: admitted.requester,
+        ...(caller?.operationalRunInstance?.runId
+          ? { expectedRunId: caller.operationalRunInstance.runId }
+          : {}),
+      });
+      sessionMutationAuthorization?.assertCurrent();
+      respond(true, result);
     },
   ),
   "sessions.github.options": defineSessionGitHubMethod(
@@ -241,71 +242,64 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       const deadline = new AbortController();
       await raceWithTimeout(
         async () => {
-          const read = await prepareGitHubPublicationOptionsRead(
+          using read = await prepareGitHubPublicationOptionsRead(
             options,
             options.params,
             deadline.signal,
           );
+
           const coordinator = options.context.githubPublicationService;
           if (!coordinator) {
             options.respond(false, undefined, publicationStateUnavailableError());
             return;
           }
-          let shared: SessionGitHubOptionsResult["shared"] = null;
-          let stale = false;
-          let sharedUnavailableReason: SessionGitHubOptionsResult["sharedUnavailableReason"];
-          try {
-            const identity = await prepareCurrentGitHubPublicationOptionsIdentity(
-              read.session.agentId,
-              () => deadline.signal.throwIfAborted(),
-            );
-            stale = identity.stale === true;
-            shared = {
-              source: identity.source,
-              accountId: identity.account.accountId,
-              login: identity.account.login,
-            };
-          } catch (error) {
-            sharedUnavailableReason =
-              error instanceof GitHubIdentityError ? error.reason : "unverified";
-          }
-          read.currentSession();
           const service = options.context.githubOAuthService?.personal;
           if (read.personal.kind === "eligible" && !service) {
             throw new Error("GitHub connections are unavailable; retry after Gateway startup.");
           }
           const action = read.personal.kind === "eligible" ? read.personal.action : null;
-          let personal = action ? await service!.status(action) : null;
           const session = read.currentSession();
           const assertResponseCurrent = () => read.assertSessionUnchanged(session);
-          const pendingPersonal = action
-            ? await coordinator.personalPending(action, session)
-            : null;
-          assertResponseCurrent();
-          if (action && personal) {
-            personal = service!.revalidateStatus(action, personal);
-          }
-          const latestShared = await coordinator.latestShared(
-            session,
-            options.params.idempotencyKey,
-            (snapshot) =>
+          let sharedUnavailableReason: SessionGitHubOptionsResult["sharedUnavailableReason"];
+          // Independent account and receipt owners can read concurrently. The response
+          // still revalidates the same session and personal authority after all awaits.
+          const [identity, personalSnapshot, pendingPersonal, latestShared] = await Promise.all([
+            prepareCurrentGitHubPublicationOptionsIdentity(
+              read.session.agentId,
+              assertResponseCurrent,
+            ).catch((error: unknown) => {
+              sharedUnavailableReason =
+                error instanceof GitHubIdentityError ? error.reason : "unverified";
+              return null;
+            }),
+            action ? service!.status(action) : null,
+            action ? coordinator.personalPending(action, session) : null,
+            coordinator.latestShared(session, options.params.idempotencyKey, (snapshot) =>
               isSessionPublicationSuperseded(options, session, snapshot, assertResponseCurrent),
-          );
-          assertResponseCurrent();
-          if (action && personal) {
-            personal = service!.revalidateStatus(action, personal);
-          }
+            ),
+          ]);
+          let shared: SessionGitHubOptionsResult["shared"] = identity
+            ? {
+                source: identity.source,
+                accountId: identity.account.accountId,
+                login: identity.account.login,
+              }
+            : null;
           if (shared && read.sessionScoped) {
             if (!(await hasSupportedGitHubPublicationTarget(session, assertResponseCurrent))) {
               shared = null;
               sharedUnavailableReason = "unsupported_workspace";
             }
-            assertResponseCurrent();
           }
+          assertResponseCurrent();
+          const personal =
+            action && personalSnapshot
+              ? service!.revalidateStatus(action, personalSnapshot)
+              : personalSnapshot;
           options.respond(true, {
             personal,
             shared,
-            ...(stale || personal?.stale ? { stale: true } : {}),
+            ...(identity?.stale || personal?.stale ? { stale: true } : {}),
             ...(sharedUnavailableReason ? { sharedUnavailableReason } : {}),
             pendingPersonal,
             latestShared,
@@ -326,7 +320,8 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
     "sessions.github.status",
     validateSessionGitHubStatusParams,
     async (options) => {
-      const read = await prepareGitHubPublicationOptionsRead(options, options.params);
+      using read = await prepareGitHubPublicationOptionsRead(options, options.params);
+
       const service = options.context.githubPublicationService;
       if (!service) {
         options.respond(false, undefined, publicationStateUnavailableError());
@@ -336,6 +331,8 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         read.personal.kind === "eligible"
           ? await service.preparePersonalStatus(options.params.requestId)
           : undefined;
+      using _ = { [Symbol.dispose]: () => prepared?.release() };
+
       const session = read.currentSession();
       const shared = await service.sharedStatus(session, options.params.requestId);
       if (shared) {
@@ -365,13 +362,11 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         throw new Error("GitHub publication is unavailable.");
       }
       const admitted = await preparePersonalGitHubSessionActionV2(options, options.params);
-      try {
-        const result = await service.confirmPersonalV2(options.params, admitted.action);
-        admitted.action.assertCurrent();
-        options.respond(true, result);
-      } finally {
-        admitted.release();
-      }
+      using _ = { [Symbol.dispose]: () => admitted.release() };
+
+      const result = await service.confirmPersonalV2(options.params, admitted.action);
+      admitted.action.assertCurrent();
+      options.respond(true, result);
     },
   ),
 };

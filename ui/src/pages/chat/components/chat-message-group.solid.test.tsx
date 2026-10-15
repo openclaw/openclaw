@@ -14,8 +14,96 @@ import { createApplicationContextProvider } from "../../../test-helpers/applicat
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { MessageGroup, type NativeMessageGroupOptions } from "./chat-message-group-view.tsx";
-import { renderActivityGroup } from "./chat-message-group.ts";
+import { renderActivityGroup } from "./chat-message-group.test-support.ts";
 import { createMessageGroup, createToolResultMessage } from "./chat-message.test-support.ts";
+
+it.each([false, true])(
+  "does not present a partial response group as complete usage (unavailable: %s)",
+  (unavailable) => {
+    const first = {
+      role: "assistant",
+      content: "First answer.",
+      timestamp: 1000,
+      usage: { input: 100, output: 20, cost: { total: 1 } },
+    };
+    const group = createMessageGroup(first, "assistant", {
+      messages: [
+        { key: "first", message: first },
+        {
+          key: "second",
+          message: {
+            ...first,
+            content: "Second answer.",
+            usage: {
+              input: 50,
+              output: 50,
+              cost: { total: 2 },
+              ...(unavailable ? { usageReport: { state: "unavailable" } } : {}),
+            },
+          },
+        },
+      ],
+    });
+    const view = mountSolid(() => (
+      <MessageGroup group={group} options={{ showReasoning: false, contextWindow: 1000 }} />
+    ));
+    flush();
+    const metadata = view.container.querySelector(".msg-meta__details");
+    expect(
+      [...(metadata?.querySelectorAll(".msg-meta__tokens") ?? [])].map((node) => node.textContent),
+    ).toEqual(unavailable ? ["Token usage and cost unavailable"] : ["↑150", "↓70"]);
+    expect(metadata?.querySelector(".msg-meta__cost") === null).toBe(unavailable);
+    expect(metadata?.querySelector(".msg-meta__ctx") === null).toBe(unavailable);
+  },
+);
+
+it.each([
+  ["ends with its answer", true],
+  ["is still working", false],
+])("gives progress before tool calls no reply actions when an unframed group %s", (_, answered) => {
+  // Claude, Gemini and other providers mark progress only with a `toolUse` stop, not a phase.
+  const progress = (text: string, timestamp: number) => ({
+    role: "assistant",
+    content: [
+      { type: "text", text },
+      { type: "toolCall", id: `call-${timestamp}`, name: "exec", arguments: {} },
+    ],
+    stopReason: "toolUse",
+    timestamp,
+  });
+  const messages = [
+    { key: "progress-1", message: progress("Checking the tests first:", 1000) },
+    { key: "progress-2", message: progress("Now applying the fix:", 2000) },
+    ...(answered
+      ? [
+          {
+            key: "answer",
+            message: {
+              role: "assistant",
+              content: "The fix is ready.",
+              stopReason: "stop",
+              timestamp: 3000,
+            },
+          },
+        ]
+      : []),
+  ];
+  const group = createMessageGroup(messages[0]!.message, "assistant", { messages });
+  const onReply = vi.fn();
+  const view = mountSolid(() => (
+    <MessageGroup group={group} options={{ showReasoning: false, onReply }} />
+  ));
+  flush();
+  expect(view.container.querySelectorAll(".chat-message-actions-row")).toHaveLength(0);
+  const replies = view.container.querySelectorAll<HTMLButtonElement>(
+    '.chat-group-footer-actions button[aria-label="Reply to message"]',
+  );
+  expect(replies).toHaveLength(answered ? 1 : 0);
+  replies[0]?.click();
+  expect(onReply.mock.calls.map(([target]) => target.messageId)).toEqual(
+    answered ? ["answer"] : [],
+  );
+});
 
 it("keeps distinct peer avatars and focused message content across group updates", async () => {
   const imageData =

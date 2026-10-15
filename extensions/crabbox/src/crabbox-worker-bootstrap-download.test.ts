@@ -335,7 +335,10 @@ async function download(
     },
     exitCode: 0,
   });
-  const execution = runInNewContext(setup.command.split("\n").slice(2, -1).join("\n"), {
+  const script = setup.command
+    .split("CRABBOX_NODE_ENROLLMENT_SCRIPT'\n")[1]!
+    .split("\nCRABBOX_NODE_ENROLLMENT_SCRIPT")[0]!;
+  const execution = runInNewContext(script, {
     Buffer,
     URL,
     setTimeout,

@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   isCurrentPlacementTurnClaim,
   required,
@@ -20,7 +20,7 @@ type WorkerSessionToolOperationIdentity = {
   requestDigest: string;
 };
 
-function runningOperations(db: DatabaseSync, identity: WorkerTurnToolStateIdentity) {
+function runningOperations(db: EngineConnection, identity: WorkerTurnToolStateIdentity) {
   return query(db)
     .selectFrom("worker_session_tool_operations")
     .select("tool_call_id")
@@ -31,7 +31,7 @@ function runningOperations(db: DatabaseSync, identity: WorkerTurnToolStateIdenti
 
 /** Removes idle authority and replay data in the transaction that revokes the turn claim. */
 export function clearWorkerTurnToolState(
-  db: DatabaseSync,
+  db: EngineConnection,
   identity: WorkerTurnToolStateIdentity,
 ): void {
   if (executeSqliteQuerySync(db, runningOperations(db, identity).limit(1)).rows.length) {
@@ -41,7 +41,7 @@ export function clearWorkerTurnToolState(
 }
 
 function closeWorkerTurnToolAdmission(
-  db: DatabaseSync,
+  db: EngineConnection,
   identity: WorkerTurnToolStateIdentity,
 ): void {
   executeSqliteQuerySync(
@@ -53,7 +53,10 @@ function closeWorkerTurnToolAdmission(
   );
 }
 
-function deleteWorkerTurnToolState(db: DatabaseSync, identity: WorkerTurnToolStateIdentity): void {
+function deleteWorkerTurnToolState(
+  db: EngineConnection,
+  identity: WorkerTurnToolStateIdentity,
+): void {
   closeWorkerTurnToolAdmission(db, identity);
   publishPlacementTurnToolState(db, identity);
   executeSqliteQuerySync(
@@ -66,7 +69,7 @@ function deleteWorkerTurnToolState(db: DatabaseSync, identity: WorkerTurnToolSta
 }
 
 export function createPlacementSessionToolOperationKernel(runtime: {
-  db: DatabaseSync;
+  db: EngineConnection;
   instanceId: string;
   now: () => number;
 }) {

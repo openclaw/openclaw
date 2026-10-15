@@ -401,6 +401,7 @@ struct MacNodeModeCoordinatorTests {
         #expect(degraded?.label == "Mac node degraded — worker exited: schema mismatch")
         #expect(degraded?.diagnostic == nil)
         #expect(degraded?.isDegraded == true)
+        #expect(degraded?.recoveryAction == nil)
 
         let unavailable = MacNodeChannelState
             .unavailable(reason: "state database uses newer schema version 10\nTry: openclaw doctor")
@@ -408,6 +409,25 @@ struct MacNodeModeCoordinatorTests {
         #expect(unavailable?.label == "Mac node unavailable — state database uses newer schema version 10")
         #expect(unavailable?.diagnostic == nil)
         #expect(unavailable?.isDegraded == false)
+        #expect(unavailable?.recoveryAction == nil)
+    }
+
+    @Test func `newer state schema exposes app update recovery from native node status`() throws {
+        let diagnostic = "OpenClaw state database /state/state.db uses newer schema version 18; " +
+            "this build supports 17."
+        let line = try #require(MacNodeChannelState.connected(
+            workerUnavailableReason: "worker exited with status exited(1)",
+            diagnostic: diagnostic).operatorStatusLine)
+
+        #expect(line.label == "Mac node degraded — update the OpenClaw app: its worker supports schema 17, " +
+            "but shared state requires schema 18")
+        #expect(line.recoveryAction == .checkForUpdates)
+        #expect(line.diagnostic == diagnostic)
+
+        let unrelated = try #require(MacNodeChannelState.connected(
+            workerUnavailableReason: "worker exited with status exited(1)",
+            diagnostic: "worker could not initialize").operatorStatusLine)
+        #expect(unrelated.recoveryAction == nil)
     }
 
     @Test func `worker stderr never becomes part of the operator status headline`() throws {
@@ -423,6 +443,7 @@ struct MacNodeModeCoordinatorTests {
             #expect(line.label.contains(reason))
             #expect(!line.label.contains(diagnostic))
             #expect(line.diagnostic == diagnostic)
+            #expect(line.recoveryAction == nil)
         }
     }
 
@@ -805,9 +826,6 @@ struct MacNodeModeCoordinatorTests {
 extension MacNodeModeCoordinatorTests {
     @Test func `native manifest excludes CLI-owned node commands`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: false,
-            locationMode: .off,
             connectionMode: .remote)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
 
@@ -838,9 +856,6 @@ extension MacNodeModeCoordinatorTests {
 
     @Test func `local native manifest leaves browser proxy to the CLI worker`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: false,
-            locationMode: .off,
             connectionMode: .local)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
 
@@ -850,9 +865,6 @@ extension MacNodeModeCoordinatorTests {
 
     @Test func `local mode omits native session catalogs`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: false,
-            locationMode: .off,
             connectionMode: .local,
             codexThreadCatalogEnabled: true)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
@@ -864,9 +876,6 @@ extension MacNodeModeCoordinatorTests {
 
     @Test func `remote mode advertises native session catalogs`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: false,
-            locationMode: .off,
             connectionMode: .remote,
             codexThreadCatalogEnabled: true)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
@@ -936,17 +945,17 @@ extension MacNodeModeCoordinatorTests {
         ]
         #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericPluginEnable))
 
-        let numericNestedEnable: [String: Any] = [
+        let numericCatalogEnable: [String: Any] = [
             "plugins": [
                 "entries": [
                     "codex": [
                         "enabled": true,
-                        "config": ["supervision": ["enabled": NSNumber(value: 1)]],
+                        "config": ["sessionCatalog": ["enabled": NSNumber(value: 1)]],
                     ],
                 ],
             ],
         ]
-        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericNestedEnable))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericCatalogEnable))
 
         let numericGlobalEnable: [String: Any] = [
             "plugins": [
@@ -1108,45 +1117,21 @@ extension MacNodeModeCoordinatorTests {
         #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: ambiguousEntryAliases))
     }
 
-    @Test func `computer control cap gates the computer.act command`() {
-        let enabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: true,
-            locationMode: .off,
+    @Test func `computer control remains discoverable before consent`() {
+        let caps = MacNodeModeCoordinator.resolvedCaps(
             connectionMode: .local)
-        let enabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: enabledCaps)
-        #expect(enabledCaps.contains(OpenClawCapability.computer.rawValue))
-        #expect(enabledCommands.contains(OpenClawComputerCommand.act.rawValue))
-
-        let disabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: false,
-            locationMode: .off,
-            connectionMode: .local)
-        let disabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: disabledCaps)
-        #expect(!disabledCaps.contains(OpenClawCapability.computer.rawValue))
-        #expect(!disabledCommands.contains(OpenClawComputerCommand.act.rawValue))
+        let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
+        #expect(caps.contains(OpenClawCapability.computer.rawValue))
+        #expect(commands.contains(OpenClawComputerCommand.act.rawValue))
     }
 
-    @Test func `camera cap gates capture and PTZ commands`() {
-        let enabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: true,
-            computerControlEnabled: false,
-            locationMode: .off,
+    @Test func `camera remains discoverable before consent`() {
+        let caps = MacNodeModeCoordinator.resolvedCaps(
             connectionMode: .local)
-        let enabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: enabledCaps)
-        #expect(enabledCommands.contains(OpenClawCameraCommand.list.rawValue))
-        #expect(enabledCommands.contains(OpenClawCameraCommand.ptzStatus.rawValue))
-        #expect(enabledCommands.contains(OpenClawCameraCommand.ptzControl.rawValue))
-
-        let disabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            cameraEnabled: false,
-            computerControlEnabled: false,
-            locationMode: .off,
-            connectionMode: .local)
-        let disabledCommands = MacNodeModeCoordinator.resolvedCommands(caps: disabledCaps)
-        #expect(!disabledCommands.contains(OpenClawCameraCommand.ptzStatus.rawValue))
-        #expect(!disabledCommands.contains(OpenClawCameraCommand.ptzControl.rawValue))
+        let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
+        #expect(commands.contains(OpenClawCameraCommand.list.rawValue))
+        #expect(commands.contains(OpenClawCameraCommand.ptzStatus.rawValue))
+        #expect(commands.contains(OpenClawCameraCommand.ptzControl.rawValue))
     }
 
     @Test func `tls pin store key uses default wss port`() throws {

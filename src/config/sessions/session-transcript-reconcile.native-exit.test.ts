@@ -8,19 +8,18 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
   readSessionTranscriptMessageEvents,
 } from "./session-accessor.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
-import { replaceSqliteTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
   reconcileSessionTranscriptIndexes,
@@ -48,7 +47,7 @@ const scope = {
 };
 type ProjectionStage = "plan-start" | "active-chunk" | "fts-chunk" | "plan-finish" | "done";
 
-function createQueuedProjectionFence(stage: ProjectionStage, beforeRelease: () => void) {
+function createQueuedProjectionFence(stage: ProjectionStage) {
   const release = createDeferred();
   const blocked = createDeferred();
   const acknowledged = createDeferred();
@@ -78,7 +77,6 @@ function createQueuedProjectionFence(stage: ProjectionStage, beforeRelease: () =
           async () => {
             blocked.resolve();
             await release.promise;
-            beforeRelease();
           },
           "sessions.transcript-index.preflight",
         );
@@ -118,36 +116,21 @@ function createQueuedProjectionFence(stage: ProjectionStage, beforeRelease: () =
 }
 
 const cases = [
-  { stage: "plan-start", scheduled: false, replace: false },
-  { stage: "active-chunk", scheduled: false, replace: false },
-  { stage: "fts-chunk", scheduled: false, replace: false },
-  { stage: "plan-finish", scheduled: false, replace: false },
-  { stage: "done", scheduled: false, replace: false },
-  { stage: "active-chunk", scheduled: true, replace: false },
-  { stage: "active-chunk", scheduled: false, replace: true },
-  { stage: "plan-finish", scheduled: false, replace: true },
-] satisfies Array<{ stage: ProjectionStage; scheduled: boolean; replace: boolean }>;
+  { stage: "plan-start", scheduled: false },
+  { stage: "active-chunk", scheduled: false },
+  { stage: "fts-chunk", scheduled: false },
+  { stage: "plan-finish", scheduled: false },
+  { stage: "done", scheduled: false },
+  { stage: "active-chunk", scheduled: true },
+] satisfies Array<{ stage: ProjectionStage; scheduled: boolean }>;
 
 it.each(cases)(
-  "joins queued $stage on native exit (scheduled=$scheduled, replacement=$replace)",
-  async ({ stage, scheduled, replace }) => {
+  "joins queued $stage on native exit (scheduled=$scheduled)",
+  async ({ stage, scheduled }) => {
     const stateDir = tempDirs.make("openclaw-native-worker-exit-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const fence = createQueuedProjectionFence(stage, () => {
-        if (replace) {
-          runOpenClawAgentWriteTransaction((database) => {
-            // The canonical replacement publishes a new projection and revokes the old claim.
-            replaceSqliteTranscriptEventsInTransaction(database, scope, [
-              {
-                type: "message",
-                id: "replacement",
-                parentId: null,
-                message: { role: "user", content: "replacement" },
-              },
-            ]);
-          }, databaseOptions);
-        }
-      });
+      setRuntimeConfigSnapshot({});
+      const fence = createQueuedProjectionFence(stage);
       let outcome: Promise<unknown> | undefined;
       let drain: Promise<void> | undefined;
       try {
@@ -230,12 +213,10 @@ it.each(cases)(
         );
         await checkpoint();
         expect(snapshot()).toEqual(atSettlement);
-        if (!replace) {
-          expect(sourceRows()).toEqual(originalSource);
-          await reconcileSessionTranscriptIndexes(databaseOptions);
-        }
+        expect(sourceRows()).toEqual(originalSource);
+        await reconcileSessionTranscriptIndexes(databaseOptions);
         expect(readSessionTranscriptMessageEvents(scope).map((row) => row.event)).toEqual([
-          expect.objectContaining({ id: replace ? "replacement" : "seed" }),
+          expect.objectContaining({ id: "seed" }),
         ]);
         await fence.cleanup();
         await closeOpenClawAgentDatabasesAsync();
@@ -249,6 +230,7 @@ it.each(cases)(
         closeOpenClawAgentDatabasesForTest();
         await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
+        clearRuntimeConfigSnapshot();
       }
     });
   },

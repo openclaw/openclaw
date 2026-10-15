@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFailed, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createGatewayCrashLoopRecovery } from "../../cli/gateway-cli/crash-loop-recovery.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
@@ -41,6 +42,7 @@ import { cleanupSessionStateForTest } from "../../test-utils/session-state-clean
 import { waitForFast } from "../subagent-test-fixtures.test-helpers.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "./main-session-recovery-admission.js";
 import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
+import * as recoveryTargets from "./main-session-restart-recovery-exact-target.js";
 import { mainSessionRecoveryLog } from "./main-session-restart-recovery-shared.js";
 import {
   retryRestartAbortedMainSessionRecovery,
@@ -83,11 +85,13 @@ describe("startup recovery admission", () => {
     resetAgentEventsForTest();
     resetGatewayWorkAdmission();
     tmpDir = tempDirs.make("openclaw-recovery-admission-");
+    setRuntimeConfigSnapshot({});
   });
 
   afterEach(async () => {
     resetGatewayWorkAdmission();
     await cleanupSessionStateForTest({ stateDir: tmpDir });
+    clearRuntimeConfigSnapshot();
   });
 
   async function makeMainSessionFixture(
@@ -143,7 +147,12 @@ describe("startup recovery admission", () => {
       if (action !== "healthy") {
         for (let i = 0; i < 3; i++) {
           const boot = recordGatewayBootStart(env, now - 295_000 + i);
-          completeGatewayBootLifecycle(boot, { outcome: "startup_failed" }, env, now - 295_000 + i);
+          await completeGatewayBootLifecycle(
+            boot,
+            { outcome: "startup_failed" },
+            env,
+            now - 295_000 + i,
+          );
         }
         activeBootId = recordGatewayBootStart(
           env,
@@ -154,7 +163,12 @@ describe("startup recovery admission", () => {
         // Two previous crashes plus the live boot must not independently trip safe mode.
         for (let i = 0; i < 2; i++) {
           const boot = recordGatewayBootStart(env, now - 1_000 + i);
-          completeGatewayBootLifecycle(boot, { outcome: "startup_failed" }, env, now - 1_000 + i);
+          await completeGatewayBootLifecycle(
+            boot,
+            { outcome: "startup_failed" },
+            env,
+            now - 1_000 + i,
+          );
         }
         activeBootId = recordGatewayBootStart(env, now);
       }
@@ -269,7 +283,7 @@ describe("startup recovery admission", () => {
         const extendedPause = createDeferred();
         if (action === "crash") {
           const boot = recordGatewayBootStart(env, now);
-          completeGatewayBootLifecycle(boot, { outcome: "startup_failed" }, env, now);
+          await completeGatewayBootLifecycle(boot, { outcome: "startup_failed" }, env, now);
           info.mockImplementation((message) => {
             if (message.includes("restart recovery paused until")) {
               extendedPause.resolve();
@@ -510,7 +524,7 @@ describe("startup recovery admission", () => {
                 sessionKey: first.sessionKey,
                 sourceRunId: "interrupted-main",
                 decision: "started",
-                nextOwner: "main-lane",
+                nextOwner: "background-lane",
                 boot: expect.any(String),
                 pass: expect.any(String),
               }),
@@ -542,14 +556,15 @@ describe("startup recovery admission", () => {
   );
 
   it.for([
-    { field: "initializationPending", action: "resume" },
-    { field: "pendingProjectGitUrl", action: "resume" },
-    { field: "pendingProjectGitUrl", action: "retry" },
-    { field: "pendingProjectGitUrl", action: "archive" },
-    { field: "initializationPending", action: "replace" },
+    { field: "initializationPending", action: "resume", timing: "startup replay" },
+    { field: "initializationPending", action: "resume", timing: "publication replay" },
+    { field: "pendingProjectGitUrl", action: "resume", timing: "preparation commit" },
+    { field: "pendingProjectGitUrl", action: "retry", timing: "preparation commit" },
+    { field: "pendingProjectGitUrl", action: "archive", timing: "preparation commit" },
+    { field: "initializationPending", action: "replace", timing: "preparation commit" },
   ] as const)(
-    "handles $action when $field preparation finishes after startup",
-    async ({ field, action }, { signal }) => {
+    "handles $action when $field preparation finishes after startup ($timing)",
+    async ({ field, action, timing }, { signal }) => {
       const target = await makeMainSessionFixture({
         [field]: field === "initializationPending" ? true : "https://example.test/project.git",
         pendingFinalDelivery: makePendingFinalDelivery(),
@@ -558,6 +573,48 @@ describe("startup recovery admission", () => {
       const resumed = createDeferred();
       const blocked = createDeferred();
       const failedAttempt = createDeferred();
+      const firstPreparationSettled = createDeferred();
+      const replayLoaded = createDeferred();
+      const releaseReplay = createDeferred();
+      let holdPreparationRead = timing === "startup replay";
+      const preparationChecks: boolean[][] = [];
+      const prepareCurrent = recoveryTargets.prepareExpectedRestartRecoveryCurrent;
+      const currentSpy = vi
+        .spyOn(recoveryTargets, "prepareExpectedRestartRecoveryCurrent")
+        .mockImplementation(async (params) => {
+          const current = await prepareCurrent(params);
+          const checks: boolean[] = [];
+          preparationChecks.push(checks);
+          return {
+            ...current,
+            isCurrent: () => {
+              const result = current.isCurrent();
+              checks.push(result);
+              return result;
+            },
+          };
+        });
+      const loadTarget = recoveryTargets.loadExpectedRestartRecoveryTarget;
+      const exactReads: Array<{
+        sessionId?: string;
+        initializationPending?: boolean;
+      }> = [];
+      const targetSpy = vi
+        .spyOn(recoveryTargets, "loadExpectedRestartRecoveryTarget")
+        .mockImplementation(async (params) => {
+          const entry = await loadTarget(params);
+          exactReads.push({
+            sessionId: entry?.sessionId,
+            initializationPending: entry?.initializationPending,
+          });
+          if (holdPreparationRead) {
+            holdPreparationRead = false;
+            // Finish preparation after recovery reads the row, before it handles that snapshot.
+            replayLoaded.resolve();
+            await releaseReplay.promise;
+          }
+          return entry;
+        });
       let failedRead = false;
       const readSpy = vi.spyOn(transcriptReaders, "readSessionMessagesAsync");
       if (action === "retry") {
@@ -574,8 +631,17 @@ describe("startup recovery admission", () => {
             try {
               return await admit(run, origin, admissionSignal);
             } finally {
-              if (origin === "main-session:preparation-recovery" && failedRead) {
-                failedAttempt.resolve();
+              if (origin === "main-session:preparation-recovery") {
+                if (holdPreparationRead) {
+                  holdPreparationRead = false;
+                  replayLoaded.reject(
+                    new Error("Preparation replay finished before reading its target"),
+                  );
+                }
+                firstPreparationSettled.resolve();
+                if (failedRead) {
+                  failedAttempt.resolve();
+                }
               }
             }
           },
@@ -587,6 +653,33 @@ describe("startup recovery admission", () => {
         if (line.includes('"reason":"archived"')) {
           blocked.resolve();
         }
+      });
+      let phase = "startup";
+      const gatewayCalls = vi.mocked(callGateway).mock.calls;
+      const recoveryDecisions = info.mock.calls;
+      let entryFlags:
+        | {
+            status?: string;
+            abortedLastRun?: boolean;
+            initializationPending?: boolean;
+            pendingProjectGitUrl: boolean;
+          }
+        | undefined;
+      onTestFailed(() => {
+        console.error(
+          "startup preparation diagnostics",
+          JSON.stringify({
+            field,
+            action,
+            timing,
+            phase,
+            preparationChecks,
+            exactReads,
+            entry: entryFlags,
+            gatewayCalls: gatewayCalls.length,
+            decisions: recoveryDecisions.slice(-8).map(([line]) => line),
+          }),
+        );
       });
       vi.mocked(callGateway).mockImplementation(async () => {
         resumed.resolve();
@@ -605,6 +698,21 @@ describe("startup recovery admission", () => {
         if (action === "retry") {
           vi.useFakeTimers();
         }
+        if (timing === "publication replay") {
+          phase = "initial-preparation";
+          await withinTest(firstPreparationSettled.promise, signal);
+          holdPreparationRead = true;
+          await patchSessionEntryCore(target, () => ({ label: "preparation progress" }));
+        }
+        if (timing !== "preparation commit") {
+          phase = timing;
+          await withinTest(replayLoaded.promise, signal);
+          expect(exactReads.at(-1)).toEqual({
+            sessionId: "main-session",
+            initializationPending: true,
+          });
+        }
+        phase = "preparation";
         if (action === "replace") {
           await replaceSessionEntry(target, {
             sessionId: "replacement-session",
@@ -614,17 +722,27 @@ describe("startup recovery admission", () => {
           expect(callGateway).not.toHaveBeenCalled();
           expect(loadSessionEntry(target)?.sessionId).toBe("replacement-session");
         } else {
-          await patchSessionEntryCore(target, () => ({
+          const patched = await patchSessionEntryCore(target, () => ({
             [field]: undefined,
             ...(action === "archive" ? { archivedAt: Date.now() } : {}),
           }));
+          entryFlags = {
+            status: patched?.status,
+            abortedLastRun: patched?.abortedLastRun,
+            initializationPending: patched?.initializationPending,
+            pendingProjectGitUrl: Boolean(patched?.pendingProjectGitUrl),
+          };
+          releaseReplay.resolve();
           if (action === "retry") {
+            phase = "failed-attempt";
             await withinTest(failedAttempt.promise, signal);
             expect(callGateway).not.toHaveBeenCalled();
             expect(loadSessionEntry(target)?.mainRestartRecovery?.chargedAttempts).toBe(0);
             await vi.advanceTimersByTimeAsync(5_000);
           }
+          phase = action === "archive" ? "blocked" : "resumed";
           await withinTest(action === "archive" ? blocked.promise : resumed.promise, signal);
+          phase = "admission";
           if (action === "resume" || action === "retry") {
             await gatewayRuntime.expectAdmission(1, recovery, target);
           } else {
@@ -633,17 +751,22 @@ describe("startup recovery admission", () => {
           expect(callGateway).toHaveBeenCalledTimes(action === "archive" ? 0 : 1);
           expect(loadSessionEntry(target)?.abortedLastRun).toBe(action === "archive");
         }
+        phase = "decisions";
         const decisions = info.mock.calls.map(([line]) => line);
         expect(decisions).toContainEqual(expect.stringContaining('"decision":"deferred"'));
         expect(decisions).toContainEqual(
           expect.stringContaining('"nextOwner":"session-preparation"'),
         );
       } finally {
+        phase = `cleanup-after-${phase}`;
+        releaseReplay.resolve();
         dispatchSettlement.resolve();
         await recovery.stop();
         info.mockRestore();
         readSpy.mockRestore();
         admissionSpy.mockRestore();
+        targetSpy.mockRestore();
+        currentSpy.mockRestore();
         vi.useRealTimers();
       }
     },

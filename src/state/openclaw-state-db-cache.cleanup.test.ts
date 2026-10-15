@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as kyselyCache from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import {
   openClawStateDatabaseCache as cache,
@@ -170,7 +171,7 @@ describe("shared-state disposal ownership", () => {
       }
       expect(owner.db.isOpen).toBe(true);
       expect(cache.getOpenClawStateDatabaseIfOpenAtPath(owner.path)).toBeUndefined();
-      expect(kyselyCache.kyselyByDatabase.has(owner.db)).toBe(false);
+      expect(kyselyCache.kyselyByDatabase.has(requireNativeSqliteDatabase(owner.db))).toBe(false);
       expect(healthy.db.isOpen).toBe(scope !== "all");
       close.mockRestore();
       expect(cache.closeOpenClawStateDatabaseByPath(owner.path)).toBe(true);

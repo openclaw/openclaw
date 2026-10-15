@@ -14,7 +14,7 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -141,8 +141,12 @@ export function createTelegramInboundMedia({
       ? Math.max(10, Math.floor(opts.testTimings.mediaGroupFlushMs))
       : MEDIA_GROUP_TIMEOUT_MS;
   const buffer = new Map<string, BufferedMediaGroupEntry>();
-  const queue = new KeyedAsyncQueue();
+  const queue = new Map<string, Promise<void>>();
   const heads = new Map<string, BufferedMediaGroupEntry>();
+  const conversationKeyFor = (input: Pick<TelegramMediaGroupInput, "chatId" | "threadSpec">) =>
+    `media:${input.chatId}:${input.threadSpec.scope}:${input.threadSpec.id ?? "main"}`;
+  const pendingMediaGroups = (input: Pick<TelegramMediaGroupInput, "chatId" | "threadSpec">) =>
+    queue.get(conversationKeyFor(input));
 
   const resolveUnaddressedGroupMediaDisposition = async (
     authorization: MediaAuthorization & { ctx: TelegramContext; msg: Message },
@@ -497,17 +501,21 @@ export function createTelegramInboundMedia({
     const stopHeartbeat = () => clearInterval(entry.heartbeatTimer);
     renewWaitingEntry(key, entry);
     void claimsSettled.then(stopHeartbeat);
-    void queue.enqueue(key, async () => {
-      stopHeartbeat();
-      heads.set(key, entry);
-      try {
-        await entry.collectionClosed.promise;
-        const processing = processMediaGroup(entry).catch(() => undefined);
-        // Released claims advance the queue even if a download ignores cancellation.
-        await (participants.length > 0 ? Promise.race([processing, claimsSettled]) : processing);
-      } finally {
-        heads.delete(key);
-      }
+    void enqueueKeyedTask({
+      tails: queue,
+      key,
+      task: async () => {
+        stopHeartbeat();
+        heads.set(key, entry);
+        try {
+          await entry.collectionClosed.promise;
+          const processing = processMediaGroup(entry).catch(() => undefined);
+          // Released claims advance the queue even if a download ignores cancellation.
+          await (participants.length > 0 ? Promise.race([processing, claimsSettled]) : processing);
+        } finally {
+          heads.delete(key);
+        }
+      },
     });
   };
 
@@ -576,7 +584,7 @@ export function createTelegramInboundMedia({
     if (!mediaGroupId) {
       return false;
     }
-    const conversationKey = `media:${input.chatId}:${input.threadSpec.scope}:${input.threadSpec.id ?? "main"}`;
+    const conversationKey = conversationKeyFor(input);
     const key = `${conversationKey}:${mediaGroupId}`;
     const existing = buffer.get(key);
     const participant = createTelegramSpooledReplayDeferredParticipant(
@@ -630,5 +638,10 @@ export function createTelegramInboundMedia({
     return true;
   };
 
-  return { handleMediaGroup, resolveUnaddressedGroupMediaDisposition, sendMediaWarning };
+  return {
+    handleMediaGroup,
+    pendingMediaGroups,
+    resolveUnaddressedGroupMediaDisposition,
+    sendMediaWarning,
+  };
 }

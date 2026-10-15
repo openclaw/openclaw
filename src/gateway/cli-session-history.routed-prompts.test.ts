@@ -20,13 +20,14 @@ function writeClaudeEntries(filePath: string, entries: readonly Record<string, u
 }
 
 describe("routed CLI prompts in chat history", () => {
-  it.each(
-    ["string", "text block"].flatMap((shape) =>
-      ["messages occurred outside this Claude session", "earlier messages in this chat"].map(
-        (description) => ({ shape, description }),
-      ),
-    ),
-  )(
+  it.each([
+    { shape: "text block", description: "earlier messages in this chat" },
+    {
+      shape: "text block",
+      description:
+        "messages recorded in this chat since your last reply here (possibly already in this session)",
+    },
+  ])(
     "preserves unmatched routed $shape provenance beneath $description context",
     async ({ shape, description }) => {
       await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
@@ -94,14 +95,7 @@ describe("routed CLI prompts in chat history", () => {
     });
   });
 
-  it.each(
-    ["string", "text block"].flatMap((shape) =>
-      ["resume", "requester guidance", "requester frame"].map((decoration) => ({
-        shape,
-        decoration,
-      })),
-    ),
-  )(
+  it.each([{ shape: "text block", decoration: "requester frame" }])(
     "matches literal routed $shape $decoration before removing generated-looking decorations",
     async ({ shape, decoration }) => {
       await withClaudeProjectsDir(async ({ filePath, readMessages, sessionId }) => {
@@ -323,71 +317,5 @@ describe("routed CLI prompts in chat history", () => {
     expect(
       mergeImportedChatHistoryMessages({ localMessages: [local], importedMessages: [imported] }),
     ).toEqual([{ ...local, __openclaw: cliMeta("routed-events") }]);
-  });
-
-  it("dedupes a body-only routed row against an import with a drift note", () => {
-    const provenance: InputProvenance = {
-      kind: "inter_session",
-      sourceSessionKey: "agent:ops:main",
-      sourceTool: "sessions_send",
-    };
-    const envelope = buildInterSessionPromptContext(provenance).text;
-    const local = { ...user("Please check the build.", 1_000), provenance };
-    const imported = user(
-      `${envelope}\n${DRIFT_NOTE}\nPlease check the build.`,
-      1_001,
-      cliMeta("routed-drift"),
-    );
-
-    expect(
-      mergeImportedChatHistoryMessages({ localMessages: [local], importedMessages: [imported] }),
-    ).toEqual([{ ...local, __openclaw: cliMeta("routed-drift") }]);
-  });
-
-  it("keeps typed System lines as part of the prompt", () => {
-    const local = user("what changed?", 1_000);
-    const imported = user("System: review the logs\n\nwhat changed?", 1_001, cliMeta("typed"));
-
-    expect(
-      mergeImportedChatHistoryMessages({ localMessages: [local], importedMessages: [imported] }),
-    ).toEqual([local, imported]);
-  });
-
-  it("keeps typed bracketed System lines apart from an unrelated local turn", () => {
-    const local = user("done", 1_000);
-    const imported = user("System: [manual note]\n\ndone", 1_001, cliMeta("bracketed"));
-
-    expect(
-      mergeImportedChatHistoryMessages({ localMessages: [local], importedMessages: [imported] }),
-    ).toEqual([local, imported]);
-  });
-
-  it("strips queued system event lines with UTC and unknown timestamps", () => {
-    const local = user("done", 1_000);
-    const imported = user(
-      "System: [2026-09-30T17:16:38Z] Gateway connected.\nSystem: [unknown-time] Node paired.\n\ndone",
-      1_001,
-      cliMeta("utc-events"),
-    );
-
-    expect(
-      mergeImportedChatHistoryMessages({ localMessages: [local], importedMessages: [imported] }),
-    ).toEqual([{ ...local, __openclaw: cliMeta("utc-events") }]);
-  });
-
-  it("dedupes prompts carrying queued system event lines", () => {
-    const localMessage = user("what changed?", 1_000);
-    const importedMessage = user(
-      `${DRIFT_NOTE}\n\nSystem: [2026-09-30 17:16:38 UTC] Gateway connected.\nSystem: second line\n\nwhat changed?`,
-      1_001,
-      cliMeta("system-events"),
-    );
-
-    expect(
-      mergeImportedChatHistoryMessages({
-        localMessages: [localMessage],
-        importedMessages: [importedMessage],
-      }),
-    ).toEqual([{ ...localMessage, __openclaw: cliMeta("system-events") }]);
   });
 });

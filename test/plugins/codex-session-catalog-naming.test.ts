@@ -177,6 +177,7 @@ it("adopts duplicate native titles without claiming labels or replacing local na
         });
         builder.registry.plugins.push(record);
         markPluginRegistryActive(builder.registry);
+        let phase = "register Codex plugin";
         try {
           plugin.register(
             builder.createApi(record, {
@@ -187,18 +188,22 @@ it("adopts duplicate native titles without claiming labels or replacing local na
           const provider = builder.registry.sessionCatalogs.find(
             (entry) => entry.provider.id === "codex",
           )!.provider;
-          const continueThread = (threadId: string) =>
-            provider.continueSession!({
+          const continueThread = (threadId: string) => {
+            phase = `continue native thread ${threadId}`;
+            return provider.continueSession!({
               agentId: "main",
               hostId: "gateway:local",
               threadId,
               clientScopes: ["operator.admin"],
             });
-          const getEntry = (sessionKey: string) =>
-            runtime.agent.session.getSessionEntry({
+          };
+          const getEntry = (sessionKey: string) => {
+            phase = `read session entry ${sessionKey}`;
+            return runtime.agent.session.getSessionEntry({
               sessionKey,
               readConsistency: "latest",
             })!;
+          };
 
           // Preserve the reported order: the second same-agent adoption used to
           // fail unique-label admission after the first had durably committed.
@@ -213,6 +218,7 @@ it("adopts duplicate native titles without claiming labels or replacing local na
             expect(entry.displayName).toBe("Shared native title");
             expect(entry.label).toBeUndefined();
             expect(entry.initializationPending).toBeUndefined();
+            phase = `load transcript ${result.sessionKey}`;
             const transcript = await loadTranscriptEvents({
               sessionKey: result.sessionKey,
               sessionId: entry.sessionId,
@@ -221,11 +227,13 @@ it("adopts duplicate native titles without claiming labels or replacing local na
             expect(JSON.stringify(transcript)).toContain(`Answer ${index}`);
           }
 
+          phase = `patch operator label ${first.sessionKey}`;
           await runtime.agent.session.patchSessionEntry({
             sessionKey: first.sessionKey,
             update: () => ({ label: "Operator chosen label" }),
           });
           // Equality with the old source name cannot identify label authorship.
+          phase = `patch source-matching label ${second.sessionKey}`;
           await runtime.agent.session.patchSessionEntry({
             sessionKey: second.sessionKey,
             update: () => ({ label: "Shared native title" }),
@@ -243,6 +251,7 @@ it("adopts duplicate native titles without claiming labels or replacing local na
             });
           }
 
+          phase = "create first explicit-label session";
           const explicitA = await createGatewaySession({
             cfg: config,
             key: "agent:main:explicit-a",
@@ -250,6 +259,7 @@ it("adopts duplicate native titles without claiming labels or replacing local na
             commandSource: "test",
             operatorRoleActor: { kind: "system" },
           });
+          phase = "create duplicate explicit-label session";
           const explicitB = await createGatewaySession({
             cfg: config,
             key: "agent:main:explicit-b",
@@ -273,6 +283,8 @@ it("adopts duplicate native titles without claiming labels or replacing local na
             expect(entry.displayName).toBe(thread.name?.trim() ? "界".repeat(499) : undefined);
           }
           expect(keys.size).toBe(titles.length);
+        } catch (cause) {
+          throw new Error(`Native adoption naming failed during: ${phase}`, { cause });
         } finally {
           for (const { harness } of builder.registry.agentHarnesses) {
             await harness.dispose?.();

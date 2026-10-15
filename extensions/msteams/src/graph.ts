@@ -12,7 +12,6 @@ import { resolveMSTeamsRuntimeAccount } from "./accounts.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import {
-  MSTEAMS_REQUEST_TIMEOUT_MS,
   resolveMSTeamsRequestTimeoutMs,
   type MSTeamsRequestDeadline,
   withMSTeamsRequestDeadline,
@@ -77,6 +76,7 @@ async function requestGraph(params: {
   path: string;
   method?: "GET" | "POST" | "PATCH" | "DELETE";
   root?: string;
+  absoluteUrl?: string;
   headers?: Record<string, string>;
   body?: unknown;
   errorPrefix?: string;
@@ -86,7 +86,7 @@ async function requestGraph(params: {
   const assertRequestCurrent = captureGraphRequestCurrentness(assertReadAuthority);
   assertRequestCurrent?.();
   const hasBody = params.body !== undefined;
-  const url = `${params.root ?? GRAPH_ROOT}${params.path}`;
+  const url = params.absoluteUrl ?? `${params.root ?? GRAPH_ROOT}${params.path}`;
   const { response, release } = await fetchWithSsrFGuard({
     url,
     init: {
@@ -99,7 +99,7 @@ async function requestGraph(params: {
       },
       body: hasBody ? JSON.stringify(params.body) : undefined,
     },
-    auditContext: "msteams.graph",
+    auditContext: params.absoluteUrl ? "msteams.graph.absolute" : "msteams.graph",
     timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
     beforeRequest: assertRequestCurrent,
   });
@@ -174,32 +174,15 @@ export async function fetchGraphJson<T>(params: {
  */
 export async function fetchGraphAbsoluteUrl<T>(params: { token: string; url: string }): Promise<T> {
   const assertReadAuthority = captureChannelReadAuthority();
-  const assertRequestCurrent = captureGraphRequestCurrentness(assertReadAuthority);
-  assertRequestCurrent?.();
-  const { response, release } = await fetchWithSsrFGuard({
-    url: params.url,
-    init: {
-      headers: {
-        "User-Agent": buildUserAgent(),
-        Authorization: `Bearer ${params.token}`,
-      },
-    },
-    auditContext: "msteams.graph.absolute",
-    timeoutMs: MSTEAMS_REQUEST_TIMEOUT_MS,
-    beforeRequest: assertRequestCurrent,
-  });
   try {
-    assertReadAuthority?.();
-    if (!response.ok) {
-      throw await createProviderHttpError(response, `Graph ${params.url} failed`);
-    }
+    const response = await requestGraph({
+      token: params.token,
+      path: params.url,
+      absoluteUrl: params.url,
+    });
     return await readProviderJsonResponse<T>(response, `Graph ${params.url} failed`);
   } finally {
-    try {
-      await release();
-    } finally {
-      assertReadAuthority?.();
-    }
+    assertReadAuthority?.();
   }
 }
 
@@ -213,6 +196,8 @@ export async function fetchAllGraphPages<T>(params: {
   token: string;
   path: string;
   headers?: Record<string, string>;
+  /** Optional shared operation deadline; actively aborts each guarded fetch when spent. */
+  deadline?: MSTeamsRequestDeadline;
   /** Max pages to fetch before stopping. Default: 50. */
   maxPages?: number;
   /** Stop pagination early when this predicate returns true. */
@@ -229,6 +214,7 @@ export async function fetchAllGraphPages<T>(params: {
       token: params.token,
       path: nextPath,
       headers: params.headers,
+      ...(params.deadline ? { deadline: params.deadline } : {}),
     });
 
     const pageItems = res.value ?? [];

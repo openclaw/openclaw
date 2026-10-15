@@ -1,1 +1,1 @@
-export { ChannelAvatar } from "./solid/channel-avatar.tsx";
+import "./solid/channel-avatar.tsx";

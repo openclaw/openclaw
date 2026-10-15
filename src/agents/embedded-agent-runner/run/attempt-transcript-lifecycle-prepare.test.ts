@@ -1,17 +1,23 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { createAssistantMessageEventStream } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import {
   loadSessionEntry,
+  loadTranscriptEvents,
   loadTranscriptEventsSync,
+  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
+import { isIndexedSessionEntry } from "../../../config/sessions/session-entry-codec.js";
 import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   runWithoutOwnedSessionTranscriptWrites,
+  withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { getAgentRunLifecycleGeneration } from "../../../infra/agent-run-registry.js";
@@ -32,8 +38,14 @@ import {
 } from "../../admitted-run-context.js";
 import { createAssistantErrorTranscript } from "../../assistant-error-transcript.js";
 import { isRecordedModelFallbackStop } from "../../model-fallback-stop.js";
+import { createAgentRunRestartAbortError } from "../../run-termination.js";
 import { attachInternalToolResultAcknowledgement } from "../../runtime/internal-hooks.js";
 import { installSessionToolResultGuard } from "../../session-tool-result-guard.js";
+import {
+  createAssistant,
+  createTestSession,
+  testModel,
+} from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { SessionMetadataCommittedError } from "../../sessions/session-manager-metadata-error.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
@@ -62,7 +74,7 @@ type InitialWriterFixture = {
   admission: PreparedAgentRunAdmission;
   controller: AbortController;
   manager: SessionManager;
-  openManager: () => SessionManager;
+  openManager: () => Promise<SessionManager>;
   promptState: Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
   preparedSessionTarget: NonNullable<EmbeddedRunAttemptInternalParams["preparedSessionTarget"]>;
   replaceAdmission: () => Promise<void>;
@@ -108,12 +120,17 @@ async function withInitialWriter(
         runId,
       };
       if (options.existing) {
-        replaceSessionEntrySync(target, {
+        const entry: InternalSessionEntry = {
           sessionId,
           updatedAt: 1,
           lifecycleRevision: "existing-revision",
           ...(options.incognito ? { incognito: true } : {}),
-        });
+        };
+        if (options.incognito) {
+          await replaceSessionEntry(target, entry);
+        } else {
+          replaceSessionEntrySync(target, entry);
+        }
         const claim = await claimAgentSessionWriter(runParams);
         expect(claim?.expectedWriterRunId).toBe(runId);
         runParams.sessionTarget = { ...target, ...claim };
@@ -149,13 +166,21 @@ async function withInitialWriter(
           externalAbortController,
         });
         prepared = transcript;
-        const openManager = () =>
-          SessionManager.open({ ...target, ...promptState.sessionWriterFence }, state.workspaceDir);
-        const runFixture = () =>
+        const openManager = async () =>
+          options.incognito
+            ? await SessionManager.openAsync(
+                { ...target, ...promptState.sessionWriterFence },
+                state.workspaceDir,
+              )
+            : SessionManager.open(
+                { ...target, ...promptState.sessionWriterFence },
+                state.workspaceDir,
+              );
+        const runFixture = async () =>
           run({
             admission,
             controller,
-            manager: openManager(),
+            manager: await transcript.withOwnedTranscriptWrite(openManager),
             openManager,
             promptState,
             preparedSessionTarget,
@@ -188,12 +213,129 @@ async function withInitialWriter(
         for (const owner of admissions) {
           owner.close();
         }
+        if (options.incognito) {
+          memorySessionActorOwners.closeDatabase({
+            agentId: target.agentId,
+            path: target.storePath,
+          });
+        }
       }
     }
   });
 }
 
 describe("admitted lazy session writer", () => {
+  it.each([
+    { existing: false, text: "Already streamed answer" },
+    { existing: true, text: "Already streamed answer" },
+    { existing: true, text: "" },
+    { existing: true, text: "Already streamed answer", closeAdmission: true },
+    { existing: true, text: "Already streamed answer", incognito: true },
+    { existing: true, text: "Already streamed answer", incognito: true, closeAdmission: true },
+  ])(
+    "settles a restart-aborted stream (existing=$existing, text=$text, closed=$closeAdmission, incognito=$incognito)",
+    async ({ existing, text, closeAdmission, incognito }) => {
+      await withInitialWriter(
+        async ({ manager, controller, target, transcript, admission }) =>
+          withOwnedSessionTranscriptWrites(transcript.ownedTranscriptWriteContext, async () => {
+            const { session } = await createTestSession({
+              sessionManager: manager,
+              withSessionWriteSettlement: (write) =>
+                transcript.transcriptLifecycle.withTranscriptWrite(write),
+            });
+            const reason = createAgentRunRestartAbortError();
+            session.agent.streamFn = (_model, _context, options) => {
+              const stream = createAssistantMessageEventStream();
+              const output = createAssistant(testModel, []);
+              options?.signal?.addEventListener(
+                "abort",
+                () => {
+                  Object.assign(output, {
+                    stopReason: "aborted",
+                    errorCode: "OPENCLAW_RESTART_ABORT",
+                    errorMessage: reason.message,
+                  });
+                  stream.push({ type: "error", reason: "aborted", error: output });
+                  stream.end();
+                },
+                { once: true },
+              );
+              queueMicrotask(() => {
+                stream.push({ type: "start", partial: output });
+                if (text) {
+                  output.content.push({ type: "text", text });
+                  output.content.push({
+                    type: "toolCall",
+                    id: "unfinished",
+                    name: "read",
+                    arguments: {},
+                    async: true,
+                  });
+                  stream.push({
+                    type: "text_delta",
+                    contentIndex: 0,
+                    delta: text,
+                    partial: output,
+                  });
+                }
+              });
+              return stream;
+            };
+            session.subscribe((event) => {
+              if (
+                ((text && event.type === "message_update") ||
+                  (!text && event.type === "message_start")) &&
+                event.message.role === "assistant"
+              ) {
+                if (closeAdmission) {
+                  admission.close();
+                }
+                controller.abort(reason);
+                session.agent.abort(reason);
+              }
+            });
+            try {
+              // The canceled run may reject after its terminal row; storage is the contract here.
+              await Promise.allSettled([
+                session.prompt("Keep my answer", { expandPromptTemplates: false }),
+              ]);
+              const events = incognito
+                ? await runWithoutOwnedSessionTranscriptWrites(() => loadTranscriptEvents(target))
+                : loadTranscriptEventsSync(target);
+              const assistants = events.flatMap((entry) =>
+                isIndexedSessionEntry(entry) &&
+                entry.type === "message" &&
+                entry.message.role === "assistant"
+                  ? [entry.message]
+                  : [],
+              );
+              expect(assistants).toHaveLength(closeAdmission ? 0 : 1);
+              if (closeAdmission) {
+                return;
+              }
+              expect(assistants[0]).toMatchObject({
+                stopReason: "aborted",
+                errorCode: "OPENCLAW_RESTART_ABORT",
+                content: text ? [{ type: "text", text }] : [],
+              });
+              expect(assistants[0]?.content.some((part) => part.type === "toolCall")).toBe(false);
+              await expect(manager.appendMessageAsync(userMessage)).rejects.toThrow();
+              if (incognito) {
+                await expect(
+                  runWithoutOwnedSessionTranscriptWrites(() =>
+                    manager.appendMessageAsync(userMessage),
+                  ),
+                ).rejects.toThrow();
+              }
+            } finally {
+              session.dispose();
+            }
+          }),
+        { existing, incognito, outsideTranscriptWrite: true },
+      );
+    },
+  );
+
   it.each([
     { existing: false, incognito: false },
     { existing: true, incognito: false },
@@ -254,9 +396,21 @@ describe("admitted lazy session writer", () => {
     async (incognito) => {
       await withInitialWriter(
         async ({ manager, runParams, target, transcript }) => {
-          if (incognito) {
-            expect(transcript.ownedTranscriptWriteContext.sessionActor).toBeUndefined();
-          }
+          const actor = transcript.ownedTranscriptWriteContext.sessionActor!.actor;
+          expect(actor.target.database.kind).toBe(incognito ? "memory" : "file");
+          const readPersisted = () => {
+            if (!incognito) {
+              return loadTranscriptEventsSync(target);
+            }
+            const result = actor.storage!.readCurrent(
+              { type: "session.history.hydrate", input: { sessionId: target.sessionId } },
+              { assertCurrent() {}, authorize() {} },
+            );
+            if (result.kind !== "full") {
+              throw new Error("Expected the committed memory transcript");
+            }
+            return result.snapshot.events;
+          };
           await manager.appendMessageAsync(userMessage);
           installSessionToolResultGuard(manager);
           const toolCall = (id: string) =>
@@ -265,7 +419,7 @@ describe("admitted lazy session writer", () => {
             });
           await manager.appendMessageAsync(toolCall("committed-result"));
           const acknowledge = vi.fn(() => {
-            expect(loadTranscriptEventsSync(target).at(-1)).toMatchObject({
+            expect(readPersisted().at(-1)).toMatchObject({
               type: "message",
               message: { role: "toolResult", toolCallId: "committed-result" },
             });
@@ -285,7 +439,7 @@ describe("admitted lazy session writer", () => {
           expect(acknowledge).toHaveBeenCalledOnce();
 
           await manager.appendMessageAsync(toolCall("refused-result"));
-          const before = loadTranscriptEventsSync(target);
+          const before = readPersisted();
           await claimAgentSessionWriter({ ...runParams, runId: "replacement-result-writer" });
           const refusedAcknowledgement = vi.fn();
           await expect(
@@ -297,7 +451,7 @@ describe("admitted lazy session writer", () => {
             ),
           ).rejects.toThrow(SessionTranscriptWriterClaimReboundError);
           expect(refusedAcknowledgement).not.toHaveBeenCalled();
-          expect(loadTranscriptEventsSync(target)).toEqual(before);
+          expect(readPersisted()).toEqual(before);
         },
         { existing: true, incognito },
       );
@@ -720,7 +874,7 @@ describe("admitted lazy session writer", () => {
         expect(identities).toEqual([]);
         expect(isSessionWorkAdmissionActive(target.storePath, [target.sessionKey])).toBe(true);
 
-        openManager().appendMessage(userMessage);
+        (await openManager()).appendMessage(userMessage);
         expect(promptState.sessionWriterFence?.expectedWriterRunId).toBe(runParams.runId);
         expect(loadSessionEntry(target)).toMatchObject({ activeWriterRunId: runParams.runId });
         expect(identities).toHaveLength(1);

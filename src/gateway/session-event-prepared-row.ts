@@ -89,11 +89,8 @@ function createPublicationOwner(projection: SessionRowProjection) {
               },
               options,
             );
-            if (prepared.kind === "pending") {
+            if (prepared !== deferred) {
               return prepared;
-            }
-            if (prepared.value !== deferred) {
-              return { kind: "complete" as const, value: prepared.value };
             }
             // Prepared views expire synchronously; reacquire facts and authority after yielding.
             await yieldUntil;
@@ -142,15 +139,38 @@ export async function drainSessionEventPublications(projection: SessionRowProjec
 export async function withPreparedEventRow(
   projection: SessionRowProjection | undefined,
   query: { key: string; agentId: string; storePath?: string } | undefined,
-  publish: (read?: SessionRowReadView) => void,
+  publish: (
+    read?: SessionRowReadView,
+    ancestors?: ReturnType<SessionRowProjection["ancestorRows"]>,
+  ) => void,
 ) {
   if (!projection || !query) {
     publish();
     return;
   }
-  await sessionEventPublicationRows(projection).withReadyRows(() => [query], publish, {
-    includeAncestors: true,
-  });
+  await sessionEventPublicationRows(projection).withReadyRows(
+    () => [query],
+    (read) => {
+      const record = read.describe(query);
+      const ancestors = record ? projection.ancestorRows(record, read) : undefined;
+      const rows = record ? [record, ...(ancestors ?? [])] : [];
+      const children = new Set<string>();
+      for (const row of rows) {
+        for (const group of row.materialized.row.swarm?.groups ?? []) {
+          for (const child of group.children ?? []) {
+            children.add(child.sessionKey);
+          }
+        }
+      }
+      // Resolve child metadata before the transport catches serialization errors.
+      // Pending worker facts must reach the preparation owner's existing retry.
+      for (const key of children) {
+        read.selectEntries({ key });
+      }
+      publish(read, ancestors);
+    },
+    { includeAncestors: true },
+  );
 }
 
 export async function withPreparedSessionEventRow(

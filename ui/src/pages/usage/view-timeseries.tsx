@@ -48,6 +48,9 @@ function deriveTimeSeries(detail: TimeSeriesProps["detail"], range: TimeSeriesPr
   if (status.error && !status.hasLoaded) {
     return { chart: null, emptyKey: null, showTitle: true, showStatus: true };
   }
+  if (timeSeries?.usageReport?.state === "unavailable") {
+    return { chart: null, emptyKey: "usage.unavailable", showTitle: true, showStatus: true };
+  }
   if (!timeSeries || timeSeries.points.length < 2) {
     return {
       chart: null,
@@ -179,14 +182,11 @@ function deriveTimeSeries(detail: TimeSeriesProps["detail"], range: TimeSeriesPr
           segmentY -= segmentHeight;
           return [{ className, y: segmentY, height: segmentHeight }];
         })
-      : [];
+      : [{ className: "", y, height: barHeight }];
     return {
       x,
-      y,
       width: barWidth,
-      height: barHeight,
       tooltip: tooltipLines.join(" · "),
-      stacked: breakdownByType,
       dimmed: hasSelection && (index < rangeStartIdx || index >= rangeEndIdx),
       segments,
     };
@@ -211,8 +211,6 @@ function deriveTimeSeries(detail: TimeSeriesProps["detail"], range: TimeSeriesPr
       chartHeight,
       maxValue,
       formatAxisTimestamp,
-      barWidth,
-      barGap,
       formatTooltipTimestamp,
       breakdownByType,
       rangeStartIdx,
@@ -473,37 +471,23 @@ function TimeSeriesChart(props: {
             {model().formatAxisTimestamp(model().lastTimestamp)}
           </text>
           <For each={model().bars}>
-            {(bar) =>
-              bar.stacked ? (
-                <For each={bar.segments}>
-                  {(segment) => (
-                    <rect
-                      x={bar.x}
-                      y={segment.y}
-                      width={bar.width}
-                      height={segment.height}
-                      class={["ts-bar", segment.className, { dimmed: bar.dimmed }]}
-                      rx="1"
-                      role="img"
-                      data-tooltip={bar.tooltip}
-                      aria-label={bar.tooltip}
-                    />
-                  )}
-                </For>
-              ) : (
-                <rect
-                  x={bar.x}
-                  y={bar.y}
-                  width={bar.width}
-                  height={bar.height}
-                  class={["ts-bar", { dimmed: bar.dimmed }]}
-                  rx="1"
-                  role="img"
-                  data-tooltip={bar.tooltip}
-                  aria-label={bar.tooltip}
-                />
-              )
-            }
+            {(bar) => (
+              <For each={bar.segments}>
+                {(segment) => (
+                  <rect
+                    x={bar.x}
+                    y={segment.y}
+                    width={bar.width}
+                    height={segment.height}
+                    class={["ts-bar", segment.className, { dimmed: bar.dimmed }]}
+                    rx="1"
+                    role="img"
+                    data-tooltip={bar.tooltip}
+                    aria-label={bar.tooltip}
+                  />
+                )}
+              </For>
+            )}
           </For>
           {/*  Selection highlight overlay (always visible between handles)  */}
           <rect

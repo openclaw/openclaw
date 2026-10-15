@@ -152,6 +152,16 @@ export async function createTelegramBotCore(
   bot.use(async (ctx, next) => {
     const begin = updateTracker.beginUpdate(ctx);
     if (!begin.accepted) {
+      // Dedupe must distinguish a completed update from an older attempt that
+      // still owns middleware after its spool claim timed out.
+      recordTelegramMessageProcessingResult(
+        begin.reason === "pending"
+          ? {
+              kind: "failed-retryable",
+              error: new Error("Telegram update processing is still pending"),
+            }
+          : { kind: "skipped" },
+      );
       return;
     }
     try {
@@ -335,6 +345,7 @@ export async function createTelegramBotCore(
   };
   const processMessage = createTelegramMessageProcessor({
     ...messageContext,
+    telegramTransport,
     account,
     sendChatActionHandler,
     buildContext: opts.buildContext,

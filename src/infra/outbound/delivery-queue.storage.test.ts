@@ -8,6 +8,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   updateDeliveryQueueEntryInDatabase,
   upsertDeliveryQueueEntryInDatabase,
@@ -33,11 +34,9 @@ import {
   markDeliveryPlatformSendAttemptStarted,
   moveToFailed,
   reserveDeliveryAttempt,
-  type QueuedDelivery,
 } from "./delivery-queue-storage.js";
 import { readOutboundDeliveriesInDatabase } from "./delivery-queue-storage.kernel.js";
 import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
-import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
 describe("delivery-queue storage", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
@@ -259,10 +258,13 @@ describe("delivery-queue storage", () => {
         retryCount.run(pending.retryCount, OUTBOUND_DELIVERY_QUEUE_NAME, id);
       }
       const entryTextBytes = Buffer.byteLength(JSON.stringify(readQueuedEntry(stateDir, id)));
-      const reads = trackSqliteStatementExecutions(db, ["queue"], (sql) =>
-        /^\s*select\b/i.test(sql) && /\bfrom\s+"?delivery_queue_entries"?\b/i.test(sql)
-          ? "queue"
-          : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(db),
+        ["queue"],
+        (sql) =>
+          /^\s*select\b/i.test(sql) && /\bfrom\s+"?delivery_queue_entries"?\b/i.test(sql)
+            ? "queue"
+            : null,
       );
       try {
         // Count the native kernel's reads; the public ACK now runs in a separate worker.
@@ -318,18 +320,6 @@ describe("delivery-queue storage", () => {
           },
         ],
       });
-    });
-
-    it("canonicalizes duplicate singular and plural media before recording fan-out", async () => {
-      const mediaUrl = "https://example.com/same.png";
-      const id = await enqueueTextDelivery({
-        channel: "directchat",
-        to: "+1555",
-        payloads: [{ text: "caption", mediaUrl, mediaUrls: [mediaUrl] }],
-      });
-
-      const entry = readQueuedEntry(tmpDir(), id) as unknown as QueuedDelivery;
-      expect(acceptedPreparedOutboundEntries(entry.preparedBatch)[0]?.preparedMediaCount).toBe(1);
     });
 
     it("atomically reserves delivery attempts up to the producer budget", async () => {

@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { readConfigMachineState } from "./config-machine-state.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
@@ -112,9 +113,12 @@ describe("v13 plugin-index migration", () => {
         integrity_check: "ok",
       });
       closeOpenClawStateDatabaseForTest();
-      expect(readSqliteNumberPragma(openOpenClawStateDatabase(options).db, "user_version")).toBe(
-        OPENCLAW_STATE_SCHEMA_VERSION,
-      );
+      expect(
+        readSqliteNumberPragma(
+          requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db),
+          "user_version",
+        ),
+      ).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
       expect(
         openOpenClawStateDatabase(options)
           .db.prepare("SELECT payload_json FROM diagnostic_events WHERE scope = ?")

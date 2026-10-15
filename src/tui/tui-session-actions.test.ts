@@ -2377,6 +2377,81 @@ describe("tui session actions", () => {
     ]);
   });
 
+  it.each(["active", "accepted", "concurrent", "superseded"] as const)(
+    "settles a delivered %s turn through real history reconciliation",
+    async (phase) => {
+      const runId = "run-delivered";
+      const history = createDeferred<Awaited<ReturnType<TuiBackend["loadHistory"]>>>();
+      const state = createBaseState({
+        currentSessionId: "session-main",
+        activeChatRunId: phase === "active" ? runId : null,
+        pendingSubmit: phase === "active" ? null : acceptedSubmit(runId),
+        activityStatus: "waiting",
+      });
+      sendPendingUser(state, runId, "question");
+      const chatLog = new ChatLog();
+      const tui = makeTui();
+      const setActivityStatus = (value: string) => {
+        state.activityStatus = value;
+      };
+      const { loadHistory } = createTestSessionActions({
+        state,
+        chatLog,
+        tui,
+        setActivityStatus,
+        client: makeTuiBackend({ loadHistory: vi.fn(() => history.promise) }),
+      });
+      const handlers = createEventHandlers({
+        state,
+        chatLog,
+        tui,
+        loadHistory,
+        setActivityStatus,
+        updateFooter: vi.fn(),
+        btw: createBtwPresenter(),
+      });
+
+      handlers.handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        clientRunId: runId,
+        runId: "runtime-run",
+        phase: "end",
+      });
+      if (phase === "superseded") {
+        state.pendingSubmit = acceptedSubmit("run-new");
+      }
+      history.resolve({
+        sessionInfo: {
+          key: state.currentSessionKey,
+          sessionId: "session-main",
+          activeRunIds: phase === "concurrent" ? ["run-other"] : [],
+        },
+        ...(phase === "concurrent"
+          ? { inFlightRun: { runId: "run-other", text: "Still running" } }
+          : {}),
+        messages: [
+          {
+            role: "user",
+            content: "question",
+            __openclaw: { id: "user", idempotencyKey: `${runId}:user`, seq: 1 },
+          },
+          { role: "assistant", content: "Delivered reply" },
+        ],
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(state.activeChatRunId).toBe(phase === "concurrent" ? "run-other" : null);
+      expect(getPendingSubmitAcceptedRunId(state)).toBe(phase === "superseded" ? "run-new" : null);
+      expect(state.activityStatus).toBe(
+        phase === "concurrent" ? "streaming" : phase === "superseded" ? "waiting" : "idle",
+      );
+      expect(chatLog.render(120).join("\n")).toContain("Delivered reply");
+      handlers.dispose();
+    },
+  );
+
   it("releases a pending submit only when its canonical persisted run appears in history", async () => {
     const chatLog = new ChatLog(40);
     const state = createBaseState({

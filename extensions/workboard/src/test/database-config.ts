@@ -1,6 +1,6 @@
 import { getEnvironmentData } from "node:worker_threads";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { WorkboardDatabaseInput } from "../database-config.js";
+import type { DatabaseEngineInput } from "openclaw/plugin-sdk/database-engine-runtime";
 import { createWorkboardSqliteKernel as createKernel } from "../sqlite-store-kernel.js";
 import { createWorkboardSqliteStores as createStores } from "../sqlite-store.js";
 
@@ -16,7 +16,7 @@ export function workboardTestConfig(): OpenClawConfig {
   return { database: { engine: "postgres", postgres: { connection } } };
 }
 
-export function workboardTestDatabaseInput(): WorkboardDatabaseInput {
+export function workboardTestDatabaseInput(): DatabaseEngineInput {
   const config = workboardTestConfig();
   const connection = config.database?.postgres?.connection;
   if (config.database?.engine !== "postgres") {

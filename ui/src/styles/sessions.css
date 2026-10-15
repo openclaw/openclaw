@@ -369,14 +369,10 @@
   color: var(--text);
 }
 
-.sessions-filter-popover {
-  --max-width: min(280px, calc(100vw - 48px));
-  position: relative;
-  flex: 0 0 auto;
-}
-
-.sessions-filter-popover::part(body) {
-  padding: 0;
+.sessions-filter-popover.oc-popover {
+  --oc-overlay-max-width: min(280px, calc(100vw - 48px));
+  --oc-overlay-distance: 8px;
+  --oc-popover-padding: 0;
 }
 
 .sessions-filter-popover__trigger {

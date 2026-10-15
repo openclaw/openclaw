@@ -44,6 +44,7 @@ import { listImportedRuntimePluginIds } from "./runtime.js";
 import { buildPluginRuntimeLoadOptions } from "./runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 import { loadPluginMetadataRegistrySnapshot } from "./runtime/metadata-registry-loader.js";
+import { buildPluginSdkDeprecationNotices } from "./sdk-deprecation-notices.js";
 import {
   formatPluginCompatibilityNotice,
   type PluginCompatibilityNotice,
@@ -123,7 +124,9 @@ function buildCompatibilityNoticesForInspect(
     diagnostics: readonly PluginDiagnostic[];
   },
 ): PluginCompatibilityNotice[] {
-  const warnings: PluginCompatibilityNotice[] = [];
+  const warnings: PluginCompatibilityNotice[] = buildPluginSdkDeprecationNotices(
+    inspect.plugin.id,
+  ).map((notice) => Object.assign(notice, { pluginId: inspect.plugin.id }));
   if (inspect.shape === "hook-only") {
     warnings.push({
       pluginId: inspect.plugin.id,
@@ -429,6 +432,7 @@ function resolvePluginInspectContext({ report, ...params }: PluginInspectParams)
   const { config } = resolvePluginRuntimeLoadContext(params);
   return {
     report,
+    config,
     entries: normalizePluginsConfig(config.plugins).entries,
   };
 }
@@ -453,7 +457,7 @@ type PluginInspectRows = Pick<
 
 function buildPluginInspectRecord(
   plugin: PluginRegistry["plugins"][number],
-  { report, entries }: ReturnType<typeof resolvePluginInspectContext>,
+  { report, config, entries }: ReturnType<typeof resolvePluginInspectContext>,
   rows?: PluginInspectRows,
 ): PluginInspectReport {
   const typedHooks = (
@@ -556,7 +560,7 @@ function buildPluginInspectRecord(
     commands: [...plugin.commands],
     cliCommands: [...plugin.cliCommands],
     services: [...plugin.services],
-    decisions: inspectDecisionProviders(getRuntimeConfig(), report).filter(
+    decisions: inspectDecisionProviders(config, report).filter(
       (entry) => entry.pluginId === plugin.id,
     ),
     gatewayDiscoveryServices: [...plugin.gatewayDiscoveryServiceIds],

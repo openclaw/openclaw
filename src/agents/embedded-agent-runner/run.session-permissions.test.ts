@@ -53,6 +53,8 @@ describe("embedded run permissions and timeout delivery", () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
     const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     await withOpenClawTestState({ label: "session-permissions-warmup" }, async (warmupState) => {
+      const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+      setRuntimeConfigSnapshot({});
       await warmRunOverflowCompactionHarness(runEmbeddedAgent, warmupState);
     });
     ({ buildEmbeddedRunPayloads } =
@@ -64,6 +66,8 @@ describe("embedded run permissions and timeout delivery", () => {
     resetSharedRunIntegrationHarnessMocks();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "run.session-permissions" });
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot({});
     useOpenAIPlatformAuthFixture();
   });
 
@@ -320,6 +324,7 @@ it("does not replace a successfully recovered final assistant after a prompt-tim
       reportedModelRef: { provider: "openai", model: "gpt-5.4" },
       finalAssistantVisibleText: undefined,
       finalAssistantRawText: undefined,
+      finalAssistantMessageRawText: undefined,
       recoveredFinalAssistantPayloadsAfterPromptTimeout: undefined,
       payloads,
       payloadsWithToolMedia: payloads,

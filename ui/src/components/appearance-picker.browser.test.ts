@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { AppearancePicker } from "./appearance-picker.ts";
+import "./appearance-picker.tsx";
 
 const forms: HTMLFormElement[] = [];
 afterEach(() => {
@@ -11,7 +11,7 @@ afterEach(() => {
 
 async function appearanceForm() {
   const form = document.createElement("form");
-  const picker = new AppearancePicker();
+  const picker = document.createElement("openclaw-appearance-picker");
   const onChange = vi.fn();
   const onSubmit = vi.fn((event: SubmitEvent) => event.preventDefault());
   picker.props = { icon: "rocket", color: "blue", onChange };

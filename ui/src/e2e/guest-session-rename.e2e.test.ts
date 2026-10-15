@@ -75,7 +75,9 @@ suite.define(() => {
     const ownRow = page.locator(`.sidebar-recent-session[data-session-key="${own.key}"]`);
     const foreignRow = page.locator(`.sidebar-recent-session[data-session-key="${foreign.key}"]`);
     const history = pane.getByText("The project outline is ready.", { exact: true });
-    const stream = pane.getByText("Reviewing the project notes.", { exact: true });
+    const stream = pane
+      .getByRole("paragraph")
+      .filter({ hasText: /^Reviewing the project notes\.$/ });
     const observe = () =>
       pane.evaluate((element) => {
         const state = (element as HTMLElement & { state: ChatPageHost }).state;
@@ -212,7 +214,9 @@ suite.define(() => {
 
       await cue("Read-only shared session: Rename stays unavailable");
       await foreignRow.click({ button: "right" });
-      const foreignRename = page.locator('openclaw-session-menu wa-dropdown-item[value="rename"]');
+      const foreignRename = page
+        .locator("openclaw-session-menu")
+        .getByRole("menuitem", { name: "Rename…", exact: true });
       await foreignRename.waitFor();
       expect(await foreignRename.getAttribute("disabled")).not.toBeNull();
       await page.keyboard.press("Escape");

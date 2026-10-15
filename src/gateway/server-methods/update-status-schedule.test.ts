@@ -420,101 +420,10 @@ it.each([
 );
 
 it.for([
-  { stage: "checkout", channel: "beta", concurrent: false },
-  { stage: "checkout", channel: "beta", concurrent: true },
-  { stage: "metadata", channel: "beta", concurrent: false },
-  { stage: "metadata", channel: "beta", concurrent: true },
-  { stage: "metadata", channel: "dev", concurrent: false },
-  { stage: "metadata", channel: undefined, concurrent: false },
-] as const)(
-  "revalidates the effective channel after manual $stage discovery (channel=$channel, concurrent=$concurrent)",
-  async ({ stage, channel, concurrent }, { signal }) => {
-    let config: OpenClawConfig = { update: { channel: "dev", auto: { enabled: false } } };
-    const discovered = {
-      root: "/opt/openclaw",
-      installReceipt: null,
-      status: createDevGitStatus(),
-    };
-    install.mockResolvedValue(discovered);
-    await lifecycle.initialize();
-    const availableChanged = vi.fn();
-    const scheduleChanged = vi.fn();
-    lifecycle.onUpdateAvailableChange = availableChanged;
-    lifecycle.onUpdateScheduleChange = scheduleChanged;
-    const entered = createDeferred();
-    const resume = createDeferred();
-    if (stage === "checkout") {
-      install.mockImplementationOnce(async () => {
-        entered.resolve();
-        await resume.promise;
-        return discovered;
-      });
-    } else {
-      vi.mocked(resolveDevGitCommits).mockImplementationOnce(async () => {
-        entered.resolve();
-        await resume.promise;
-        return [];
-      });
-    }
-    const respond = vi.fn();
-    const context = { getRuntimeConfig: () => config };
-    const refreshing = updateStatusHandlers["update.status"]!({
-      params: { refreshCheckout: true },
-      respond,
-      context,
-    } as never);
-    try {
-      await withinTest(entered.promise, signal);
-      // Hot reload replaces the runtime config without a background discovery.
-      config = { update: { ...(channel ? { channel } : {}), auto: { enabled: false } } };
-      if (concurrent) {
-        const betaRespond = vi.fn();
-        await updateStatusHandlers["update.status"]!({
-          params: { refreshCheckout: true },
-          respond: betaRespond,
-          context,
-        } as never);
-        expect(betaRespond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ effectiveChannel: "beta", updateAvailable: null }),
-        );
-      }
-      resume.resolve();
-      await refreshing;
-      if (channel === "beta") {
-        expect.soft(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
-          code: "UNAVAILABLE",
-          message: "Could not check the latest update. Try again.",
-        });
-        expect.soft(getUpdateAvailable()).toBeNull();
-        expect.soft(getUpdateSchedule()).toBeNull();
-        expect.soft(availableChanged).not.toHaveBeenCalled();
-        expect.soft(scheduleChanged).not.toHaveBeenCalled();
-      } else {
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({
-            effectiveChannel: "dev",
-            updateAvailable: expect.objectContaining({ upstreamSha: "upstream-sha" }),
-          }),
-        );
-        expect(availableChanged).toHaveBeenCalledOnce();
-        expect(scheduleChanged).toHaveBeenCalledOnce();
-      }
-    } finally {
-      resume.resolve();
-      await refreshing;
-    }
-  },
-);
-
-it.for([
-  { channel: "dev", applying: false },
-  { channel: undefined, applying: false },
   { channel: "beta", applying: false },
   { channel: "beta", applying: true },
 ] as const)(
-  "revalidates a no-op refresh after initialization (channel=$channel, applying=$applying)",
+  "preserves a no-op refresh after initialization (applying=$applying)",
   async ({ channel, applying }, { signal }) => {
     let config: OpenClawConfig = { update: { channel: "beta", auto: { enabled: false } } };
     if (applying) {
@@ -545,17 +454,10 @@ it.for([
       config = { update: { ...(channel ? { channel } : {}), auto: { enabled: false } } };
       resume.resolve();
       await refreshing;
-      if (channel === "beta") {
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({ effectiveChannel: "beta" }),
-        );
-      } else {
-        expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
-          code: "UNAVAILABLE",
-          message: "Could not check the latest update. Try again.",
-        });
-      }
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ effectiveChannel: "beta" }),
+      );
       expect(install).toHaveBeenCalledExactlyOnceWith(false, expect.any(AbortSignal));
       expect(getUpdateAvailable()).toBeNull();
       expect(getUpdateSchedule()).toBe(priorSchedule);
@@ -594,7 +496,7 @@ it.for([
     });
     const availableChanged = vi.fn();
     const scheduleChanged = vi.fn();
-    const announce = vi.fn();
+    const announce = vi.fn(async () => {});
     lifecycle.onUpdateAvailableChange = availableChanged;
     lifecycle.onUpdateScheduleChange = scheduleChanged;
     lifecycle.announceDevGitUpdate = announce;

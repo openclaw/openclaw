@@ -4,7 +4,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/setup";
 import { resolveClickClackAccount } from "./accounts.js";
 import { createClickClackClient } from "./http-client.js";
-import { resolveWorkspaceId } from "./resolve.js";
+import { findClickClackWorkspace } from "./resolve.js";
 import type { CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 type ClickClackSetupConnectionResult =
@@ -72,9 +72,10 @@ export async function checkClickClackSetupConnection(params: {
       token,
     });
     const me = await client.me();
-    const workspaceId = await resolveWorkspaceId(client, account.workspace);
     const workspaces = await client.workspaces();
-    const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
+    const workspace = account.workspace.startsWith("wsp_")
+      ? workspaces.find((candidate) => candidate.id === account.workspace)
+      : findClickClackWorkspace(workspaces, account.workspace);
     if (!workspace) {
       throw new Error(`ClickClack workspace not found: ${account.workspace}`);
     }
@@ -155,24 +156,13 @@ export async function verifyClickClackAccountAfterSetup(params: {
   accountId: string;
   runtime: RuntimeEnv;
 }): Promise<void> {
-  try {
-    const result = await checkClickClackSetupConnection({
-      cfg: params.cfg,
-      accountId: params.accountId,
-    });
-    const message = formatClickClackConnectionLog(result);
-    if (message) {
-      params.runtime.log(message);
-    }
-  } catch (error) {
-    params.runtime.log(
-      `Connection check failed: ${formatErrorMessage(error)}. Setup was saved; fix the connection and rerun setup.`,
-    );
+  const result = await checkClickClackSetupConnection({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  const message = formatClickClackConnectionLog(result);
+  if (message) {
+    params.runtime.log(message);
   }
-
-  try {
-    params.runtime.log(await probeClickClackGatewayStatus());
-  } catch {
-    params.runtime.log(GATEWAY_UNKNOWN_MESSAGE);
-  }
+  params.runtime.log(await probeClickClackGatewayStatus());
 }

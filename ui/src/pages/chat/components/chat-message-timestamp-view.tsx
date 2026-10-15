@@ -1,14 +1,21 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount, formatCost, formatTimeAgo } from "../../../lib/format.ts";
-import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { getLocale, registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
 const CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS = 2 * 60 * 1000;
+
+// Shared relative-time copy is lowercase for mid-sentence use ("Updated just now");
+// the chat footer shows it alone, so it starts with a capital ("Just now").
+function capitalizeStandaloneLabel(value: string): string {
+  return value.charAt(0).toLocaleUpperCase(getLocale()) + value.slice(1);
+}
 
 function prepareTimestamp(timestamp: number) {
   const date = new Date(timestamp);
@@ -37,11 +44,11 @@ function prepareTimestamp(timestamp: number) {
     : label;
   const nowMs = Date.now();
   const ageMs = nowMs - date.getTime();
-  // Slightly-future messages clamp to "just now"; older or distant-future ones use a date.
+  // Slightly-future messages clamp to "Just now"; older or distant-future ones use a date.
   const relativeLabel = !valid
     ? label
     : ageMs >= -CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS && ageMs < CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS
-      ? formatTimeAgo(Math.max(0, ageMs))
+      ? capitalizeStandaloneLabel(formatTimeAgo(Math.max(0, ageMs)))
       : date.toLocaleDateString([], {
           month: "short",
           day: "numeric",
@@ -91,6 +98,7 @@ export function ChatTimestamp(props: { timestamp: number; metadata?: JSX.Element
 }
 
 type GroupMeta = {
+  usageUnavailable?: true;
   input: number;
   output: number;
   cacheRead: number;
@@ -112,11 +120,19 @@ export function extractGroupMeta(
   let model: string | null = null;
   let hasUsage = false;
   let maxPromptTokens = 0;
+  let usageUnavailable = false;
 
   for (const { message } of group.messages) {
     // SAFETY: Grouped transcript entries are admitted message objects; the role is checked below.
     const m = message as Record<string, unknown>;
     if (m.role !== "assistant") {
+      continue;
+    }
+    if (typeof m.model === "string" && m.model !== "gateway-injected") {
+      model = m.model;
+    }
+    if (asNullableRecord(asNullableRecord(m.usage)?.usageReport)?.state === "unavailable") {
+      usageUnavailable = true;
       continue;
     }
     // SAFETY: The message producer supplies numeric token counts under these usage field names.
@@ -144,11 +160,20 @@ export function extractGroupMeta(
     if (c?.total) {
       cost += c.total;
     }
-    if (typeof m.model === "string" && m.model !== "gateway-injected") {
-      model = m.model;
-    }
   }
 
+  if (usageUnavailable) {
+    return {
+      usageUnavailable: true,
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+      model,
+      contextPercent: null,
+    };
+  }
   if (!hasUsage && !model) {
     return null;
   }
@@ -171,6 +196,9 @@ const TOKEN_FIELDS = [
 function MessageMetadata(props: { meta: GroupMeta | null }) {
   return (
     <>
+      <Show when={props.meta?.usageUnavailable}>
+        <span class="msg-meta__tokens">{t("chat.messages.usageUnavailable")}</span>
+      </Show>
       <For each={TOKEN_FIELDS} keyed={(entry) => entry[0]}>
         {(entry) => (
           <Show when={props.meta?.[entry()[0]]}>
@@ -211,6 +239,7 @@ export function MessageMeta(props: { timestamp: number; meta: GroupMeta | null }
   const hasMetadata = () =>
     props.meta &&
     Boolean(
+      props.meta.usageUnavailable ||
       props.meta.input ||
       props.meta.output ||
       props.meta.cacheRead ||

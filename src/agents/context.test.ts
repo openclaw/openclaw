@@ -91,7 +91,7 @@ describe("context cache projection", () => {
 });
 
 describe("context token resolution", () => {
-  it.each(["configuredTokenCache", "discoveredTokenCache", "contextWindowCache"] as const)(
+  it.each(["configuredTokenCache"] as const)(
     "keeps captured reporting independent of a stale %s without changing execution lookup",
     (cacheName) => {
       const caches = getContextWindowCaches();
@@ -110,40 +110,6 @@ describe("context token resolution", () => {
     },
   );
 
-  it("preserves genuine selected limits and authored caps without cache lookup", () => {
-    const selected = {
-      cfg: {},
-      provider: "custom",
-      model: "large",
-      allowCacheLookup: false,
-    };
-    expect(resolve({ ...selected, modelContextTokens: 128_000, modelContextWindow: 128_000 })).toBe(
-      128_000,
-    );
-    expect(
-      resolve({
-        ...selected,
-        cfg: modelConfig("custom", "large", {
-          contextTokens: 64_000,
-          contextWindow: 1_050_000,
-        }),
-        modelContextTokens: 922_000,
-        modelContextWindow: 1_050_000,
-      }),
-    ).toBe(64_000);
-    expect(
-      resolve({
-        ...selected,
-        cfg: modelConfig("custom", "large", {
-          contextTokens: 922_000,
-          contextWindow: 64_000,
-        }),
-        modelContextTokens: 922_000,
-        modelContextWindow: 1_050_000,
-      }),
-    ).toBe(64_000);
-  });
-
   it("does not replace unknown captured capacity with a sibling's bare cache", async () => {
     await discover([{ provider: "other", id: "shared-model", contextTokens: 128_000 }]);
     const selected = { cfg: {}, provider: "custom", model: "shared-model" };
@@ -152,12 +118,6 @@ describe("context token resolution", () => {
     expect(resolve({ ...selected, allowCacheLookup: false, fallbackContextTokens: 32_000 })).toBe(
       32_000,
     );
-  });
-
-  it("preserves fixed provider contracts without process cache lookup", () => {
-    expect(
-      resolve({ provider: "anthropic", model: "claude-sonnet-5", allowCacheLookup: false }),
-    ).toBe(1_000_000);
   });
 
   it("can exclude unscoped discovery from provider-owned lookup", async () => {

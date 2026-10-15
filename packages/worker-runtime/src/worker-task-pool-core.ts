@@ -197,7 +197,7 @@ export class WorkerTaskPoolCore<Input, Output> {
   private enqueue(
     input: WorkerTaskInput<Input>,
     options: OwnedWorkerTaskOptions<Input>,
-    owned = false,
+    owned: boolean,
     inputBytes = options.inputBytes ?? 0,
   ): Task<Input, Output> {
     // A Promise executor would let the task's timer/abort closures retain input too.
@@ -285,6 +285,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       (slot) => this.ownedSettlement.retire(slot),
       key,
       this.ownerOptions,
+      this.host.observeResourceReply,
     );
   }
 
@@ -437,7 +438,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       host: this.host,
       bootstrapError: this.bootstrap.error,
       runInContext: runInWorkerPoolContext,
-      unavailableError: (message) => new WorkerTaskError(message, "unavailable"),
+      unavailableError: (message, cause) => new WorkerTaskError(message, "unavailable", { cause }),
       onStarted: (worker) => {
         this.workers++;
         this.workersCreated++;

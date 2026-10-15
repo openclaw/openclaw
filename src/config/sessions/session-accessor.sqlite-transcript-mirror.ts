@@ -2,6 +2,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -14,7 +15,6 @@ import {
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { createTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
-import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { transcriptEventJsonSql, transcriptEventRunIdSql } from "./transcript-payload.js";
@@ -32,36 +32,48 @@ type TranscriptMirrorFacts = {
   sourceEvents?: TranscriptEvent[];
 };
 
-/** Returns raw events only when the transcript identity projection is not current. */
-function loadTranscriptEventsForMirrorFallback(
-  database: OpenClawAgentDatabase,
-  sessionId: string,
-): TranscriptEvent[] | undefined {
+/** Read projection readiness once in the mirror's transaction snapshot. */
+function readTranscriptMirrorProjection(database: OpenClawAgentDatabase, sessionId: string) {
   const db = getSessionKysely(database.db);
-  const latest = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select("seq")
-      .where("session_id", "=", sessionId)
-      .orderBy("seq", "desc")
-      .limit(1),
-  );
-  if (!latest) {
-    return [];
-  }
   const state = executeSqliteQueryTakeFirstSync(
     database.db,
     db
-      .selectFrom("session_transcript_index_state")
-      .select(["indexed_seq", "needs_rebuild"])
-      .where("session_id", "=", sessionId),
+      .selectFrom(
+        db
+          .selectFrom("transcript_events")
+          .select("seq")
+          .where("session_id", "=", sessionId)
+          .orderBy("seq", "desc")
+          .limit(1)
+          .as("latest"),
+      )
+      .leftJoin("session_transcript_index_state as state", (join) =>
+        join.on("state.session_id", "=", sessionId),
+      )
+      .select(["latest.seq", "state.indexed_seq", "state.needs_rebuild"])
+      .select((eb) =>
+        eb
+          .exists(
+            eb
+              .selectFrom("session_transcript_active_events")
+              .select("session_id")
+              .where("session_id", "=", sessionId)
+              .where("context_eligible", "is", null),
+          )
+          .as("has_unclassified"),
+      ),
   );
-  if (state && state.needs_rebuild === 0 && state.indexed_seq === latest.seq) {
-    return undefined;
+  if (!state) {
+    return { fallbackEvents: [], anchorsReady: false };
+  }
+  if (state.needs_rebuild === 0 && state.indexed_seq === state.seq) {
+    return { fallbackEvents: undefined, anchorsReady: !state.has_unclassified };
   }
   // Raw rows stay authoritative if projection maintenance has not caught up.
-  return loadTranscriptEventsFromDatabase(database, sessionId);
+  return {
+    fallbackEvents: loadTranscriptEventsFromDatabase(database, sessionId),
+    anchorsReady: false,
+  };
 }
 
 /** Reads the bounded identity facts needed by transcript mirrors. */
@@ -78,7 +90,10 @@ export function readTranscriptMirrorFacts(
     () => {
       assertSessionTranscriptHot(database.db, resolved.sessionId);
       const idempotencyKeys = [...new Set(params.idempotencyKeys)];
-      const fallbackEvents = loadTranscriptEventsForMirrorFallback(database, resolved.sessionId);
+      const { fallbackEvents, anchorsReady } = readTranscriptMirrorProjection(
+        database,
+        resolved.sessionId,
+      );
       if (fallbackEvents !== undefined) {
         return readMirrorFactsFromEvents(
           fallbackEvents,
@@ -124,7 +139,6 @@ export function readTranscriptMirrorFacts(
           "active.message_position",
           "rewrite.generation",
         ]);
-      let anchorsReady: boolean | undefined;
       for (const batch of batches) {
         let query = events
           .where("identity.session_id", "=", resolved.sessionId)
@@ -156,11 +170,14 @@ export function readTranscriptMirrorFacts(
                   ),
                 ),
               )
-              .where(transcriptEventRunIdSql("event"), "=", sourceRunId)
+              .where(transcriptEventRunIdSql(database.db, "event"), "=", sourceRunId)
               .select((eb) => eb.val(1).as("is_source")),
           );
         }
-        const rows = executeSqliteQuerySync(database.db, query.orderBy("event.seq", "asc")).rows;
+        const rows = executeSqliteQuerySync(
+          database.db,
+          query.orderBy(isPostgresSqlConnection(database.db) ? "seq" : "event.seq", "asc"),
+        ).rows;
         for (const row of rows) {
           // SAFETY: event_json reconstructs the stored TranscriptEvent via transcriptEventJsonSql.
           const event = JSON.parse(row.event_json) as TranscriptEvent;
@@ -174,7 +191,6 @@ export function readTranscriptMirrorFacts(
             continue;
           }
           facts.existingIdempotencyKeys.add(idempotencyKey);
-          anchorsReady ??= !sessionTranscriptIndexNeedsReconcile(database.db, resolved.sessionId);
           const anchor = anchorsReady
             ? createTranscriptEntryAnchor({
                 database,

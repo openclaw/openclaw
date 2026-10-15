@@ -5,12 +5,17 @@ import {
   installManagedGitHubProfile,
   resolveManagedGitHubProfileDir,
 } from "../../agents/github-tool-identity.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareGitHubPublicationFact } from "./worker-github-binding.js";
 
 async function prepareWorkerGitHubBinding(
   params: Parameters<typeof prepareGitHubPublicationFact>[0],
 ) {
+  setRuntimeConfigSnapshot(config);
   return (await prepareGitHubPublicationFact(params))?.github;
 }
 
@@ -43,15 +48,46 @@ vi.mock("../../agents/worktrees/registry-read.js", async (importOriginal) => ({
   readLiveRegistryWorktreeByOwner: async (_context: unknown, kind: string, id: string) =>
     mocks.worktree(kind, id),
 }));
-vi.mock("../session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: mocks.session }));
 vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
   loadGatewaySessionEntryReadOnlyInWorker: async (
     params: Parameters<
       typeof import("../session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
     >[0],
-  ) => mocks.session(params.key, { agentId: params.agentId }),
+  ) => ({
+    ...mocks.session(params.key, { agentId: params.agentId }),
+    storePath: sessionStorePath,
+    readSource: sessionReadSource,
+  }),
 }));
+vi.mock("../../config/sessions/session-entry-read-facts.js", async (original) => {
+  const actual =
+    await original<typeof import("../../config/sessions/session-entry-read-facts.js")>();
+  return {
+    ...actual,
+    readRetainedSessionEntryFacts: ((database, request, owner) => {
+      if (
+        database.agentId !== session.agentId ||
+        database.path !== sessionStorePath ||
+        !request.sessionKeys?.includes(session.sessionKey)
+      ) {
+        return actual.readRetainedSessionEntryFacts(database, request, owner);
+      }
+      return {
+        kind: "session-exact-entries",
+        source: sessionReadSource,
+        databaseIdentity: {
+          identity: sessionReadSource.databaseIdentity,
+          incarnation: "synthetic",
+          filename: sessionStorePath,
+          canonicalPath: sessionStorePath,
+        },
+        entries: [{ sessionKey: session.sessionKey, entry: mocks.session().entry }],
+        lifecycleTimestamps: {},
+      };
+    }) satisfies typeof actual.readRetainedSessionEntryFacts,
+  };
+});
 vi.mock("../../state/session-repository-workspaces.js", () => ({
   getSessionRepositoryWorkspaceStore: () => ({
     prepare: async () => ({
@@ -65,7 +101,13 @@ vi.mock("../../process/exec.js", () => ({ runCommandBuffered: mocks.nativeToken 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const profileId = "ghp_11111111111111111111111111111111";
 const token = "synthetic-worker-github-binding-token";
+const sessionStorePath = "/worker-github-binding/sessions.sqlite";
 const session = { sessionId: "worker-session", sessionKey: "agent:main:worker", agentId: "main" };
+const sessionReadSource = {
+  agentId: session.agentId,
+  path: sessionStorePath,
+  databaseIdentity: "synthetic-worker-github-binding",
+};
 const worktree = {
   id: "worker-worktree",
   path: "/repo/worktree",
@@ -117,7 +159,10 @@ describe("worker GitHub launch binding", () => {
       stderr: Buffer.alloc(0),
     });
   });
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+    vi.unstubAllEnvs();
+  });
 
   it("binds the verified shared account and canonical HTTPS remote", async () => {
     await installProfile();

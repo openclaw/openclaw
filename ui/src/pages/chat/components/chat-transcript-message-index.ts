@@ -18,7 +18,7 @@ import {
 import { isInterSessionMessage, isSessionActivityGroup } from "../chat-turn-boundary.ts";
 import { readLiveTerminalRevision } from "../terminal-message-identity.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
-import type { StreamGroupPart } from "./chat-message-stream.ts";
+import type { StreamGroupPart } from "./chat-message-stream-view.tsx";
 import { projectChatPositions, type ChatPositionIndex } from "./chat-position-projection.ts";
 import type { LoadedReplySource } from "./chat-reply-preview.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -182,6 +182,8 @@ export function projectTranscriptChain(
     runWorking: boolean;
     searchActive: boolean;
     bubbleMode?: boolean;
+    messages?: readonly unknown[];
+    activeRunId?: string | null;
     session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
   },
 ): TranscriptChain {
@@ -192,6 +194,8 @@ export function projectTranscriptChain(
     options.runWorking,
     options.searchActive,
     options.bubbleMode,
+    options.messages,
+    options.activeRunId,
     session?.key,
     session?.lastRunId,
     session?.status,

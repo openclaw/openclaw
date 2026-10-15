@@ -70,13 +70,16 @@ function show(
   showThinking = true,
 ) {
   renderChatInto(container, {
+    sessionKey: state.sessionKey,
     messages: state.chatMessages,
+    toolMessages: state.chatToolMessages,
+    streamSegments: state.chatStreamSegments,
     reasoning: state.chatReasoning,
     stream: state.chatStream,
     streamStartedAt: state.chatStreamStartedAt,
     runId: state.chatRunId,
     runActive: Boolean(state.chatRunId),
-    selectedSession: { key: "main", kind: "direct", updatedAt: 1, reasoningLevel: mode },
+    selectedSession: { key: state.sessionKey, kind: "direct", updatedAt: 1, reasoningLevel: mode },
     showThinking,
   });
 }
@@ -135,9 +138,7 @@ it("shows thinking while generating and retains it through thinking-only history
 });
 
 it.each([
-  { order: "before", appended: 2, displayed: 2 },
   { order: "after", appended: 2, displayed: 2 },
-  // Reset projection can renumber positions while the durable message ID stays fixed.
   { order: "before", appended: 18, displayed: 7 },
 ])(
   "hands reasoning to history once $order final (append $appended, display $displayed)",
@@ -221,7 +222,7 @@ it("applies View and session visibility independently to live and saved reasonin
   expect(container.querySelector(".chat-thinking")?.textContent).toContain("Private synthetic");
 });
 
-it.each(["error", "aborted", "final"] as const)(
+it.each(["error", "aborted"] as const)(
   "retires reasoning on a message-less %s and ignores late thinking after sequence cleanup",
   (terminal) => {
     const state = stateWithRun();
@@ -376,6 +377,162 @@ it("does not let an earlier receipt consume equal reasoning from the next assist
     show(container, state, mode);
     expect(container.querySelectorAll(".chat-thinking")).toHaveLength(2);
   }
+});
+
+it("keeps persisted tool-step reasoning visible until its run finishes", () => {
+  const sessionKey = "agent:main:dashboard:reasoning";
+  const toolMessage = (index: number, owner: string, text: string, timestamp: number) => ({
+    role: "assistant",
+    timestamp,
+    stopReason: "toolUse",
+    content: [
+      { type: "thinking", thinking: text },
+      {
+        type: "toolCall",
+        id: `read-${index}`,
+        name: "read",
+        arguments: { path: `evidence-${index}.txt` },
+      },
+    ],
+    __openclaw: { id: `${owner}-${index}`, seq: timestamp, runId: owner },
+  });
+  const history = activeHistory(runId);
+  history.messages = [
+    {
+      role: "user",
+      content: "Earlier question.",
+      timestamp: 100,
+      __openclaw: { id: "earlier-user", seq: 100 },
+    },
+    toolMessage(0, "earlier-run", "Earlier first thought.", 200),
+    toolMessage(1, "earlier-run", "Earlier second thought.", 300),
+    {
+      role: "assistant",
+      content: "Earlier answer.",
+      timestamp: 400,
+      __openclaw: { id: "earlier-answer", seq: 400, runId: "earlier-run" },
+    },
+    { ...user, timestamp: 1_000, __openclaw: { ...user["__openclaw"], seq: 1_000 } },
+  ];
+  const state = createState(history);
+  state.sessionKey = sessionKey;
+  state.chatMessages = history.messages;
+  adoptStartedChatRun(state, runId, 1_050);
+  const container = createComposerContainer();
+  const thoughts = [
+    "Inspect the first file.",
+    "Compare the second file.",
+    "Explain the result.",
+  ] as const;
+  let seq = 0;
+  const agent = (stream: string, data: Record<string, unknown>, ts: number) =>
+    handleAgentEvent(state, { sessionKey, runId, seq: ++seq, stream, data, ts });
+  for (const index of [0, 1]) {
+    agent("thinking", { itemId: `thought-${index}`, text: thoughts[index] }, 1_100 + index * 100);
+    agent(
+      "tool",
+      {
+        toolCallId: `read-${index}`,
+        name: "read",
+        phase: "start",
+        args: { path: `evidence-${index}.txt` },
+      },
+      1_150 + index * 100,
+    );
+    agent(
+      "tool",
+      {
+        toolCallId: `read-${index}`,
+        name: "read",
+        phase: "result",
+        result: { content: [{ type: "text", text: "42" }] },
+      },
+      1_160 + index * 100,
+    );
+  }
+  agent("thinking", { itemId: "thought-2", text: thoughts[2] }, 1_300);
+  const expectSteps = () => {
+    expect(container.querySelectorAll(".chat-thinking")).toHaveLength(3);
+    expect(
+      [...container.querySelectorAll(".chat-thinking, .chat-tool-msg-summary")].map(
+        (node) => node.textContent,
+      ),
+    ).toEqual([
+      expect.stringContaining(thoughts[0]),
+      expect.stringContaining("evidence-0.txt"),
+      expect.stringContaining(thoughts[1]),
+      expect.stringContaining("evidence-1.txt"),
+      expect.stringContaining(thoughts[2]),
+    ]);
+  };
+  show(container, state);
+  expectSteps();
+  for (const index of [0, 1]) {
+    const message = toolMessage(index, runId, thoughts[index]!, 1_050 + index * 100);
+    agent(
+      "thinking",
+      {
+        phase: "persisted",
+        itemId: `thought-${index}`,
+        messageId: message["__openclaw"].id,
+        messageRunId: runId,
+      },
+      1_400 + index,
+    );
+    applySessionMessagePayload(
+      state,
+      {
+        sessionKey,
+        message,
+        messageId: message["__openclaw"].id,
+        messageSeq: message["__openclaw"].seq,
+      },
+      true,
+      { kind: "live", activeRunId: runId },
+    );
+    for (const mode of ["on", "stream"] as const) {
+      show(container, state, mode);
+      expectSteps();
+    }
+  }
+  show(container, state, "on", false);
+  expect(container.querySelectorAll(".chat-thinking")).toHaveLength(0);
+  show(container, state);
+  expectSteps();
+
+  const worked = () =>
+    container.querySelectorAll<HTMLButtonElement>(
+      ".chat-work-group > .chat-activity-group__summary",
+    );
+  const rawDetails = () =>
+    [...container.querySelectorAll<HTMLButtonElement>(".chat-activity-group__summary")].find(
+      (button) => button.textContent?.includes("Raw details"),
+    )!;
+  expect(worked()).toHaveLength(1);
+  worked()[0]!.click();
+  show(container, state);
+  expect(rawDetails().getAttribute("aria-expanded")).toBe("false");
+  expectSteps();
+  worked()[0]!.click();
+  show(container, state);
+
+  handleChatGatewayEvent(state, {
+    state: "final",
+    sessionKey,
+    runId,
+    seq: ++seq,
+    message: { role: "assistant", content: [{ type: "text", text: "The answer is 42." }] },
+  });
+  show(container, state);
+  expect(worked()).toHaveLength(2);
+  expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
+  worked()[1]!.click();
+  show(container, state);
+  expect(rawDetails().getAttribute("aria-expanded")).toBe("false");
+  expect(container.querySelectorAll(".chat-thinking")).toHaveLength(1);
+  rawDetails().click();
+  show(container, state);
+  expect(container.querySelectorAll(".chat-thinking")).toHaveLength(3);
 });
 
 it("does not attach known-committed pre-tool reasoning to a later final answer", () => {

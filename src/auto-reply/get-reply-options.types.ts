@@ -3,6 +3,10 @@ import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outco
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { AgentPlanStep } from "../channels/streaming.js";
+import type {
+  AsyncSessionSourceCheck,
+  SessionSourceCheck,
+} from "../config/sessions/session-source-authority.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type { OutboundPayloadPlan } from "../infra/outbound/reply-payload-parts.js";
 import type { ImageContent } from "../llm/types.js";
@@ -178,7 +182,7 @@ export type GetReplyOptions = {
   /** Abort signal for the underlying agent run. */
   abortSignal?: AbortSignal;
   /** Ephemeral channel owner check for a targeted Stop; never serialized as authority. */
-  isCommandTargetCurrent?: () => boolean;
+  isCommandTargetCurrent?: SessionSourceCheck | AsyncSessionSourceCheck;
   /** Optional inbound images (used for webchat attachments). */
   images?: ImageContent[];
   /** Original inline/offloaded attachment order for inbound images. */
@@ -188,7 +192,7 @@ export type GetReplyOptions = {
   /** Return "reply-dispatch" synchronously to accept the offered completion ownership. */
   onPreparedAgentRunStart?: (start: PreparedAgentRunStart) => unknown;
   /**
-   * @deprecated Use onPreparedAgentRunStart with a prepared transcript boundary.
+   * @deprecated Use onPreparedAgentRunStart with a prepared transcript boundary. Supported through 2026-12-31.
    * Notifies when an agent run starts. Return "reply-dispatch" synchronously to accept
    * completion ownership offered in options; all other legacy callback results are ignored.
    */
@@ -275,7 +279,7 @@ export type GetReplyOptions = {
    * commentary progress inside an ephemeral streaming draft should yield those
    * draft lines while the getter returns true, so progress is not rendered in
    * both lanes at once.
-   * @deprecated Use onVerboseProgressVisibilityAsync; retained until the next Plugin SDK major.
+   * @deprecated Use onVerboseProgressVisibilityAsync. Supported through 2026-12-31.
    */
   onVerboseProgressVisibility?: (isActive: () => boolean) => void;
   /** Registers awaited visibility before dispatch; preferred over the deprecated callback. */

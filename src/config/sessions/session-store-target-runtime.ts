@@ -112,6 +112,7 @@ export function prepareSessionStoreTargetInventoryRead(
     : registry.assertAdmissionCurrent;
   return {
     assertRegistryCurrent,
+    followRegistration: registry.followRegistration,
     withRead<T>(
       operation: (
         inventory: Extract<SessionStoreTargetInventoryResult, { kind: "session-target-inventory" }>,

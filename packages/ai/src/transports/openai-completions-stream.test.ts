@@ -17,6 +17,44 @@ function collectVisibleText(output: OpenAICompletionsOutput): string {
 }
 
 describe("openai completions stream", () => {
+  it.each(["delta", "message"] as const)(
+    "keeps Groq parsed %s reasoning in thinking blocks",
+    async (field) => {
+      const model = makeCompletionsModel({
+        provider: "groq",
+        id: "qwen/qwen3.6-27b",
+        baseUrl: "https://api.groq.com/openai/v1",
+      });
+      const output = createAssistantOutput(model);
+      const events: CapturedStreamEvent[] = [];
+      await processCompletionsStream(
+        streamChunks([
+          {
+            ...makeCompletionsChunk({}, "stop"),
+            choices: [
+              {
+                index: 0,
+                [field]: { role: "assistant", reasoning: "Multiply 17 by 23.", content: "391" },
+                finish_reason: "stop",
+              },
+            ],
+          },
+        ]),
+        output,
+        model,
+        { push: (event) => events.push(event) },
+      );
+      expect(output.content).toEqual([
+        { type: "thinking", thinking: "Multiply 17 by 23.", thinkingSignature: "reasoning" },
+        { type: "text", text: "391" },
+      ]);
+      expect(
+        events.filter((event) => event.type === "thinking_delta").map((event) => event.delta),
+      ).toEqual(["Multiply 17 by 23."]);
+      expect(collectVisibleText(output)).toBe("391");
+    },
+  );
+
   it.each([false, true])(
     "publishes cumulative tool input before execution (direct=%s)",
     async (direct) => {
@@ -782,4 +820,105 @@ describe("openai completions stream", () => {
     expect(textDeltas.map((event) => event.delta)).toEqual(deltas);
     expect(textDeltas.every((event) => !("partial" in event))).toBe(true);
   });
+});
+
+describe("OpenAI-compatible provider processing timing", () => {
+  it.each([false, true])(
+    "preserves final timing in both transports (direct=%s)",
+    async (direct) => {
+      const model = makeCompletionsModel();
+      const output = createAssistantOutput(model);
+      const previousDiagnostic = { type: "previous", timestamp: 1 };
+      output.diagnostics = [previousDiagnostic];
+      await processCompletionsStream(
+        streamChunks([
+          makeCompletionsChunk({ content: "ok" }, null, {
+            timings: { prompt_ms: 100, predicted_ms: 200 },
+          }),
+          makeCompletionsChunk({}, "stop", {
+            timings: { prompt_ms: 3, predicted_ms: 5 },
+          }),
+          { ...usageChunk(2), timings: { prompt_ms: 1.25, predicted_ms: 2.5 } },
+        ]),
+        output,
+        model,
+        { push() {} },
+        direct ? { mode: "direct", beforeContentBlock() {} } : undefined,
+      );
+      expect(output.diagnostics).toEqual([
+        previousDiagnostic,
+        {
+          type: "provider_timing",
+          timestamp: expect.any(Number),
+          details: { processingMs: 3.75 },
+        },
+      ]);
+    },
+  );
+
+  it.each([
+    [{ prompt_ms: 0, predicted_ms: 0 }, 0],
+    [{ prompt_ms: 1.25, predicted_ms: 2.5 }, 3.75],
+  ] as const)(
+    "retains zero and fractional timing on finish chunks: %j",
+    async (timings, expected) => {
+      const { output } = await runChunks([
+        makeCompletionsChunk({ content: "ok" }, "stop", { timings }),
+      ]);
+      expect(output.diagnostics).toEqual([
+        {
+          type: "provider_timing",
+          timestamp: expect.any(Number),
+          details: { processingMs: expected },
+        },
+      ]);
+    },
+  );
+
+  it.each([
+    undefined,
+    { prompt_ms: 1 },
+    { predicted_ms: 1 },
+    { prompt_ms: -1, predicted_ms: 1 },
+    { prompt_ms: "1", predicted_ms: 1 },
+    { prompt_ms: Number.NaN, predicted_ms: 1 },
+    { prompt_ms: 1, predicted_ms: Number.POSITIVE_INFINITY },
+    { prompt_ms: Number.MAX_VALUE, predicted_ms: Number.MAX_VALUE },
+  ])("omits missing, partial, or invalid final timing: %j", async (timings) => {
+    const { output } = await runChunks([
+      makeCompletionsChunk({ content: "ok" }, null, {
+        timings: { prompt_ms: 1, predicted_ms: 2 },
+      }),
+      makeCompletionsChunk({}, "stop", { timings }),
+    ]);
+    expect(output.diagnostics).toBeUndefined();
+  });
+
+  it.each([false, true])(
+    "does not publish timing after cancellation (direct=%s)",
+    async (direct) => {
+      const model = makeCompletionsModel();
+      const output = createAssistantOutput(model);
+      const abort = new AbortController();
+      async function* interrupted() {
+        yield makeCompletionsChunk({ content: "ok" }, "stop", {
+          timings: { prompt_ms: 1, predicted_ms: 2 },
+        });
+        abort.abort();
+        yield usageChunk(2);
+      }
+      await expect(
+        processCompletionsStream(
+          interrupted(),
+          output,
+          model,
+          { push() {} },
+          direct
+            ? { signal: abort.signal, mode: "direct", beforeContentBlock() {} }
+            : { signal: abort.signal },
+        ),
+      ).rejects.toThrow("Request was aborted");
+      expect(output.diagnostics).toBeUndefined();
+    },
+  );
 });

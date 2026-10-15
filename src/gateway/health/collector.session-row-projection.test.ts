@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
@@ -14,7 +15,6 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { readStatusSessionStores } from "../../status/session-stores.js";
 import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
 import {
   createSessionRowProjection,
   type SessionRowProjection,
@@ -93,10 +93,10 @@ describe("health and status resident session summaries", () => {
         agents: { entries: { main: {} } },
         session: { store: storePath },
       };
+      setRuntimeConfigSnapshot(cfg);
       const first = "agent:main:first";
       const second = "agent:main:second";
       const added = "agent:main:added";
-      const backfill = observeSessionRowBackfill([first, second]);
       for (const [key, updatedAt] of [
         [first, 10],
         [second, 20],
@@ -112,8 +112,6 @@ describe("health and status resident session summaries", () => {
       let held: Promise<void> | undefined;
       let health: ReturnType<typeof buildHealthAgentSummaries> | undefined;
       try {
-        await settleProjection(projection);
-        await backfill;
         await settleProjection(projection);
         held = projection.withSelectionPreparation(() => release.promise);
         sessionChanges.emit({ all: true, scope: "catalog" });
@@ -177,12 +175,12 @@ describe("health and status resident session summaries", () => {
         },
         session: { store: storePath },
       };
+      setRuntimeConfigSnapshot(cfg);
       const agentIds = ["main", "worker"];
       const suffixes = Array.from({ length: 12 }, (_, index) => String(index).padStart(2, "0"));
       const sessionKeys = agentIds.flatMap((id) =>
         suffixes.map((suffix) => `agent:${id}:${suffix}`),
       );
-      const backfill = observeSessionRowBackfill(sessionKeys);
       for (const agentId of agentIds) {
         for (const suffix of suffixes.toReversed()) {
           const key = `agent:${agentId}:${suffix}`;
@@ -194,8 +192,6 @@ describe("health and status resident session summaries", () => {
       }
       const projection = await createSessionRowProjection({ cfg });
       try {
-        await settleProjection(projection);
-        await backfill;
         await settleProjection(projection);
         const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
         const reads = observeMainThreadReads();
@@ -265,8 +261,8 @@ describe("health and status resident session summaries", () => {
       let cfg: OpenClawConfig = {
         agents: { entries: { main: {} } },
       };
+      setRuntimeConfigSnapshot(cfg);
       const mainKey = "agent:main:primary";
-      const backfill = observeSessionRowBackfill([mainKey]);
       const committed = await upsertSessionEntryCore(
         { agentId: "main", sessionKey: mainKey },
         { sessionId: "main-primary", updatedAt: 10 },
@@ -275,8 +271,6 @@ describe("health and status resident session summaries", () => {
       const initialUpdatedAt = committed.updatedAt;
       const projection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
       try {
-        await settleProjection(projection);
-        await backfill;
         await settleProjection(projection);
         expect(
           projection.describe({
@@ -341,6 +335,7 @@ describe("health and status resident session summaries", () => {
             defaults: { systemAgent: { agentId: "main" } },
           },
         };
+        setRuntimeConfigSnapshot(cfg);
         sessionChanges.emit({ all: true, scope: "config" });
         const topology = await buildHealthAgentSummaries(
           cfg,

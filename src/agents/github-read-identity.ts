@@ -5,22 +5,26 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { mergeProcessEnv, resolveEnvironmentValue } from "../infra/process-env.js";
+import { createStaleWhileRevalidateCache } from "../infra/stale-while-revalidate-cache.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { runCommandBuffered } from "../process/exec.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { withGitProcessOperation } from "../process/spawn-diagnostics.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { resolveGitHubHost } from "./github-host-runtime.js";
 
 const GITHUB_IDENTITY_COMMAND_TIMEOUT_MS = 15_000;
 export const GITHUB_IDENTITY_OUTPUT_LIMIT_BYTES = 32 * 1024;
 
-// Read/options only: host gh login/logout/switch detection can lag by 60 seconds,
-// matching credential verification. Publication and environment tokens stay live.
+// API reads wait after 60 seconds; options may display stale facts during refresh.
+// Publication and environment tokens stay live.
 const NATIVE_GITHUB_TOKEN_TTL_MS = 60_000;
-let nativeTokens = new Map<string, { token: string; expiresAt: number }>();
-const pendingNativeTokens = new Map<string, Promise<string | undefined>>();
+const nativeTokens = createStaleWhileRevalidateCache<string | undefined>({
+  maxEntries: 32,
+  ttlMs: NATIVE_GITHUB_TOKEN_TTL_MS,
+  // Failed reads and anonymous absence proofs must not hide later sign-in.
+  cacheable: (token) => token !== undefined,
+});
 
 const identityChanges = new Set<() => void>();
 export function subscribeGitHubIdentityChanges(listener: () => void): () => void {
@@ -28,9 +32,7 @@ export function subscribeGitHubIdentityChanges(listener: () => void): () => void
 }
 
 export function clearNativeGitHubTokenCache(): void {
-  // In-flight reads keep their old map and cannot repopulate the cleared cache.
-  nativeTokens = new Map();
-  pendingNativeTokens.clear();
+  nativeTokens.clear();
   notifyListeners(identityChanges, undefined);
 }
 
@@ -54,6 +56,7 @@ export async function readCachedNativeGitHubToken(
   env: NodeJS.ProcessEnv,
   requireAbsentProof = false,
   githubHost = resolveGitHubHost(),
+  display?: { onStale: () => void },
 ): Promise<string | undefined> {
   const effectiveEnv = mergeProcessEnv([process.env, env]);
   const { host, token } = ambientGitHubCredential(effectiveEnv, githubHost);
@@ -72,27 +75,15 @@ export async function readCachedNativeGitHubToken(
       ]),
     )
     .digest("hex");
-  const cache = nativeTokens;
-  const cached = cache.get(key);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.token;
-  }
-  cache.delete(key);
-  return getOrCreatePromise(
-    pendingNativeTokens,
+  const { value, stale } = await nativeTokens.read(
     key,
-    async () => {
-      const current = await readNativeGitHubToken(env, requireAbsentProof, host);
-      // Failures and anonymous absence proofs remain live, so unreadable native
-      // configuration cannot be hidden by a previously absent account.
-      if (current !== undefined) {
-        cache.set(key, { token: current, expiresAt: Date.now() + NATIVE_GITHUB_TOKEN_TTL_MS });
-        pruneMapToMaxSize(cache, 32);
-      }
-      return current;
-    },
-    { evictOnSettled: true },
+    () => readNativeGitHubToken(env, requireAbsentProof, host),
+    { allowStale: display !== undefined },
   );
+  if (stale) {
+    display?.onStale();
+  }
+  return value;
 }
 
 export async function runGitHubIdentityCommand(
@@ -101,12 +92,17 @@ export async function runGitHubIdentityCommand(
   cwd?: string,
   timeoutMs = GITHUB_IDENTITY_COMMAND_TIMEOUT_MS,
 ) {
-  return await runCommandBuffered(argv, {
-    env: env ? { ...env } : {},
-    cwd,
-    timeoutMs,
-    maxOutputBytes: GITHUB_IDENTITY_OUTPUT_LIMIT_BYTES,
-  });
+  return await withGitProcessOperation(
+    "github.identity",
+    () =>
+      runCommandBuffered(argv, {
+        env: env ? { ...env } : {},
+        cwd,
+        timeoutMs,
+        maxOutputBytes: GITHUB_IDENTITY_OUTPUT_LIMIT_BYTES,
+      }),
+    "default",
+  );
 }
 
 export function normalizeGitHubToken(token: string): string {

@@ -39,9 +39,7 @@ import {
 import type { RegionProps, RegionElement, RegionMethods } from "./chat-sidebar-region-types.ts";
 
 function activePanelTab(root: ParentNode | null | undefined) {
-  return [...(root?.querySelectorAll<HTMLElementTagNameMap["wa-tab"]>("wa-tab") ?? [])].find(
-    (tab) => tab.active,
-  );
+  return root?.querySelector<HTMLElement>('.tabstrip-tab[aria-selected="true"]');
 }
 
 function Region(props: RegionProps, host: RegionElement) {
@@ -50,7 +48,8 @@ function Region(props: RegionProps, host: RegionElement) {
   let focusedSurface: Element | null = null;
   let focusBeforeSideLock: HTMLElement | null = null;
   let contentMounted = false;
-  const [hostedRevision, setHostedRevision] = createSignal(0);
+  // Child panels publish hosted tabs synchronously while their parent commits.
+  const [hostedRevision, setHostedRevision] = createSignal(0, { ownedWrite: true });
   const refreshHostedTabs = () => setHostedRevision((value) => value + 1);
   const trackFocus = (event: Event): void => {
     const surface = event
@@ -195,6 +194,11 @@ function Region(props: RegionProps, host: RegionElement) {
       // A pane that merely loads this way has neither, and takes no focus.
       if (origin) {
         focusBeforeSideLock = origin;
+        // Content with an opening focus request owns entry. Focusing its tab here
+        // would look like newer input and cancel that request. Keep the return target.
+        if (props.sideFocusManaged) {
+          return;
+        }
         // A tab strip rendered just now is focusable from its next frame.
         if (focusFrame !== null) {
           cancelAnimationFrame(focusFrame);
@@ -431,6 +435,7 @@ export const ChatSidebarRegion = defineSolidBridge<RegionProps, RegionMethods>(
       callbacks: { default: null, attribute: false },
       narrow: { default: false },
       sideFocusLocked: { default: false },
+      sideFocusManaged: { default: false },
       sideFocusOrigin: { default: undefined, attribute: false },
       availableWidth: { default: 0 },
     },

@@ -350,7 +350,7 @@ describe("spawn context-engine resource custody", () => {
         await nativeCleanupStarted.promise;
         expect(fixture.database.isOpen).toBe(true);
         releaseNativeCleanup.resolve();
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(0);
 
         expect(scheduler.isSwarmRunActive(result.runId!)).toBe(true);
         expect(fixture.retired).not.toHaveBeenCalled();

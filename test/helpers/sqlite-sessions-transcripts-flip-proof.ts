@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { formatCliCommand } from "../../src/cli/command-format.js";
 import {
   readSessionArchiveContentSync,
   stripSessionArchiveCompressionSuffix,
@@ -37,6 +38,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../src/state/openclaw-stat
 import { sleep } from "../../src/utils.js";
 import {
   createOpenClawTestInstance,
+  GatewayAgentAdmissionError,
   GatewayStartupRefusedError,
 } from "./openclaw-test-instance.js";
 import { withinTest } from "./promise.js";
@@ -859,11 +861,24 @@ async function requireLegacyStartupRefusal(inst: OpenClawTestInstance, context: 
       refusal = error;
       message = error instanceof Error ? error.message : String(error);
     }
-    if (
-      !(refusal instanceof GatewayStartupRefusedError) ||
-      refusal.reason !== "legacy-migration-required" ||
-      refusal.legacyStorePath !== legacyStorePath
-    ) {
+    const legacyProcessRefusal =
+      refusal instanceof GatewayStartupRefusedError &&
+      refusal.reason === "legacy-migration-required" &&
+      refusal.legacyStorePath === legacyStorePath;
+    const deferredAdmissionRefusal =
+      refusal instanceof GatewayAgentAdmissionError &&
+      refusal.refusals.some(
+        (entry) =>
+          entry.code === "agent-database-inspection-failed" &&
+          entry.agentId === context.agentId &&
+          Array.isArray(entry.paths) &&
+          entry.paths.includes(context.agentDbPath) &&
+          entry.reason ===
+            `Legacy session store requires migration: ${legacyStorePath}. Run "${formatCliCommand("openclaw doctor --fix", inst.env)}" against the same state/config before starting OpenClaw.` &&
+          typeof entry.repairHint === "string" &&
+          entry.repairHint.includes("doctor --fix"),
+      );
+    if (!legacyProcessRefusal && !deferredAdmissionRefusal) {
       throw new Error(
         `expected legacy session migration refusal on startup ${attempt}, got: ${message || "ready Gateway"}`,
       );
@@ -1730,7 +1745,7 @@ async function waitForAgentRunSettled(client: GatewayClient, runId: string): Pro
   if (result.status === "ok") {
     return;
   }
-  // Deletion can settle with its action or an admission/runtime abort reason.
+  // Deletion can settle with its action or the runtime's terminal abort error.
   // A wait deadline has no endedAt and must still fail this proof.
   const terminalLifecycleStatus = result.status === "timeout" || result.status === "error";
   if (

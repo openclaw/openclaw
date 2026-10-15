@@ -4,10 +4,14 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
   appendSessionTranscriptMessageByIdentity,
   readVisibleSessionTranscriptMessageEntries,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { describe, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   HOST_KEY,
   HOST_MODEL,
@@ -55,6 +59,9 @@ import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 setupRunAttemptTestHooks();
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 
 type NativeRunParams = ReturnType<typeof createNativeRunParams>;
 
@@ -168,6 +175,7 @@ async function createRunParams(fixture: NativeFixture) {
   params.permissionMode = "full";
   params.timeoutMs = 20_000;
   params.config = { tools: { web: { search: { enabled: false } } } };
+  setRuntimeConfigSnapshot(params.config);
   setCodexTestToolFactory(params, () => []);
   registerCodexTestSessionIdentity(params.sessionFile, params.sessionId, params.sessionKey);
   return params;
@@ -385,7 +393,7 @@ describe.skipIf(process.platform === "win32")(
           };
           const calls = vi.spyOn(client, "request");
           fixture.setPhase("side");
-          await expect(runCodexAppServerSideQuestion(side, options)).resolves.toEqual({
+          await expect(runCodexAppServerSideQuestion(side, options)).resolves.toMatchObject({
             text: SUMMARY,
           });
           expect(await fs.readFile(fixture.marker, "utf8")).toBe("completed-once\n");

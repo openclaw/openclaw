@@ -10,7 +10,6 @@ import {
   mergeSessionUsageRollupBucket,
   type SessionUsageRollupData,
 } from "./session-cost-usage-rollup.js";
-import type { CostUsageTotals } from "./session-cost-usage.types.js";
 import { resolveZstdCodec } from "./zstd-codec.js";
 
 export const USAGE_COST_PARTITION_SCOPE = "session-cost-usage-projection-v1";
@@ -48,7 +47,17 @@ function encodeUsageCostPartition(
 export function decodeUsageCostPartition(
   valueJson: string,
   blob: Uint8Array | null,
-): SessionUsageRollupData | undefined {
+): SessionUsageRollupData | undefined;
+export function decodeUsageCostPartition(
+  valueJson: string,
+  blob: Uint8Array | null,
+  budget: { remainingBytes: number },
+): SessionUsageRollupData | null | undefined;
+export function decodeUsageCostPartition(
+  valueJson: string,
+  blob: Uint8Array | null,
+  budget?: { remainingBytes: number },
+): SessionUsageRollupData | null | undefined {
   if (!blob) {
     return undefined;
   }
@@ -60,9 +69,18 @@ export function decodeUsageCostPartition(
       typeof metadata.bytes !== "number" ||
       !Number.isSafeInteger(metadata.bytes) ||
       metadata.bytes <= 0 ||
+      (metadata.encoding === "identity"
+        ? metadata.bytes !== blob.byteLength
+        : metadata.bytes <= blob.byteLength) ||
       typeof metadata.sha256 !== "string"
     ) {
       return undefined;
+    }
+    if (budget) {
+      if (metadata.bytes > budget.remainingBytes) {
+        return null;
+      }
+      budget.remainingBytes -= metadata.bytes;
     }
     const raw =
       metadata.encoding === "zstd"
@@ -82,38 +100,12 @@ export function decodeUsageCostPartition(
   }
 }
 
-const numericTotals: Array<Exclude<keyof CostUsageTotals, "missingCostByModel">> = [
-  "input",
-  "output",
-  "cacheRead",
-  "cacheWrite",
-  "totalTokens",
-  "totalCost",
-  "inputCost",
-  "outputCost",
-  "cacheReadCost",
-  "cacheWriteCost",
-  "missingCostEntries",
-];
-
-export function partitionUsageCostRollup(
-  entry: UsageCostRollupEntry,
-  inheritedCanonicalNumbers = false,
-  ephemeral = false,
-): {
+export function partitionUsageCostRollup(entry: UsageCostRollupEntry): {
   valueJson: string;
   blob: Uint8Array<ArrayBuffer>;
   partitions: Array<UsageCostPartition & { blob: Uint8Array<ArrayBuffer> }>;
 } {
-  // The legacy incognito owner is process-held; only durable stores persist date projections.
-  if (ephemeral) {
-    return { ...encodeUsageCostRollup(entry), partitions: [] };
-  }
   const months = new Map<string, SessionUsageRollupData>();
-  let canonicalNumbers = inheritedCanonicalNumbers;
-  let regrouped = false;
-  let integerArithmetic = true;
-  const canonicalTotal = { ...entry.rollup.untimestamped.totals };
   const buckets = Object.values(entry.rollup.buckets).toSorted(
     (left, right) => left.timestampMs - right.timestampMs,
   );
@@ -128,7 +120,6 @@ export function partitionUsageCostRollup(
     }
     const current = month.buckets[String(quarter)];
     if (current) {
-      regrouped = true;
       mergeSessionUsageRollupBucket(current, bucket);
     } else {
       month.buckets[String(quarter)] = {
@@ -138,21 +129,7 @@ export function partitionUsageCostRollup(
         lastTimestampMs: bucket.lastTimestampMs ?? bucket.timestampMs,
       };
     }
-    integerArithmetic &&= bucket.models.every((model) =>
-      numericTotals.every(
-        (key) => Number.isSafeInteger(model.totals[key]) && model.totals[key] >= 0,
-      ),
-    );
-    for (const key of numericTotals) {
-      canonicalTotal[key] += bucket.totals[key];
-      integerArithmetic &&=
-        Number.isSafeInteger(bucket.totals[key]) &&
-        bucket.totals[key] >= 0 &&
-        Number.isSafeInteger(canonicalTotal[key]);
-    }
   }
-  // Any regrouping must remain exact for every subrange, not just the full sum.
-  canonicalNumbers ||= regrouped && !integerArithmetic;
   const checkpoint = {
     ...entry,
     rollup: {
@@ -163,7 +140,8 @@ export function partitionUsageCostRollup(
   };
   const encoded = encodeUsageCostRollup(checkpoint);
   const envelope: UsageCostRollupEnvelope = JSON.parse(encoded.valueJson);
-  envelope.projection = { version: 2, dates: [...months.keys()], canonicalNumbers };
+  // Keep the existing envelope shape; report readers accept aggregate rounding.
+  envelope.projection = { version: 2, dates: [...months.keys()], canonicalNumbers: false };
   return {
     valueJson: JSON.stringify(envelope),
     blob: encoded.blob,

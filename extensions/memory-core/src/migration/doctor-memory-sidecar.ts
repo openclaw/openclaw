@@ -450,7 +450,7 @@ async function migrateLegacyMemorySidecarSource(params: {
         // Every imported table is a derived search index. A same-identity mismatch means the
         // current per-agent row wins; normal sync rebuilds any rows skipped with the sidecar.
         params.changes.push(
-          `Resolved Memory Core legacy memory index conflict for agent ${params.source.agentId} by keeping canonical per-agent SQLite rows`,
+          `Resolved Memory Core legacy memory index conflict for agent ${params.source.agentId} by keeping existing per-agent SQLite rows`,
         );
         return true;
       }
@@ -623,6 +623,8 @@ function createQmdRetirementMigration(kind: "workspace" | "locks"): PluginDoctor
       : "memory-core-qmd-file-locks-to-sqlite-leases",
     label: workspace ? "Memory Core retired QMD workspaces" : "Memory Core retired QMD file locks",
     ...(workspace ? { doctorOnly: true } : {}),
+    // Retirement removes only empty directories or disposable stale coordination locks.
+    collectBackupResources: () => [],
     async detectLegacyState(params) {
       const paths = await collect(params.stateDir);
       return paths.length > 0

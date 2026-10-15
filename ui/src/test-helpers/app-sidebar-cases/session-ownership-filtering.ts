@@ -8,8 +8,9 @@ import {
   mountSidebar,
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 async function selectOwner(sidebar: SidebarLifecycleState, ownerId: string, involvingMe = false) {
   await activateSessionMenuValue(sidebar, involvingMe ? "involving-me" : `owner:${ownerId}`);
@@ -310,7 +311,7 @@ describe("AppSidebar session ownership filtering", () => {
     ];
     sidebar.sessionData.requestSessionDataUpdate();
     harness.publishList({ result, agentId: "main" });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
 
     expect(sidebar.querySelector(`[data-session-key="${backingSessionKey}"]`)).not.toBeNull();
     expect(sidebar.textContent).toContain("External unowned session");
@@ -324,7 +325,7 @@ describe("AppSidebar session ownership filtering", () => {
       agentId: "main",
     });
     await sidebar.sessionData.refreshSidebarSessions();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.querySelector(`[data-session-key="${backingSessionKey}"]`)).toBeNull();
     expect(sidebar.textContent).not.toContain("External unowned session");
   });
@@ -542,7 +543,7 @@ describe("AppSidebar session ownership filtering", () => {
         ],
       },
     });
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
 
     sidebar

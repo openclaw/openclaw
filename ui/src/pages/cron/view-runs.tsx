@@ -3,7 +3,7 @@ import { cronRunEntryMatchesLink } from "../../../../src/cron/run-link.js";
 import type { CronRunLogEntry, CronDeliveryStatus, CronRunsStatusValue } from "../../api/types.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import "../../components/web-awesome.ts";
+import { Menu } from "../../components/solid/menu.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { i18n } from "../../i18n/index.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
@@ -141,62 +141,52 @@ function FilterDropdown<T extends string>(props: {
   );
   return (
     <div class="cron-filter-dropdown" data-filter={props.id}>
-      <wa-dropdown
+      <Menu
+        id={`cron-runs-filter-${props.id}`}
+        label={`${props.title} ${accessibleSummary()}`}
         class="cron-filter-dropdown__details"
+        triggerClass={`btn btn--sm cron-filter-dropdown__trigger${props.selected.length > 0 ? " active" : ""}`}
+        triggerAttributes={{ title: props.title }}
+        trigger={
+          <>
+            <span>{summary()}</span>
+            <Icon name="chevronDown" />
+          </>
+        }
         placement="bottom-start"
-        onWa-select={(
-          event: CustomEvent<{
-            item: {
-              value?: string;
-            };
-          }>,
-        ) => {
-          const value = event.detail.item.value;
-          if (value === `${FILTER_COMMAND_PREFIX}clear`) {
+        items={[
+          ...props.options.map((option) => ({
+            id: `${FILTER_OPTION_PREFIX}${option.value}`,
+            label: option.label,
+            class: "cron-filter-dropdown__option",
+            type: "checkbox" as const,
+            checked: props.selected.includes(option.value),
+            closeOnSelect: false,
+          })),
+          {
+            kind: "content",
+            id: "separator",
+            content: <div class="session-menu__separator" role="separator" />,
+          },
+          {
+            id: `${FILTER_COMMAND_PREFIX}clear`,
+            label: t("cron.runs.clear"),
+            class: "cron-filter-dropdown__clear",
+          },
+        ]}
+        onSelect={(item) => {
+          if (item.id === `${FILTER_COMMAND_PREFIX}clear`) {
             props.onClear();
-            return;
-          }
-          if (value?.startsWith(FILTER_OPTION_PREFIX)) {
-            event.preventDefault();
+          } else if (item.id.startsWith(FILTER_OPTION_PREFIX)) {
             const option = props.options.find(
-              (candidate) => candidate.value === value.slice(FILTER_OPTION_PREFIX.length),
+              (candidate) => candidate.value === item.id.slice(FILTER_OPTION_PREFIX.length),
             );
             if (option) {
               props.onToggle(option.value, !props.selected.includes(option.value));
             }
           }
         }}
-      >
-        <button
-          slot="trigger"
-          type="button"
-          class={[
-            "btn btn--sm cron-filter-dropdown__trigger",
-            { active: props.selected.length > 0 },
-          ]}
-          title={props.title}
-          aria-label={`${props.title} ${accessibleSummary()}`}
-        >
-          <span>{summary()}</span>
-          <Icon name="chevronDown" />
-        </button>
-        <For each={props.options} keyed={(option) => option.value}>
-          {(option) => (
-            <wa-dropdown-item
-              class="cron-filter-dropdown__option"
-              type="checkbox"
-              value={`${FILTER_OPTION_PREFIX}${option().value}`}
-              prop:checked={props.selected.includes(option().value)}
-            >
-              {option().label}
-            </wa-dropdown-item>
-          )}
-        </For>
-        <div class="session-menu__separator" role="separator" />
-        <wa-dropdown-item value={`${FILTER_COMMAND_PREFIX}clear`}>
-          {t("cron.runs.clear")}
-        </wa-dropdown-item>
-      </wa-dropdown>
+      />
     </div>
   );
 }
@@ -282,50 +272,46 @@ export function RunsSection(props: CronRunsSectionProps) {
           }}
         />
         <div class="cron-filter-dropdown">
-          <wa-dropdown
+          <Menu
+            id="cron-runs-sort"
+            label={`${t("cron.jobs.sort")} ${sortLabel()}`}
             class="cron-filter-dropdown__details"
+            triggerClass="btn btn--sm cron-filter-dropdown__trigger cron-run-sort"
+            trigger={
+              <>
+                <span>{sortLabel()}</span>
+                <Icon name="chevronDown" />
+              </>
+            }
             placement="bottom-start"
-            onWa-select={(
-              event: CustomEvent<{
-                item: {
-                  value?: string;
-                };
-              }>,
-            ) => {
-              const value = event.detail.item.value;
-              if (value === "asc" || value === "desc") {
-                void props.onRunsFiltersChange({ cronRunsSortDir: value });
+            items={[
+              {
+                id: "desc",
+                label: t("cron.runs.newestFirst"),
+                attributes: { "aria-current": props.runsSortDir === "desc" ? "true" : "false" },
+                details: (
+                  <span aria-hidden="true">
+                    {props.runsSortDir === "desc" ? <Icon name="check" /> : undefined}
+                  </span>
+                ),
+              },
+              {
+                id: "asc",
+                label: t("cron.runs.oldestFirst"),
+                attributes: { "aria-current": props.runsSortDir === "asc" ? "true" : "false" },
+                details: (
+                  <span aria-hidden="true">
+                    {props.runsSortDir === "asc" ? <Icon name="check" /> : undefined}
+                  </span>
+                ),
+              },
+            ]}
+            onSelect={(item) => {
+              if (item.id === "asc" || item.id === "desc") {
+                void props.onRunsFiltersChange({ cronRunsSortDir: item.id });
               }
             }}
-          >
-            <button
-              slot="trigger"
-              type="button"
-              class="btn btn--sm cron-filter-dropdown__trigger cron-run-sort"
-              aria-label={`${t("cron.jobs.sort")} ${sortLabel()}`}
-            >
-              <span>{sortLabel()}</span>
-              <Icon name="chevronDown" />
-            </button>
-            <wa-dropdown-item
-              value="desc"
-              aria-current={props.runsSortDir === "desc" ? "true" : "false"}
-            >
-              {t("cron.runs.newestFirst")}
-              <span slot="details" aria-hidden="true">
-                {props.runsSortDir === "desc" ? <Icon name="check" /> : undefined}
-              </span>
-            </wa-dropdown-item>
-            <wa-dropdown-item
-              value="asc"
-              aria-current={props.runsSortDir === "asc" ? "true" : "false"}
-            >
-              {t("cron.runs.oldestFirst")}
-              <span slot="details" aria-hidden="true">
-                {props.runsSortDir === "asc" ? <Icon name="check" /> : undefined}
-              </span>
-            </wa-dropdown-item>
-          </wa-dropdown>
+          />
         </div>
       </div>
       {props.runsState === "failed" ? (

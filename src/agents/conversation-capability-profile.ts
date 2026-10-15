@@ -27,6 +27,7 @@ import type {
   PreparedSessionCapabilityEntry,
   SessionCapabilityStore,
 } from "./subagents/spawn/subagent-capabilities.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import {
   collectExplicitAllowlist,
   collectExplicitDenylist,
@@ -34,7 +35,7 @@ import {
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
-import { prepareSandboxSessionRename } from "./tools/sessions-operator-authority.js";
+import { prepareSandboxSessionTools } from "./tools/sessions-operator-authority.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function resolveManifestToolProfileNames(
@@ -98,11 +99,16 @@ export type ConversationCapabilityProfileParams = {
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
 
+/** Prepare standalone worker reads before running the shared synchronous policy. */
+export function prepareConversationCapabilityProfile(params: ConversationCapabilityProfileParams) {
+  return withPreparedSessionCapabilityRead(() => resolveConversationCapabilityProfile(params));
+}
+
 export function resolveConversationCapabilityProfile(params: ConversationCapabilityProfileParams) {
   const messageProvider = params.messageProvider;
   const effective = resolveEffectiveToolPolicy(params);
   const { policy: sandboxToolPolicy, renameOnly: sandboxSessionRenameOnly } =
-    prepareSandboxSessionRename({
+    prepareSandboxSessionTools({
       policy: resolveSessionPlacementSandboxToolPolicy(params.sandboxToolPolicy, {
         runId: params.runId,
         agentId: effective.agentId,

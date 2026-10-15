@@ -29,6 +29,7 @@ import {
   getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,
+  getRuntimeConfigAppliedHash,
   preflightManagedRuntimeConfigWrite,
   loadPinnedRuntimeConfig,
   registerManagedRuntimeConfigWriteOwner,
@@ -570,6 +571,24 @@ function gatedPreparer() {
 }
 
 describe("prepared runtime snapshots", () => {
+  it("publishes applied config and its source only after asynchronous preparation", async () => {
+    const { started, deferred } = gatedPreparer();
+    const config: OpenClawConfig = { gateway: { port: 19001 } };
+    const source: OpenClawConfig = { gateway: { port: 19002 } };
+    const facts = createConfigResolutionFacts([]);
+    setConfigResolutionFacts(source, facts);
+    const pending = setAppliedRuntimeConfigSnapshot(config, source);
+    await started;
+    expect(getRuntimeConfigSnapshot()).toBeNull();
+    expect(getRuntimeConfigAppliedHash()).toBeNull();
+    deferred.resolve(() => {});
+    await pending;
+    expect(getRuntimeConfigSnapshot()).toBe(config);
+    expect(getRuntimeConfigSourceSnapshot()).toBe(source);
+    expect(getConfigResolutionFacts(config)).toBe(facts);
+    expect(getRuntimeConfigAppliedHash()).toBe(hashRuntimeConfigValue(source));
+  });
+
   it("keeps registration and setters synchronous when an async companion is available", () => {
     const active: OpenClawConfig = { gateway: { port: 18789 } };
     setRuntimeConfigSnapshot(active);
@@ -967,7 +986,7 @@ describe("captured async runtime reads", () => {
 describe("config environment across in-process restart", () => {
   it.each([{ operation: "replacement", nextValue: "second" }])(
     "applies config-owned value $operation after restart",
-    ({ nextValue }) => {
+    async ({ nextValue }) => {
       vi.stubEnv("OPENCLAW_TEST_RESTART_VALUE", undefined);
       vi.stubEnv("OPENCLAW_TEST_RESTART_AMBIENT", "ambient");
       const initial = {
@@ -983,7 +1002,7 @@ describe("config environment across in-process restart", () => {
       initializePublishedConfigRuntimeEnv(initial, {
         ownedEnv: collectConfigRuntimeEnvOwnership(initial, beforeStartup, process.env),
       });
-      setAppliedRuntimeConfigSnapshot(initial, initial);
+      await setAppliedRuntimeConfigSnapshot(initial, initial);
 
       clearRuntimeConfigSnapshot();
       // Server shutdown and the run loop both clear snapshots before the next boot.

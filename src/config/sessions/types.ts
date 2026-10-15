@@ -347,6 +347,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     spawnedCwd?: string;
     /** Content-free fingerprints for checkout changes that predate this session generation. */
     sessionDiffBaseline?: SessionDiffBaseline;
+    /** Canonical existing directory owned by the user on a paired session host. */
+    deviceFolder?: { deviceId: string; path: string };
     /**
      * Managed worktree bound to this session; set with spawnedCwd at worktree
      * creation and cleared together when a plain New Chat detaches the checkout.
@@ -544,6 +546,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     queueDrop?: "old" | "new" | "summarize";
     inputTokens?: number;
     outputTokens?: number;
+    /** Completeness of the latest run's token and cost accounting. */
+    usageReport?: { state: "available" | "unavailable" };
     totalTokens?: number;
     pendingFinalDelivery?: PendingFinalDeliveryState;
     pendingDeliveryNotice?: PendingDeliveryNoticeState;

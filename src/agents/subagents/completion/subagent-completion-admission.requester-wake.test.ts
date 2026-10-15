@@ -15,7 +15,6 @@ import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
-  SubagentRegistryVersionConflictError,
 } from "../registry/subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
 import { getPendingWakeCommit } from "../registry/subagent-registry-requester-wake-commit.js";
@@ -23,12 +22,14 @@ import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-st
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { registerRequesterWakeOwnershipTests } from "./subagent-completion-admission.requester-wake-ownership.test-support.js";
 import {
   blockSubagentCompletionDelivery,
   mutateRequesterCompletionBatch,
 } from "./subagent-completion-admission.store.js";
 import {
   currentCompletionRun,
+  readCompletionSystemEvents,
   advanceRequesterWakeTime,
   armRequesterWake,
   reopenCompletionFixtureOwners,
@@ -37,8 +38,6 @@ import {
   requesterWakeDriver,
   observeRequesterOutcomePublication,
   admitCompletionFixtureDatabase,
-  readCompletionSystemEvents,
-  seedSubagentCompletionDelivery,
   seedSubagentCompletionOwner,
 } from "./subagent-completion-admission.test-helpers.js";
 import { mutateSubagentCompletionInDatabase } from "./subagent-completion-mutation.kernel.js";
@@ -68,6 +67,7 @@ describe("persisted subagent requester wakes", () => {
   const persistOwner = (input: ReturnType<typeof records>) =>
     seedSubagentCompletionOwner({ subagent: input.subagent, databaseOptions: { database } });
 
+  registerRequesterWakeOwnershipTests({ database: () => database, persistOwner });
   it("reconciles an acknowledged retirement without even a no-op data write", async () => {
     const input = armRequesterWake(records());
     input.subagent.expectsCompletionMessage = false;
@@ -230,7 +230,7 @@ describe("persisted subagent requester wakes", () => {
     }
   });
 
-  it.each(["second owner", "omitted sibling", "second run write", "retirement"] as const)(
+  it.each(["omitted sibling", "second run write", "retirement"] as const)(
     "commits the entire requester batch or nothing when %s refuses settlement",
     async (cut) => {
       const first = records();
@@ -247,11 +247,7 @@ describe("persisted subagent requester wakes", () => {
         persistOwner(input);
       }
       const liveBefore = inputs.map(({ subagent }) => structuredClone(subagent));
-      if (cut === "second owner") {
-        const changed = structuredClone(second);
-        changed.subagent.generation = (changed.subagent.generation ?? 0) + 1;
-        seedSubagentCompletionDelivery({ ...changed, databaseOptions: { database } });
-      } else if (cut !== "omitted sibling") {
+      if (cut !== "omitted sibling") {
         database.db.exec(
           cut === "second run write"
             ? "CREATE TRIGGER reject_batch AFTER UPDATE ON subagent_runs WHEN NEW.run_id = 'completion-second' BEGIN SELECT RAISE(ABORT, 'cut:second'); END"
@@ -294,21 +290,14 @@ describe("persisted subagent requester wakes", () => {
         ).rejects.toThrow();
         expect(inputs.map(({ subagent }) => subagent)).toEqual(liveBefore);
         expect(snapshot()).toEqual(before);
-        if (cut === "second owner") {
-          observed.mockClear();
-        } else {
-          expect(observed).not.toHaveBeenCalled();
-        }
+        expect(observed).not.toHaveBeenCalled();
         if (cut === "second run write" || cut === "retirement") {
           database.db.exec("DROP TRIGGER reject_batch");
         }
         database = await reopenCompletionFixtureOwners();
         expect(snapshot()).toEqual(before);
-        for (const [index, input] of inputs.entries()) {
+        for (const input of inputs) {
           input.subagent = subagentRuns.get(input.subagent.runId)!;
-          if (cut === "second owner" && index === 1) {
-            persistOwner(input);
-          }
         }
         const retry = requesterWakeDriver(inputs);
         try {
@@ -706,7 +695,7 @@ describe("persisted subagent requester wakes", () => {
     },
   );
 
-  it.each(["missing outcome", "paused", "superseded generation"] as const)(
+  it.each(["missing outcome", "paused"] as const)(
     "does not settle uncaptured completion with %s evidence",
     async (change) => {
       const input = failedRecords("failed", { status: "error" });
@@ -718,19 +707,12 @@ describe("persisted subagent requester wakes", () => {
       }
       persistOwner(input);
       const before = structuredClone(input);
-      if (change === "superseded generation") {
-        before.subagent.delivery!.generation = 2;
-        writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(before.subagent)], []);
-      }
-      const blocked = blockSubagentCompletionDelivery({
-        subagent: input.subagent,
-        reason: "requester unavailable",
-      });
-      if (change === "superseded generation") {
-        await expect(blocked).rejects.toBeInstanceOf(SubagentRegistryVersionConflictError);
-      } else {
-        await expect(blocked).resolves.toBe(false);
-      }
+      await expect(
+        blockSubagentCompletionDelivery({
+          subagent: input.subagent,
+          reason: "requester unavailable",
+        }),
+      ).resolves.toBe(false);
       database = await reopenCompletionFixtureOwners();
       expect(subagentRuns.get(input.subagent.runId)).toEqual(before.subagent);
       expect(readCompletionSystemEvents(database)).toEqual([]);
@@ -828,7 +810,7 @@ describe("persisted subagent requester wakes", () => {
     },
   );
 
-  it.each(["unchanged", "newer sibling", "run generation", "wake generation", "wake attempt"])(
+  it.each(["unchanged", "newer sibling", "run generation"])(
     "reconciles a retired cancellation wake only with its current owner: %s",
     async (change) => {
       const input = failedRecords("cancelled", { status: "error", error: "stopped" });
@@ -848,13 +830,8 @@ describe("persisted subagent requester wakes", () => {
           if (change === "newer sibling") {
             updated.runId = "newer-child-run";
             updated.generation = (updated.generation ?? 0) + 1;
-          } else if (change === "run generation") {
-            updated.generation = (updated.generation ?? 0) + 1;
-          } else if (change === "wake attempt") {
-            updated.requesterSettleWake!.status = "dispatching";
-            updated.requesterSettleWake!.attemptCount += 1;
           } else {
-            updated.requesterSettleWake!.rearmGeneration = 2;
+            updated.generation = (updated.generation ?? 0) + 1;
           }
           writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(updated)], []);
         }
@@ -891,12 +868,6 @@ describe("persisted subagent requester wakes", () => {
           expect(restored.suppressCompletionDelivery).toBe(true);
         } else {
           expect(restored.requesterSettleWake).toBeDefined();
-          if (change === "wake attempt") {
-            expect(restored.requesterSettleWake).toMatchObject({
-              status: "dispatching",
-              attemptCount: before.requesterSettleWake!.attemptCount + 1,
-            });
-          }
           expect(restored.completion).toEqual(before.completion);
           expect(restored.delivery).toEqual(before.delivery);
         }

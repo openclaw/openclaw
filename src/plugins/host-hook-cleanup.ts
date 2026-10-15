@@ -1,5 +1,5 @@
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { cleanupPluginHostSessionStore } from "../config/sessions/session-accessor.js";
 import { resolveAllAgentSessionStoreTargetsAsync } from "../config/sessions/targets-runtime.js";
@@ -31,6 +31,7 @@ import type { PluginInstanceDisposalResult } from "./plugin-instance.types.js";
 import { getPluginRecordRegistry } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
+import { getPluginRuntimeLoadContext } from "./runtime/load-context.js";
 
 const log = createSubsystemLogger("plugins/cleanup");
 
@@ -210,7 +211,7 @@ export async function runPluginHostCleanup(params: {
   if (!shouldCleanup()) {
     return { cleanupCount: 0, failures };
   }
-  return withPluginRunContextCleanup(params, async (clearRunContext) => {
+  const result = await withPluginRunContextCleanup(params, async (clearRunContext) => {
     const registry = params.registry;
     const cleanupRegistry = registry ?? getActivePluginRegistry();
     const sessionEntrySlotKeys = collectSessionEntrySlotKeys(cleanupRegistry, params.pluginId);
@@ -224,7 +225,7 @@ export async function runPluginHostCleanup(params: {
     if (!params.skipPersistentSessionState && shouldCleanup()) {
       try {
         cleanupCount = await clearPluginSessionStores({
-          cfg: params.cfg ?? getRuntimeConfig(),
+          cfg: params.cfg ?? (await captureRuntimeConfigAsyncReader()()),
           mode: params.reason === "restart" ? "promoted-slots" : "plugin-owned-state",
           pluginId: params.pluginId,
           sessionKey: params.sessionKey,
@@ -291,6 +292,15 @@ export async function runPluginHostCleanup(params: {
     }
     return { cleanupCount, failures };
   });
+  if (params.reason === "reset" || params.reason === "delete") {
+    for (const { pluginId, hookId, error } of result.failures) {
+      log.warn(
+        `Plugin host cleanup failed during session ${params.reason}; check the reported cleanup error and retry.`,
+        { pluginId, hookId, error: String(error) },
+      );
+    }
+  }
+  return result;
 }
 
 function collectHostHookPluginIds(registry: PluginRegistry): string[] {
@@ -360,7 +370,13 @@ export function createPluginHostRegistryRetirement(params: {
   if (!previousRegistry || previousRegistry === params.nextRegistry || !shouldCleanup()) {
     return async () => ({ cleanupCount: 0, failures: [] });
   }
-  const cfg = params.cfg ?? getRuntimeConfigSnapshot() ?? undefined;
+  // Cold CLI registries still own their load config; a later runtime snapshot may be a successor's.
+  const cfg =
+    params.cfg ??
+    getPluginRuntimeLoadContext(previousRegistry)?.config ??
+    getRuntimeConfigSnapshot() ??
+    undefined;
+  const readConfig = captureRuntimeConfigAsyncReader();
   const runContextCleanup = preparePluginRunContextCleanup();
   const nextPluginIds = params.nextRegistry
     ? collectLoadedPluginIds(params.nextRegistry)
@@ -375,8 +391,8 @@ export function createPluginHostRegistryRetirement(params: {
   ]);
   let sessionStoreTargets: Promise<readonly SessionStoreTarget[]> | undefined;
   // Discover stores after admitted writes finish, using the retiring configuration.
-  const resolveSessionStoreTargets = () =>
-    (sessionStoreTargets ??= resolveAllAgentSessionStoreTargetsAsync(cfg ?? getRuntimeConfig()));
+  const resolveSessionStoreTargets = async () =>
+    (sessionStoreTargets ??= resolveAllAgentSessionStoreTargetsAsync(cfg ?? (await readConfig())));
   const waits: PluginHostRegistryRetirement[] = [];
   for (const pluginId of previousPluginIds) {
     const record = previousRegistry.plugins.find((entry) => entry.id === pluginId);
@@ -395,7 +411,7 @@ export function createPluginHostRegistryRetirement(params: {
       ? () =>
           runContextCleanup(async () => {
             result = await runPluginHostCleanup({
-              cfg,
+              cfg: params.skipPersistentSessionState ? cfg : (cfg ?? (await readConfig())),
               registry: previousRegistry,
               pluginId,
               reason: restarted ? "restart" : "disable",

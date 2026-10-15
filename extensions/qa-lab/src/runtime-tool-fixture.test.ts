@@ -2,6 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { nestedToolActivityFixture } from "../test/nested-tool-activity-fixture.js";
 import {
@@ -282,11 +286,6 @@ describe("runtime tool fixture", () => {
       label: "JSON-encoded provider arguments",
       encode: (input: string) => JSON.stringify({ input }),
     },
-    {
-      label: "executed provider arguments with an empty mirrored input",
-      encode: (input: string) => ({ input }),
-      shadowInput: true,
-    },
   ])("verifies linked $label without weakening workspace containment", async (testCase) => {
     const { encode } = testCase;
     const env = await makeEnv();
@@ -294,7 +293,6 @@ describe("runtime tool fixture", () => {
     await writeCodexNativePatchEvidence(env, "patch rejected: writing outside of the project", {
       happyArguments: encode(runtimePatchAddInput()),
       failureArguments: encode(runtimePatchUpdateInput()),
-      ...("shadowInput" in testCase ? { happyInput: {}, failureInput: {} } : {}),
     });
 
     await expect(runNativePatchFixture(env)).resolves.toContain(
@@ -752,7 +750,6 @@ describe("runtime tool fixture mock request linking", () => {
     ).rejects.toThrow("expected mock happy-path tool output for read");
   });
   it.each([
-    ["happy-path file", runtimePatchAddInput("runtime-tool-fixture-wrong.txt"), undefined],
     [
       "failure-path replacement",
       undefined,
@@ -880,6 +877,32 @@ async function runTranscriptFixture(
 }
 
 describe("runtime tool fixture transcript evidence", () => {
+  it("prepares the authored config instead of seeding a stale runtime store", async () => {
+    const env = await makeEnv();
+    const staleStorePath = path.join(env.gateway.tempRoot, "state", "stale.sqlite");
+    env.cfg = { agents: { defaults: { workspace: env.gateway.workspaceDir } } };
+    setRuntimeConfigSnapshot({ session: { store: staleStorePath } });
+
+    await writeRuntimeToolTranscripts(
+      env,
+      "read",
+      [
+        transcriptToolCall("read", "happy", { path: "README.md" }),
+        transcriptToolResult("read", "happy", "README contents"),
+      ],
+      [
+        transcriptToolCall("read", "failure", { path: "/missing" }),
+        transcriptToolResult("read", "failure", "permission denied", true),
+      ],
+    );
+
+    expect(getRuntimeConfigSnapshot()).toEqual(env.cfg);
+    await expect(runLiveRuntimeToolFixture(env)).resolves.toContain(
+      "read live provider happy planned args",
+    );
+    await expect(fs.access(staleStorePath)).rejects.toThrow();
+  });
+
   it.each([
     {
       name: "native cell wait control output",

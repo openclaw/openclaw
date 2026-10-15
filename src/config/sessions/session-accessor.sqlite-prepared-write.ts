@@ -9,6 +9,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
 import type { SessionEntryCreateWithTranscriptOptions } from "./session-accessor.types.js";
+import { composeSessionSourceAssertion } from "./session-source-authority.js";
 
 type PreparedSessionWrite<T> = {
   deletedEntries: Parameters<typeof withSqliteSessionDeletions>[1];
@@ -56,14 +57,11 @@ export async function runPreparedSqliteSessionWrite<T>(
     await write.beforeCommit?.();
     const runCommit = async (assertSourceCurrent?: () => void) => {
       const commitHeld = async () => {
-        const assertHeld = () => {
-          assertCurrent?.();
-          assertSourceCurrent?.();
-        };
+        const assertHeld = composeSessionSourceAssertion([assertCurrent, assertSourceCurrent]);
         assertHeld();
         return await write.commit(assertHeld);
       };
-      // Opaque native mutations stay on their original writer and ALS owner.
+      // Incognito stays with its process-local owner; durable companions settle in the worker.
       return scheduling === "worker" &&
         (!hasPreparedNativeSessionDeletion() ||
           captureNativeSessionWorkerDeletion(write.deletedEntries))

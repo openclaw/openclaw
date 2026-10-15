@@ -1,12 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import { canonicalizePersistedUserMessageMedia } from "../../media/media-facts.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
-  SessionTranscriptWriteScope,
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
 } from "./session-accessor.sqlite-contract.js";
@@ -16,16 +13,13 @@ import {
   resolveSessionPendingInputAppend,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
-import {
-  resolveSqliteTranscriptScope,
-  toDatabaseOptions,
-  type ResolvedTranscriptScope,
-} from "./session-accessor.sqlite-scope.js";
+import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
   readActiveTranscriptEntryAnchorInTransaction,
   readTranscriptMessageAppendMetadataInTransaction,
 } from "./session-accessor.sqlite-transcript-anchor.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
+import { readTranscriptMessageByEventId } from "./session-accessor.sqlite-transcript-identity.js";
 import type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.types.js";
 import {
   isTranscriptEntryOnActivePathInTransaction,
@@ -34,9 +28,8 @@ import {
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventInTransaction,
-  readTranscriptMessageByEventId,
   readTranscriptMessageByScopedIdempotencyKey,
-  redactTranscriptMessageForStorage,
+  sanitizeTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
@@ -46,7 +39,6 @@ import {
 import { normalizeTranscriptJsonValue } from "./transcript-json.js";
 import { messagesMatchForIdempotentReplay } from "./transcript-message-equality.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
-import { prepareTranscriptPayloadForReuse } from "./transcript-payload.js";
 
 export type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.types.js";
 
@@ -77,39 +69,19 @@ function serializePreparedMessageEvent(envelope: TranscriptMessageEnvelope, mess
 /** The append owner retains its canonical message and storage bytes across retries. */
 export function prepareTranscriptMessageAppend<TMessage extends object>(
   options: Pick<TranscriptMessageAppendOptions<TMessage>, "message" | "config">,
-  candidate?: {
-    scope: SessionTranscriptWriteScope;
-    envelope: TranscriptMessageEnvelope;
-  },
 ): PreparedTranscriptMessageAppend<TMessage> | undefined {
   if (!isRecord(options.message) || options.message.role === "user") {
     // Pending user custody retains its transaction-owned preparation.
     return undefined;
   }
-  const prepared = prepareTranscriptMessageAppendForWorker(options);
-  if (
-    !candidate ||
-    (options.message.role !== "assistant" && options.message.role !== "toolResult")
-  ) {
-    return prepared;
-  }
-  const eventJson = serializePreparedMessageEvent(candidate.envelope, prepared.messageJson);
-  const read = withOpenClawAgentDatabaseReadOnly(
-    ({ db }) =>
-      prepareTranscriptPayloadForReuse(db, eventJson, {
-        ...candidate.envelope,
-        message: prepared.persistedMessage,
-      }),
-    toDatabaseOptions(resolveSqliteTranscriptScope(candidate.scope)),
-  );
-  return read.found ? { ...prepared, physicalPayload: read.value } : prepared;
+  return prepareTranscriptMessageAppendForWorker(options);
 }
 
-/** Redaction stays on the host; physical payload preparation belongs to the writer. */
+/** Transcript normalization stays on the host; physical payload preparation belongs to the writer. */
 export function prepareTranscriptMessageAppendForWorker<TMessage extends object>(
   options: Pick<TranscriptMessageAppendOptions<TMessage>, "message" | "config">,
 ): PreparedTranscriptMessageAppend<TMessage> {
-  const message = redactTranscriptMessageForStorage(options.message, options);
+  const message = sanitizeTranscriptMessageForStorage(options.message);
   const persistedMessage = normalizeTranscriptJsonValue(
     canonicalizePersistedUserMessageMedia(message).message,
     "",
@@ -121,14 +93,13 @@ export function appendTranscriptMessageInTransaction<TMessage>(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
   options: TranscriptMessageAppendOptions<TMessage> & {
-    messageAlreadyRedacted?: boolean;
     appendMode?: "side";
   },
   preparedMessage?: PreparedTranscriptMessageAppend<TMessage>,
   projection?: { scheduleProjectionReconcile?: boolean; onProjectionReconcileNeeded?: () => void },
 ): TranscriptMessageCommit<TMessage> | undefined {
   const pending = resolveSessionPendingInputAppend(database, resolved, options.message);
-  // Accepted input already owns its hook and redaction decision. A host-prepared
+  // Accepted input already owns its hook and normalization decision. A host-prepared
   // candidate must never replace those bytes during promotion or terminal replay.
   const storagePreparation = pending ? undefined : preparedMessage;
   if (
@@ -138,10 +109,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     throw new Error("Pending input session changed before transcript promotion");
   }
   const serializeForStorage = (message: TMessage): TMessage =>
-    storagePreparation?.persistedMessage ??
-    (options.messageAlreadyRedacted
-      ? message
-      : redactTranscriptMessageForStorage(message, options));
+    storagePreparation?.persistedMessage ?? sanitizeTranscriptMessageForStorage(message);
   const readAnchor = (params: {
     message: unknown;
     messageId: string;
@@ -214,7 +182,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     }
     return existingAppendResult(committed);
   }
-  // Pending input already passed the hook and redaction before acknowledgment.
+  // Pending input already passed the hook and normalization before acknowledgment.
   const prepared = pending
     ? (pending.message as TMessage) // SAFETY: exact private custody supplies this keyed user's approved storage bytes.
     : options.prepareMessageAfterIdempotencyCheck
@@ -304,7 +272,6 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     message: persistedMessage,
   });
   const { anchor } = metadata;
-  const revision = readSqliteNativeMutationRevision(database.db);
   if (pending) {
     if (pending.stageRelocation) {
       pending.stageRelocation(messageId);
@@ -321,9 +288,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
         message: persistedMessage,
         messageId,
       },
-      ...(metadata.visibleTailEntryId !== undefined &&
-      revision !== undefined &&
-      readSqliteNativeMutationRevision(database.db) === revision
+      ...(metadata.visibleTailEntryId !== undefined
         ? { visibleTailEntryId: metadata.visibleTailEntryId }
         : {}),
     },

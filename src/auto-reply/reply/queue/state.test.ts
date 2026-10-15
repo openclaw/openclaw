@@ -231,9 +231,9 @@ describe("refreshQueuedFollowupSession", () => {
   });
 
   it.each([
-    { requested: "off", stored: "high", expected: ["low", "off", "low"] },
+    { requested: "off", stored: "high", expected: ["off", "off", "off"] },
     { requested: "default", stored: "off", expected: ["high", "off", "low"] },
-    { requested: undefined, stored: "low", expected: ["low", "off", "low"] },
+    { requested: undefined, stored: "high", expected: ["high", "high", "high"] },
   ] as const)(
     "retains requested thinking $requested across repeated queued model switches",
     ({ requested, stored, expected }) => {
@@ -309,6 +309,7 @@ describe("refreshQueuedFollowupSession", () => {
         config,
         thinkLevel: "medium",
         thinkLevelOverride: source,
+        thinkingExplicit: false,
       };
       queue.items.push({ prompt: "task", enqueuedAt: Date.now(), run });
       refreshQueuedFollowupSession({
@@ -322,6 +323,7 @@ describe("refreshQueuedFollowupSession", () => {
         },
       });
       expect(run.thinkLevel).toBe(expected);
+      expect(run.thinkingExplicit).toBe(true);
     });
   });
 
@@ -330,7 +332,7 @@ describe("refreshQueuedFollowupSession", () => {
     queue.items.push({
       prompt: "queued message",
       enqueuedAt: Date.now(),
-      run: { ...makeRun(), thinkLevel: "ultra" },
+      run: { ...makeRun(), thinkLevel: "ultra", thinkingExplicit: true },
     });
 
     refreshQueuedFollowupSession({
@@ -344,6 +346,7 @@ describe("refreshQueuedFollowupSession", () => {
     // Sol's provider default reasoning level is medium (extensions/openai
     // thinking-policy.ts); retargeting without an override adopts it.
     expect(queue.items[0]?.run.thinkLevel).toBe("medium");
+    expect(queue.items[0]?.run.thinkingExplicit).toBe(false);
   });
 });
 

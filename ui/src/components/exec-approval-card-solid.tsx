@@ -23,8 +23,8 @@ import { Icon } from "./solid/icon.tsx";
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-approval-countdown": HTMLAttributes<HTMLElement> &
-        Properties<{ expiresAtMs: number; compact: boolean }>;
+      "openclaw-approval-countdown": HTMLAttributes<HTMLElement>;
+      "openclaw-sidebar-approval-row": HTMLAttributes<HTMLElement>;
     }
   }
 }
@@ -43,6 +43,7 @@ export type ExecApprovalCardProps = {
   error: string | null;
   variant: "inline" | "modal";
   queueCount?: number;
+  renderPendingQueue?: () => SolidJSX.Element;
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
 };
 
@@ -74,32 +75,38 @@ function useApprovalClock(onTick?: (nowMs: number) => void) {
   return now;
 }
 
-defineSolidBridge<{ expiresAtMs: number; compact: boolean }>(
-  "openclaw-approval-countdown",
-  (props, host) => {
-    host.style.display = "contents";
-    const now = useApprovalClock((time) => {
-      if (!props.compact) {
-        host
-          .closest("openclaw-modal-dialog")
-          ?.setAttribute("description", approvalRemainingLabel(props.expiresAtMs, time));
-      }
-    });
-    return (
-      <>
-        {props.compact
-          ? formatCountdown(props.expiresAtMs, now(), true)
-          : approvalRemainingLabel(props.expiresAtMs, now())}
-      </>
-    );
-  },
-  {
-    properties: {
-      expiresAtMs: { default: 0, type: Number },
-      compact: { default: false, type: Boolean },
-    },
-  },
-);
+export function ApprovalCountdown(
+  props: Pick<
+    SolidJSX.HTMLAttributes<HTMLElement>,
+    "class" | "role" | "aria-label" | "aria-hidden" | "title"
+  > & { expiresAtMs: number; compact?: boolean },
+) {
+  let host: HTMLElement | undefined;
+  const now = useApprovalClock((time) => {
+    if (!props.compact) {
+      host
+        ?.closest("openclaw-modal-dialog")
+        ?.setAttribute("description", approvalRemainingLabel(props.expiresAtMs, time));
+    }
+  });
+  return (
+    <openclaw-approval-countdown
+      ref={(element) => {
+        host = element;
+      }}
+      style={{ display: "contents" }}
+      class={props.class}
+      role={props.role}
+      aria-label={props["aria-label"]}
+      aria-hidden={props["aria-hidden"]}
+      title={props.title}
+    >
+      {props.compact
+        ? formatCountdown(props.expiresAtMs, now(), true)
+        : approvalRemainingLabel(props.expiresAtMs, now())}
+    </openclaw-approval-countdown>
+  );
+}
 
 function renderMetaRow(label: string, value?: string | null, opts?: { path?: boolean }) {
   if (!value) {
@@ -251,7 +258,7 @@ export function approvalTitle(active: ExecApprovalRequest): string {
     : t("execApproval.execApprovalNeeded");
 }
 
-function SidebarApprovalRowContent(props: SidebarApprovalRowProps) {
+export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
   const approval = createMemo(() => props.approval);
   const nowMs = useApprovalClock();
   const expired = createMemo(() => approval().expiresAtMs <= nowMs());
@@ -268,93 +275,97 @@ function SidebarApprovalRowContent(props: SidebarApprovalRowProps) {
   const reviewOnlyMessage = createMemo(() => t("execApproval.reviewOnly"));
   const grantError = createMemo(() => !props.canGrant && props.error === reviewOnlyMessage());
   return (
-    <article
-      class="sidebar-approval-row sidebar-issues-panel__details--warning"
-      data-attention-kind="pendingApproval"
-      data-approval-id={approval().id}
-    >
-      <span class="sidebar-issues-panel__icon sidebar-approval-row__icon" aria-hidden="true">
-        <Icon name="shieldQuestion" />
-      </span>
-      <div class="sidebar-approval-row__content">
-        <div class="sidebar-approval-row__header" data-issue-row-focus tabindex="-1">
-          <span class="sidebar-issues-panel__entity" title={sessionTitle()}>
-            {sessionTitle()}
-          </span>
-          <openclaw-approval-countdown
-            class={[
-              "sidebar-approval-row__timer",
-              { "sidebar-approval-row__timer--urgent": expiryUrgent() },
-            ]}
-            role="timer"
-            aria-label={expiryLabel()}
-            title={expiryLabel()}
-            prop:expiresAtMs={approval().expiresAtMs}
-            prop:compact={true}
-          />
-        </div>
-        <div class="sidebar-approval-row__command mono" title={approval().request.command}>
-          <span aria-hidden="true">$ </span>
-          {command()}
-        </div>
-        <Show when={approval().request.scope}>
-          {(scope) => <div class="exec-approval-scope">{summarizeApprovalScopeLabel(scope())}</div>}
-        </Show>
-        <div
-          class="sidebar-approval-row__actions"
-          role="group"
-          aria-label={t("approvalPage.actionsLabel")}
-        >
-          <For each={resolveApprovalDecisions(approval())}>
-            {(decision) => {
-              const label = createMemo(() => approvalDecisionLabel(decision, approval()));
-              return (
-                <button
-                  type="button"
-                  class={[
-                    "btn btn--xs sidebar-approval-row__action",
-                    `sidebar-approval-row__action--${decision}`,
-                    { "btn--ghost": decision === "deny" },
-                  ]}
-                  aria-label={t("execApproval.decisionRequest", {
-                    decision: label(),
-                    command: command(),
-                  })}
-                  disabled={props.busy || !props.canGrant || expired()}
-                  onClick={(event: Event) => props.onDecision(event, approval().id, decision)}
-                >
-                  {label()}
-                </button>
-              );
-            }}
-          </For>
-          {props.openSessionHref && props.onOpenSession ? (
-            <a
-              class="sidebar-approval-row__open-session"
-              href={props.openSessionHref}
-              aria-label={t("sessionsView.openSession")}
-              title={t("sessionsView.openSession")}
-              onClick={props.onOpenSession}
+    <openclaw-sidebar-approval-row style={{ display: "contents" }}>
+      <article
+        class="sidebar-approval-row sidebar-issues-panel__details--warning"
+        data-attention-kind="pendingApproval"
+        data-approval-id={approval().id}
+      >
+        <span class="sidebar-issues-panel__icon sidebar-approval-row__icon" aria-hidden="true">
+          <Icon name="shieldQuestion" />
+        </span>
+        <div class="sidebar-approval-row__content">
+          <div class="sidebar-approval-row__header" data-issue-row-focus tabindex="-1">
+            <span class="sidebar-issues-panel__entity" title={sessionTitle()}>
+              {sessionTitle()}
+            </span>
+            <ApprovalCountdown
+              class={[
+                "sidebar-approval-row__timer",
+                { "sidebar-approval-row__timer--urgent": expiryUrgent() },
+              ]}
+              role="timer"
+              aria-label={expiryLabel()}
+              title={expiryLabel()}
+              expiresAtMs={approval().expiresAtMs}
+              compact={true}
+            />
+          </div>
+          <div class="sidebar-approval-row__command mono" title={approval().request.command}>
+            <span aria-hidden="true">$ </span>
+            {command()}
+          </div>
+          <Show when={approval().request.scope}>
+            {(scope) => (
+              <div class="exec-approval-scope">{summarizeApprovalScopeLabel(scope())}</div>
+            )}
+          </Show>
+          <div
+            class="sidebar-approval-row__actions"
+            role="group"
+            aria-label={t("approvalPage.actionsLabel")}
+          >
+            <For each={resolveApprovalDecisions(approval())}>
+              {(decision) => {
+                const label = createMemo(() => approvalDecisionLabel(decision, approval()));
+                return (
+                  <button
+                    type="button"
+                    class={[
+                      "btn btn--xs sidebar-approval-row__action",
+                      `sidebar-approval-row__action--${decision}`,
+                      { "btn--ghost": decision === "deny" },
+                    ]}
+                    aria-label={t("execApproval.decisionRequest", {
+                      decision: label(),
+                      command: command(),
+                    })}
+                    disabled={props.busy || !props.canGrant || expired()}
+                    onClick={(event: Event) => props.onDecision(event, approval().id, decision)}
+                  >
+                    {label()}
+                  </button>
+                );
+              }}
+            </For>
+            {props.openSessionHref && props.onOpenSession ? (
+              <a
+                class="sidebar-approval-row__open-session"
+                href={props.openSessionHref}
+                aria-label={t("sessionsView.openSession")}
+                title={t("sessionsView.openSession")}
+                onClick={props.onOpenSession}
+              >
+                <Icon name="arrowUpRight" />
+              </a>
+            ) : undefined}
+          </div>
+          {!props.canGrant ? (
+            <div class="sidebar-approval-row__message" role={grantError() ? "alert" : "note"}>
+              {reviewOnlyMessage()}
+            </div>
+          ) : undefined}
+          {props.error && !grantError() ? (
+            <div
+              class="sidebar-approval-row__message sidebar-approval-row__message--error"
+              role="alert"
             >
-              <Icon name="arrowUpRight" />
-            </a>
+              {props.error}
+            </div>
           ) : undefined}
         </div>
-        {!props.canGrant ? (
-          <div class="sidebar-approval-row__message" role={grantError() ? "alert" : "note"}>
-            {reviewOnlyMessage()}
-          </div>
-        ) : undefined}
-        {props.error && !grantError() ? (
-          <div
-            class="sidebar-approval-row__message sidebar-approval-row__message--error"
-            role="alert"
-          >
-            {props.error}
-          </div>
-        ) : undefined}
-      </div>
-    </article>
+      </article>
+    </openclaw-sidebar-approval-row>
   );
 }
 
@@ -377,6 +388,82 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
   const agentId = createMemo(() =>
     props.variant === "modal" ? active().request.agentId?.trim() : null,
   );
+  const content = () => (
+    <>
+      <div class="exec-approval-header">
+        <div>
+          <div class="exec-approval-title">{approvalTitle(active())}</div>
+          {pluginId() || agentId() ? (
+            <div class="exec-approval-chips">
+              {renderChip("plugin", pluginId())} {renderChip("agent", agentId())}
+            </div>
+          ) : undefined}
+          <ApprovalCountdown
+            class="exec-approval-sub exec-approval-countdown"
+            role="timer"
+            expiresAtMs={active().expiresAtMs}
+          />
+        </div>
+        {(props.queueCount ?? 0) > 1 ? (
+          <div class="exec-approval-queue">
+            {t("execApproval.pending", { count: String(props.queueCount) })}
+          </div>
+        ) : undefined}
+      </div>
+      <Show when={props.variant === "inline" && active().sourceSessionKey}>
+        {(sessionKey) => (
+          <div class="exec-approval-warning" role="note">
+            {t("execApproval.requestedBySession", {
+              session: resolveSessionDisplayName(sessionKey(), props.sourceSession),
+            })}
+          </div>
+        )}
+      </Show>
+      {active().kind === "exec"
+        ? renderExecBody(active().request, props.variant)
+        : renderPluginBody(active(), props.variant)}
+      {active().kind === "exec" && !decisions().includes("allow-always") ? (
+        <div class="exec-approval-warning">{t("execApproval.allowAlwaysUnavailable")}</div>
+      ) : undefined}
+      {!props.canGrant ? (
+        <div
+          class={grantError() ? "exec-approval-error" : "exec-approval-warning"}
+          role={grantError() ? "alert" : "note"}
+        >
+          {reviewOnlyMessage()}
+        </div>
+      ) : undefined}
+      {props.error && !grantError() ? (
+        <div class="exec-approval-error" role="alert">
+          {props.error}
+        </div>
+      ) : undefined}
+      {props.renderPendingQueue?.()}
+    </>
+  );
+  const actions = () => (
+    <For each={decisions()}>
+      {(decision) => {
+        const label = createMemo(() => approvalDecisionLabel(decision, active()));
+        return (
+          <button
+            class={decisionClass(decision)}
+            type="button"
+            aria-label={label()}
+            disabled={props.busy || !props.canGrant}
+            title={
+              props.variant === "modal" && props.canGrant
+                ? `${label()} (${decisionShortcut(decision)})`
+                : label()
+            }
+            onClick={() => void props.onDecision(active().id, decision)}
+          >
+            <span>{label()}</span>
+          </button>
+        );
+      }}
+    </For>
+  );
   return (
     <>
       {" "}
@@ -388,77 +475,15 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
         ]}
         data-approval-id={active().id}
       >
-        <div class="exec-approval-header">
-          <div>
-            <div class="exec-approval-title">{approvalTitle(active())}</div>
-            {pluginId() || agentId() ? (
-              <div class="exec-approval-chips">
-                {renderChip("plugin", pluginId())} {renderChip("agent", agentId())}
-              </div>
-            ) : undefined}
-            <openclaw-approval-countdown
-              class="exec-approval-sub exec-approval-countdown"
-              role="timer"
-              prop:expiresAtMs={active().expiresAtMs}
-            />
-          </div>
-          {(props.queueCount ?? 0) > 1 ? (
-            <div class="exec-approval-queue">
-              {t("execApproval.pending", { count: String(props.queueCount) })}
-            </div>
-          ) : undefined}
-        </div>
-        <Show when={props.variant === "inline" && active().sourceSessionKey}>
-          {(sessionKey) => (
-            <div class="exec-approval-warning" role="note">
-              {t("execApproval.requestedBySession", {
-                session: resolveSessionDisplayName(sessionKey(), props.sourceSession),
-              })}
-            </div>
-          )}
+        <Show when={props.variant === "modal"} fallback={content()}>
+          <div class="exec-approval-modal-content">{content()}</div>
         </Show>
-        {active().kind === "exec"
-          ? renderExecBody(active().request, props.variant)
-          : renderPluginBody(active(), props.variant)}
-        {active().kind === "exec" && !decisions().includes("allow-always") ? (
-          <div class="exec-approval-warning">{t("execApproval.allowAlwaysUnavailable")}</div>
-        ) : undefined}
-        {!props.canGrant ? (
-          <div
-            class={grantError() ? "exec-approval-error" : "exec-approval-warning"}
-            role={grantError() ? "alert" : "note"}
-          >
-            {reviewOnlyMessage()}
-          </div>
-        ) : undefined}
-        {props.error && !grantError() ? (
-          <div class="exec-approval-error" role="alert">
-            {props.error}
-          </div>
-        ) : undefined}
-        <div class="exec-approval-actions">
-          <For each={decisions()}>
-            {(decision) => {
-              const label = createMemo(() => approvalDecisionLabel(decision, active()));
-              return (
-                <button
-                  class={decisionClass(decision)}
-                  type="button"
-                  aria-label={label()}
-                  disabled={props.busy || !props.canGrant}
-                  title={
-                    props.variant === "modal" && props.canGrant
-                      ? `${label()} (${decisionShortcut(decision)})`
-                      : label()
-                  }
-                  onClick={() => void props.onDecision(active().id, decision)}
-                >
-                  <span>{label()}</span>
-                </button>
-              );
-            }}
-          </For>
-        </div>
+        <Show
+          when={props.variant === "modal"}
+          fallback={<div class="exec-approval-actions">{actions()}</div>}
+        >
+          <openclaw-modal-actions class="exec-approval-actions">{actions()}</openclaw-modal-actions>
+        </Show>
       </div>
     </>
   );
@@ -469,14 +494,6 @@ export const ExecApprovalCard = defineSolidBridge<{ props?: ExecApprovalCardProp
   (props, host) => {
     host.style.display = "contents";
     return <>{props.props && <ExecApprovalCardContent {...props.props} />}</>;
-  },
-  { properties: { props: { default: undefined, attribute: false } } },
-);
-defineSolidBridge<{ props?: SidebarApprovalRowProps }>(
-  "openclaw-sidebar-approval-row",
-  (props, host) => {
-    host.style.display = "contents";
-    return <>{props.props && <SidebarApprovalRowContent {...props.props} />}</>;
   },
   { properties: { props: { default: undefined, attribute: false } } },
 );

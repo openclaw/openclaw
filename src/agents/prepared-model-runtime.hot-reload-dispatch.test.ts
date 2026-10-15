@@ -386,7 +386,7 @@ describe("Gateway plugin reload run admission", () => {
         });
         const lease = await admission!;
         expect(lease.snapshot.config).toEqual(outcome === "rollback" ? retained : committed);
-        expect(lease.snapshot.workspaceDir).toBe(input.workspaceDir);
+        expect(lease.snapshot.workspaceDir).toBe("/tmp/unused-workspace");
         expect(lease.snapshot.isCurrent()).toBe(true);
       } finally {
         finishDrainage.resolve();
@@ -640,6 +640,8 @@ describe("retained config and committed model publication", () => {
     const admission = acquireAgentRunPreparedModelRuntime({
       ...ownerInput(retained),
       workspaceDir: fixture.state.path("failed-run-workspace"),
+      // Require a separate owner so admission still exercises failed preparation.
+      skipCredentials: true,
     });
     const result = admission.catch((error: unknown) => error);
     try {

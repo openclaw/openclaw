@@ -180,13 +180,12 @@ describe("Codex physical request authority", () => {
     }
   });
 
-  it("passes scoped wire authority unchanged to the physical client", async () => {
+  it("enforces scoped wire authority at the physical client", async () => {
     const harness = createClientHarness();
     const cause = new Error("owner replaced");
-    const withCurrent = async () => {
+    const withCurrent = vi.fn(async () => {
       throw cause;
-    };
-    const request = vi.spyOn(harness.client, "request");
+    });
     try {
       await expect(
         requestCodexAppServerClientJson({
@@ -196,13 +195,9 @@ describe("Codex physical request authority", () => {
           withCurrent,
         }),
       ).rejects.toMatchObject({ cause });
-      expect(request).toHaveBeenCalledWith(
-        "thread/list",
-        {},
-        expect.objectContaining({ withCurrent }),
-      );
+      expect(withCurrent).toHaveBeenCalledOnce();
+      expect(harness.writes).toEqual([]);
     } finally {
-      request.mockRestore();
       harness.client.close();
     }
   });

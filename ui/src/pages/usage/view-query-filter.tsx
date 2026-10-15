@@ -1,6 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { For, Show, createMemo } from "solid-js";
+import { Show, createMemo } from "solid-js";
 import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
+import { Menu, type MenuItem } from "../../components/solid/menu.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { setQueryTokensForKey } from "./query.ts";
 
@@ -24,14 +25,39 @@ export function UsageQueryFilter(props: {
   const allSelected = createMemo(() =>
     props.options.every((value) => selectedSet().has(normalizeLowercaseStringOrEmpty(value))),
   );
+  const items = createMemo<MenuItem[]>(() => [
+    {
+      id: "command:select-all",
+      label: t("usage.filters.selectAll"),
+      disabled: allSelected(),
+      closeOnSelect: false,
+    },
+    {
+      id: "command:clear",
+      label: t("usage.filters.clear"),
+      disabled: selected().length === 0,
+      closeOnSelect: false,
+    },
+    ...props.options.map((value): MenuItem => ({
+      id: `option:${encodeURIComponent(value)}`,
+      label: value,
+      class: "usage-filter-option",
+      type: "checkbox",
+      checked: selectedSet().has(normalizeLowercaseStringOrEmpty(value)),
+      closeOnSelect: false,
+    })),
+  ]);
   return (
     <Show when={props.options.length > 0}>
-      <wa-dropdown
+      <Menu
+        id={`usage-filter-${props.filterKey}`}
+        label={`${props.label} ${selected().length > 0 ? selected().length : t("usage.filters.all")}`}
         class="usage-filter-select"
+        triggerClass="usage-filter-trigger"
         placement="bottom-start"
-        onWa-select={(event: CustomEvent<{ item: { value?: string; checked: boolean } }>) => {
-          event.preventDefault();
-          const value = event.detail.item.value;
+        items={items()}
+        onSelect={(item) => {
+          const value = item.id;
           if (value === "command:select-all") {
             props.onQueryDraftChange(
               setQueryTokensForKey(props.queryDraft, props.filterKey, props.options),
@@ -42,50 +68,32 @@ export function UsageQueryFilter(props: {
             props.onQueryDraftChange(setQueryTokensForKey(props.queryDraft, props.filterKey, []));
             return;
           }
-          if (value?.startsWith("option:")) {
+          if (value.startsWith("option:")) {
             const optionValue = decodeURIComponent(value.slice("option:".length));
             props.onQueryDraftChange(
               setQueryTokensForKey(
                 props.queryDraft,
                 props.filterKey,
-                event.detail.item.checked
-                  ? [...selected(), optionValue]
-                  : selected().filter(
+                selectedSet().has(normalizeLowercaseStringOrEmpty(optionValue))
+                  ? selected().filter(
                       (entry) =>
                         normalizeLowercaseStringOrEmpty(entry) !==
                         normalizeLowercaseStringOrEmpty(optionValue),
-                    ),
+                    )
+                  : [...selected(), optionValue],
               ),
             );
           }
         }}
-      >
-        <button slot="trigger" type="button" class="usage-filter-trigger">
-          <span>{props.label}</span>
-          <span class="settings-count">
-            {selected().length > 0 ? selected().length : t("usage.filters.all")}
-          </span>
-        </button>
-        <wa-dropdown-item value="command:select-all" disabled={allSelected()}>
-          {t("usage.filters.selectAll")}
-        </wa-dropdown-item>
-        <wa-dropdown-item value="command:clear" disabled={selected().length === 0}>
-          {t("usage.filters.clear")}
-        </wa-dropdown-item>
-        <div class="session-menu__separator" role="separator" />
-        <For each={props.options}>
-          {(value) => (
-            <wa-dropdown-item
-              class="usage-filter-option"
-              type="checkbox"
-              value={`option:${encodeURIComponent(value)}`}
-              prop:checked={selectedSet().has(normalizeLowercaseStringOrEmpty(value))}
-            >
-              {value}
-            </wa-dropdown-item>
-          )}
-        </For>
-      </wa-dropdown>
+        trigger={
+          <>
+            <span>{props.label}</span>
+            <span class="settings-count">
+              {selected().length > 0 ? selected().length : t("usage.filters.all")}
+            </span>
+          </>
+        }
+      />
     </Show>
   );
 }

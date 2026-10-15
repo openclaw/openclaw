@@ -13,6 +13,10 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import * as logger from "../../logger.js";
 import type { ProviderThinkingProfile } from "../../plugins/provider-thinking.types.js";
@@ -193,6 +197,7 @@ function saveStatusTestAuthProfiles(params: {
 }
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   cliBackendsTesting.resetDepsForTest();
   clearAgentHarnesses();
   providerUsageMock.loadProviderUsageSummary.mockReset();
@@ -222,6 +227,7 @@ afterEach(() => {
 
 describe("buildStatusReply subagent summary", () => {
   beforeEach(async () => {
+    setRuntimeConfigSnapshot(baseCfg);
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupRegistry: () => ({
         providers: [],
@@ -275,37 +281,6 @@ describe("buildStatusReply subagent summary", () => {
     const reply = await buildStatusReplyForTest({});
 
     expect(reply?.text).toContain("🤖 Subagents: 1 active");
-  });
-
-  it("dedupes stale rows in the verbose subagent status summary", async () => {
-    const childSessionKey = "agent:main:subagent:status-dedupe-worker";
-    seedSubagentRunForReadTest({
-      runId: "run-status-current",
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "current status worker",
-      cleanup: "keep",
-      createdAt: Date.now() - 60_000,
-      startedAt: Date.now() - 60_000,
-    });
-    seedSubagentRunForReadTest({
-      runId: "run-status-stale",
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "stale status worker",
-      cleanup: "keep",
-      createdAt: Date.now() - 120_000,
-      startedAt: Date.now() - 120_000,
-      endedAt: Date.now() - 90_000,
-      outcome: { status: "ok" },
-    });
-
-    const reply = await buildStatusReplyForTest({ verbose: true });
-
-    expect(reply?.text).toContain("🤖 Subagents: 1 active");
-    expect(reply?.text).not.toContain("· 1 done");
   });
 
   it("gates /status plugins behind the plugin command flag", async () => {

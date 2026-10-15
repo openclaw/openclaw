@@ -1,11 +1,11 @@
 import type { ChatQueueItem, HumanMention } from "../../../lib/chat/chat-types.ts";
+import { isSessionRunVisuallyActive } from "../../../lib/session-run-state.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import {
   adjustTextareaHeight,
   disconnectComposerPopoverAnchorObserver,
 } from "./chat-composer-dom.ts";
 import { ComposerEmojiMenu } from "./chat-composer-emoji.tsx";
-import { clearGoalElapsedTimers } from "./chat-composer-goal.tsx";
 import { HumanMentionMenu } from "./chat-composer-mention-menu.tsx";
 import { createSkillMenuState } from "./chat-composer-skill-menu.tsx";
 import { createSlashMenuState } from "./chat-composer-slash-menu.tsx";
@@ -75,16 +75,19 @@ export function isCurrentSessionSubmittedProgress(
   );
 }
 
-// Single source for "the selected session is visibly working": drives both
-// the thread's working spark and the composer's sr-only announcement.
+// Shared by the thread, composer, pane activity, and header presentation.
 export function isChatRunWorking(
-  props: Pick<ChatComposerProps, "runActive" | "runStatus" | "queue" | "sessionKey">,
+  props: Pick<
+    ChatComposerProps,
+    "runActive" | "runStatus" | "queue" | "sessionKey" | "startupStatus"
+  >,
 ): boolean {
-  return (
+  return isSessionRunVisuallyActive(
     (props.runActive === true && !hasTerminalRunStatus(props.runStatus)) ||
-    props.queue.some((item) =>
-      isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
-    )
+      props.queue.some((item) =>
+        isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
+      ),
+    props.startupStatus?.phase,
   );
 }
 
@@ -177,8 +180,6 @@ function disposeChatComposerState(state: ChatComposerState) {
 
 export function resetChatComposerState(paneId?: string) {
   if (paneId) {
-    // Goal elapsed timers are keyed by element and cleaned up when their
-    // element leaves the DOM, so a per-pane reset does not need to touch them.
     const paneState = composerStates.get(paneId);
     if (paneState) {
       disposeChatComposerState(paneState);
@@ -190,5 +191,4 @@ export function resetChatComposerState(paneId?: string) {
     disposeChatComposerState(state);
   }
   composerStates.clear();
-  clearGoalElapsedTimers();
 }

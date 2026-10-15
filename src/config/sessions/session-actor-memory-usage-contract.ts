@@ -2,6 +2,7 @@ import type {
   SessionTranscriptCorpusEntry,
   SessionTranscriptCorpusOptions,
 } from "../../../packages/memory-host-sdk/src/host/session-transcript-corpus.types.js";
+import type { UsageCostFreshnessCheckpoint } from "../../infra/session-cost-usage-rollup-codec.js";
 import type { SessionTranscriptStats } from "./session-accessor.types.js";
 import type {
   MemorySessionSelectors,
@@ -9,7 +10,7 @@ import type {
 } from "./session-memory-targets.types.js";
 
 /** Replaced as a unit; readers retain the immutable envelope and body together. */
-type SessionActorMemoryUsageRollup = {
+export type SessionActorMemoryUsageRollup = {
   valueJson: string;
   blob: Uint8Array;
   updatedAt: number;
@@ -20,7 +21,12 @@ export type SessionActorMemoryUsageSnapshot = {
   sessionId: string;
   updatedAtMs: number;
   stats: SessionTranscriptStats;
-  rollup?: Omit<SessionActorMemoryUsageRollup, "blob"> & { blob?: Uint8Array };
+  rollup?: Omit<SessionActorMemoryUsageRollup, "blob"> & {
+    blob?: Uint8Array;
+    bodyBytes?: number;
+  };
+  rollupDeferred?: boolean;
+  deferredRollupMetadata?: { checkpoint: UsageCostFreshnessCheckpoint; scannedAt: number };
   events?: Array<{ seq: number; eventJson: string }>;
 };
 
@@ -37,6 +43,11 @@ export type SessionActorMemoryUsageReads = {
     input: {
       includeEvents?: boolean;
       includeRollupBodies?: boolean;
+      reportBudget?: {
+        remainingBytes: number;
+        metadataLimit: number;
+        pricingFingerprint: string;
+      };
       sessionIds?: readonly string[];
     };
     output: SessionActorMemoryUsageSnapshot[];
@@ -49,3 +60,16 @@ export type SessionActorMemoryUsageWrites = {
     output: boolean;
   };
 };
+
+export type SessionActorMemoryUsageQuery = {
+  [Key in keyof SessionActorMemoryUsageReads]: {
+    type: Key;
+    input: SessionActorMemoryUsageReads[Key]["input"];
+  };
+}[keyof SessionActorMemoryUsageReads];
+export type SessionActorMemoryUsageCommand = {
+  [Key in keyof SessionActorMemoryUsageWrites]: {
+    type: Key;
+    input: SessionActorMemoryUsageWrites[Key]["input"];
+  };
+}[keyof SessionActorMemoryUsageWrites];

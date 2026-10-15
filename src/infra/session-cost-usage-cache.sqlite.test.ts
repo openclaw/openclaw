@@ -3,8 +3,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
+import * as validationCache from "../state/openclaw-agent-db-validation-cache.js";
+import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -15,19 +17,29 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { migrateSessionCostUsageRollupStorage } from "./session-cost-usage-cache-migration.js";
-import { writeSessionCostUsageRollupInDatabase } from "./session-cost-usage-cache.kernel.js";
+import {
+  readSessionCostUsageRollupRowsInDatabase,
+  writeSessionCostUsageRollupInDatabase,
+  type SessionCostUsageDeferredMetadata,
+} from "./session-cost-usage-cache.kernel.js";
 import {
   deleteSessionCostUsageRollupsExcept,
   isSessionCostUsageRefreshRunning,
   prepareSessionCostUsageRefreshLock,
 } from "./session-cost-usage-cache.sqlite.js";
-import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.test-support.js";
+import {
+  readSessionCostUsageRollupRows,
+  readSessionCostUsageRollupEntry,
+} from "./session-cost-usage-cache.test-support.js";
 import {
   partitionUsageCostRollup,
   decodeUsageCostPartition,
   USAGE_COST_PARTITION_SCOPE,
 } from "./session-cost-usage-partitions.js";
+import { projectSessionCostSummaries } from "./session-cost-usage-projection.js";
 import {
   decodeUsageCostRollup,
   encodeUsageCostRollup,
@@ -37,6 +49,8 @@ import {
   appendSessionUsageRollupContribution,
   createSessionUsageRollupData,
 } from "./session-cost-usage-rollup.js";
+import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
+import { loadSessionCostSummariesFromCache } from "./session-cost-usage.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -198,7 +212,6 @@ describe("session cost usage SQLite cache", () => {
         expect(
           await owner.writeRollup({
             rollupId: sessionFile,
-            previousValueJson: null,
             valueJson: utf8Json(first.valueJson),
             blob: first.blob,
             partitions: first.partitions,
@@ -225,7 +238,6 @@ describe("session cost usage SQLite cache", () => {
         await expect(
           owner.writeRollup({
             rollupId: sessionFile,
-            previousValueJson: utf8Json(first.valueJson),
             valueJson: utf8Json(first.valueJson),
             blob: first.blob,
             partitions: first.partitions,
@@ -243,7 +255,6 @@ describe("session cost usage SQLite cache", () => {
         expect(
           await owner.writeRollup({
             rollupId: sessionFile,
-            previousValueJson: utf8Json(first.valueJson),
             valueJson: utf8Json(rewritten.valueJson),
             blob: rewritten.blob,
             partitions: [],
@@ -256,7 +267,6 @@ describe("session cost usage SQLite cache", () => {
         expect(
           await owner.writeRollup({
             rollupId: sessionFile,
-            previousValueJson: utf8Json(rewritten.valueJson),
             valueJson: utf8Json(first.valueJson),
             blob: first.blob,
             partitions: first.partitions,
@@ -268,7 +278,6 @@ describe("session cost usage SQLite cache", () => {
         expect(
           await owner.writeRollup({
             rollupId: sessionFile,
-            previousValueJson: utf8Json(first.valueJson),
             valueJson: utf8Json(legacy.valueJson),
             blob: legacy.blob,
             updatedAt: 5,
@@ -277,7 +286,6 @@ describe("session cost usage SQLite cache", () => {
         expect(
           await owner.writeRollup({
             rollupId: sessionFile,
-            previousValueJson: utf8Json(legacy.valueJson),
             valueJson: utf8Json(rewritten.valueJson),
             blob: rewritten.blob,
             partitions: [],
@@ -289,7 +297,6 @@ describe("session cost usage SQLite cache", () => {
         expect(
           await owner.writeRollup({
             rollupId: sessionFile,
-            previousValueJson: utf8Json(rewritten.valueJson),
             valueJson: utf8Json(first.valueJson),
             blob: first.blob,
             partitions: first.partitions,
@@ -385,7 +392,7 @@ describe("session cost usage SQLite cache", () => {
     });
   });
 
-  it("keeps compare-and-swap text returned to the caller bounded for large values", async () => {
+  it("replaces a large prior value without reading it back", async () => {
     const stateDir = tempDirs.make("openclaw-usage-cache-cas-payload-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "worker-1";
@@ -394,7 +401,6 @@ describe("session cost usage SQLite cache", () => {
       expect(
         writeRollup(agentId, {
           rollupId: "large.jsonl",
-          previousValueJson: null,
           valueJson: utf8Json(previousValueJson),
           updatedAt: 1,
         }),
@@ -406,7 +412,6 @@ describe("session cost usage SQLite cache", () => {
         expect(
           writeRollup(agentId, {
             rollupId: "large.jsonl",
-            previousValueJson: utf8Json(previousValueJson),
             valueJson: utf8Json('{"totalTokens":2}'),
             updatedAt: 2,
           }),
@@ -417,127 +422,108 @@ describe("session cost usage SQLite cache", () => {
         executions.restore();
       }
       expect(readSessionCostUsageRollupRows(agentId)).toEqual([
-        { key: "large.jsonl", updatedAt: 2, valueJson: '{"totalTokens":2}' },
+        { key: "large.jsonl", updatedAt: 2, valueJson: '{"totalTokens":2}', bodyBytes: 0 },
       ]);
     });
   });
 
-  it("preserves exact text, null recovery, and refusals for UTF-8 compare-and-swap values", async () => {
-    const stateDir = tempDirs.make("openclaw-usage-cache-cas-values-");
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const agentId = "worker-1";
-      const { db } = openOpenClawAgentDatabase({ agentId });
-      const scope = "session-cost-usage-rollup-v3";
-      const currentJson = '{ "label": "雪🦞é", "total": 1 }';
-      const nextJson = '{"label":"€🦞", "total":2}';
-      const insert = db.prepare(
-        "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-      );
-      const select = db.prepare(
-        "SELECT value_json, typeof(value_json) AS value_type, blob, expires_at, updated_at FROM cache_entries WHERE scope = ? AND key = ?",
-      );
-      const cases: Array<{
-        label: string;
-        current: string | null | undefined;
-        previous: string | null;
-        applied: boolean;
-      }> = [
-        { label: "insert", current: undefined, previous: null, applied: true },
-        { label: "null recovery", current: null, previous: null, applied: true },
-        { label: "exact match", current: currentJson, previous: currentJson, applied: true },
-        { label: "invalid JSON", current: "{雪", previous: "{雪", applied: true },
-        { label: "missing", current: undefined, previous: currentJson, applied: false },
-        { label: "null mismatch", current: null, previous: currentJson, applied: false },
-        { label: "existing", current: currentJson, previous: null, applied: false },
-        { label: "stale", current: nextJson, previous: currentJson, applied: false },
-        {
-          label: "whitespace mismatch",
-          current: currentJson,
-          previous: '{"label":"雪🦞é","total":1}',
-          applied: false,
-        },
-        { label: "Unicode mismatch", current: '"é"', previous: '"e\u0301"', applied: false },
-        { label: "embedded NUL", current: "{雪\0}", previous: "{雪\0}", applied: true },
-      ];
-      for (const { label, current, previous, applied } of cases) {
-        const rollupId = `${label}\0雪`;
+  it.each([undefined, null, "{invalid", '{"total":1}'])(
+    "upserts UTF-8 reports over prior value %s while preserving other scopes",
+    async (current) => {
+      const stateDir = tempDirs.make("openclaw-usage-cache-upsert-");
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const agentId = "worker-1";
+        const { db } = openOpenClawAgentDatabase({ agentId });
+        const rollupId = "session\0雪";
+        const valueJson = '{"label":"€🦞", "total":2}';
+        const insert = db.prepare(
+          "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)",
+        );
         if (current !== undefined) {
-          insert.run(scope, rollupId, current, new Uint8Array([1, 2]), 123, 1);
+          insert.run("session-cost-usage-rollup-v3", rollupId, current, 1);
         }
-        insert.run("other", rollupId, currentJson, null, null, 1);
-        const before = select.get(scope, rollupId);
-        const otherBefore = select.get("other", rollupId);
+        insert.run("other", rollupId, "unchanged", 1);
         expect(
           writeRollup(agentId, {
             rollupId,
-            previousValueJson: previous === null ? null : utf8Json(previous),
-            valueJson: utf8Json(nextJson),
+            valueJson: utf8Json(valueJson),
             blob: new Uint8Array([3, 4, 5]),
             updatedAt: 2,
           }),
-          label,
-        ).toBe(applied);
-        expect(select.get(scope, rollupId), label).toEqual(
-          applied
-            ? {
-                value_json: nextJson,
-                value_type: "text",
-                blob: new Uint8Array([3, 4, 5]),
-                expires_at: null,
-                updated_at: 2,
-              }
-            : before,
-        );
-        expect(select.get("other", rollupId), label).toEqual(otherBefore);
+        ).toBe(true);
+        expect(readSessionCostUsageRollupRows(agentId)).toEqual([
+          { key: rollupId, valueJson, updatedAt: 2, bodyBytes: 3 },
+        ]);
+        expect(
+          db.prepare("SELECT value_json FROM cache_entries WHERE scope = 'other'").get(),
+        ).toEqual({ value_json: "unchanged" });
+      });
+    },
+  );
+
+  it("serializes refreshes in-process without persisting lock or status writes", async () => {
+    const stateDir = tempDirs.make("openclaw-usage-cache-exclusion-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const agentId = "worker-1";
+      const database = openOpenClawAgentDatabase({ agentId });
+      const owner = prepareSessionCostUsageRefreshLock(agentId, database.path);
+      const contender = prepareSessionCostUsageRefreshLock(agentId, database.path);
+      try {
+        expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
+        expect(await owner.acquire()).toBe(true);
+        expect(await contender.acquire()).toBe(false);
+        expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(true);
+        expect(database.db.prepare("SELECT * FROM cache_entries").all()).toEqual([]);
+        await owner.release();
+        expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
+        expect(await contender.acquire()).toBe(true);
+      } finally {
+        await owner.release();
+        await contender.release();
       }
+      expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
+      expect(database.db.prepare("SELECT * FROM cache_entries").all()).toEqual([]);
     });
   });
 
-  it("reclaims a zombie refresh lock on acquisition without writing during status reads", async () => {
-    const stateDir = tempDirs.make("openclaw-usage-cache-zombie-lock-");
-
+  it("persists a usage refresh when a sibling adopts shared admission during schema refresh", async () => {
+    const stateDir = tempDirs.make("openclaw-usage-cache-readmission-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "worker-1";
-      const zombiePid = 4242;
-      const database = openOpenClawAgentDatabase({ agentId });
-      database.db
-        .prepare(
-          "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, ?)",
-        )
-        .run(
-          "session-cost-usage",
-          "refresh-lock",
-          JSON.stringify({ pid: zombiePid, startedAt: 1, ownerNonce: "zombie-owner" }),
-          1,
-        );
-      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-      vi.spyOn(process, "kill").mockImplementation(() => true);
-      const readFile = fs.readFileSync;
-      vi.spyOn(fs, "readFileSync").mockImplementation((filePath, options) => {
-        if (String(filePath) === `/proc/${zombiePid}/status`) {
-          return `Name:\tworker\nState:\tZ (zombie)\nPid:\t${zombiePid}\nThreads:\t1\n`;
+      const database = await withOpenClawAgentDatabaseWrite({ agentId }, (opened) => opened);
+      const write = async (valueJson: string, updatedAt: number) => {
+        const owner = prepareSessionCostUsageRefreshLock(agentId, database.path);
+        try {
+          expect(await owner.acquire()).toBe(true);
+          return await owner.writeRollup({
+            rollupId: "session.jsonl",
+            valueJson: utf8Json(valueJson),
+            blob: null,
+            updatedAt,
+          });
+        } finally {
+          await owner.release();
         }
-        return readFile(filePath, options);
-      });
-
-      const readLock = () =>
-        database.db
-          .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
-          .get("session-cost-usage", "refresh-lock");
-      expect(await isSessionCostUsageRefreshRunning(agentId, database.path)).toBe(false);
-      expect(readLock()).toEqual({
-        value_json: JSON.stringify({ pid: zombiePid, startedAt: 1, ownerNonce: "zombie-owner" }),
-      });
-      const owner = prepareSessionCostUsageRefreshLock(agentId, database.path);
-      try {
-        expect(await owner.acquire()).toBe(true);
-        expect(readLock()).not.toEqual({
-          value_json: JSON.stringify({ pid: zombiePid, startedAt: 1, ownerNonce: "zombie-owner" }),
+      };
+      expect(await write('{"totalTokens":1}', 1)).toBe(true);
+      database.db.exec("CREATE TABLE usage_readmission_fixture(value TEXT)");
+      const capture = validationCache.captureOpenClawAgentDatabaseAdmissionPublication;
+      const publication = vi
+        .spyOn(validationCache, "captureOpenClawAgentDatabaseAdmissionPublication")
+        .mockImplementation((target) => {
+          const publish = capture(target);
+          // A retained reader can adopt the shared receipt while worker admission is pending.
+          validationCache.getOpenClawAgentDatabaseValidation(database);
+          return publish;
         });
+      try {
+        expect(await write('{"totalTokens":2}', 2)).toBe(true);
+        expect(readSessionCostUsageRollupRows(agentId, database.path)).toMatchObject([
+          { key: "session.jsonl", valueJson: '{"totalTokens":2}', updatedAt: 2 },
+        ]);
       } finally {
-        await owner.release();
+        publication.mockRestore();
       }
-      expect(readLock()).toBeUndefined();
     });
   });
 
@@ -561,10 +547,9 @@ describe("session cost usage SQLite cache", () => {
       const agentId = "worker-1";
       const database = openOpenClawAgentDatabase({ agentId });
       const databasePath = database.path;
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync();
 
-      const stateDatabase = openOpenClawStateDatabase();
-      stateDatabase.db.prepare("DELETE FROM agent_databases").run();
+      unregisterOpenClawAgentDatabase({ agentId, path: databasePath });
       expect(countRegisteredAgentDatabases()).toBe(0);
 
       expect(readSessionCostUsageRollupRows(agentId, databasePath)).toEqual([]);
@@ -574,7 +559,6 @@ describe("session cost usage SQLite cache", () => {
       expect(
         writeRollup(agentId, {
           rollupId: "session.jsonl",
-          previousValueJson: null,
           valueJson: utf8Json("{}"),
           updatedAt: 1,
         }),
@@ -599,7 +583,6 @@ describe("session cost usage SQLite cache", () => {
         expect(
           writeRollup(agentId, {
             rollupId,
-            previousValueJson: null,
             valueJson: utf8Json(staleValue),
             updatedAt: 1,
           }),
@@ -608,7 +591,6 @@ describe("session cost usage SQLite cache", () => {
 
         const refreshed = writeRollup(agentId, {
           rollupId,
-          previousValueJson: utf8Json(staleValue),
           valueJson: utf8Json(refreshedValue),
           updatedAt: 2,
         });
@@ -616,7 +598,7 @@ describe("session cost usage SQLite cache", () => {
         expect(refreshed).toBe(true);
 
         expect(readSessionCostUsageRollupRows(agentId)).toEqual([
-          { key: rollupId, updatedAt: 2, valueJson: refreshedValue },
+          { key: rollupId, updatedAt: 2, valueJson: refreshedValue, bodyBytes: 0 },
         ]);
       });
     },
@@ -687,6 +669,8 @@ describe("session cost usage SQLite cache", () => {
         const { db } = openOpenClawAgentDatabase({ agentId });
         const owner = prepareSessionCostUsageRefreshLock(agentId);
         expect(await owner.acquire()).toBe(true);
+        // Admit the writer before installing the fault-injection trigger.
+        await owner.pruneRows([]);
         const insert = db.prepare(
           "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, ?)",
         );
@@ -715,9 +699,7 @@ describe("session cost usage SQLite cache", () => {
 
         await owner.pruneRows(rows);
 
-        expect(db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all()).toEqual(
-          before.filter((row) => row.key === "refresh-lock"),
-        );
+        expect(db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all()).toEqual([]);
         await owner.release();
       });
     },
@@ -731,7 +713,6 @@ describe("session cost usage SQLite cache", () => {
       expect(
         writeRollup(agentId, {
           rollupId: "current.jsonl",
-          previousValueJson: null,
           valueJson: utf8Json('{"version":2}'),
           updatedAt: 2,
         }),
@@ -746,7 +727,9 @@ describe("session cost usage SQLite cache", () => {
       insert.run("other", "keep", "{}", 1);
 
       const rows = readSessionCostUsageRollupRows(agentId);
-      expect(rows).toEqual([{ key: "current.jsonl", updatedAt: 2, valueJson: '{"version":2}' }]);
+      expect(rows).toEqual([
+        { key: "current.jsonl", updatedAt: 2, valueJson: '{"version":2}', bodyBytes: 0 },
+      ]);
 
       await deleteSessionCostUsageRollupsExcept({
         agentId,
@@ -764,3 +747,292 @@ describe("session cost usage SQLite cache", () => {
     });
   });
 });
+
+it.each(["stored", "decoded", "corrupt-length"] as const)(
+  "refreshes genuinely stale %s budget-deferred checkpoints",
+  async (mode) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const config = {};
+      const agentId = "usage-deferred-freshness";
+      const sessionFile = state.path("deferred-freshness.jsonl");
+      const record =
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-09-18T00:00:00Z",
+          message: { role: "assistant", usage: { input: 7, output: 0, totalTokens: 7 } },
+        }) + "\n";
+      await fs.promises.writeFile(sessionFile, record);
+      await refreshCostUsageCacheForAgent({ config, agentId, sessionFiles: [sessionFile] });
+      const row = readSessionCostUsageRollupRows(agentId)[0];
+      if (!row) {
+        throw new Error("Expected stored checkpoint");
+      }
+      const entry = readSessionCostUsageRollupEntry(row, agentId);
+      if (!entry) {
+        throw new Error("Expected valid checkpoint body");
+      }
+      if (mode !== "corrupt-length") {
+        entry.rollup.untimestamped.tools = [
+          { name: "synthetic-" + "x".repeat((mode === "stored" ? 2 : 35) * 1024 * 1024), count: 1 },
+        ];
+      }
+      const encoded = encodeUsageCostRollup(entry);
+      if (mode === "corrupt-length") {
+        const envelope = JSON.parse(encoded.valueJson);
+        envelope.body.bytes = 35 * 1024 * 1024;
+        encoded.valueJson = JSON.stringify(envelope);
+      }
+      if (mode === "stored") {
+        encoded.blob = Uint8Array.from(Buffer.from(JSON.stringify(entry.rollup)));
+        const envelope = JSON.parse(encoded.valueJson);
+        envelope.body.encoding = "identity";
+        envelope.body.storedBytes = encoded.blob.byteLength;
+        encoded.valueJson = JSON.stringify(envelope);
+      }
+      const lock = prepareSessionCostUsageRefreshLock(agentId);
+      try {
+        expect(await lock.acquire()).toBe(true);
+        expect(
+          await lock.writeRollup({
+            rollupId: row.key,
+            valueJson: new TextEncoder().encode(encoded.valueJson),
+            blob: encoded.blob,
+            updatedAt: row.updatedAt,
+          }),
+        ).toBe(true);
+      } finally {
+        await lock.release();
+      }
+      const prepared = prepareUsageCostWorker({ config, agentId, sessionFiles: [sessionFile] });
+      for (const stale of [false, true]) {
+        if (stale) {
+          await fs.promises.appendFile(sessionFile, record);
+        }
+        const result = await runUsageCostWorker(prepared, {
+          kind: "sessions",
+          sessions: [{ sessionFile }],
+          pricingFingerprint: entry.pricingFingerprint,
+          dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+        });
+        expect(result).toMatchObject({
+          kind: "sessions",
+          summaries: [null],
+          staleSessionFiles: stale || mode === "corrupt-length" ? [sessionFile] : [],
+          invalidRows: [],
+          cacheStatus: { pendingFiles: 1, staleFiles: stale || mode === "corrupt-length" ? 1 : 0 },
+        });
+      }
+    });
+  },
+);
+
+it.each(["valid", "missing", "truncated"] as const)(
+  "preserves freshness or repairs %s bodies after header exhaustion",
+  async (mode) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const agentId = "usage-header-allowance";
+      const sessionFile = state.path("header-allowance.jsonl");
+      const record =
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-09-18T00:00:00Z",
+          message: { role: "assistant", usage: { input: 7, totalTokens: 7 } },
+        }) + "\n";
+      await fs.promises.writeFile(sessionFile, record);
+      await refreshCostUsageCacheForAgent({ config: {}, agentId, sessionFiles: [sessionFile] });
+      const row = readSessionCostUsageRollupRows(agentId)[0];
+      const entry = row && readSessionCostUsageRollupEntry(row, agentId);
+      if (!entry || !row) {
+        throw new Error("Expected stored checkpoint");
+      }
+      if (mode !== "valid") {
+        writeRollup(agentId, {
+          rollupId: row.key,
+          valueJson: Buffer.from(row.valueJson),
+          updatedAt: row.updatedAt,
+          blob: mode === "truncated" ? encodeUsageCostRollup(entry).blob.subarray(1) : undefined,
+        });
+      }
+      const budget = {
+        remainingBytes: 128,
+        deferredPaths: new Set<string>(),
+        deferredMetadata: new Map<string, SessionCostUsageDeferredMetadata>(),
+        metadataLimit: 1,
+        pricingFingerprint: entry.pricingFingerprint,
+      };
+      const rows = readSessionCostUsageRollupRowsInDatabase(
+        openOpenClawAgentDatabase({ agentId }).db,
+        [row.key],
+        { includeBody: true, budget },
+      );
+      expect(rows).toEqual([]);
+      expect(budget.remainingBytes).toBe(128);
+      expect(budget.deferredMetadata.size).toBe(mode === "valid" ? 1 : 0);
+      expect(budget.deferredPaths.has(row.key)).toBe(mode === "valid");
+      if (mode === "valid") {
+        expect(budget.deferredMetadata.get(row.key)?.checkpoint).not.toHaveProperty("anchorHash");
+      }
+      for (const stale of mode === "valid" ? [false, true] : [false]) {
+        if (stale) {
+          await fs.promises.appendFile(sessionFile, record);
+        }
+        const stat = await fs.promises.stat(sessionFile);
+        const result = await projectSessionCostSummaries({
+          readRow: () => undefined,
+          readBody: () => null,
+          onInvalidBody: () => {},
+          remainingRows: [],
+          deferredPaths: budget.deferredPaths,
+          deferredMetadata: budget.deferredMetadata,
+          sessions: [{ sessionFile }],
+          files: [
+            {
+              filePath: row.key,
+              sourcePath: sessionFile,
+              kind: "jsonl",
+              size: stat.size,
+              mtimeMs: stat.mtimeMs,
+              device: stat.dev,
+              inode: stat.ino,
+            },
+          ],
+          pricingFingerprint: entry.pricingFingerprint,
+        });
+        expect(result).toMatchObject({
+          summaries: [null],
+          staleSessionFiles: stale || mode !== "valid" ? [sessionFile] : [],
+          cacheStatus: { pendingFiles: 1, staleFiles: stale || mode !== "valid" ? 1 : 0 },
+        });
+      }
+      if (mode !== "valid") {
+        const prepared = prepareUsageCostWorker({
+          config: {},
+          agentId,
+          sessionFiles: [sessionFile],
+        });
+        const operation = {
+          kind: "sessions" as const,
+          sessions: [{ sessionFile }],
+          pricingFingerprint: entry.pricingFingerprint,
+          dayBucket: { mode: "utc-offset" as const, utcOffsetMinutes: 0 },
+        };
+        expect(await runUsageCostWorker(prepared, operation)).toMatchObject({
+          staleSessionFiles: [sessionFile],
+        });
+        // No rebuildRows: the refresh owner must detect actual body corruption itself.
+        await refreshCostUsageCacheForAgent({ config: {}, agentId, sessionFiles: [sessionFile] });
+        expect(await runUsageCostWorker(prepared, operation)).toMatchObject({
+          staleSessionFiles: [],
+          summaries: [{ totalTokens: 7 }],
+        });
+      }
+    });
+  },
+);
+
+it.each(["missing", "oversized-first", "oversized-last", "identity-length"])(
+  "repairs %s monthly partitions and filters within and across months",
+  async (mode) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const config = {};
+      const agentId = "usage-missing-partition";
+      const sessionFile = state.path("usage-missing-partition.jsonl");
+      const options = { config, agentId, sessionFiles: [sessionFile] };
+      const record = (day: number) =>
+        JSON.stringify({
+          type: "message",
+          timestamp: new Date(Date.UTC(2026, 8, day)).toISOString(),
+          message: {
+            role: "assistant",
+            model: "fixture",
+            provider: "test",
+            usage: { input: 10, output: 0, totalTokens: 10, cost: { total: 1 } },
+          },
+        }) + "\n";
+      await fs.promises.writeFile(sessionFile, record(18) + record(19) + record(31));
+      await refreshCostUsageCacheForAgent(options);
+      runOpenClawAgentWriteTransaction(
+        ({ db }) => {
+          if (mode === "identity-length") {
+            const partition = db
+              .prepare(
+                "SELECT key, value_json FROM cache_entries WHERE scope = ? ORDER BY key LIMIT 1",
+              )
+              .get(USAGE_COST_PARTITION_SCOPE);
+            if (
+              !partition ||
+              typeof partition.key !== "string" ||
+              typeof partition.value_json !== "string"
+            ) {
+              throw new Error("Expected partition header");
+            }
+            db.prepare("UPDATE cache_entries SET value_json = ? WHERE scope = ? AND key = ?").run(
+              JSON.stringify({
+                ...JSON.parse(partition.value_json),
+                encoding: "identity",
+                bytes: 35 * 1024 * 1024,
+              }),
+              USAGE_COST_PARTITION_SCOPE,
+              partition.key,
+            );
+            return;
+          }
+          db.prepare(
+            mode === "missing"
+              ? "DELETE FROM cache_entries WHERE (scope, key) IN (SELECT scope, key FROM cache_entries WHERE scope = ? ORDER BY key LIMIT 1)"
+              : `UPDATE cache_entries SET value_json = CASE WHEN key = (SELECT key FROM cache_entries WHERE scope = ? ORDER BY key ${mode === "oversized-last" ? "DESC" : "ASC"} LIMIT 1) THEN ? || value_json ELSE value_json END, blob = zeroblob(2097152) WHERE scope = ?`,
+          ).run(
+            ...(mode === "missing"
+              ? [USAGE_COST_PARTITION_SCOPE]
+              : [
+                  USAGE_COST_PARTITION_SCOPE,
+                  " ".repeat(64 * 1024 + 1),
+                  USAGE_COST_PARTITION_SCOPE,
+                ]),
+          );
+        },
+        { agentId },
+      );
+      const row = readSessionCostUsageRollupRows(agentId)[0];
+      if (!row) {
+        throw new Error("Expected stored checkpoint");
+      }
+      const prepared = prepareUsageCostWorker(options);
+      const operation = {
+        kind: "sessions" as const,
+        sessions: [{ sessionFile }],
+        pricingFingerprint: JSON.parse(row.valueJson).pricingFingerprint,
+        dayBucket: { mode: "utc-offset" as const, utcOffsetMinutes: 0 },
+      };
+      expect(
+        await runUsageCostWorker(prepared, { ...operation, startMs: Date.UTC(2026, 8, 18) + 1 }),
+      ).toMatchObject({ summaries: [{ totalTokens: 20 }], staleSessionFiles: [] });
+      const rejected = await runUsageCostWorker(prepared, operation);
+      expect(rejected).toMatchObject({
+        summaries: [null],
+        staleSessionFiles: [sessionFile],
+        invalidRows: [row],
+        cacheStatus: { staleFiles: 1 },
+      });
+      await refreshCostUsageCacheForAgent({ ...options, rebuildRows: [row] });
+      await fs.promises.appendFile(sessionFile, record(20));
+      await refreshCostUsageCacheForAgent(options);
+      for (const [startMs, endMs, totalTokens] of [
+        [Date.UTC(2026, 8, 19), Date.UTC(2026, 8, 20) - 1, 10],
+        [Date.UTC(2026, 8, 20), Date.UTC(2026, 9, 2) - 1, 20],
+        [Date.UTC(2026, 8, 18), Date.UTC(2026, 9, 2) - 1, 40],
+      ]) {
+        expect(
+          await loadSessionCostSummariesFromCache({
+            ...options,
+            sessions: [{ sessionFile }],
+            requestRefresh: false,
+            startMs,
+            endMs,
+            dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+          }),
+        ).toMatchObject({ summaries: [{ totalTokens }], cacheStatus: { status: "fresh" } });
+      }
+    });
+  },
+);

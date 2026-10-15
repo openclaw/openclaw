@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   readExactSessionEntryRow,
@@ -20,6 +21,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { recordSessionCreated } from "./session-created.js";
 import { prepareAmbientGroupWatchTargetsRead } from "./session-state-events.ambient-read.js";
 import {
@@ -78,11 +80,60 @@ async function createWatcherSession(
   );
 }
 
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
+
 afterEach(async () => {
   await cleanupSessionStateTestState();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("session state events", () => {
+  it("publishes the inserted head and notice once, leaving replay state unchanged", () => {
+    const database = createDatabaseOptions();
+    const input = eventInput({
+      dedupeKey: "replayed-event",
+      summary: "event \ud800",
+      payload: { reason: "requested" },
+    });
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(database).db);
+    const record = (now: number) =>
+      runOpenClawStateWriteTransaction(
+        ({ db: writer }) => recordSessionStateEventInDatabase(writer, input, now),
+        database,
+      );
+    const reads = trackSqliteStatementExecutions(db, ["events"], (sql) =>
+      /^select\b/i.test(sql) && /\bfrom\s+"session_state_events"/i.test(sql) ? "events" : null,
+    );
+    let first: ReturnType<typeof record>;
+    try {
+      first = record(1000);
+    } finally {
+      reads.restore();
+    }
+    expect(reads.counts.events).toBe(0);
+    expect(first.row?.sequence).toBeGreaterThan(0);
+    expect(first.row).toMatchObject({
+      summary: "event \ufffd",
+      payload_json: '{"reason":"requested"}',
+      occurred_at: 1000,
+    });
+    expect(first.notices).toHaveLength(1);
+    const readHead = () =>
+      db.prepare("SELECT last_sequence, updated_at FROM session_state_heads").get();
+    const head = readHead();
+    const cursor = readCursor(database);
+    expect(head).toEqual({ last_sequence: first.row?.sequence, updated_at: 1000 });
+    expect(cursor?.material_sequence).toBe(first.row?.sequence);
+
+    const replay = record(2000);
+    expect(replay.row).toEqual(first.row);
+    expect(replay.notices).toEqual([]);
+    expect(readHead()).toEqual(head);
+    expect(readCursor(database)).toEqual(cursor);
+  });
+
   it.each(
     [
       { change: "ownership", key: child, field: "lifecycleRunId", records: false },
@@ -360,6 +411,7 @@ describe("session state events", () => {
     ] as const) {
       const prepared = prepareSubagentTerminalState({
         childSessionKey: child,
+        agentId: "main",
         requesterSessionKey: watcher,
         ...terminal,
       });
@@ -414,7 +466,7 @@ describe("session state watcher cursor batches", () => {
   it("advances watcher fanout with bounded cursor reads and preserves excluded cursors", async () => {
     const database = createDatabaseOptions();
     await seedChild(database, nestedWatcher);
-    const { db } = openOpenClawStateDatabase(database);
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(database).db);
     const watchers = Array.from(
       { length: 1_001 },
       (_, index) => `agent:main:subagent:fanout-${index}`,

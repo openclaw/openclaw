@@ -18,7 +18,9 @@ import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-
 import { parseStoredJson } from "./plugin-state-error.js";
 import {
   observationFromCachedPluginState,
+  preparePluginStateEntriesCacheRead,
   preparePluginStateObservationCacheRead,
+  readPluginStateEntriesCache,
   readPluginStateObservationCache,
 } from "./plugin-state-observation-cache.js";
 import type {
@@ -30,6 +32,7 @@ import {
   capturePluginStateMutationSettlement,
 } from "./plugin-state-operation-epochs.js";
 import {
+  beginPluginStatePublication,
   recordPluginStateReadDependency,
   withPluginStatePublication,
 } from "./plugin-state-publication.js";
@@ -131,7 +134,9 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
   const description = pluginStateWorkerOperations[command.type];
   let operationStarted = false;
   let order: PluginStateCommandOrder | undefined;
+  let publication: ReturnType<typeof beginPluginStatePublication> | undefined;
   let installObservation: ReturnType<typeof preparePluginStateObservationCacheRead> | undefined;
+  let installEntries: ReturnType<typeof preparePluginStateEntriesCacheRead> | undefined;
   try {
     const context =
       capturedContext ?? captureOpenClawStateWorkerContext({ path: databasePath, env });
@@ -146,6 +151,16 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     // SAFETY: Key and input are correlated by every caller; this forms the dispatch union.
     const typedCommand = command as PluginStateCommand;
     order = prepareCommandOrder(context.admission.coordinationKey, typedCommand);
+    if (
+      order?.finish ||
+      (typedCommand.type === "pluginState.executeOperation" &&
+        typedCommand.input.writeStores.length > 0)
+    ) {
+      publication = beginPluginStatePublication(
+        () => context.admission.identity.key,
+        context.assertPublicationCurrent ?? context.admission.assertCurrent,
+      );
+    }
     if (order?.ready) {
       await order.ready;
       assertAdmission?.();
@@ -154,17 +169,27 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       !currentEntries &&
       (typedCommand.type === "pluginState.observe" ||
         typedCommand.type === "pluginState.lookup" ||
-        typedCommand.type === "pluginState.lookupMany")
+        typedCommand.type === "pluginState.lookupMany" ||
+        typedCommand.type === "pluginState.entries")
     ) {
       const identity = context.admission.identity.key;
       const keys =
-        typedCommand.type === "pluginState.lookupMany"
-          ? typedCommand.input.keys
-          : [typedCommand.input.key];
+        typedCommand.type === "pluginState.entries"
+          ? []
+          : typedCommand.type === "pluginState.lookupMany"
+            ? typedCommand.input.keys
+            : [typedCommand.input.key];
+      const cachedEntries =
+        typedCommand.type === "pluginState.entries"
+          ? readPluginStateEntriesCache(identity, typedCommand.input)
+          : undefined;
       const cached = keys.map((key) =>
         readPluginStateObservationCache(identity, { ...typedCommand.input, key }),
       );
-      if (cached.every((entry) => entry !== undefined)) {
+      if (
+        cached.every((entry) => entry !== undefined) &&
+        (typedCommand.type !== "pluginState.entries" || cachedEntries !== undefined)
+      ) {
         const terminalFailure =
           openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(databasePath);
         if (terminalFailure) {
@@ -176,6 +201,10 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         assertAdmission?.();
         // Quarantine revokes these admitted facts; the worker owns refusal and recovery.
         if (hasSqliteDatabaseSchemaAdmissionForIdentity(context.admission.identity)) {
+          if (typedCommand.type === "pluginState.entries") {
+            // SAFETY: Only the entries command reaches this namespace result branch.
+            return cachedEntries as PluginStateWorkerRequests[Key]["output"];
+          }
           if (typedCommand.type === "pluginState.observe") {
             const observation = observationFromCachedPluginState(
               identity,
@@ -183,8 +212,12 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
               typedCommand.input,
               cached[0]!,
             );
+            const cachedObservation = {
+              ...observation,
+              row: cached[0]!.row,
+            };
             // SAFETY: This branch handles only the observe command's observation output.
-            return observation as PluginStateWorkerRequests[Key]["output"];
+            return cachedObservation as PluginStateWorkerRequests[Key]["output"];
           }
           const values = cached.map(({ row }): Result<unknown, PluginStateWorkerFailure> => {
             try {
@@ -215,6 +248,8 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       }
       if (typedCommand.type === "pluginState.observe") {
         installObservation = preparePluginStateObservationCacheRead(identity, typedCommand.input);
+      } else if (typedCommand.type === "pluginState.entries") {
+        installEntries = preparePluginStateEntriesCacheRead(identity, typedCommand.input);
       }
     }
     // A write-only await here would let later reads overtake it before broker admission.
@@ -248,6 +283,11 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
           // SAFETY: The command discriminant fixes this worker result's private row envelope.
           result.value as PluginStateWorkerRequests["pluginState.observe"]["output"];
         installObservation?.(observation.row);
+      } else if (command.type === "pluginState.entries") {
+        installEntries?.(
+          // SAFETY: The command discriminant fixes this worker result's entry list.
+          result.value as PluginStateWorkerRequests["pluginState.entries"]["output"],
+        );
       }
       return result.value;
     };
@@ -310,7 +350,11 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       databasePath,
     );
   } finally {
-    order?.finish?.();
+    try {
+      publication?.finish("completed");
+    } finally {
+      order?.finish?.();
+    }
   }
 }
 
@@ -375,14 +419,14 @@ export const registerPluginStateInWorker = createOperation("pluginState.register
 export const replacePluginStateInWorker = createOperation("pluginState.replace");
 export const replacePluginStateEntryInWorker = createOperation("pluginState.replaceEntry");
 
-const observePluginState = createOperation(
+export const observePluginStateRowInWorker = createOperation(
   "pluginState.observe",
   undefined,
   () => true,
   ({ pluginId, namespace, key }) => ({ pluginId, namespace, keys: [key] }),
 );
 export async function observePluginStateInWorker(params: Input<"pluginState.observe">) {
-  const { value, comparison } = await observePluginState(params);
+  const { value, comparison } = await observePluginStateRowInWorker(params);
   return { value, comparison };
 }
 export const comparePluginStateUpdateInWorker = createOperation(

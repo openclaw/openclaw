@@ -51,7 +51,7 @@ export type ChannelConversationBindingSupport = {
       threadId?: string | number;
     };
   }) => boolean;
-  /** @deprecated Use setIdleTimeoutBySessionKeyAsync. Retained through the next Plugin SDK major. */
+  /** @deprecated Use setIdleTimeoutBySessionKeyAsync; final compatibility day: 2026-12-31. */
   setIdleTimeoutBySessionKey?: (params: {
     targetSessionKey: string;
     accountId?: string | null;
@@ -62,7 +62,7 @@ export type ChannelConversationBindingSupport = {
     idleTimeoutMs?: number;
     maxAgeMs?: number;
   }>;
-  /** @deprecated Use setMaxAgeBySessionKeyAsync. Retained through the next Plugin SDK major. */
+  /** @deprecated Use setMaxAgeBySessionKeyAsync; final compatibility day: 2026-12-31. */
   setMaxAgeBySessionKey?: (params: {
     targetSessionKey: string;
     accountId?: string | null;

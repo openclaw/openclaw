@@ -3,12 +3,21 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
   MessageChannel,
   receiveMessageOnPort,
+  threadId,
   Worker,
   type MessagePort,
 } from "node:worker_threads";
+import { assertEngineStoreExecutionAllowed } from "../database-engine/admission-scope.js";
+import { observeDatabaseOperation } from "../database-engine/observation.js";
+import {
+  POSTGRES_CONNECT_TIMEOUT_MS,
+  POSTGRES_LOCK_TIMEOUT_MS,
+  POSTGRES_STATEMENT_TIMEOUT_MS,
+} from "../database-engine/policy.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../runtime-process-url.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../runtime-worker-url.js";
 import type { PostgresSqlConnection, SqlStatement } from "../sql-connection.js";
+import { sqlPublicationAnchor } from "../sql-connection.js";
 import {
   beginSqliteDatabaseWrite,
   finishSqliteDatabaseWrite,
@@ -17,6 +26,7 @@ import { withSqlitePostCommitPublications } from "../sqlite-post-commit.js";
 import { SqliteWorkerError } from "../sqlite-worker-contract.js";
 import { deferSqliteWorkerCommitReceipt } from "../sqlite-worker-operation-admission.js";
 import { currentSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-settlement.js";
+import { recordWorkerMessage } from "../worker-message-metrics.js";
 import {
   decodePostgresError,
   decodePostgresRows,
@@ -38,20 +48,34 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   private failure: Error | undefined;
   private requestId = 0;
   private outcomeUnknown = true;
+  private readonly mainThread = threadId === 0;
 
   constructor(
     url: string,
     readonly schema: string,
     readonly anchor: DatabaseSync,
     storeId: string,
+    options?: {
+      lockTimeoutMs?: number;
+      statementTimeoutMs?: number;
+    },
   ) {
+    assertEngineStoreExecutionAllowed();
     Object.defineProperty(this, Symbol.for("openclaw.postgres-sync-connection"), { value: true });
     this.advisoryLockKey = createHash("sha256").update(storeId).digest().readBigInt64BE();
     const { port1, port2 } = new MessageChannel();
     this.port = port1;
     const workerUrl = resolveRuntimeProcessEntrypointUrl("postgresBridge");
     this.worker = new Worker(workerUrl, {
-      workerData: { port: port2, signal: this.control.buffer, url, schema },
+      workerData: {
+        port: port2,
+        signal: this.control.buffer,
+        url,
+        schema,
+        connectTimeoutMs: POSTGRES_CONNECT_TIMEOUT_MS,
+        lockTimeoutMs: options?.lockTimeoutMs ?? POSTGRES_LOCK_TIMEOUT_MS,
+        statementTimeoutMs: options?.statementTimeoutMs ?? POSTGRES_STATEMENT_TIMEOUT_MS,
+      },
       transferList: [port2],
       execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
     });
@@ -71,7 +95,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   runTransaction<T>(
     operation: () => T,
     options?: { withCommit?: (commit: () => void) => void },
-    ...modes: [readOnly?: boolean, reserved?: boolean, admitWorker?: boolean]
+    ...modes: [readOnly?: boolean, reserved?: boolean]
   ): T {
     return runPostgresTransactionSync(this, operation, options, ...modes);
   }
@@ -79,8 +103,8 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   private loseConnection(): Error {
     if (!this.failure && this.outcomeUnknown) {
       // The write may have committed, so invalidate anchor caches before reconnecting.
-      beginSqliteDatabaseWrite(this.anchor);
-      finishSqliteDatabaseWrite(this.anchor);
+      beginSqliteDatabaseWrite(sqlPublicationAnchor(this));
+      finishSqliteDatabaseWrite(sqlPublicationAnchor(this));
     }
     this.failure ??= this.outcomeUnknown
       ? new SqliteWorkerError("PostgreSQL connection lost; outcome unknown", "outcome-unknown")
@@ -102,6 +126,9 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   }
 
   private request(request: BridgeCommand, outcomeUnknown = true) {
+    if (this.mainThread && request.operation !== "close") {
+      assertEngineStoreExecutionAllowed();
+    }
     this.assertOpen();
     this.outcomeUnknown = outcomeUnknown;
     const id = ++this.requestId;
@@ -110,6 +137,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     }
     const deadline = performance.now() + 120_000;
     this.port.postMessage({ ...request, id }, []);
+    recordWorkerMessage("sqlite_request", "to_worker");
     // A notify for an earlier request can arrive after this request starts.
     let observed: number;
     while ((observed = Atomics.load(this.control, 0)) !== id) {
@@ -120,10 +148,16 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       Atomics.wait(this.control, 0, observed, remaining);
     }
     const reply: BridgeReply | undefined = receiveMessageOnPort(this.port)?.message;
+    if (reply) {
+      recordWorkerMessage("sqlite_reply", "from_worker");
+    }
     if (!reply || reply.id !== id) {
       throw this.loseConnection();
     }
     if ("error" in reply) {
+      if (request.operation === "connect") {
+        throw decodePostgresError(reply.error);
+      }
       if (isPostgresConnectionError(reply.error.code)) {
         throw this.loseConnection();
       }
@@ -136,6 +170,12 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   }
 
   query(sql: string, parameters: readonly SQLInputValue[] = [], readBigInts = false) {
+    return observeDatabaseOperation("postgres", "statement", sql, () =>
+      this.execute(sql, parameters, readBigInts),
+    );
+  }
+
+  private execute(sql: string, parameters: readonly SQLInputValue[], readBigInts: boolean) {
     this.assertOpen();
     validatePostgresBindings(parameters);
     const rewrittenSql = rewritePostgresPlaceholders(sql);
@@ -148,26 +188,26 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       { operation: "query", sql: rewrittenSql, parameters },
       !wasTransaction || /^\s*COMMIT\b/i.test(sql),
     );
-    if (
-      !wasTransaction &&
-      /^(?:INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|DROP|TRUNCATE|COMMENT|GRANT|REVOKE)$/.test(
-        result.command ?? "",
-      )
-    ) {
-      // Autocommit writes publish the same anchor receipt as explicit transactions.
-      withSqlitePostCommitPublications(this.anchor, () => {
-        beginSqliteDatabaseWrite(this.anchor);
-        finishSqliteDatabaseWrite(this.anchor);
-        if (currentSqliteWorkerOperationAdmission.getStore()?.active) {
-          deferSqliteWorkerCommitReceipt(this.anchor, {});
-        }
-      });
-    }
     if (/^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(sql)) {
       this.isTransaction = false;
       if (/^\s*COMMIT\b/i.test(sql) && result.command !== "COMMIT") {
         throw new Error("PostgreSQL transaction rolled back instead of committing");
       }
+    }
+    const autocommitWrite =
+      !wasTransaction &&
+      /^(?:INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|DROP|TRUNCATE|COMMENT|GRANT|REVOKE)$/.test(
+        result.command ?? "",
+      );
+    if (result.command === "COMMIT" || autocommitWrite) {
+      // All confirmed commits advance the anchor, including callers using raw SQL.
+      withSqlitePostCommitPublications(sqlPublicationAnchor(this), () => {
+        beginSqliteDatabaseWrite(sqlPublicationAnchor(this));
+        finishSqliteDatabaseWrite(sqlPublicationAnchor(this));
+        if (autocommitWrite && currentSqliteWorkerOperationAdmission.getStore()?.active) {
+          deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(this), {});
+        }
+      });
     }
     this.outcomeUnknown = !this.isTransaction;
     return {

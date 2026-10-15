@@ -5,7 +5,7 @@ import { listSubagentSessionListRunsForControllers } from "../agents/subagents/r
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { readSessionActivitySummary } from "../config/sessions/activity-summary.js";
 import {
-  getSessionActorStorageBinding,
+  captureSessionActorStorageOwner,
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
@@ -24,14 +24,19 @@ import { withGatewaySessionStoreTarget } from "./session-utils-store-lookup.js";
 
 /** Private rows are detached display facts; membership is read at presentation. */
 export async function withMemorySessionRows<T>(
-  binding: SessionActorStorageBinding,
+  binding: SessionActorStorageBinding | undefined,
   cfg: OpenClawConfig,
   queries: readonly { key: string; agentId: string; storePath?: string }[],
   consume: (rows: ReadonlyMap<string, Row | undefined>) => T,
   env: NodeJS.ProcessEnv,
 ): Promise<T> {
-  const selectedBinding = getSessionActorStorageBinding({ sessionActor: binding })!;
   let active = true;
+  const assertActive = () => {
+    if (!active) {
+      throw new Error("Memory row consumer is no longer active");
+    }
+  };
+  const authority = binding?.authority ?? { assertCurrent: assertActive, authorize: assertActive };
   const releases: Array<() => void | Promise<void>> = [];
   const presentations: Array<{
     key: string;
@@ -45,44 +50,36 @@ export async function withMemorySessionRows<T>(
       if (!isIncognitoSessionKey(query.key)) {
         continue;
       }
-      if (query.agentId !== binding.agentId) {
-        presentations.push({ ...query, present: () => undefined, relatedRows: {}, durable: [] });
-        continue;
-      }
-      getSessionActorStorageBinding({
-        agentId: query.agentId,
-        storePath: query.storePath,
-        sessionActor: binding,
-      });
-      const actor =
-        query.key === binding.actor.target.sessionKey
-          ? binding.actor
-          : selectedBinding.actor.storage.readCurrent(
-                { type: "session.entry.read", input: { sessionKey: query.key } },
-                binding.authority,
-              )
-            ? await selectedBinding.actor.storage.acquire(query.key, {
-                assertCurrent: () => binding.actor.assertReadable(),
-                assertReadable: () => binding.actor.assertReadable(),
-              })
-            : undefined;
+      const namespace = captureSessionActorStorageOwner(
+        { ...query, sessionKey: query.key, sessionActor: binding, env },
+        authority,
+      )!;
+      const { owner } = namespace;
+      const direct =
+        binding &&
+        query.agentId === binding.agentId &&
+        query.key === binding.actor.target.sessionKey;
+      const actor = direct
+        ? binding.actor
+        : await owner?.acquireExisting(query.key, {
+            assertCurrent: () => binding?.actor.assertReadable(),
+            assertReadable: () => binding?.actor.assertReadable(),
+          });
       if (!actor) {
         presentations.push({ ...query, present: () => undefined, relatedRows: {}, durable: [] });
         continue;
       }
-      if (actor !== binding.actor) {
+      if (!direct) {
         releases.push(() => actor.release());
       }
-      const selected = { ...binding, actor };
+      const selected = { actor, authority, agentId: namespace.agentId, path: namespace.path };
       const assertCurrent = () => {
-        if (!active) {
-          throw new Error("Memory row consumer is no longer active");
-        }
+        assertActive();
         actor.assertReadable();
-        binding.authority.assertCurrent();
+        authority.assertCurrent();
       };
       await runWithSessionActorStorage(selected, async () => {
-        const snapshot = actor.snapshot(binding.authority);
+        const snapshot = actor.snapshot(authority);
         if (!snapshot?.entry) {
           presentations.push({ ...query, present: () => undefined, relatedRows: {}, durable: [] });
           return;
@@ -119,7 +116,7 @@ export async function withMemorySessionRows<T>(
           : [];
         const title = actor.storage!.readCurrent(
           { type: "session.history.title", input: { sessionId: entry.sessionId } },
-          binding.authority,
+          authority,
         );
         const tail =
           entry.status === "done" && entry.lastRunId && entry.fallbackNotice
@@ -131,7 +128,7 @@ export async function withMemorySessionRows<T>(
                     options: { maxBytes: 256 * 1024, maxMessages: 1, offset: 0, readOnly: true },
                   },
                 },
-                binding.authority,
+                authority,
               )
             : undefined;
         const facts: PreparedSessionRowDatabaseFacts = {
@@ -155,19 +152,34 @@ export async function withMemorySessionRows<T>(
             (run) => run.childSessionKey,
           ),
         ]);
-        for (const related of selectedBinding.actor.storage.readCurrent(
-          { type: "session.entries.read", input: {} },
-          binding.authority,
-        )) {
-          if (related.sessionKey === query.key) {
+        for (const related of owner?.listSessions(authority) ?? []) {
+          if (!related.entry || related.target.sessionKey === query.key) {
             continue;
           }
-          const key = related.sessionKey;
+          const key = related.target.sessionKey;
           if (related.entry.parentSessionKey === query.key || relatedKeys.has(key)) {
             relatedRows[key] = {
               key,
               agentId: selected.agentId,
               storeTarget: { agentId: selected.agentId, storePath: selected.path },
+              entry: related.entry,
+            };
+          }
+        }
+        for (const key of relatedKeys) {
+          if (!key || !isIncognitoSessionKey(key) || relatedRows[key]) {
+            continue;
+          }
+          const relatedOwner = captureSessionActorStorageOwner(
+            { sessionKey: key, sessionActor: binding, env },
+            authority,
+          )!;
+          const related = relatedOwner.owner?.readSession(key, authority);
+          if (related?.entry) {
+            relatedRows[key] = {
+              key,
+              agentId: relatedOwner.agentId,
+              storeTarget: { agentId: relatedOwner.agentId, storePath: relatedOwner.path },
               entry: related.entry,
             };
           }
@@ -196,7 +208,7 @@ export async function withMemorySessionRows<T>(
           present() {
             acp.assertCurrent();
             runtime.assertCurrent();
-            const current = actor.snapshot(binding.authority);
+            const current = actor.snapshot(authority);
             if (!current?.entry) {
               return undefined;
             }

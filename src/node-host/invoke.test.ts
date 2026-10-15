@@ -6,7 +6,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClient as TestGatewayClient } from "../../packages/gateway-client/src/client.js";
 import type { FsListDirResult } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import type { ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
@@ -23,6 +28,7 @@ import { handleInvoke } from "./invoke.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   resetPluginRuntimeStateForTest();
 });
 
@@ -189,6 +195,7 @@ describe("node host invoke", () => {
   );
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     approvalResolutionFailure.error = null;
     execApprovalsStoreMock.ensureError = undefined;
     execApprovalsStoreMock.ensureResult = undefined;
@@ -881,6 +888,7 @@ describe("node host invoke", () => {
       const state = await createOpenClawTestState({ label: "node-default-policy" });
       try {
         await state.writeConfig({});
+        setRuntimeConfigSnapshot({});
         saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" } });
         const executable = path.join(fs.realpathSync(state.root), "native-agent.cjs");
         fs.writeFileSync(executable, `#!${process.execPath}\nprocess.stdout.write('ok');\n`, {
@@ -918,6 +926,46 @@ describe("node host invoke", () => {
       }
     },
   );
+
+  it("preserves negotiated permission details through a cancellable system.run invocation", async () => {
+    const state = await createOpenClawTestState({ label: "node-permission-result" });
+    try {
+      await state.writeConfig({});
+      (await import("../config/runtime-snapshot.js")).setRuntimeConfigSnapshot({});
+      saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" } });
+      const client = Object.assign(new TestGatewayClient({ deviceIdentity: null }), {
+        serverCapabilities: new Set([GATEWAY_SERVER_CAPS.NODE_PERMISSION_ERRORS]),
+      });
+      const request = vi.spyOn(client, "request").mockResolvedValue(null);
+      await handleInvoke(
+        {
+          id: "screen-capture",
+          nodeId: "test-mac",
+          command: "system.run",
+          paramsJSON: JSON.stringify({
+            command: [process.execPath, "--version"],
+            needsScreenRecording: true,
+          }),
+        },
+        client,
+        { current: async () => [] },
+        undefined,
+        { signal: new AbortController().signal },
+      );
+      expect(request).toHaveBeenCalledWith("node.invoke.result", {
+        id: "screen-capture",
+        nodeId: "test-mac",
+        ok: false,
+        error: {
+          code: "PERMISSION_MISSING",
+          message: "PERMISSION_MISSING: screenRecording",
+          details: { capabilities: ["screenRecording"], state: "not-determined" },
+        },
+      });
+    } finally {
+      await state.cleanup();
+    }
+  });
 
   it("includes effective exec policy in system.run.prepare responses", async () => {
     const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);

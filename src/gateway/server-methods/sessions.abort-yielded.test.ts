@@ -26,12 +26,13 @@ import { clearFollowupDrainCallback } from "../../auto-reply/reply/queue/drain.j
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
+  loadExactSessionEntryReadOnly,
   loadSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { createChatAbortContext } from "./chat.abort.test-helpers.js";
@@ -81,6 +82,8 @@ async function seedYieldedParent() {
   await registerSubagentRun({
     runId: childRunId,
     childSessionKey: childKey,
+    childAgentId: "main",
+    sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: childKey }),
     requesterSessionKey: parentKey,
     requesterAgentId: "main",
     requesterDisplayKey: parentKey,
@@ -124,15 +127,18 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
     await seedYieldedParent();
     if (race === "partial cancellation") {
       const brokenKey = "agent:broken:subagent:uncancellable";
-      await writeSubagentSessionEntry({
+      const brokenStore = await writeSubagentSessionEntry({
         stateDir: fixture.stateDir,
         agentId: "broken",
         sessionKey: brokenKey,
         defaultSessionId: "broken-child-session",
+        lifecycleRevision: "broken-child-revision",
       });
       await registerSubagentRun({
         runId: "broken-child-run",
         childSessionKey: brokenKey,
+        childAgentId: "broken",
+        sessionEntry: loadSessionEntry({ agentId: "broken", sessionKey: brokenKey }),
         requesterSessionKey: parentKey,
         requesterAgentId: "main",
         requesterDisplayKey: parentKey,
@@ -146,8 +152,11 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
       if (!database) {
         throw new Error("Missing sibling database");
       }
-      expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+      expect(await closeOpenClawAgentDatabaseByPathAsync(database.path, "broken")).toBe(true);
       await writeFile(database.path, "not a SQLite database");
+      expect(() =>
+        loadExactSessionEntryReadOnly({ storePath: brokenStore, sessionKey: brokenKey }),
+      ).toThrow();
     }
     const context = createChatAbortContext({
       getRuntimeConfig,

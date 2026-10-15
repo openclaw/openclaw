@@ -1,11 +1,15 @@
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { ensureOpenClawAgentBoardSchemaInTransaction } from "../../state/openclaw-agent-board-schema.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
+import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import { readCommittedSessionEntryCache } from "./session-accessor.sqlite-entry-cache.test-support.js";
 import { writeSessionEntryPatchInDatabase } from "./session-accessor.sqlite-entry-mutation.js";
 import {
   readSessionEntrySelectionSnapshot,
@@ -14,10 +18,89 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { loadExactSessionEntry } from "./session-accessor.sqlite-entry.js";
+import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
 import type { SessionEntry } from "./types.js";
+
+it("publishes canonical side metadata through cold, warm, and field-only writes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:cache-metadata" };
+    const database = openOpenClawAgentDatabase(scope);
+    let published: ReturnType<typeof readPreparedSessionEntryChange>;
+    const unsubscribe = sessionChanges.subscribeProjection((change) => {
+      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+        published = readPreparedSessionEntryChange(change, scope.sessionKey);
+      }
+    });
+    const expectAbsentMetadata = (entry: SessionEntry | undefined) => {
+      expect(entry).toMatchObject({ sessionId: "cache-metadata" });
+      for (const field of ["owner", "participants", "participantCount"]) {
+        expect(entry).not.toHaveProperty(field);
+      }
+    };
+    const write = (label: string, updatedAt = 10) =>
+      runOpenClawAgentWriteTransaction(
+        (writer) =>
+          writeSessionEntry(writer, scope.sessionKey, {
+            sessionId: "cache-metadata",
+            updatedAt,
+            label,
+            skillsSnapshot: { prompt: "saved prompt", skills: [] },
+          }),
+        scope,
+      );
+    const current = () => readCommittedSessionEntryCache(database.db)?.get(scope.sessionKey);
+    const owner: NonNullable<SessionEntry["owner"]> = {
+      actor: { type: "human", id: "cache-owner" },
+    };
+    const assignOwner = (assignment: typeof owner | undefined) =>
+      runOpenClawAgentWriteTransaction(
+        (writer) => replaceSessionOwnerInTransaction(writer, scope.sessionKey, assignment),
+        scope,
+      );
+    try {
+      write("cold");
+      expectAbsentMetadata(published?.entry);
+      expectAbsentMetadata(published?.fullEntry);
+      expect(published?.fullEntry?.skillsSnapshot?.prompt).toBe("saved prompt");
+
+      readSessionEntryCache(database, { cache: true, projection: "list" });
+      write("warm", 20);
+      expect(current()).toMatchObject({ label: "warm", updatedAt: 20 });
+      expectAbsentMetadata(current());
+      expectAbsentMetadata(published?.entry);
+
+      expect(assignOwner(owner)).toBe(true);
+      readSessionEntryCache(database, { cache: true, projection: "list" });
+      expect(current()?.owner).toEqual(owner);
+      expect(assignOwner(undefined)).toBe(true);
+      expectAbsentMetadata(current());
+
+      expect(assignOwner(owner)).toBe(true);
+      expect(
+        recordSessionParticipant(scope, {
+          identity: { type: "agent", id: "cache-participant" },
+          promptedAt: 10,
+        }),
+      ).toBe("inserted");
+      expect(current()).toMatchObject({
+        owner,
+        participants: [{ identity: { type: "agent", id: "cache-participant" } }],
+        participantCount: 1,
+      });
+      expect(assignOwner(undefined)).toBe(true);
+      expect(current()).not.toHaveProperty("owner");
+      expect(current()).toMatchObject({
+        participants: [{ identity: { type: "agent", id: "cache-participant" } }],
+        participantCount: 1,
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
+});
 
 it("skips unchanged entry and snapshot writes while retaining current transcript observation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

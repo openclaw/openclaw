@@ -37,11 +37,13 @@ export type CronRunExecutionParams = Pick<
   | "commandBody"
   | "inputProvenance"
   | "persistSessionEntry"
+  | "preRunSessionPersisted"
 > &
   Pick<
     RunCronAgentTurnParams,
     | "cfg"
     | "job"
+    | "trigger"
     | "lane"
     | "onLaneWait"
     | "executionIdentity"

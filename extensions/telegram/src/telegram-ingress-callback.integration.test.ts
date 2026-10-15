@@ -13,6 +13,10 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, expect, it, vi } from "vitest";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
@@ -143,6 +147,7 @@ it.each(["none", "middleware", "handler"] as const)(
         channels: { telegram: { apiRoot, dmPolicy: "open", allowFrom: ["*"] } },
         session: { store: path.join(stateDir, "sessions.json") },
       };
+      setRuntimeConfigSnapshot(cfg);
       const bot = await createTelegramBot({
         token: "123456:loopback-token",
         botInfo: telegramBotInfoForTest,
@@ -224,9 +229,9 @@ it.each(["none", "middleware", "handler"] as const)(
         expect(heldMenuResponse).toBeDefined();
         sendResult(heldMenuResponse!, menu);
         heldMenuResponse = undefined;
+        // Wait for the router, not a polling deadline, before checking ACK recovery.
+        await handlerAnswerRead.promise;
         if (recovery === "handler") {
-          // Wait for the router, not a polling deadline, before rejecting its pending answer.
-          await handlerAnswerRead.promise;
           const firstResponse = heldAnswerResponses.shift();
           expect(firstResponse).toBeDefined();
           firstResponse!.writeHead(503, { "content-type": "application/json" });
@@ -302,6 +307,7 @@ it.each(["none", "middleware", "handler"] as const)(
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
+      clearRuntimeConfigSnapshot();
       clearTelegramRuntimeForTest();
       resetTelegramAccountThrottlersForTest();
       resetPluginStateStoreForTests({ closeDatabase: false });

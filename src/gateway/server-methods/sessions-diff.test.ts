@@ -5,6 +5,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import * as execRunner from "../../process/exec-runner.js";
 import { captureSessionDiffBaseline } from "../../sessions/session-diff.js";
@@ -15,11 +19,6 @@ const hoisted = vi.hoisted(() => ({
   patchSessionEntryCore: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
-}));
-
-vi.mock("../session-utils.js", () => ({
-  loadSessionEntry: hoisted.loadSessionEntry,
-  loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
 }));
 
 // mock-isolation: Diff RPC cases supply session discovery while exercising real Git reads.
@@ -71,6 +70,7 @@ describe("loadSessionDiff", () => {
   let repoRoot: string;
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     vi.clearAllMocks();
     repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-diff-")));
     hoisted.resolveDefaultAgentId.mockReturnValue("main");
@@ -79,6 +79,7 @@ describe("loadSessionDiff", () => {
 
   afterEach(() => {
     fs.rmSync(repoRoot, { recursive: true, force: true });
+    clearRuntimeConfigSnapshot();
   });
 
   it("reports unknown sessions without touching a workspace", async () => {
@@ -157,6 +158,7 @@ describe("loadSessionDiff", () => {
         entries: { ops: {}, research: {} },
       },
     } as const;
+    setRuntimeConfigSnapshot(cfg);
     hoisted.loadSessionEntry.mockReturnValue({
       agentId: "ops",
       cfg,
@@ -203,6 +205,7 @@ describe("loadSessionDiff", () => {
         entries: { ops: {}, research: {} },
       },
     } as const;
+    setRuntimeConfigSnapshot(cfg);
     const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
 
     await sessionsDiffHandlers["sessions.diff"]?.({

@@ -30,7 +30,9 @@ it.each(["utf8", "utf16le"] as const)(
       id: "cbx_evidence",
       runCommand: async (_argv, options) => {
         let stdout = "";
-        const script = String(options.input).split("\n").slice(2, -1).join("\n");
+        const script = String(options.input)
+          .split("CRABBOX_NODE_SCRIPT'\n")[1]!
+          .split("\nCRABBOX_NODE_SCRIPT")[0]!;
         runInNewContext(script, {
           Buffer,
           require: (name: string) =>

@@ -1,17 +1,25 @@
 import { randomUUID } from "node:crypto";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { retainGatewayDeviceRevocation } from "../../gateway/device-revocation.js";
-import { createAbortError, isAbortError } from "../../infra/abort-signal.js";
+import {
+  createAbortError,
+  isAbortError,
+  racePromiseWithAbortSignal,
+} from "../../infra/abort-signal.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import { captureCronRunAdmissionTracker } from "../mutation-completion.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { locked } from "./locked.js";
-import { waitForRunSettlement } from "./ops-lifecycle.js";
 import { inspectManualRunPreflight } from "./ops-run-preparation.js";
 import type { ManualRunOptions, OnExitRunOptions } from "./run-options.js";
-import { commitCronRunRequests, drainCronRunQueue, type RequestedCronRun } from "./run-queue.js";
+import {
+  commitCronRunRequests,
+  drainCronRunQueue,
+  waitForCronJobRun,
+  type RequestedCronRun,
+} from "./run-queue.js";
 import type { CronRunMode, CronRunResult, CronServiceState, CronWakeMode } from "./state.js";
 import { captureCronServiceMutationSource } from "./store.js";
 import { wake } from "./wake.js";
@@ -70,7 +78,8 @@ export async function runOnExit(state: CronServiceState, id: string, opts: OnExi
       opts.commitGuard();
     };
     try {
-      while (await waitForRunSettlement(state, id, opts.signal)) {
+      while (!opts.signal.aborted && !state.stopped && generation === state.lifecycleGeneration) {
+        const waited = await racePromiseWithAbortSignal(waitForCronJobRun(state, id), opts.signal);
         const result = await requestManualCronRun(state, id, "force", {
           onExit: { ...opts, commitGuard },
           commitGuard,
@@ -78,7 +87,7 @@ export async function runOnExit(state: CronServiceState, id: string, opts: OnExi
         if ("requested" in result) {
           return await result.requested.completion;
         }
-        if (!(result.ok && "reason" in result && result.reason === "already-running")) {
+        if (!waited || !(result.ok && "reason" in result && result.reason === "already-running")) {
           return result;
         }
       }
@@ -97,15 +106,20 @@ export async function enqueueRun(
   state: CronServiceState,
   id: string,
   mode?: CronRunMode,
-  opts?: { commitGuard?: () => void },
+  opts?: Pick<ManualRunOptions, "commitGuard" | "event" | "onEventTransferred" | "runId">,
 ) {
-  const runId = `cron-request.${randomUUID()}`;
+  const runId = opts?.runId ?? `cron-request.${randomUUID()}`;
   const releaseCaller = retainGatewayDeviceRevocation(opts?.commitGuard);
   const trackAdmission = captureCronRunAdmissionTracker();
   return runWithoutOwnedSessionTranscriptWrites(() =>
     runWithGatewayIndependentRootWorkContinuation(async () => {
+      let eventTransferred = false;
       const result = await requestManualCronRun(state, id, mode, {
         ...opts,
+        onEventTransferred: (receipt) => {
+          eventTransferred = true;
+          opts?.onEventTransferred?.(receipt);
+        },
         runId,
         scheduleOwnershipAtMs: state.deps.nowMs(),
         terminalTracker: { emitted: false },
@@ -134,6 +148,13 @@ export async function enqueueRun(
           state.queuedManualRuns.delete(runId);
         });
       state.queuedManualRuns.set(runId, completion);
+      if (opts?.event) {
+        // Ingress owns the immutable event until activation and tombstone commit together.
+        await result.requested.activation;
+        if (!eventTransferred) {
+          return result.requested.completion;
+        }
+      }
       return { ok: true, enqueued: true, runId } as const;
     }, "cron:manual-run"),
   ).catch((error: unknown) => {

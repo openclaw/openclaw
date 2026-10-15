@@ -44,12 +44,14 @@ export class CodexNativeSubagentCompletionDelivery {
     const attempt = Promise.resolve().then(() => this.deliverAttempt(state, childState));
     this.attempts.set(childState, attempt);
     const release = () => {
-      if (this.attempts.get(childState) === attempt) {
-        this.attempts.delete(childState);
-      }
+      this.attempts.delete(childState);
     };
     void attempt.then(release, release);
     return attempt;
+  }
+
+  async join(child: ChildState): Promise<void> {
+    await this.attempts.get(child);
   }
 
   private async deliverAttempt(state: ParentState, childState: ChildState): Promise<void> {
@@ -62,6 +64,10 @@ export class CodexNativeSubagentCompletionDelivery {
     }
     let deferredToForeground = false;
     try {
+      if (childState.cancellationRequested && completion.status === "cancelled") {
+        // Stop owns durable cancellation acknowledgement before releasing this child.
+        return;
+      }
       if (!this.prepareDelivery(state, childState)) {
         return;
       }

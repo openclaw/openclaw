@@ -32,6 +32,7 @@ import {
   assertDoctorMaintenanceInspection,
   classifyDoctorMaintenanceRefusal,
   readDoctorGatewayOwnerLease,
+  readOfflineAppOwnedDoctorInspection,
 } from "./doctor-maintenance-inspection.js";
 import {
   assertStaleDoctorGatewayStopped,
@@ -126,18 +127,10 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       throw failure;
     }
   };
-  const releaseState = async () => {
-    if (cleanupFailure) {
-      throw cleanupFailure.error;
-    }
-    const settledFailure = await state.release();
-    repairStoresMayBeOpen = false;
-    return settledFailure;
-  };
   // A settled state cleanup failure is reported only after Doctor restores what it stopped.
   const releaseAndRestoreAutoStart = (assertCustody?: () => void) =>
     settle(async () => {
-      const settledFailure = await releaseState();
+      const settledFailure = await state.release();
       const recovery = stopped?.windowsTaskAutoStartRecovery;
       try {
         assertCustody?.();
@@ -328,12 +321,31 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
     }
   };
   const finish = async (
-    cfg: OpenClawConfig,
+    initialConfig: OpenClawConfig | undefined,
     assertCustody?: () => void,
     writeConfig?: DoctorConfigWriter,
     assertRestoreAdmission?: () => void,
   ) => {
+    let cfg = initialConfig;
+    // Config recovery must not encounter Doctor's own offline-maintenance lease.
     const settledFailure = await releaseAndRestoreAutoStart(assertCustody);
+    if (!cfg && !stopped?.stopped) {
+      throwSettledFailure(settledFailure);
+      return;
+    }
+    if (!cfg) {
+      try {
+        // Restore our own stop without re-entering the readiness gate that failed.
+        const { readConfigFileSnapshot } = await import("../config/config.js");
+        cfg = (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false })).config;
+      } catch (error) {
+        throw new DoctorMaintenanceRefusalError(
+          `Doctor could not restore the Gateway because persisted repair state is not ready: ${formatErrorMessage(error)}`,
+          { kind: "data-at-risk", reason: "incomplete-migration" },
+          { cause: error },
+        );
+      }
+    }
     await restoreGateway(cfg, assertCustody, writeConfig, assertRestoreAdmission);
     throwSettledFailure(settledFailure);
   };
@@ -366,9 +378,8 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
               : `Warning: Doctor could not reacquire maintenance ownership: ${String(ownershipError)} Restoring its service without repairing shared state.`;
           warn(warning);
         }
-        const { readConfigFileSnapshot } = await import("../config/config.js");
         await finish(
-          (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false })).config,
+          undefined,
           assertStopCustody,
           undefined,
           assertStopCustody ?? assertUpdateAdmissionCurrent,
@@ -438,13 +449,23 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         const { maybeStopManagedServiceBeforeMutableUpdate } =
           await import("../cli/update-cli/update-command-service-maintenance.js");
         inspectingActivation = true;
-        const inspection = await maybeStopManagedServiceBeforeMutableUpdate({
-          updateInstallKind: "package",
-          root: params.root,
-          shouldRestart: true,
-          jsonMode: true,
-          phase: "inspect",
-        });
+        let inspection: PreManagedServiceStop;
+        try {
+          inspection = await maybeStopManagedServiceBeforeMutableUpdate({
+            updateInstallKind: "package",
+            root: params.root,
+            shouldRestart: true,
+            jsonMode: true,
+            phase: "inspect",
+          });
+        } catch (error) {
+          const offlineApp = await readOfflineAppOwnedDoctorInspection(error, env);
+          if (!offlineApp) {
+            throw error;
+          }
+          inspection = offlineApp;
+          warn(offlineApp.serviceMutationSkipMessage);
+        }
         assertDoctorMaintenanceInspection(inspection, env);
         serviceUpdateVerdict = inspection.serviceUpdateVerdict;
         if (inspection.serviceUpdateVerdict?.kind !== "absent" && inspection.offline !== true) {
@@ -454,7 +475,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
             assertUpdateAdmissionReadCurrent = () => assertAuthority(admitted.assertCurrent);
             const checkAndRecord = () => assertAuthority(admitted.recordContinuation);
             assertUpdateAdmissionCurrent = () =>
-              state.owner ? state.owner.run(checkAndRecord) : checkAndRecord();
+              state.resources ? state.run(checkAndRecord) : checkAndRecord();
           });
         }
         if (inspection.serviceUpdateVerdict?.kind === "owned" && inspection.serviceEnv) {
@@ -626,7 +647,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       return state.receipt;
     },
     run: <T>(operation: () => T) => state.run(operation),
-    releaseState: async () => throwSettledFailure(await settle(releaseState)),
+    releaseState: async () => throwSettledFailure(await settle(() => state.release())),
     async repairSqliteNoCow(paths: readonly string[]) {
       assertHeld(this, "SQLite NOCOW repair");
       const result = await settle(() => state.repairSqliteNoCow(paths));
@@ -667,7 +688,6 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       writeConfig?: DoctorConfigWriter,
       failure?: unknown,
     ) {
-      let cfg = initialConfig;
       if (cleanupFailure) {
         throw cleanupFailure.error;
       }
@@ -680,27 +700,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       custody = "restoring";
       let failed = failure !== undefined;
       try {
-        if (!cfg && !stopped?.stopped) {
-          await release(assertCustody);
-          return;
-        }
-        if (!cfg) {
-          try {
-            // Readiness may be the operation that failed. Reversing Doctor's own
-            // stop must not re-enter that gate; the previous Gateway remains the
-            // recovery owner for the persisted state it was already serving.
-            const { readConfigFileSnapshot } = await import("../config/config.js");
-            cfg = (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false }))
-              .config;
-          } catch (error) {
-            throw new DoctorMaintenanceRefusalError(
-              `Doctor could not restore the Gateway because persisted repair state is not ready: ${formatErrorMessage(error)}`,
-              { kind: "data-at-risk", reason: "incomplete-migration" },
-              { cause: error },
-            );
-          }
-        }
-        await finish(cfg, assertCustody, writeConfig);
+        await finish(initialConfig, assertCustody, writeConfig);
       } catch (restoreError) {
         failed = true;
         if (failure !== undefined) {

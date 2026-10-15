@@ -19,6 +19,7 @@ const GIB = 1024 * MIB;
 const DISK_SPACE_PROBE_CONCURRENCY = 8;
 const DISK_SPACE_PROBE_TIMEOUT_MS = 30_000;
 const IDLE_DISK_SPACE_REFRESH_MS = 15 * 60_000;
+const DISK_SPACE_RETRY_MS = 60_000;
 
 const REMOTE_DISK_SPACE_PROBE_JS = String.raw`
 const fs = require("node:fs");
@@ -105,7 +106,7 @@ function parseDiskSpaceProbe(stdout: string, observedAtMs: number): SessionPlace
 }
 
 export function createWorkerPlacementDiskSpaceMonitor(params: {
-  placements: Pick<WorkerSessionPlacementStore, "get" | "readChangeSnapshot" | "readProjection">;
+  placements: Pick<WorkerSessionPlacementStore, "prepareMaintenancePlacements">;
   environments: Pick<WorkerEnvironmentService, "startTunnel">;
   runnerAvailability: Pick<WorkerPlacementRunnerAvailabilityReader, "read" | "version">;
   warn: (message: string) => void;
@@ -115,6 +116,9 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
   const staleBindings = new Map<string, ActivePlacement>();
   const now = params.now ?? Date.now;
   let observationVersion = 0;
+  let dirty = true;
+  let nextSweepAtMs = 0;
+  let lastRunnerVersion = -1;
 
   const read: WorkerPlacementDiskSpaceReader["read"] = (placement) => {
     const observation = observations.get(placement.sessionId);
@@ -159,13 +163,9 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
       result.stdout,
       Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(now()))),
     );
-    const current = params.placements.get(placement.sessionId);
     const candidate = { ...placement, snapshot, runnerVersion } satisfies DiskSpaceObservation;
-    // Tunnel work can outlive an owner. Accept the sample only for the exact active generation.
-    if (!hasExactBinding(candidate, current)) {
-      return;
-    }
-    const previous = read(current);
+    // Late samples remain tagged with their original binding; read() hides them after a move.
+    const previous = read(placement);
     observations.set(placement.sessionId, candidate);
     if (
       !previous ||
@@ -185,22 +185,35 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
   };
 
   const sweep = async (): Promise<void> => {
-    const identities = await params.placements.readChangeSnapshot();
-    const projection = await params.placements.readProjection(
-      identities.map(({ sessionId }) => sessionId),
-      { current: true },
-    );
-    const active = identities
-      .map(({ sessionId }) => projection.placements.get(sessionId))
-      .filter((placement): placement is ActivePlacement => placement?.state === "active");
+    if (
+      !dirty &&
+      now() < nextSweepAtMs &&
+      lastRunnerVersion === params.runnerAvailability.version()
+    ) {
+      return;
+    }
+    // Receipts during the awaited inventory/probes must survive this pass.
+    dirty = false;
+    lastRunnerVersion = params.runnerAvailability.version();
+    nextSweepAtMs = now() + DISK_SPACE_RETRY_MS;
+    const inventory = await params.placements.prepareMaintenancePlacements();
+    let active: ActivePlacement[];
+    try {
+      active = inventory.placements.filter(
+        (placement): placement is ActivePlacement => placement.state === "active",
+      );
+    } finally {
+      inventory.release();
+    }
+    const activeBySession = new Map(active.map((placement) => [placement.sessionId, placement]));
     for (const [sessionId, observation] of observations) {
-      if (!hasExactBinding(observation, params.placements.get(sessionId))) {
+      if (!hasExactBinding(observation, activeBySession.get(sessionId))) {
         observations.delete(sessionId);
         observationVersion += 1;
       }
     }
     for (const [sessionId, binding] of staleBindings) {
-      if (!hasExactBinding(binding, params.placements.get(sessionId))) {
+      if (!hasExactBinding(binding, activeBySession.get(sessionId))) {
         staleBindings.delete(sessionId);
       }
     }
@@ -218,7 +231,37 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
         );
       },
     });
+    nextSweepAtMs = Math.min(
+      Infinity,
+      ...active.map((placement) => {
+        const stale = staleBindings.get(placement.sessionId);
+        if (
+          (stale && hasExactBinding(stale, placement)) ||
+          params.runnerAvailability.read(placement)?.status === "offline"
+        ) {
+          return Infinity;
+        }
+        const observation = observations.get(placement.sessionId);
+        return observation && hasExactBinding(observation, placement)
+          ? Math.max(
+              now() + DISK_SPACE_RETRY_MS,
+              observation.snapshot.observedAtMs + IDLE_DISK_SPACE_REFRESH_MS,
+            )
+          : now() + DISK_SPACE_RETRY_MS;
+      }),
+    );
   };
 
-  return { read, sweep, version: () => observationVersion };
+  return {
+    read,
+    sweep,
+    invalidate() {
+      dirty = true;
+    },
+    nextSweepAtMs: () =>
+      dirty || lastRunnerVersion !== params.runnerAvailability.version()
+        ? now() + DISK_SPACE_RETRY_MS
+        : nextSweepAtMs,
+    version: () => observationVersion,
+  };
 }

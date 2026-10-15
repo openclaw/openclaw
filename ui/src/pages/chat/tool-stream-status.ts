@@ -369,6 +369,36 @@ function handleLifecycleApprovalEvent(host: ToolStreamHost, payload: AgentEventP
 }
 
 export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  if (
+    payload.stream === "lifecycle" &&
+    payload.data.phase === "start" &&
+    host.chatRunStartup?.state === "status" &&
+    host.chatRunStartup.phase === "finishing"
+  ) {
+    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+  }
+  if (payload.stream === "lifecycle" && payload.data.phase === "finishing") {
+    reconcileChatRunStartup(host, {
+      state: "status",
+      runId: payload.runId,
+      phase: "finishing",
+      seq: payload.seq,
+    });
+    return true;
+  }
+  if (payload.stream === "lifecycle" && payload.data.phase === "fallback_step") {
+    const model = toTrimmedString(payload.data.fallbackStepToModel);
+    if (payload.data.fallbackStepFinalOutcome === "next_fallback" && model) {
+      reconcileChatRunStartup(host, {
+        state: "status",
+        runId: payload.runId,
+        phase: "fallback",
+        message: formatUiExternalText(truncateUtf16Safe(model, 256)),
+        seq: payload.seq,
+      });
+    }
+    return true;
+  }
   if (payload.stream === "run_status" && payload.data.phase === "retrying") {
     const message = toTrimmedString(payload.data.message);
     if (message) {
@@ -377,13 +407,26 @@ export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayl
         runId: payload.runId,
         phase: "retrying",
         message: formatUiExternalText(truncateUtf16Safe(message, 256)),
+        ...(typeof payload.data.retryAt === "number" && Number.isFinite(payload.data.retryAt)
+          ? { retryAt: payload.data.retryAt }
+          : {}),
         seq: payload.seq,
       });
     }
     return true;
   }
   if (payload.stream === "assistant") {
-    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+    if ((payload.data.text || payload.data.delta) && payload.data.phase !== "commentary") {
+      reconcileChatRunStartup(host, {
+        state: "status",
+        runId: payload.runId,
+        phase: "answer",
+        seq: payload.seq,
+      });
+    } else {
+      // Reconnect snapshots retain the assistant sequence without copying its text.
+      reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
+    }
     return true;
   }
   if (payload.stream === "compaction") {

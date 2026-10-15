@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -15,7 +16,7 @@ import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispa
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 
 it.each(["runtime", "legacy"] as const)(
-  "routes %s approval expiry through its worker or released native guard contract",
+  "routes %s approval expiry through its worker with the request guard",
   async (entrypoint) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await insertOperatorApproval({
@@ -89,7 +90,7 @@ it.each(["runtime", "legacy"] as const)(
               ),
       );
       expect(result).toMatchObject({ outcome: "found", record: { status: "expired" } });
-      expect(nativeMutation).toBe(entrypoint === "legacy");
+      expect(nativeMutation).toBe(false);
     });
   },
 );
@@ -98,6 +99,7 @@ it.each(["direct", "tool"] as const)(
   "keeps opaque and prepared commit guards authoritative with worker writes on %s dispatch",
   async (entrypoint) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const scope = { agentId: "main", sessionKey: "agent:main:commit-guard-routing" };
       await upsertSessionEntryCore(scope, { sessionId: "guard-routing-session", updatedAt: 1 });
       const context = createContext();

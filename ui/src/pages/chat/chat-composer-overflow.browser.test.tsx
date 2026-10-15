@@ -2,16 +2,16 @@ import { html, nothing, render } from "lit";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, server, userEvent } from "vitest/browser";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import type { SessionGoal } from "../../api/types.ts";
+import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer, createComposerProps } from "./chat-composer.test-support.ts";
 import { renderAttachmentPreview } from "./components/chat-attachments.ts";
-import { ChatGoal, clearGoalElapsedTimers } from "./components/chat-composer-goal.tsx";
+import { ChatGoal } from "./components/chat-composer-goal.tsx";
 import { ComposerMenu } from "./components/chat-composer-menu.tsx";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 import { resetChatComposerState } from "./components/chat-composer-state.ts";
-import { renderChatComposer } from "./components/chat-composer.tsx";
 import { subscribeTranscriptScroll } from "./components/chat-transcript-scroll-events.ts";
 import baseStyles from "../../styles/base.css?inline";
 import contextStripStyles from "../../styles/chat/composer-context-strip.css?inline";
@@ -57,7 +57,6 @@ describe("composer overflow presentation", () => {
     container.remove();
     styles.remove();
     resetChatComposerState();
-    clearGoalElapsedTimers();
   });
 
   it.each([390, 2048])(
@@ -102,17 +101,19 @@ describe("composer overflow presentation", () => {
       render(renderChatComposer(props), container);
       await page
         .elementLocator(
-          container.querySelector<HTMLElement>('.agent-chat__attach-menu > [slot="trigger"]')!,
+          container.querySelector<HTMLElement>(
+            ".agent-chat__attach-menu .agent-chat__input-btn--attach",
+          )!,
         )
         .click();
       await page
-        .elementLocator(container.querySelector<HTMLElement>('[value="open-skills"]')!)
+        .elementLocator(container.querySelector<HTMLElement>('[data-value="open-skills"]')!)
         .click();
       await afterLayout();
       const dropdown = container.querySelector<HTMLElement>(".agent-chat__capability-menu")!;
-      const menu = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
+      const menu = dropdown.querySelector<HTMLElement>(".oc-menu")!;
       expect(menu.scrollHeight).toBeGreaterThan(menu.clientHeight);
-      const rows = [...dropdown.querySelectorAll<HTMLElement>('[value^="skill:"]')];
+      const rows = [...dropdown.querySelectorAll<HTMLElement>('[data-value^="skill:"]')];
       expect(rows).toHaveLength(16);
 
       for (const row of rows) {
@@ -526,7 +527,11 @@ describe("composer overflow presentation", () => {
       expect(rail()).toBe(element);
       expect(element.scrollWidth).toBeGreaterThan(element.clientWidth);
       await expectEdges(element, true);
+      // The reconnect measurement can precede the native observer's first delivery.
+      await afterLayout();
       container.style.width = "760px";
+      await afterLayout();
+      expect(element.scrollWidth).toBeLessThanOrEqual(element.clientWidth + 1);
       await expectEdges(element, false);
     },
   );

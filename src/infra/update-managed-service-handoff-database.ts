@@ -8,7 +8,7 @@ import { root as openLockRoot, type Root } from "@openclaw/fs-safe/root";
 import { sql } from "kysely";
 import { z } from "zod";
 import { formatCliCommand } from "../cli/command-format.js";
-import { ensureColumn } from "../state/openclaw-state-db-schema-helpers.js";
+import { ensureColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
@@ -19,6 +19,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import { packageUpdateRefusal } from "./package-update-refusal.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
   isSqliteLockError,
@@ -70,7 +71,8 @@ function assertRecordedDatabasePath(
   existingIdentity?: ManagedUpdateLeaseDatabaseIdentity,
 ): void {
   if (existingIdentity && databasePath !== existingIdentity.databasePath) {
-    throw new Error(
+    throw packageUpdateRefusal(
+      "managed-handoff-lease-identity-changed",
       identityChangedMessage(databasePath, [
         `path (recorded ${existingIdentity.databasePath}; current ${databasePath})`,
       ]),
@@ -107,7 +109,12 @@ export async function prepareManagedHandoffLeaseDatabase(
   if (existingIdentity) {
     assertManagedUpdateLeaseDatabaseIdentity(existingIdentity);
   }
-  return createManagedHandoffLeaseDatabase(databasePath, existingIdentity, lockRoot);
+  // Canonicalize unbound admissions before original acquisition reenters its writer.
+  // Keep earned pins exact and leave unsafe database leaves for no-follow recovery.
+  const canonicalPath = existingIdentity
+    ? databasePath
+    : path.join(lockRoot.rootReal, path.basename(databasePath));
+  return createManagedHandoffLeaseDatabase(canonicalPath, existingIdentity, lockRoot);
 }
 
 /** Bootstrap owned storage and capture the identity used by later no-repair operations. */
@@ -169,6 +176,9 @@ export function readManagedHandoffRepairMetadata(
 }
 
 function initializeLeaseSchema(db: HandoffDatabase): void {
+  if (tableExists(db, "managed_update_handoffs")) {
+    return;
+  }
   executeSqliteQuerySync(
     db,
     leaseQueries(db)
@@ -350,7 +360,10 @@ export function captureManagedUpdateLeaseDatabaseIdentity(
       );
     }
     if (changes.length) {
-      throw new Error(identityChangedMessage(databasePath, changes));
+      throw packageUpdateRefusal(
+        "managed-handoff-lease-identity-changed",
+        identityChangedMessage(databasePath, changes),
+      );
     }
   }
   return Object.freeze({

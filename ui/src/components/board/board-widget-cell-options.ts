@@ -12,13 +12,6 @@ export const BOARD_SIZE_PRESETS = {
   xl: { w: 12, h: 8 },
 } as const;
 
-export function closeBoardWidgetMenu(root: ParentNode): void {
-  const menu = root.querySelector<HTMLElement & { open: boolean }>(".board-widget__menu");
-  if (menu) {
-    menu.open = false;
-  }
-}
-
 export type BoardWidgetPageMenu = {
   widget: BoardWidget;
   tabs: readonly BoardTab[];

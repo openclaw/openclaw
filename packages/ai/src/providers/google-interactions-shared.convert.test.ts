@@ -222,6 +222,23 @@ describe("buildGoogleInteractionsParams", () => {
     });
   });
 
+  it.each([true, false])(
+    "preserves the caller output cap for Interactions thinking (enabled=%s)",
+    (enabled) => {
+      const params = buildGoogleInteractionsParams(
+        { ...model, id: "gemini-3-flash-preview", reasoning: true, maxTokens: 65536 },
+        { messages: [user("Answer briefly")] },
+        { maxTokens: 64, thinking: { enabled, level: "LOW" } },
+      );
+      const serialized = JSON.stringify(params);
+      expect(JSON.parse(serialized).generation_config).toEqual({
+        max_output_tokens: 64,
+        thinking_level: "low",
+        thinking_summaries: enabled ? "auto" : "none",
+      });
+    },
+  );
+
   it("strips incompatible thought signatures and repairs missing tool results before conversion", () => {
     const params = buildGoogleInteractionsParams(
       model,

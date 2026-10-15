@@ -69,8 +69,6 @@ describe("repository workspace editor admission", () => {
         admit(request, grant);
       });
       try {
-        placements.get(SESSION_ID);
-        expect(sql.queries.length).toBeGreaterThan(0);
         const saving = f.mutations.mutate({
           ...sessionTarget,
           assertCurrent: () => {
@@ -140,6 +138,7 @@ describe("repository workspace editor admission", () => {
     const receive = brokerReply.receiveSqliteWorkerReply;
     const dispatch = brokerReply.dispatchSqliteWorkerJob;
     const dispatchedSlots = new WeakMap<object, Slot>();
+    const predecessorRequests = new WeakSet<object>();
     const updateManifest = placements.updateWorkspaceBaseManifest.bind(placements);
     let holding = false;
     let heldSlot: Slot | undefined;
@@ -155,7 +154,18 @@ describe("repository workspace editor admission", () => {
       .spyOn(brokerReply, "dispatchSqliteWorkerJob")
       .mockImplementation((slot, job, onRejected) => {
         dispatchedSlots.set(slot, slot);
-        dispatch(slot, job, onRejected);
+        if (job.request.type === "execute") {
+          const command: unknown = deserialize(job.request.input);
+          if (
+            isRecord(command) &&
+            command.type === "repositoryWorkspaces.get" &&
+            isRecord(command.input) &&
+            command.input.workspaceId === f.repository.workspaceId
+          ) {
+            predecessorRequests.add(job.request);
+          }
+        }
+        return dispatch(slot, job, onRejected);
       });
     const replies = vi
       .spyOn(brokerReply, "receiveSqliteWorkerReply")
@@ -168,13 +178,7 @@ describe("repository workspace editor admission", () => {
           !reply.transfer &&
           !reply.input
         ) {
-          const command: unknown = deserialize(slot.current.request.input);
-          if (
-            isRecord(command) &&
-            command.type === "repositoryWorkspaces.get" &&
-            isRecord(command.input) &&
-            command.input.workspaceId === f.repository.workspaceId
-          ) {
+          if (predecessorRequests.has(slot.current.request)) {
             heldSlot = dispatchedSlots.get(slot);
             if (!heldSlot) {
               throw new Error("Repository predecessor has no observed native dispatch");

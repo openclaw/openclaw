@@ -69,7 +69,6 @@ describe("scheduled tool policy provenance", () => {
     await expect(removal).rejects.toThrow("authority closed");
     expect(state.store?.jobs.some((entry) => entry.id === job.id)).toBe(true);
     expect(commitGuard).toHaveBeenCalledTimes(2);
-    state.timer?.cancel();
   });
 
   it.each(["add validation", "update precondition"] as const)(
@@ -126,12 +125,12 @@ describe("scheduled tool policy provenance", () => {
       expect(captureRuntimeAuthority).toHaveBeenCalledOnce();
       if (existing) {
         expect(state.store?.jobs[0]?.name).toBe("updated");
+        expect((await loadCronStore(storePath)).jobs[0]).toEqual(state.store?.jobs[0]);
       } else {
         expect(state.store?.jobs).toHaveLength(1);
         expect(job.state.nextRunAtMs).toBeGreaterThan(state.deps.nowMs());
         expect((await loadCronStore(storePath)).jobs.map(({ id }) => id)).toEqual([job.id]);
       }
-      state.timer?.cancel();
     },
   );
 
@@ -187,7 +186,6 @@ describe("scheduled tool policy provenance", () => {
       payload: { kind: "agentTurn", toolsAllow: ["read"] },
     });
     expect(explicit.toolsAllowProvenance).toBeUndefined();
-    state.timer?.cancel();
   });
 
   it.each(["update", "declarative"] as const)(
@@ -308,7 +306,6 @@ describe("scheduled tool policy provenance", () => {
         );
         expect(persistedAuthorityRow).toBeUndefined();
       }
-      state.timer?.cancel();
     },
   );
 
@@ -350,7 +347,6 @@ describe("scheduled tool policy provenance", () => {
       ownerSessionKey: "agent:main:discord:group:ops",
       ownerAccountId: "work",
     });
-    state.timer?.cancel();
   });
 
   it("keeps routine legacy edits restrictive and adopts authority on an explicit tool edit", async () => {
@@ -389,6 +385,5 @@ describe("scheduled tool policy provenance", () => {
       },
     );
     expect(reauthorized.scheduledToolPolicy?.mode).toBe("account");
-    state.timer?.cancel();
   });
 });

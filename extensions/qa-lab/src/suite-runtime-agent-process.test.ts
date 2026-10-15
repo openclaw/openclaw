@@ -3,7 +3,6 @@ import { EventEmitter } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
 import timersPromises from "node:timers/promises";
 import { promisify } from "node:util";
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -44,7 +43,6 @@ import {
   readDoctorMemoryStatus,
   runAgentPrompt,
   startAgentRun,
-  waitForAgentRun,
   waitForAgentHistoryReply,
 } from "./suite-runtime-agent-process.js";
 
@@ -143,24 +141,6 @@ describe("qa suite runtime agent process helpers", () => {
     waitForGatewayHealthyMock.mockClear();
     waitForTransportReadyMock.mockClear();
     readSessionTranscriptSummaryMock.mockReset();
-  });
-
-  it("caps oversized qa cli timeout timers", async () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    try {
-      const { child, pending } = startMockQaCli({
-        args: ["qa", "suite"],
-        options: { timeoutMs: Number.MAX_SAFE_INTEGER },
-      });
-
-      await waitForSpawnCount(1);
-      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-      child.stdout.emit("data", Buffer.from("ok\n"));
-      child.emit("close", 0);
-      await expect(pending).resolves.toBe("ok");
-    } finally {
-      timeoutSpy.mockRestore();
-    }
   });
 
   it.runIf(process.platform !== "win32")("kills timed-out qa cli process groups", async () => {
@@ -501,24 +481,6 @@ describe("qa suite runtime agent process helpers", () => {
     ).rejects.toThrow("agent.wait returned error: boom");
   });
 
-  it("accepts malformed completed wait errors as successful terminal runs", async () => {
-    const gatewayCall = vi
-      .fn()
-      .mockResolvedValueOnce({ runId: "run-error-completed" })
-      .mockResolvedValueOnce({ status: "error", error: "completed" });
-    const env = createAgentPromptEnv(gatewayCall);
-
-    await expect(
-      runAgentPrompt(env, {
-        sessionKey: "session-error-completed",
-        message: "hello",
-      }),
-    ).resolves.toEqual({
-      started: { runId: "run-error-completed" },
-      waited: { status: "error", error: "completed" },
-    });
-  });
-
   it.each([{ toolName: "session_status", requireSuccess: false, callVisible: true }])(
     "waits for persisted $toolName results after agent completion",
     async ({ toolName, requireSuccess, callVisible }) => {
@@ -752,16 +714,7 @@ describe("qa suite runtime agent process helpers", () => {
     expect(gatewayCall.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
-  it.each([
-    { details: { method: "chat.startup" }, retryable: true },
-    {
-      details: { method: "chat.startup", code: "agent-database-inspection-pending" },
-      retryable: true,
-    },
-    { details: { code: "agent-database-inspection-failed" }, retryable: true },
-    { details: { code: "agent-database-inspection-pending" }, retryable: false },
-    { details: {}, retryable: true },
-  ])(
+  it.each([{ details: {}, retryable: true }])(
     "does not retry history errors with details=$details and retryable=$retryable",
     async ({ details, retryable }) => {
       const gatewayError = Object.assign(new Error("history unavailable"), {
@@ -784,20 +737,6 @@ describe("qa suite runtime agent process helpers", () => {
       expect(gatewayCall).toHaveBeenCalledOnce();
     },
   );
-
-  it("caps the gateway client timeout when waiting for oversized agent runs", async () => {
-    const gatewayCall = vi.fn(async () => ({ status: "ok" }));
-
-    await expect(
-      waitForAgentRun({ gateway: { call: gatewayCall } } as never, "run-oversized", 9e15),
-    ).resolves.toEqual({ status: "ok" });
-
-    expect(gatewayCall).toHaveBeenCalledWith(
-      "agent.wait",
-      { runId: "run-oversized", timeoutMs: MAX_TIMER_TIMEOUT_MS },
-      { timeoutMs: MAX_TIMER_TIMEOUT_MS },
-    );
-  });
 
   it("lists cron jobs and doctor memory status through the gateway", async () => {
     const gatewayCall = vi

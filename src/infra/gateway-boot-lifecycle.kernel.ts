@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "./startup-maintenance-required.js";
 import { TAILSCALE_BACKEND_STOPPED_REASON } from "./tailscale-backend-stopped-error.js";
@@ -9,6 +9,7 @@ import { TAILSCALE_BACKEND_STOPPED_REASON } from "./tailscale-backend-stopped-er
 type GatewayBootLifecycleDatabase = Pick<DB, "gateway_boot_lifecycle">;
 const GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD = 3;
 const GATEWAY_BOOT_LOOP_WINDOW_MS = 5 * 60_000;
+export const GATEWAY_SIGNAL_REPEAT_WINDOW_MS = 5 * 60_000;
 export const GATEWAY_CRASH_LOOP_BREAKER_REASON = "gateway.crash_loop_breaker";
 export const GATEWAY_CRASH_LOOP_RECOVERED_REASON = "gateway.crash_loop_recovered";
 export const maintenanceStartupReasons = [
@@ -44,7 +45,7 @@ export function buildGatewayCrashLoopBreakerDecision(params: {
   };
 }
 
-export function inspectGatewayCrashLoopBreakerInDatabase(db: DatabaseSync, nowMs: number) {
+export function inspectGatewayCrashLoopBreakerInDatabase(db: EngineConnection, nowMs: number) {
   const kysely = getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db);
   const windowStartMs = nowMs - GATEWAY_BOOT_LOOP_WINDOW_MS;
   // Unclean means startup_failed by completion time, or an open boot row
@@ -106,4 +107,4 @@ export const gatewayBootReadOperations = {
       inspectGatewayCrashLoopBreakerInDatabase(db, nowMs),
     ),
   }),
-} satisfies WorkerOperationHandlers<DatabaseSync>;
+} satisfies WorkerOperationHandlers<EngineConnection>;

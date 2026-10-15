@@ -333,6 +333,9 @@ export function buildPluginManifestRegistry(
                 manifest: {
                   id: candidate.idHint,
                   configSchema: { type: "object", additionalProperties: false },
+                  // A standalone file has nowhere to declare activation; listing it in
+                  // plugins.load.paths is the startup opt-in. Enablement policy still applies.
+                  activation: { onStartup: true },
                 },
                 manifestPath: candidate.source,
               }

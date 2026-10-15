@@ -38,7 +38,7 @@ function confirmationDialog(page: Page) {
   return page.getByRole("dialog", { name: "Update Gateway", exact: true });
 }
 
-async function openUpdateCard(page: Page, baseUrl: string, compact = false) {
+async function openUpdateCard(page: Page, baseUrl: string) {
   const gateway = await installMockGateway(page, {
     methodResponses: {
       "update.run": UPDATE_RUN_RESPONSE,
@@ -49,16 +49,6 @@ async function openUpdateCard(page: Page, baseUrl: string, compact = false) {
   await gateway.waitForRequest("chat.startup");
   await gateway.setMethodResponse("update.status", { updateAvailable: UPDATE_AVAILABLE });
   await gateway.emitGatewayEvent("update.available", { updateAvailable: UPDATE_AVAILABLE });
-  if (compact) {
-    await page.locator(".chat-header-session-menu__trigger").click();
-    expect(await page.getByText("Update available v2.0.0", { exact: true }).count()).toBe(0);
-    await page.screenshot({
-      animations: "disabled",
-      path: path.join(PROOF_DIR, "04a-compact-session-menu-without-update.png"),
-    });
-    await page.keyboard.press("Escape");
-    await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
-  }
   await page.locator(".sidebar-issues-button:visible").click();
   const updateIssue = page.locator(
     'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
@@ -66,15 +56,9 @@ async function openUpdateCard(page: Page, baseUrl: string, compact = false) {
   await updateIssue.locator("summary").click();
   const updateButton = updateIssue.locator(".sidebar-update-card__action");
   await updateButton.waitFor({ timeout: 10_000 });
-  // Expansion checks freshness; a disabled button cannot receive keyboard focus.
+  // Expansion refreshes the target; the action stays disabled until that check settles.
   await expect.poll(() => updateButton.isEnabled()).toBe(true);
-  if (compact) {
-    await page.screenshot({
-      animations: "disabled",
-      path: path.join(PROOF_DIR, "04b-compact-update-inbox.png"),
-    });
-  }
-  return { compact, gateway, updateButton };
+  return { gateway, updateButton };
 }
 
 async function openConfirmation(page: Page, updateButton: Locator) {
@@ -96,7 +80,7 @@ suite.define(() => {
           });
           const status = (sha: string, behind: number) => ({
             updateAvailable: {
-              channel: "dev" as const,
+              channel: "beta" as const,
               currentVersion: "1.0.0",
               latestVersion: "1.0.0",
               currentSha: "a".repeat(40),
@@ -104,7 +88,7 @@ suite.define(() => {
               commitsBehind: behind,
             },
             schedule: {
-              channel: "dev" as const,
+              channel: "beta" as const,
               autoEnabled: false,
               target: {
                 kind: "git" as const,
@@ -254,7 +238,7 @@ suite.define(() => {
             activeRun: null,
             lastRun: run,
             updateAvailable: {
-              channel: "dev" as const,
+              channel: "beta" as const,
               currentVersion: "1.0.0",
               latestVersion: "1.0.0",
               currentSha: "a".repeat(40),
@@ -263,7 +247,7 @@ suite.define(() => {
               commitsBehind: behind,
             },
             schedule: {
-              channel: "dev" as const,
+              channel: "beta" as const,
               autoEnabled: false,
               target: {
                 kind: "git" as const,
@@ -360,12 +344,12 @@ suite.define(() => {
     },
   );
 
-  it("refreshes the Dev target when opening the update card and again before confirmation", async () => {
+  it("refreshes the Git release target when opening the update card and again before confirmation", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
       async ({ page }) => {
         const available = (sha: string, behind: number): UpdateAvailable => ({
-          channel: "dev",
+          channel: "beta",
           currentVersion: "1.0.0",
           latestVersion: "1.0.0",
           currentSha: "a".repeat(40),
@@ -380,7 +364,7 @@ suite.define(() => {
         ): { updateAvailable: UpdateAvailable; schedule: UpdateScheduleState } => ({
           updateAvailable: available(sha, behind),
           schedule: {
-            channel: "dev",
+            channel: "beta",
             autoEnabled: false,
             target: {
               kind: "git",
@@ -443,7 +427,7 @@ suite.define(() => {
         expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
         await gateway.waitForRequest("chat.startup");
 
-        // The Inbox is the sole update surface; the badge carries the attention.
+        // The Inbox badge carries dismissible attention; the menu keeps release availability.
         const inboxBadge = page.locator(".sidebar-issues-button__count");
         await inboxBadge.waitFor();
         expect(
@@ -455,9 +439,9 @@ suite.define(() => {
                 .filter((className) => typeof className === "string" && className.length > 0),
             ),
         ).toEqual(["sr-only", "sidebar-issues-button"]);
-        await page.locator(".sidebar-shell__footer").screenshot({
+        await page.locator(".sidebar-issues-button").screenshot({
           animations: "disabled",
-          path: path.join(PROOF_DIR, "00-footer-inbox-badge.png"),
+          path: path.join(PROOF_DIR, "00-inbox-badge.png"),
         });
 
         await page.locator(".sidebar-issues-button").click();
@@ -472,7 +456,13 @@ suite.define(() => {
         await inboxBadge.waitFor({ state: "detached" });
 
         await page.locator(".sidebar-identity-card").click();
-        await page.getByText("Update available", { exact: true }).waitFor();
+        await page
+          .getByRole("menuitem", { name: "Updates. Update available", exact: true })
+          .waitFor();
+        await page
+          .locator(".sidebar-identity-menu__update-badge")
+          .getByText("Available", { exact: true })
+          .waitFor();
         await page.keyboard.press("Escape");
 
         await page.reload();
@@ -487,7 +477,7 @@ suite.define(() => {
     );
   });
 
-  it("keeps Inbox snoozes and the account-menu update chip with their authenticated account", async () => {
+  it("keeps Inbox snoozes account-scoped without hiding release availability", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
       async ({ page }) => {
@@ -541,9 +531,9 @@ suite.define(() => {
           await page.locator(".sidebar-identity-menu").waitFor({ state: "visible" });
           await expect
             .poll(() =>
-              page.locator(".sidebar-identity-menu .sidebar-footer-build__update").count(),
+              page.locator(".sidebar-identity-menu .sidebar-identity-menu__update-badge").count(),
             )
-            .toBe(snoozed ? 1 : 0);
+            .toBe(1);
           await page.keyboard.press("Escape");
           await page.locator(".sidebar-identity-menu").waitFor({ state: "detached" });
         }
@@ -594,77 +584,6 @@ suite.define(() => {
     );
   });
 
-  it("opens a confirmation that states the action, target, versions, and restart impact", async () => {
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport: { height: 720, width: 1280 } },
-      async ({ page }) => {
-        const { gateway, updateButton } = await openUpdateCard(page, suite.server.baseUrl);
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(PROOF_DIR, "01-update-affordance-light.png"),
-        });
-
-        await openConfirmation(page, updateButton);
-
-        const dialog = confirmationDialog(page);
-        await dialog.waitFor();
-        expect(await dialog.getAttribute("aria-label")).toBe("Update Gateway");
-        const dialogText = await confirmationCopy(page).textContent();
-        expect(dialogText).toContain(
-          "Installs the available update on the connected Gateway and restarts it.",
-        );
-        expect(dialogText).toContain("this Control UI disconnects until the Gateway is back");
-        expect(dialogText).toContain("Installed v1.0.0 · Available v2.0.0");
-        // The first click must not reach the Gateway.
-        expect(await gateway.getRequests("update.run")).toHaveLength(0);
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(PROOF_DIR, "02-confirmation-light.png"),
-        });
-      },
-    );
-  });
-
-  it("renders the same confirmation in dark mode and on a compact viewport", async () => {
-    for (const variant of [
-      { colorScheme: "dark", name: "03-confirmation-dark", viewport: { height: 720, width: 1280 } },
-      {
-        colorScheme: "light",
-        name: "04-confirmation-compact",
-        viewport: { height: 780, width: 420 },
-      },
-    ] as const) {
-      await suite.withPage(
-        {
-          colorScheme: variant.colorScheme,
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport: variant.viewport,
-        },
-        async ({ page }) => {
-          const compact = variant.viewport.width < 600;
-          const { gateway, updateButton } = await openUpdateCard(
-            page,
-            suite.server.baseUrl,
-            compact,
-          );
-          await openConfirmation(page, updateButton);
-          await confirmationDialog(page).waitFor();
-          expect(
-            await confirmationCopy(page)
-              .getByRole("button", { name: "Update and restart", exact: true })
-              .isVisible(),
-          ).toBe(true);
-          expect(await gateway.getRequests("update.run")).toHaveLength(0);
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(PROOF_DIR, `${variant.name}.png`),
-          });
-        },
-      );
-    }
-  });
-
   it.each([
     { dismiss: "Escape" as const, name: "Escape" },
     { dismiss: "cancel" as const, name: "Cancel" },
@@ -694,8 +613,7 @@ suite.define(() => {
       async ({ page }) => {
         const { gateway, updateButton } = await openUpdateCard(page, suite.server.baseUrl);
 
-        await updateButton.focus();
-        await page.keyboard.press("Enter");
+        await updateButton.press("Enter");
         const dialog = confirmationDialog(page);
         await dialog.waitFor();
 
@@ -719,7 +637,7 @@ suite.define(() => {
           animations: "disabled",
           path: path.join(PROOF_DIR, "06-confirmation-confirm-focus.png"),
         });
-        await page.keyboard.press("Enter");
+        await confirm.press("Enter");
 
         await gateway.waitForRequest("update.run");
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
@@ -734,6 +652,13 @@ suite.define(() => {
         const { gateway, updateButton } = await openUpdateCard(page, suite.server.baseUrl);
         await openConfirmation(page, updateButton);
         await confirmationDialog(page).waitFor();
+        const dialogText = await confirmationCopy(page).textContent();
+        expect(dialogText).toContain(
+          "Installs the available update on the connected Gateway and restarts it.",
+        );
+        expect(dialogText).toContain("this Control UI disconnects until the Gateway is back");
+        expect(dialogText).toContain("Installed v1.0.0 · Available v2.0.0");
+        expect(await gateway.getRequests("update.run")).toHaveLength(0);
 
         await confirmationCopy(page)
           .getByRole("button", { name: "Update and restart", exact: true })

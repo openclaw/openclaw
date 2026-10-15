@@ -95,11 +95,15 @@ export async function readSessionTranscriptHydrationRequest(
       SessionTranscriptWorkerValues["transcript-hydration"],
       { kind: "bounded" }
     >["transcript"];
+    let residentRows: Array<{ rawSeq: number; serializedBytes: number }> | undefined;
     const snapshot = readSessionTranscriptBoundedActiveContextCore(request.target, {
       ...request.limits,
       readOnly: true,
       resolvedScope: request.resolvedScope,
-      onRead: (projection) => {
+      onRead: (projection, rows, messagePresence) => {
+        if (!projection.hasUnindexedPrefix) {
+          residentRows = rows;
+        }
         const { database, resolved } = projection;
         if (request.expectedIdentity) {
           assertOpenClawAgentDatabaseIdentity(database, request.expectedIdentity);
@@ -112,6 +116,7 @@ export async function readSessionTranscriptHydrationRequest(
             undefined,
             projection,
             request.preparedEntry,
+            messagePresence,
           );
         }
       },
@@ -119,6 +124,7 @@ export async function readSessionTranscriptHydrationRequest(
     return {
       kind: "bounded" as const,
       snapshot,
+      residentRows,
       ...(selection ? { transcript } : {}),
     };
   }

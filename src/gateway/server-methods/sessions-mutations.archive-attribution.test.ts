@@ -1,18 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionsPatchParams } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import * as lifecycleDrain from "./sessions-lifecycle-drain.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
+import * as archivePreparation from "./sessions-patch-archive.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 afterEach(() => {
@@ -80,12 +85,69 @@ async function invokePatchSession(params: SessionsPatchParams, requestClient: Ga
 }
 
 describe("sessions.patch archive attribution", () => {
+  it("drains an archive behind an unrelated writer, then commits after that writer settles", async ({
+    signal,
+  }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const key = "agent:main:dashboard:archive-writer-wait";
+      const scope = { agentId: "main", sessionKey: key };
+      await upsertSessionEntryCore(scope, { sessionId: "archive-writer-wait", updatedAt: 1 });
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      const drained = createDeferredCore();
+      let writer: Promise<void> | undefined;
+      const prepareOwner = archivePreparation.prepareSessionPatchArchive;
+      const drainOwner = lifecycleDrain.prepareSessionLifecycleDrain;
+      const prepare = vi
+        .spyOn(archivePreparation, "prepareSessionPatchArchive")
+        .mockImplementationOnce(async (params) => {
+          writer = runOpenClawAgentWriteAdmission(
+            { agentId: "main", path: params.target.initialTarget.readSource!.path },
+            async () => {
+              entered.resolve();
+              await resume.promise;
+            },
+          );
+          await entered.promise;
+          return prepareOwner(params);
+        });
+      const drain = vi
+        .spyOn(lifecycleDrain, "prepareSessionLifecycleDrain")
+        .mockImplementationOnce(async (params) => {
+          const result = await drainOwner(params);
+          drained.resolve();
+          return result;
+        });
+      const patch = invokePatchSession(
+        { key, archived: true, expectedSessionId: "archive-writer-wait" },
+        client(),
+      );
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(drained.promise, patch, "Archive settled before draining"),
+          signal,
+        );
+        expect(loadSessionEntry(scope)?.archivedAt).toBeUndefined();
+        resume.resolve();
+        expect((await patch)[0]?.[0]).toBe(true);
+        expect(loadSessionEntry(scope)?.archivedAt).toEqual(expect.any(Number));
+      } finally {
+        resume.resolve();
+        await Promise.allSettled([patch, ...(writer ? [writer] : [])]);
+        prepare.mockRestore();
+        drain.mockRestore();
+      }
+    });
+  });
+
   it.each([
     { change: { sidebarRoot: true }, name: "promotion" },
     { change: { category: "Independent" }, name: "category" },
     { change: { archivedAt: 42 }, name: "archive" },
   ])("rejects a $name race before drain and in the drain's live guard", async ({ change }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const key = "agent:main:dashboard:archive-cas";
       const scope = { agentId: "main", sessionKey: key };
       const entry = { sessionId: "archive-cas", updatedAt: 1, lifecycleRevision: "unchanged" };
@@ -145,6 +207,7 @@ describe("sessions.patch archive attribution", () => {
     "checks organization CAS in the admitted writer for ordinary patches: %j",
     async (change) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const key = "agent:main:dashboard:writer-cas";
         const scope = { agentId: "main", sessionKey: key };
         await upsertSessionEntryCore(scope, {
@@ -174,6 +237,7 @@ describe("sessions.patch archive attribution", () => {
 
   it("preserves a grandchild through hidden runs when its persistent ancestor becomes independent", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const root = "agent:main:dashboard:tree-root";
       const child = "agent:main:dashboard:tree-child";
       const hidden = "agent:main:subagent:tree-bridge";
@@ -254,6 +318,7 @@ describe("sessions.patch archive attribution", () => {
 
   it("returns per-target batch outcomes without acquiring independently archived rows", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const keys = ["agent:main:dashboard:cas-independent", "agent:main:dashboard:cas-selected"];
       for (const [index, key] of keys.entries()) {
         await upsertSessionEntryCore(
@@ -302,6 +367,7 @@ describe("sessions.patch archive attribution", () => {
 
   it("archives only the selected conversation, preserving nested and promoted child work", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const parent = "agent:main:dashboard:archive-parent";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: parent },
@@ -349,6 +415,7 @@ describe("sessions.patch archive attribution", () => {
     "preserves the interruption outcome, receipts, and first archiver (endedAt=%s)",
     async (endedAt) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const sessionKey = "agent:main:archive-attribution";
         const sessionId = "session-archive-attribution";
         const retained = {
@@ -419,6 +486,7 @@ describe("sessions.patch archive attribution", () => {
 
   it("does not fabricate attribution or transcript events for an unidentified client", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:solo-archive";
       const sessionId = "session-solo-archive";
       const terminal = {
@@ -450,6 +518,7 @@ describe("sessions.patch archive attribution", () => {
 
   it("archives through an alias with attribution", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const canonicalKey = "agent:main:alias-happy-archive";
       const aliasKey = "alias-happy-archive";
       await upsertSessionEntryCore(

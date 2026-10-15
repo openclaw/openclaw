@@ -66,86 +66,18 @@ function isMessageOnlyErrorIdentity(node: { type?: unknown }): node is MessageOn
   return typeof node.type === "string" && Object.hasOwn(MESSAGE_ONLY_ERRORS, node.type);
 }
 
-type ErrorFields<Type extends string, Source, Keys extends keyof Source> = { type: Type } & Pick<
-  Source,
-  Keys
->;
+export type ErrorIdentity = ReturnType<typeof identifyError>;
 
-export type ErrorIdentity =
-  | MessageOnlyErrorIdentity
-  | { type: "error" | "aggregate" | "mcp-oauth-corruption" | "session-worktree-owner-mismatch" }
-  | ErrorFields<"auth-profile-store-unreadable", AuthProfileStoreUnreadableError, "databasePath">
-  | ErrorFields<
-      "worktree-removal-contention",
-      WorktreeRemovalContentionError,
-      "kind" | "blockedByRun"
-    >
-  | ErrorFields<"worktree-removal-lock", WorktreeRemovalLockError, "kind">
-  | (ErrorFields<"plugin-state", PluginStateStoreError, "operation" | "path" | "owner"> & {
-      stateCode: PluginStateStoreError["code"];
-    })
-  | { type: "skill-library"; libraryCode: SkillLibraryError["code"]; currentRevision?: string }
-  | { type: "secret-store-validation"; secretCode: SecretStoreValidationError["code"] }
-  | ErrorFields<
-      "worker-session-already-attached",
-      WorkerSessionAlreadyAttachedError,
-      "sessionId" | "environmentId"
-    >
-  | (ErrorFields<"plugin-blob", PluginBlobStoreError, "operation" | "path"> & {
-      blobCode: PluginBlobStoreError["code"];
-    })
-  | ErrorFields<
-      "workspace-alias-repointed",
-      WorkspaceAliasRepointedError,
-      "aliasPath" | "storedWorkspacePath" | "currentWorkspacePath"
-    >
-  | { type: "session-goal-operation"; goalCode: SessionGoalOperationError["code"] }
-  | ErrorFields<
-      "session-lifecycle-upsert-conflict",
-      SessionEntryLifecycleUpsertConflictError,
-      "sessionKey"
-    >
-  | {
-      type: "session-transcript-writer-claim-rebound";
-      refusal?: NonNullable<ReturnType<typeof parseTranscriptAppendRefusal>>;
-    }
-  | ErrorFields<"session-mutation-conflict", SqliteSessionMutationConflictError, "operationLabel">
-  | ErrorFields<
-      "session-transcript-mutation-conflict",
-      SqliteTranscriptMutationConflictError,
-      "sessionId"
-    >
-  | ErrorFields<"session-metadata", SessionMetadataUnavailableError, "reason" | "missingTables">
-  | ErrorFields<"state-owner-contention", GatewayStateOwnerContentionError, "databasePath">
-  | { type: "state-lease"; leaseCode: OpenClawStateLeaseError["code"] }
-  | ErrorFields<"ownership-metadata", OpenClawStateOwnershipMetadataError, "databasePath">
-  | ErrorFields<
-      "external-ownership",
-      OpenClawStateExternalOwnershipError,
-      "databasePath" | "managerId"
-    >
-  | ErrorFields<
-      "state-migration",
-      OpenClawStateDatabaseSchemaMigrationRequiredError,
-      "kind" | "pathname"
-    >
-  | ErrorFields<
-      "agent-media-migration",
-      OpenClawAgentDatabaseMediaMigrationRequiredError,
-      "pathname" | "schemaVersion"
-    >
-  | ErrorFields<"maintenance", StartupMaintenanceRequiredError, "kind">;
-
-export function identifyError(error: Error): ErrorIdentity {
+export function identifyError(error: Error) {
   if (error instanceof AuthProfileStoreUnreadableError) {
-    return { type: "auth-profile-store-unreadable", databasePath: error.databasePath };
+    return { type: "auth-profile-store-unreadable" as const, databasePath: error.databasePath };
   }
   if (error instanceof SessionWorktreeLifecycleError && error.reason === "owner-mismatch") {
-    return { type: "session-worktree-owner-mismatch" };
+    return { type: "session-worktree-owner-mismatch" as const };
   }
   if (error instanceof WorktreeRemovalContentionError) {
     return {
-      type: "worktree-removal-contention",
+      type: "worktree-removal-contention" as const,
       kind: error.kind,
       ...(error.blockedByRun
         ? {
@@ -158,11 +90,11 @@ export function identifyError(error: Error): ErrorIdentity {
     };
   }
   if (error instanceof WorktreeRemovalLockError) {
-    return { type: "worktree-removal-lock", kind: error.kind };
+    return { type: "worktree-removal-lock" as const, kind: error.kind };
   }
   if (error instanceof PluginStateStoreError) {
     return {
-      type: "plugin-state",
+      type: "plugin-state" as const,
       stateCode: error.code,
       operation: error.operation,
       path: error.path,
@@ -171,24 +103,24 @@ export function identifyError(error: Error): ErrorIdentity {
   }
   if (error instanceof SkillLibraryError) {
     return {
-      type: "skill-library",
+      type: "skill-library" as const,
       libraryCode: error.code,
       ...(error.currentRevision === undefined ? {} : { currentRevision: error.currentRevision }),
     };
   }
   if (error instanceof SecretStoreValidationError) {
-    return { type: "secret-store-validation", secretCode: error.code };
+    return { type: "secret-store-validation" as const, secretCode: error.code };
   }
   if (error instanceof WorkerSessionAlreadyAttachedError) {
     return {
-      type: "worker-session-already-attached",
+      type: "worker-session-already-attached" as const,
       sessionId: error.sessionId,
       environmentId: error.environmentId,
     };
   }
   if (error instanceof PluginBlobStoreError) {
     return {
-      type: "plugin-blob",
+      type: "plugin-blob" as const,
       blobCode: error.code,
       operation: error.operation,
       ...(error.path === undefined ? {} : { path: error.path }),
@@ -196,63 +128,63 @@ export function identifyError(error: Error): ErrorIdentity {
   }
   if (error instanceof WorkspaceAliasRepointedError) {
     return {
-      type: "workspace-alias-repointed",
+      type: "workspace-alias-repointed" as const,
       aliasPath: error.aliasPath,
       storedWorkspacePath: error.storedWorkspacePath,
       currentWorkspacePath: error.currentWorkspacePath,
     };
   }
   if (error instanceof McpOAuthStoreCorruptionError) {
-    return { type: "mcp-oauth-corruption" };
+    return { type: "mcp-oauth-corruption" as const };
   }
   if (error instanceof SessionGoalOperationError) {
-    return { type: "session-goal-operation", goalCode: error.code };
+    return { type: "session-goal-operation" as const, goalCode: error.code };
   }
   if (error instanceof SessionEntryLifecycleUpsertConflictError) {
-    return { type: "session-lifecycle-upsert-conflict", sessionKey: error.sessionKey };
+    return { type: "session-lifecycle-upsert-conflict" as const, sessionKey: error.sessionKey };
   }
   if (error instanceof SessionTranscriptWriterClaimReboundError) {
     const refusal = parseTranscriptAppendRefusal(error.cause);
     return {
-      type: "session-transcript-writer-claim-rebound",
+      type: "session-transcript-writer-claim-rebound" as const,
       ...(refusal ? { refusal } : {}),
     };
   }
   if (error instanceof SqliteSessionMutationConflictError) {
-    return { type: "session-mutation-conflict", operationLabel: error.operationLabel };
+    return { type: "session-mutation-conflict" as const, operationLabel: error.operationLabel };
   }
   if (error instanceof SqliteTranscriptMutationConflictError) {
-    return { type: "session-transcript-mutation-conflict", sessionId: error.sessionId };
+    return { type: "session-transcript-mutation-conflict" as const, sessionId: error.sessionId };
   }
   if (error instanceof SessionMetadataUnavailableError) {
     return {
-      type: "session-metadata",
+      type: "session-metadata" as const,
       reason: error.reason,
       missingTables: [...error.missingTables],
     };
   }
   if (error instanceof GatewayStateOwnerContentionError) {
-    return { type: "state-owner-contention", databasePath: error.databasePath };
+    return { type: "state-owner-contention" as const, databasePath: error.databasePath };
   }
   if (error instanceof OpenClawStateLeaseError) {
-    return { type: "state-lease", leaseCode: error.code };
+    return { type: "state-lease" as const, leaseCode: error.code };
   }
   if (error instanceof OpenClawStateOwnershipMetadataError) {
-    return { type: "ownership-metadata", databasePath: error.databasePath };
+    return { type: "ownership-metadata" as const, databasePath: error.databasePath };
   }
   if (error instanceof OpenClawStateExternalOwnershipError) {
     return {
-      type: "external-ownership",
+      type: "external-ownership" as const,
       databasePath: error.databasePath,
       managerId: error.managerId,
     };
   }
   if (error instanceof OpenClawStateDatabaseSchemaMigrationRequiredError) {
-    return { type: "state-migration", kind: error.kind, pathname: error.pathname };
+    return { type: "state-migration" as const, kind: error.kind, pathname: error.pathname };
   }
   if (error instanceof OpenClawAgentDatabaseMediaMigrationRequiredError) {
     return {
-      type: "agent-media-migration",
+      type: "agent-media-migration" as const,
       pathname: error.pathname,
       schemaVersion: error.schemaVersion,
     };
@@ -269,11 +201,10 @@ export function identifyError(error: Error): ErrorIdentity {
     }
   }
   if (error instanceof StartupMaintenanceRequiredError) {
-    return { type: "maintenance", kind: error.kind };
+    return { type: "maintenance" as const, kind: error.kind };
   }
-  return { type: error instanceof AggregateError ? "aggregate" : "error" };
+  return { type: error instanceof AggregateError ? ("aggregate" as const) : ("error" as const) };
 }
-
 function unreachableErrorNode(node: never): never {
   throw new Error(`Unexpected shared-state worker error node: ${String(node)}`);
 }

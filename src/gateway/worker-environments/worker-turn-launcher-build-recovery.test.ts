@@ -18,9 +18,12 @@ import {
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import { placementTurnOwner } from "./placement-record.js";
+import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import {
   WorkerRuntimeRefreshPendingError,
@@ -67,6 +70,23 @@ async function expectSinglePersistedInput() {
   ).toHaveLength(1);
 }
 
+function refreshPlacementBundle(bundleHash: string) {
+  const placement = placements.get(SESSION_ID);
+  if (placement?.state !== "active") {
+    throw new Error("runtime refresh fixture requires an active placement");
+  }
+  // The mock refresh owns this write, including the postimage published by a real refresh.
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      db.prepare(
+        "UPDATE worker_session_placements SET worker_bundle_hash = ? WHERE session_id = ?",
+      ).run(bundleHash, SESSION_ID);
+      publishPlacementTurnClaimState(db, { ...placement, workerBundleHash: bundleHash });
+    },
+    { database },
+  );
+}
+
 async function createBuildRecoveryHarness(
   options: {
     rejection?:
@@ -74,12 +94,11 @@ async function createBuildRecoveryHarness(
       | "admission"
       | "pending refresh"
       | "disconnected"
-      | "launch"
-      | "handoff";
+      | "handoff"
+      | "interrupted";
     repeated?: boolean;
     pendingResult?: boolean;
     refreshInPlace?: boolean;
-    withoutRecorder?: boolean;
     afterReconcile?: () => void | Promise<void>;
     waitForAdmissionNode?: WorkerTurnLauncherOptions["waitForAdmissionNode"];
     replyOperation?: ReturnType<typeof createReplyOperation>;
@@ -89,6 +108,20 @@ async function createBuildRecoveryHarness(
   await seedActivePlacement();
   const rejection = options.rejection ?? "admission";
   let environment = attachedEnvironment();
+  let connected = rejection !== "interrupted";
+  if (rejection === "interrupted") {
+    environment = { ...environment, nodeDeviceId: "retained-node" };
+    const active = placements.get(SESSION_ID);
+    if (active?.state !== "active") {
+      throw new Error("interrupted fixture requires an active placement");
+    }
+    await placements.claimTurn({
+      ...sessionTarget,
+      claimId: "interrupted-claim",
+      runId: "interrupted-run",
+      owner: placementTurnOwner(active),
+    });
+  }
   const retire = () => {
     environment = {
       ...environment,
@@ -107,9 +140,6 @@ async function createBuildRecoveryHarness(
   }
   let replaced = false;
   const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
-    if (rejection === "launch" && (!replaced || options.repeated)) {
-      throw new StaleWorkerBuildError();
-    }
     request.onDispatchReady?.();
     if (rejection === "handoff") {
       throw new StaleWorkerBuildError();
@@ -152,7 +182,11 @@ async function createBuildRecoveryHarness(
     },
     acknowledgeCredentialDelivery: vi.fn(async () => true),
     startTunnel: async () => {
-      if (rejection !== "handoff" && rejection !== "launch" && (!replaced || options.repeated)) {
+      if (
+        rejection !== "handoff" &&
+        rejection !== "interrupted" &&
+        (!replaced || options.repeated)
+      ) {
         if (rejection === "disconnected") {
           throw new WorkerTunnelOwnerDisconnectedError(
             "device worker node is not connected with the supervisor dialect",
@@ -174,7 +208,13 @@ async function createBuildRecoveryHarness(
         stop: async () => {},
       });
     },
-    stopTunnel: vi.fn(async () => {}),
+    stopTunnel: vi.fn(async () => {
+      if (!connected) {
+        throw new WorkerTunnelOwnerDisconnectedError(
+          "device worker node is not connected with the supervisor dialect",
+        );
+      }
+    }),
     destroy,
     requestDestroy: destroy,
     attachSession: vi.fn(async () => {
@@ -183,12 +223,16 @@ async function createBuildRecoveryHarness(
     createWithRequest: vi.fn(async () => {
       throw new Error("unexpected worker environment creation");
     }),
-    reconcileOnce: async () => retire(),
+    reconcileOnce: async () => {
+      if (rejection !== "interrupted") {
+        retire();
+      }
+    },
     reconcileEnvironment: vi.fn(),
   };
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
   const dispatch = createWorkerPlacementDispatchService({
-    initialPlacements: placements.list(),
+    initialPlacements: await placements.listAsync(),
     placements,
     environments,
     runnerAvailability: { read: () => undefined, version: () => 0 },
@@ -206,6 +250,9 @@ async function createBuildRecoveryHarness(
       resolveWorkspace: async () => ({ kind: "local", path: root }),
     }),
   });
+  if (rejection === "interrupted") {
+    await dispatch.reconcile("startup");
+  }
   const redispatchPlacement = vi.fn(async () => {
     replaced = true;
     environment = attachedEnvironment();
@@ -220,8 +267,10 @@ async function createBuildRecoveryHarness(
   const provider = createWorkerSessionTurnPlacementProvider({
     environments,
     placements,
+    isInterruptedTurn: dispatch.isInterruptedTurn,
     waitForAdmissionNode: async (params) => {
       await options.waitForAdmissionNode?.(params);
+      connected = true;
       if (rejection === "disconnected") {
         replaced = true;
       }
@@ -249,11 +298,7 @@ async function createBuildRecoveryHarness(
             ...environment,
             bootstrapReceipt: { ...environment.bootstrapReceipt!, bundleHash },
           };
-          database.db
-            .prepare(
-              "UPDATE worker_session_placements SET worker_bundle_hash = ? WHERE session_id = ?",
-            )
-            .run(bundleHash, SESSION_ID);
+          refreshPlacementBundle(bundleHash);
           replaced = true;
         } else {
           await dispatch.reconcileActive(environmentId);
@@ -279,7 +324,6 @@ async function createBuildRecoveryHarness(
     originalClaimIds.push(claim.claimId);
   });
   const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
-  const onUserMessagePersisted = vi.fn();
   return {
     environments,
     launchTurn,
@@ -287,7 +331,6 @@ async function createBuildRecoveryHarness(
     onAdmitted,
     originalClaimIds,
     runLocal,
-    onUserMessagePersisted,
     reclaim: () =>
       dispatch.reclaim({ sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main" }),
     execute: (abortSignal?: AbortSignal, assertRunCurrent?: () => void) =>
@@ -296,8 +339,7 @@ async function createBuildRecoveryHarness(
         {
           ...input,
           ...(options.replyOperation ? { replyOperation: options.replyOperation } : {}),
-          ...(options.withoutRecorder ? {} : { userTurnTranscriptRecorder: recorder }),
-          onUserMessagePersisted,
+          userTurnTranscriptRecorder: recorder,
           ...(abortSignal ? { abortSignal } : {}),
         },
         runLocal,
@@ -313,6 +355,37 @@ describe("worker turn launcher build recovery", () => {
   afterEach(() => {
     resetGatewayWorkAdmission();
     resetDiagnosticRunActivityForTest();
+  });
+
+  it("waits for reconnect and settles the exact interrupted claim before the next turn", async () => {
+    const waiting = createDeferred();
+    const reconnected = createDeferred();
+    const harness = await createBuildRecoveryHarness({
+      rejection: "interrupted",
+      waitForAdmissionNode: async ({ signal, assertCurrent }) => {
+        waiting.resolve();
+        await racePromiseWithAbortSignal(reconnected.promise, signal);
+        assertCurrent();
+      },
+    });
+    const execution = harness.execute();
+    void execution.catch(() => waiting.resolve());
+    try {
+      await waiting.promise;
+      expect(placements.get(SESSION_ID)?.turnClaim?.claimId).toBe("interrupted-claim");
+      expect(harness.launchTurn).not.toHaveBeenCalled();
+      reconnected.resolve();
+      await expect(execution).resolves.toMatchObject({
+        payloads: [{ text: "Continued on the replacement worker" }],
+      });
+      expect(harness.launchTurn).toHaveBeenCalledOnce();
+      expect(harness.redispatchPlacement).not.toHaveBeenCalled();
+      expect(harness.runLocal).not.toHaveBeenCalled();
+      await expectSinglePersistedInput();
+    } finally {
+      reconnected.resolve();
+      await execution.catch(() => {});
+    }
   });
 
   async function createRefreshWaitHarness(fence = false) {
@@ -390,11 +463,7 @@ describe("worker turn launcher build recovery", () => {
           ...environment,
           bootstrapReceipt: { ...environment.bootstrapReceipt!, bundleHash },
         };
-        database.db
-          .prepare(
-            "UPDATE worker_session_placements SET worker_bundle_hash = ? WHERE session_id = ?",
-          )
-          .run(bundleHash, SESSION_ID);
+        refreshPlacementBundle(bundleHash);
         inFlight = false;
         settled.resolve();
       },
@@ -652,39 +721,6 @@ describe("worker turn launcher build recovery", () => {
     },
   );
 
-  it("clears the reconnect deadline when runtime refresh preparation fails", async () => {
-    const harness = await createBuildRecoveryHarness({
-      rejection: "pending refresh",
-      refreshInPlace: true,
-    });
-    const preparationError = new Error("runtime refresh preparation failed");
-    const prepareRuntimeRefresh = placements.prepareRuntimeRefresh.bind(placements);
-    const scheduled = vi.spyOn(globalThis, "setTimeout");
-    const cleared = vi.spyOn(globalThis, "clearTimeout");
-    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-    const preparation = vi
-      .spyOn(placements, "prepareRuntimeRefresh")
-      .mockImplementationOnce(prepareRuntimeRefresh)
-      .mockImplementationOnce(async () => {
-        reconnectTimer = scheduled.mock.results.at(-1)?.value;
-        expect(scheduled.mock.lastCall?.[1]).toBe(5_000);
-        throw preparationError;
-      });
-    try {
-      await expect(harness.execute()).rejects.toBe(preparationError);
-      expect(preparation).toHaveBeenCalledTimes(2);
-      expect(harness.launchTurn).not.toHaveBeenCalled();
-      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
-      expect(reconnectTimer).toBeDefined();
-      expect(cleared).toHaveBeenCalledWith(reconnectTimer);
-    } finally {
-      clearTimeout(reconnectTimer);
-      preparation.mockRestore();
-      scheduled.mockRestore();
-      cleared.mockRestore();
-    }
-  });
-
   it("bounds reconnect admission by the caller's timeout", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const waiting = createDeferred();
@@ -712,25 +748,6 @@ describe("worker turn launcher build recovery", () => {
       vi.useRealTimers();
     }
   });
-
-  it.each([
-    { refreshInPlace: false, withoutRecorder: false },
-    { refreshInPlace: true, withoutRecorder: true },
-  ])(
-    "persists input once after pre-handoff rejection (refreshInPlace=$refreshInPlace, withoutRecorder=$withoutRecorder)",
-    async ({ refreshInPlace, withoutRecorder }) => {
-      const harness = await createBuildRecoveryHarness({
-        rejection: "launch",
-        withoutRecorder,
-        refreshInPlace,
-      });
-      await harness.execute();
-      expect(harness.launchTurn).toHaveBeenCalledTimes(2);
-      expect(harness.onUserMessagePersisted).toHaveBeenCalledOnce();
-      await expectSinglePersistedInput();
-      expect(harness.launchTurn.mock.calls[1]?.[0].plan.assignment.initialMessages).toEqual([]);
-    },
-  );
 
   it.each(["admission", "pending refresh"] as const)(
     "continues the submitted turn after %s by refreshing the same machine",

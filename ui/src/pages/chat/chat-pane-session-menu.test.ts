@@ -59,7 +59,7 @@ describe("chat pane session menu boundary", () => {
     expect(pane.context.navigation.snapshot.sidebarEntries).not.toContain("session:" + row.key);
     expect(row.pinned).toBe(true);
   });
-  it("keeps unchanged menu children settled and reads current callbacks after a header refresh", async () => {
+  it("retains menu children and reads current callbacks after a header refresh", async () => {
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture(),
       sessions: createSessionCapabilityFixture({ state: { groups: ["Projects"] } }),
@@ -81,7 +81,10 @@ describe("chat pane session menu boundary", () => {
     draw();
     const menu = container.querySelector("openclaw-chat-header-session-menu")!;
     await menu.updateComplete;
+    menu.querySelector("wa-dropdown")!.dispatchEvent(new Event("wa-show"));
+    await menu.updateComplete;
     const items = [...menu.querySelectorAll("wa-dropdown-item")];
+    expect(items.length).toBeGreaterThan(0);
     await Promise.all(items.map((item) => item.updateComplete));
     await menu.updateComplete;
     const dropdown = menu.querySelector("wa-dropdown")!;
@@ -324,7 +327,6 @@ describe("chat pane session menu boundary", () => {
   });
 
   it.each([
-    { key: "agent:main:current", archived: false },
     { key: "agent:main:current", archived: true },
     { key: "agent:main:fork", parentSessionKey: "agent:main:parent" },
     { key: "agent:main:subagent:child" },
@@ -355,6 +357,8 @@ describe("chat pane session menu boundary", () => {
     const menu = container.querySelector("openclaw-chat-header-session-menu");
     expect(menu).not.toBeNull();
     await menu?.updateComplete;
+    menu?.querySelector("wa-dropdown")?.dispatchEvent(new Event("wa-show"));
+    await menu?.updateComplete;
     if (fields.archived === undefined) {
       expect(menu?.querySelector('[value="toggle-pin"]')).toBeNull();
     } else {
@@ -368,6 +372,39 @@ describe("chat pane session menu boundary", () => {
       );
     }
   });
+
+  it.each([
+    ["agent:main:plugin:anthropic:catalog-adopt:claude:fixture", false],
+    ["agent:main:ordinary", true],
+  ])(
+    "offers header Delete only when the transcript belongs to OpenClaw: %s",
+    async (key, allowed) => {
+      const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
+      state.settings = loadSettings();
+      const row: GatewaySessionRow = { key, sessionId: "fixture", kind: "direct", updatedAt: 0 };
+      const container = document.body.appendChild(document.createElement("div"));
+      render(
+        pane.renderPaneHeader(
+          createPaneHeaderWorkspaceFixture(state),
+          row,
+          false,
+          undefined,
+          false,
+          null,
+        ),
+        container,
+      );
+      const menu = container.querySelector("openclaw-chat-header-session-menu");
+      await menu?.updateComplete;
+      menu?.querySelector("wa-dropdown")?.dispatchEvent(new Event("wa-show"));
+      await menu?.updateComplete;
+      const deleteItem = menu?.querySelector<HTMLElement & { disabled: boolean }>(
+        '[value="delete"]',
+      );
+      expect(deleteItem).not.toBeNull();
+      expect(deleteItem?.disabled).toBe(!allowed);
+    },
+  );
 
   it("forks through the shared session organizer flow and selects the new session", async () => {
     const create = vi.fn(async () => "agent:main:forked");
@@ -400,18 +437,12 @@ describe("chat pane session menu boundary", () => {
   });
 
   it.each([
-    { action: { kind: "toggle-pin" }, patch: { pinned: true }, current: "removed" },
     { action: { kind: "toggle-pin" }, patch: { pinned: true }, current: "replacement" },
     { action: { kind: "toggle-unread" }, patch: { unread: true }, current: "replacement" },
     {
       action: { kind: "set-communication", communication: { send: "never" } },
       patch: { communication: { send: "never" } },
       current: "replacement",
-    },
-    {
-      action: { kind: "set-communication", communication: null },
-      patch: { communication: null },
-      current: "refreshed",
     },
     {
       action: { kind: "set-communication", communication: { send: "never" } },

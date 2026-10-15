@@ -75,12 +75,8 @@ export function createSessionArchiveState(
     pending.delete(key.trim());
   };
   const applyRow = (row: GatewaySessionRow): GatewaySessionRow => {
-    const archive = confirmed.get(row.key);
-    if (!archive || !row.sessionId) {
-      return row;
-    }
     const current = confirmed.get(row.key);
-    if (!current || current.sessionId !== row.sessionId) {
+    if (!current || !row.sessionId || current.sessionId !== row.sessionId) {
       return row;
     }
     const fields = projectSessionArchiveFields(current.archived);

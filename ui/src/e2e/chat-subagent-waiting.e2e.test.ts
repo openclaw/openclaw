@@ -1,8 +1,10 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -14,7 +16,7 @@ import { sessionsListResponse } from "./session-management.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Chat waiting on subagents" });
 
 suite.define(() => {
-  it("keeps one composer wait line with child activity and restores the parent's working indicator", async () => {
+  it("keeps child activity without a duplicate composer line and restores the parent's working indicator", async () => {
     const artifactParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactParent
       ? createControlUiE2eArtifactDir("chat-subagent-waiting", artifactParent)
@@ -157,8 +159,10 @@ suite.define(() => {
         };
         const childHistoryReads = () =>
           gateway.getRequests("chat.history", { sessionKey: child.key });
-        // The auto-opened panel loads child metrics. Once closed, inline observer
+        // Only an explicit open loads child metrics. Once closed, inline observer
         // updates must render from the roster without fetching another transcript.
+        expect(await panel.isVisible()).toBe(false);
+        await selectChatLayoutAction(activePane, "Subagents");
         await panelRow.waitFor();
         await gateway.waitForRequest("chat.history", { match: { sessionKey: child.key } });
         await closePanel();
@@ -188,7 +192,7 @@ suite.define(() => {
         });
         const panelTabHasFocus = () =>
           activePane
-            .locator('[data-region-header="side"] wa-tab[active]')
+            .locator('[data-region-header="side"] .tabstrip-tab[active]')
             .first()
             .evaluate((element) => element.matches(":focus"));
         const countHasFocus = () => runningCount.evaluate((element) => element.matches(":focus"));
@@ -211,14 +215,14 @@ suite.define(() => {
         const backToList = panel.getByRole("button", { name: "Back to Subagents", exact: true });
         await backToList.click();
         await panelRow.waitFor();
-        // Layout restores focus to its trigger; closing the last tab returns to
+        // Panels restores focus to its trigger; closing the last tab returns to
         // the count that opened the panel.
         await selectChatLayoutAction(activePane, "Minimize side panel");
         await indicator.waitFor();
         await expect
           .poll(() =>
             activePane
-              .getByRole("button", { name: "Layout", exact: true })
+              .getByRole("button", { name: "Panels", exact: true })
               .evaluate((element) => element.matches(":focus")),
           )
           .toBe(true);
@@ -246,11 +250,11 @@ suite.define(() => {
         await closePanel();
         await page.setViewportSize({ width: 1280, height: 900 });
         await page.locator(".shell:not(.shell--mobile-nav)").waitFor();
-        const reportUsage = (usageRunId: string, outputTokens: number) =>
+        const reportUsage = (usageRunId: string, outputTokens: number, seq = 1) =>
           gateway.emitGatewayEvent("agent", {
             stream: "usage",
             runId: usageRunId,
-            seq: 1,
+            seq,
             sessionKey: parent.key,
             data: { outputTokens },
             ts: now,
@@ -259,6 +263,21 @@ suite.define(() => {
           (await indicator.locator(".chat-working-indicator__tokens").textContent())?.trim();
         await reportUsage(runId, 4_100);
         await expect.poll(workingTokens).toBe("4.1k output tokens");
+        if (artifactDir) {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            activePane,
+            [activityRow, indicator],
+            { animations: "disabled" },
+          );
+          await writeFile(path.join(artifactDir, "working-light-1280.png"), frame.png);
+        }
+        const activityBounds = await activityRow.boundingBox();
+        const statusBounds = await indicator.boundingBox();
+        expect(activityBounds).not.toBeNull();
+        expect(statusBounds).not.toBeNull();
+        expect(activityBounds!.y + activityBounds!.height).toBeLessThanOrEqual(statusBounds!.y);
+        expect(await indicator.locator(".chat-reading-indicator").count()).toBe(0);
         const yieldCall = {
           role: "assistant",
           content: [
@@ -281,6 +300,7 @@ suite.define(() => {
           ...delegatingParent,
           hasActiveRun: false,
           activeRunIds: [],
+          endedAt: now + 2,
           updatedAt: now + 2,
           snapshotAt: now + 2,
         };
@@ -320,19 +340,39 @@ suite.define(() => {
             document.documentElement.style.colorScheme = themeMode;
           }, mode);
           if (artifactDir) {
-            await page.screenshot({
-              path: path.join(artifactDir, `waiting-${mode}-${width}.png`),
-              animations: "disabled",
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              activePane,
+              [activityRow, turnTimer, activePane.locator(".agent-chat__composer-combobox")],
+              { animations: "disabled" },
+            );
+            await writeFile(path.join(artifactDir, `waiting-${mode}-${width}.png`), frame.png);
+            const rightInset = await turnTimer.evaluate((element) => {
+              const column = element.closest(".chat-group-messages");
+              if (!column) {
+                throw new Error("Missing assistant message column");
+              }
+              return Math.abs(
+                column.getBoundingClientRect().right - element.getBoundingClientRect().right,
+              );
             });
+            expect(rightInset).toBeLessThanOrEqual(1);
           }
         };
         const childLink = activityRow.getByRole("button");
         await childLink.waitFor();
         expect(await indicator.count()).toBe(0);
         expect(await activePane.locator(".agent-chat__composer-run-status--waiting").count()).toBe(
-          1,
+          0,
         );
-        // Individual activity stays in the handed-off reply; the single wait line is in the composer.
+        const turnTimer = activePane.locator(".chat-subagent-activity__elapsed");
+        await expect
+          .poll(async () =>
+            (await turnTimer.locator("openclaw-elapsed-time").textContent())?.trim(),
+          )
+          .toBe("1m 13s");
+        expect(await turnTimer.count()).toBe(1);
+        // Child activity stays in the handed-off reply, not in a duplicate composer line.
         expect(
           await activePane
             .locator(".chat-group.assistant", { hasText: "Backend work is now delegated." })
@@ -381,9 +421,9 @@ suite.define(() => {
         await page.goBack();
         await expect.poll(() => selectedTitle.textContent()).toBe("Build the implementation");
         const waitLine = activePane.locator(".agent-chat__composer-run-status--waiting");
-        await waitLine.waitFor();
-        expect(await waitLine.textContent()).toContain("Waiting on subagents");
-        expect(await indicator.count()).toBe(1);
+        await indicator.waitFor();
+        await expect.poll(workingTokens).toBe("4.1k output tokens");
+        expect(await waitLine.count()).toBe(0);
         await gateway.waitForRequest("sessions.list", {
           after: childRosterReads,
           match: childRosterQuery,
@@ -402,6 +442,11 @@ suite.define(() => {
         );
         await activityRow.getByText("Backend implementation refreshed", { exact: true }).waitFor();
         expect(await indicator.count()).toBe(0);
+        await expect
+          .poll(async () =>
+            (await turnTimer.locator("openclaw-elapsed-time").textContent())?.trim(),
+          )
+          .toBe("1m 13s");
 
         const settledChild: GatewaySessionRow = {
           ...runningChild,
@@ -449,10 +494,12 @@ suite.define(() => {
           session: restartedChild,
           ancestorSessions: [waitingAgain],
         });
-        // The next batch reopens its panel, but the parent reflects the event
-        // while that panel's independent roster hydration is still pending.
+        // A later batch updates inline activity without reopening the panel.
+        // An explicit open still hydrates its independent roster.
         await activityRow.waitFor();
         expect(await indicator.count()).toBe(0);
+        expect(await panel.isVisible()).toBe(false);
+        await selectChatLayoutAction(activePane, "Subagents");
         await gateway.waitForRequest("sessions.list", {
           after: childReads,
           match: childRosterQuery,
@@ -503,21 +550,38 @@ suite.define(() => {
           .locator(
             ".chat-pane-cache__pane--active .chat-working-indicator:not(.chat-working-indicator--subagents)",
           )
-          .waitFor();
-        expect(await indicator.textContent()).not.toContain("Waiting on");
+          .waitFor({ state: "detached" });
+        expect(await indicator.count()).toBe(0);
+        const visibleAnswer = activePane
+          .locator(".chat-text")
+          .getByText(answerText, { exact: true });
+        expect(await visibleAnswer.count()).toBe(1);
         expect(await activePane.locator(".chat-notice").count()).toBe(0);
+        await gateway.emitGatewayEvent("agent", {
+          sessionKey: parent.key,
+          runId: "parent-resumed-run",
+          seq: 2,
+          stream: "assistant",
+          ts: now + 65_500,
+          data: { phase: "commentary", text: "Reviewing the delegated backend result." },
+        });
+        await indicator.waitFor();
+        expect(await indicator.textContent()).not.toContain("Waiting on");
         if (artifactDir) {
-          await page.screenshot({
-            path: path.join(artifactDir, "resumed-dark-1280.png"),
-            animations: "disabled",
-          });
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            activePane,
+            [indicator, activePane.locator(".agent-chat__composer-combobox")],
+            { animations: "disabled" },
+          );
+          await writeFile(path.join(artifactDir, "resumed-dark-1280.png"), frame.png);
         }
         // Still one assistant row once it answers, on the same clock, and both
         // runs' tokens count on its line.
         await block.getByText(answerText, { exact: true }).waitFor();
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
         expect(await requestClock()).toBe(history[0]!.timestamp);
-        await reportUsage("parent-resumed-run", 256);
+        await reportUsage("parent-resumed-run", 256, 3);
         await expect.poll(workingTokens).toBe("4.4k output tokens");
 
         const answer = {
@@ -571,9 +635,13 @@ suite.define(() => {
         // resumed run's own 2s, with both runs' tokens.
         const recap = activePane.locator(".chat-turn-recap");
         await recap.waitFor();
-        expect((await recap.textContent())?.replace(/\s+/g, " ").trim()).toMatch(
-          /^Done in 1 minute,? 17 seconds · 4\.4k output tokens$/,
-        );
+        expect(
+          await recap.locator(":scope > span:not(.chat-turn-recap__claw)").allTextContents(),
+        ).toEqual([
+          "4.4k output tokens",
+          "·",
+          expect.stringMatching(/^Done in 1 minute,? 17 seconds$/),
+        ]);
         expect(await block.locator(".chat-turn-recap").count()).toBe(1);
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
         // The finished subagent's row shows how long it took, and its name shows it in the panel.

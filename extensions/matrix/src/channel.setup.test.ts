@@ -142,38 +142,41 @@ describe("matrix setup post-write bootstrap", () => {
     );
   });
 
-  it("does not bootstrap verification for already configured accounts", async () => {
-    const previousCfg = {
-      channels: {
-        matrix: {
-          accounts: {
-            flurry: {
-              encryption: true,
-              homeserver: "https://matrix.example.org",
-              userId: "@flurry:example.org",
-              accessToken: "token",
+  it.each([false, true])(
+    "does not bootstrap existing accounts (encryption=%s)",
+    async (encryption) => {
+      const previousCfg = {
+        channels: {
+          matrix: {
+            accounts: {
+              flurry: {
+                encryption,
+                homeserver: "https://matrix.example.org",
+                userId: "@flurry:example.org",
+                accessToken: "token",
+              },
             },
           },
         },
-      },
-    } as CoreConfig;
-    const input = {
-      homeserver: "https://matrix.example.org",
-      userId: "@flurry:example.org",
-      accessToken: "new-token",
-    };
-    const { nextCfg, accountId } = applyAccountConfig({
-      previousCfg,
-      accountId: "flurry",
-      input,
-    });
+      } as CoreConfig;
+      const input = {
+        homeserver: "https://matrix.example.org",
+        userId: "@flurry:example.org",
+        accessToken: "new-token",
+      };
+      const { nextCfg, accountId } = applyAccountConfig({
+        previousCfg,
+        accountId: "flurry",
+        input,
+      });
 
-    await runAfterAccountConfigWritten({ previousCfg, nextCfg, accountId, input });
+      await runAfterAccountConfigWritten({ previousCfg, nextCfg, accountId, input });
 
-    expect(verificationMocks.bootstrapMatrixVerification).not.toHaveBeenCalled();
-    expect(log).not.toHaveBeenCalled();
-    expect(error).not.toHaveBeenCalled();
-  });
+      expect(verificationMocks.bootstrapMatrixVerification).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+    },
+  );
 
   it("logs a warning when verification bootstrap fails", async () => {
     const { previousCfg, nextCfg, accountId, input } = applyDefaultAccountConfig();

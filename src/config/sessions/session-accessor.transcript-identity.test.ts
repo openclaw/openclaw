@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   readOpenClawAgentDatabaseRegistryToken,
@@ -11,6 +11,7 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
@@ -34,8 +35,11 @@ import {
 import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
+afterAll(clearRuntimeConfigSnapshot);
+
 describe("transcript turn physical identity", () => {
   const fixture = useTempSessionsFixture("openclaw-transcript-identity-");
+  beforeEach(() => setRuntimeConfigSnapshot({}));
   const sessionId = "selected-window";
   const scope = (sessionKey = "global") => ({
     agentId: "main",
@@ -92,8 +96,8 @@ describe("transcript turn physical identity", () => {
   it("resolves a shared session ID to its transcript owner after the requested row's facts are retained", async () => {
     const base = scope("agent:main:cron:job");
     const run = scope(`agent:main:cron:job:run:${sessionId}`);
-    replaceSessionEntrySync(base, { sessionId, updatedAt: 1 });
-    replaceSessionEntrySync(run, { sessionId, updatedAt: 2 });
+    replaceSessionEntrySync(base, { sessionId, updatedAt: 1, lifecycleRevision: "base" });
+    replaceSessionEntrySync(run, { sessionId, updatedAt: 2, lifecycleRevision: "run" });
     expect(
       database()
         .db.prepare("SELECT session_key FROM session_windows WHERE session_id = ?")
@@ -108,7 +112,12 @@ describe("transcript turn physical identity", () => {
       await transcriptTargets.resolveSessionTranscriptRuntimeTarget(base, undefined, {
         keyFormat: "agent-qualified",
       }),
-    ).toMatchObject({ sessionId, sessionKey: run.sessionKey });
+    ).toMatchObject({
+      sessionId,
+      sessionKey: run.sessionKey,
+      selectedSessionId: sessionId,
+      selectedLifecycleRevision: "run",
+    });
   });
 
   it("reuses a selected target until an owning registry write reassigns it", async () => {
@@ -312,6 +321,7 @@ describe("transcript turn physical identity", () => {
   ])(
     "preserves the physical row $stored when writing $requested",
     async ({ stored, requested, mainKey }) => {
+      setRuntimeConfigSnapshot(mainKey ? { session: { mainKey } } : {});
       replaceSessionEntrySync(scope(stored), { sessionId, updatedAt: 1 });
       if (mainKey) {
         setCanonicalSqliteSessionMainKey(database(), mainKey);

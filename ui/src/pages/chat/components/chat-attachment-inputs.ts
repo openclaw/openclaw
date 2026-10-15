@@ -66,7 +66,7 @@ export function renderChatAttachmentInputs(props: ChatAttachmentControlsProps) {
 }
 
 export function handleChatAttachmentMenuSelection(
-  event: CustomEvent<{ item: { value?: string } }>,
+  event: Pick<CustomEvent<{ item: { value?: string } }>, "currentTarget" | "detail">,
 ): boolean {
   const value = event.detail.item.value;
   if (value !== "camera" && value !== "photo" && value !== "file") {

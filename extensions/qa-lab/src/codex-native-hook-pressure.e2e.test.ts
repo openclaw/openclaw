@@ -50,6 +50,22 @@ const isRelay = (row: ProcessRow) =>
   row.comm === "openclaw-hooks" ||
   row.argv.some((arg) => arg.endsWith("/native-hook-relay/entry.js"));
 
+function isProcessGone(error: unknown): boolean {
+  const code = extractErrorCode(error);
+  return code === "ENOENT" || code === "ESRCH";
+}
+
+async function readProcessExecutable(executable: string): Promise<string | undefined> {
+  try {
+    return await fs.readlink(executable);
+  } catch (error) {
+    if (!isProcessGone(error)) {
+      throw error;
+    }
+    return undefined;
+  }
+}
+
 async function readProcess(pid: number): Promise<ProcessRow | undefined> {
   try {
     const [stat, status, cmdline] = await Promise.all([
@@ -69,8 +85,7 @@ async function readProcess(pid: number): Promise<ProcessRow | undefined> {
       ticks: Number(fields[11]) + Number(fields[12]),
     };
   } catch (error) {
-    const code = extractErrorCode(error);
-    if (code !== "ENOENT" && code !== "ESRCH") {
+    if (!isProcessGone(error)) {
       throw error;
     }
     return undefined;
@@ -98,8 +113,7 @@ async function processTree(root: number): Promise<ProcessRow[]> {
         const children = await fs
           .readFile(`/proc/${pid}/task/${tid}/children`, "utf8")
           .catch((error: unknown) => {
-            const code = extractErrorCode(error);
-            if (code === "ENOENT" || code === "ESRCH") {
+            if (isProcessGone(error)) {
               return "";
             }
             throw error;
@@ -107,8 +121,7 @@ async function processTree(root: number): Promise<ProcessRow[]> {
         pending.push(...children.trim().split(/\s+/).filter(Boolean).map(Number));
       }
     } catch (error) {
-      const code = extractErrorCode(error);
-      if (code !== "ENOENT" && code !== "ESRCH") {
+      if (!isProcessGone(error)) {
         throw error;
       }
     }
@@ -148,6 +161,23 @@ function toolsIn(body: Record<string, unknown>): Array<{ tool: Tool; namespace?:
   }
   return entries;
 }
+
+it("preserves live executable links when another process observation disappears", async () => {
+  const root = tempDirs.make("openclaw-process-executable-observation-");
+  const executable = path.join(root, "codex");
+  const live = path.join(root, "live-exe");
+  const gone = path.join(root, "gone-exe");
+  await fs.mkdir(executable);
+  const linkType = process.platform === "win32" ? "junction" : "dir";
+  await fs.symlink(executable, live, linkType);
+  await fs.symlink(executable, gone, linkType);
+  const observations = [gone, live];
+  await fs.unlink(gone);
+
+  const targets = await Promise.all(observations.map(readProcessExecutable));
+  expect(targets.filter((target) => target !== undefined)).toEqual([executable]);
+  await expect(readProcessExecutable(executable)).rejects.toMatchObject({ code: "EINVAL" });
+});
 
 describe.skipIf(process.platform !== "linux")(
   "Codex native-hook pressure real Gateway proof",
@@ -560,23 +590,21 @@ export default {
             }
             const calls = (await readCalls()).slice(callsBefore);
             const expectedCalls = selection === "matched" ? count : 0;
+            let failureDetails: string | undefined;
             if (calls.length !== expectedCalls) {
-              console.log(
-                "NATIVE_HOOK_PRESSURE_FAILURE " +
-                  JSON.stringify({
-                    scenario,
-                    tools: [...wireTools.values()].map(({ name, type }) => ({ name, type })),
-                    peakRelays,
-                    registry: await (
-                      await fetch(`${gateway.baseUrl}/qa/native-hook-pressure`, {
-                        headers: { Authorization: `Bearer ${gateway.token}` },
-                      })
-                    ).json(),
-                    logs: gateway.logs(),
-                  }),
-              );
+              failureDetails = JSON.stringify({
+                scenario,
+                tools: [...wireTools.values()].map(({ name, type }) => ({ name, type })),
+                peakRelays,
+                registry: await (
+                  await fetch(`${gateway.baseUrl}/qa/native-hook-pressure`, {
+                    headers: { Authorization: `Bearer ${gateway.token}` },
+                  })
+                ).json(),
+                logs: gateway.logs(),
+              });
             }
-            expect(calls).toHaveLength(expectedCalls);
+            expect(calls, failureDetails).toHaveLength(expectedCalls);
             if (selection === "matched" && count === 20) {
               expect(scenario.failedResponses).toBe(1);
               expect(scenario.unacknowledgedRetries).toBeGreaterThan(0);
@@ -636,7 +664,8 @@ export default {
                 continue;
               }
               const executable = `/proc/${row.pid}/exe`;
-              if (path.basename(await fs.readlink(executable)) !== "codex") {
+              const target = await readProcessExecutable(executable);
+              if (!target || path.basename(target) !== "codex") {
                 continue;
               }
               const sha256 = createHash("sha256")

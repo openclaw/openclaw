@@ -30,6 +30,18 @@ import type {
 } from "./session-transcript-hydration.types.js";
 
 type Reads = {
+  "visibility-inputs": {
+    input: { runIds: string[] };
+    output: Array<{
+      seq: number;
+      message: {
+        role: "user";
+        idempotencyKey: unknown;
+        provenance: unknown;
+        __openclaw: { runId: unknown; steerTargetRunId: unknown; idempotencyKey: unknown };
+      };
+    }>;
+  };
   title: {
     input: { includeInterSession?: boolean };
     output: { kind: "session-title-fields"; fields: SessionTitleFields };
@@ -98,6 +110,13 @@ export type SessionActorMemoryHistoryFactsReads = {
     output: Reads[Key]["output"];
   };
 };
+
+export type SessionActorMemoryHistoryFactsQuery = {
+  [Key in keyof SessionActorMemoryHistoryFactsReads]: {
+    type: Key;
+    input: SessionActorMemoryHistoryFactsReads[Key]["input"];
+  };
+}[keyof SessionActorMemoryHistoryFactsReads];
 
 export type SessionActorMemoryAnchorReads = {
   "session.history.anchors": {

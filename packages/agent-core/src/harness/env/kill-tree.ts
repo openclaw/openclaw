@@ -40,11 +40,15 @@ export type KillProcessTreeOptions = {
  * - `detached: false`: skip group kill unconditionally.
  * - `detached: true`: use group kill unconditionally (trust caller).
  * - `detached` omitted: use group kill only when PID is the group leader.
+ *
+ * `exited()` verifies that every retained escalation target is gone: the group,
+ * every captured Linux attached-tree identity, or otherwise the root. True latches,
+ * clears the grace timer, and prevents later `force()` calls from signaling recycled numbers.
  */
 export function killProcessTree(
   pid: number,
   opts?: KillProcessTreeOptions,
-): { force: () => void } | undefined {
+): { force: () => void; exited: () => boolean } | undefined {
   if (!Number.isFinite(pid) || pid <= 0) {
     return undefined;
   }
@@ -106,11 +110,26 @@ export function killProcessTree(
   if (!attachedLinuxTree) {
     forceTimer.unref();
   }
+  let gone = false;
+  const exited = () => {
+    gone ||= useGroupKill
+      ? !isProcessAlive(-pid)
+      : processTree
+        ? !processTree.some(capturedProcessInstanceMayBeAlive)
+        : !isProcessAlive(pid);
+    if (gone) {
+      // A verified-gone tree no longer authorizes delayed signals to recycled numbers.
+      forceRequested = true;
+      clearTimeout(forceTimer);
+    }
+    return gone;
+  };
   return {
     force: () => {
       clearTimeout(forceTimer);
       force();
     },
+    exited,
   };
 }
 
@@ -347,6 +366,15 @@ function verifiedProcessInstanceAlive(entry: UnixProcessEntry): boolean {
     return false;
   }
   return readUnixProcessIdentity(entry.pid) === entry.identity;
+}
+
+/** Completion needs proof: an existing PID whose identity is unreadable may still be the captured instance. */
+function capturedProcessInstanceMayBeAlive(entry: UnixProcessEntry): boolean {
+  if (!entry.identity || !isProcessAlive(entry.pid)) {
+    return false;
+  }
+  const identity = readUnixProcessIdentity(entry.pid);
+  return identity === undefined || identity === entry.identity;
 }
 
 function* readUnixProcessChildren(pid: number, canReadTask: () => boolean): Generator<number> {

@@ -114,9 +114,6 @@ function createPoster(src: string, width: number, height: number): PosterEntry {
         },
         options,
       );
-      if (typeof video.requestVideoFrameCallback !== "function") {
-        return abort();
-      }
       waitForFrame("loadedmetadata", () => {
         waitForFrame("seeked", capture);
         video.currentTime = Math.min(0.1, video.duration / 10);

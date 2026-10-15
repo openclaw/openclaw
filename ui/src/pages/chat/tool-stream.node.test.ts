@@ -118,8 +118,9 @@ describe("status text truncation", () => {
       }),
     );
     expect(chatStartupStatusLabel(activeChatRunStartupStatus(host.chatRunStartup), null)).toBe(
-      expected,
+      "Retrying…",
     );
+    expect(host.chatRunStartup).toMatchObject({ message: expected });
     handleAgentEvent(
       host,
       agentEvent("run-1", 2, "notice", {
@@ -870,4 +871,32 @@ describe("app-tool-stream result blocks", () => {
       resultReceived: true,
     });
   });
+});
+
+it("shows a fallback attempt in the claw until same-run output resumes", () => {
+  const host = createHost({ chatRunId: "run-1", toolStreamSyncTimer: 1 });
+  handleAgentEvent(
+    host,
+    agentEvent("run-1", 10, "run_status", {
+      phase: "retrying",
+      message: "Rate limited",
+      retryAt: 20_000,
+    }),
+  );
+  expect(host.chatRunStartup).toMatchObject({ phase: "retrying", retryAt: 20_000 });
+  handleAgentEvent(
+    host,
+    agentEvent("run-1", 11, "lifecycle", {
+      phase: "fallback_step",
+      fallbackStepToModel: "example/backup",
+      fallbackStepFinalOutcome: "next_fallback",
+    }),
+  );
+  expect(chatStartupStatusLabel(activeChatRunStartupStatus(host.chatRunStartup), null)).toBe(
+    "Trying fallback model…",
+  );
+  handleAgentEvent(host, agentEvent("run-1", 12, "assistant", { text: "Recovered" }));
+  expect(
+    chatStartupStatusLabel(activeChatRunStartupStatus(host.chatRunStartup), null),
+  ).toBeUndefined();
 });

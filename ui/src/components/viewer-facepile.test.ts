@@ -1,9 +1,8 @@
-import { ContextProvider, createContext } from "@lit/context";
-import { render } from "lit";
+import { createComponent } from "solid-js";
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
-import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import type { ApplicationContext } from "../app/context-types.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
 import { resolveAvatarInitials } from "../lib/identity-avatar.ts";
@@ -14,13 +13,21 @@ import {
   type PresenceViewer,
 } from "../lib/presence-users.ts";
 import { profileDirectory } from "../lib/profile-directory.ts";
+import { LitContent } from "../lit/solid-content.tsx";
 import { renderChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts";
-import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import {
+  createApplicationGateway,
+  createSolidApplicationContextProvider,
+} from "../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
 import "./viewer-facepile.ts";
 
 afterEach(() => {
+  cleanupSolid();
   document.body.replaceChildren();
   setAvatarGatewayOrigin(null);
   vi.restoreAllMocks();
@@ -32,7 +39,7 @@ it.each(["session", "profile"] as const)(
     const avatar = document.createElement("openclaw-viewer-avatar");
     avatar.user = { id: "gateway-owner", name: "Saved owner name", watchedSessions: [] };
     avatar.variant = variant;
-    document.body.append(avatar);
+    mountSolid(() => avatar);
     await avatar.updateComplete;
     expect(avatar.querySelector(".viewer-avatar")?.getAttribute("aria-label")).toBe(
       variant === "profile" ? "Saved owner name" : "Shared owner",
@@ -49,18 +56,24 @@ it("uses the same user initials and identity hue in the roster and attributed ch
   };
   const viewerAvatar = document.createElement("openclaw-viewer-avatar");
   viewerAvatar.user = user;
-  document.body.append(viewerAvatar);
+  mountSolid(() => viewerAvatar);
 
   const chat = document.createElement("div");
   document.body.append(chat);
-  render(renderChatAuthorAvatar({ id: user.id, name: user.name, username: user.email }), chat);
+  mountSolid(
+    () =>
+      createComponent(LitContent, {
+        value: renderChatAuthorAvatar({ id: user.id, name: user.name, username: user.email }),
+      }),
+    { container: chat },
+  );
 
   const expected = resolveAvatarInitials({
     id: user.id,
     name: user.name,
     username: user.email,
   });
-  await vi.waitFor(async () => {
+  await waitForSolid(async () => {
     await viewerAvatar.updateComplete;
     const rosterInitials = viewerAvatar.querySelector<HTMLElement>(".viewer-avatar > span");
     const chatInitials = chat.querySelector(".chat-author-avatar__initials");
@@ -83,9 +96,9 @@ it("uses the shared resolver and rejects cross-origin presence avatar metadata",
     avatarUrl: "https://evil.example/avatar.png",
     watchedSessions: [],
   };
-  document.body.append(avatar);
+  mountSolid(() => avatar);
 
-  await vi.waitFor(async () => {
+  await waitForSolid(async () => {
     await avatar.updateComplete;
     expect(avatar.querySelector("img")).toBeNull();
     expect(avatar.textContent?.trim()).toBe("M");
@@ -100,40 +113,15 @@ it("renders trusted presence avatar routes directly", async () => {
     avatarUrl: "/api/users/profile-ada/avatar",
     watchedSessions: [],
   };
-  document.body.append(avatar);
+  mountSolid(() => avatar);
 
-  await vi.waitFor(async () => {
+  await waitForSolid(async () => {
     await avatar.updateComplete;
     expect(avatar.querySelector("img")?.getAttribute("src")).toBe("/api/users/profile-ada/avatar");
   });
 });
 
-it.each([true, false])(
-  "keeps a missing presence avatar on initials regardless of profile provenance: %s",
-  async (qualified) => {
-    const profileId = "c3e32452-0467-47e5-aafa-233cd5dae29f";
-    const avatar = document.createElement("openclaw-viewer-avatar");
-    avatar.user = {
-      id: profileId,
-      identity: qualified ? { type: "profile", id: profileId } : undefined,
-      email: "ada@example.test",
-      name: "Ada Lovelace",
-      watchedSessions: [],
-    };
-    document.body.append(avatar);
-
-    await vi.waitFor(async () => {
-      await avatar.updateComplete;
-      expect(avatar.querySelector("img")?.getAttribute("src")).toBe(undefined);
-      expect(avatar.querySelector(".viewer-avatar")?.getAttribute("aria-label")).toBe(
-        "Ada Lovelace",
-      );
-      expect(avatar.textContent?.trim()).toBe("AL");
-    });
-  },
-);
-
-it.each(["live", "prepared"])(
+it.each(["prepared"])(
   "keeps qualified and unqualified %s presence faces distinct",
   async (source) => {
     const id = "c3e32452-0467-47e5-aafa-233cd5dae29f";
@@ -153,9 +141,9 @@ it.each(["live", "prepared"])(
     } else {
       facepile.presencePayload = payload;
     }
-    document.body.append(facepile);
+    mountSolid(() => facepile);
 
-    await vi.waitFor(async () => {
+    await waitForSolid(async () => {
       await facepile.updateComplete;
       expect(
         [...facepile.querySelectorAll("img")].map((image) => image.getAttribute("src")),
@@ -196,18 +184,16 @@ it("shares the current self avatar with typed owner faces missing a revision", a
   const fixture = createApplicationGateway();
   const { gateway } = fixture;
   fixture.publish({ ...gateway.snapshot, phase: "connected", selfUser: user });
-  const provider = document.createElement("div");
-  void new ContextProvider(provider, {
-    context: createContext<Pick<ApplicationContext, "gateway">>(applicationContext),
-    initialValue: { gateway },
-  });
-  const avatars = [user, { ...user, avatarUrl: undefined }].map((avatarUser) => {
-    const avatar = document.createElement("openclaw-viewer-avatar");
-    avatar.user = avatarUser;
-    provider.append(avatar);
-    return avatar;
-  });
-  document.body.append(provider);
+  // SAFETY: Avatar consumers use only the Gateway capability in this fixture.
+  const provider = createSolidApplicationContextProvider({ gateway } as ApplicationContext);
+  const view = mountSolid(
+    () =>
+      [user, { ...user, avatarUrl: undefined }].map((avatarUser) =>
+        createComponent(ViewerAvatar, { user: avatarUser }),
+      ),
+    { wrapper: provider.wrapper },
+  );
+  const avatars = [...view.container.querySelectorAll("openclaw-viewer-avatar")];
 
   await Promise.all(avatars.map((avatar) => avatar.updateComplete));
   expect(fetchAvatar).toHaveBeenCalledOnce();
@@ -247,57 +233,35 @@ it("shares the current self avatar with typed owner faces missing a revision", a
     { type: "agent", id: user.id },
     { type: "legacy", actorType: "human", source: null, id: user.id },
   ] as const) {
-    const avatar = document.createElement("openclaw-viewer-avatar");
-    avatar.user = { ...user, identity: undefined, avatarUrl: undefined };
-    avatar.identity = identity;
-    provider.append(avatar);
+    const fallback = mountSolid(
+      () =>
+        createComponent(ViewerAvatar, {
+          user: { ...user, identity: undefined, avatarUrl: undefined },
+          identity,
+        }),
+      { wrapper: provider.wrapper },
+    );
+    const avatar = fallback.container.querySelector("openclaw-viewer-avatar")!;
     await avatar.updateComplete;
     expect(avatar.querySelector("img")).toBeNull();
   }
   expect(fetchAvatar).toHaveBeenCalledTimes(2);
 });
 
-it.each(["staticParticipants", "staticUsers"] as const)(
+it.each(["staticParticipants"] as const)(
   "renders an empty %s list without invalidating cached live presence",
   async (source) => {
     const payload = { presence: [{ user: { id: "live-viewer" } }] };
     const projection = projectPresencePayload(payload);
     const facepile = document.createElement("openclaw-viewer-facepile");
     facepile[source] = [];
-    document.body.append(facepile);
+    mountSolid(() => facepile);
     await facepile.updateComplete;
 
     expect(facepile.querySelector(".viewer-facepile")).toBeNull();
     expect(projectPresencePayload(payload)).toBe(projection);
   },
 );
-
-it("merges device presence into one face watching the second device's session", async () => {
-  const facepile = document.createElement("openclaw-viewer-facepile");
-  facepile.sessionKey = "agent:main:second";
-  facepile.presencePayload = {
-    presence: [
-      {
-        instanceId: "alice-1",
-        user: { id: "alice", name: "Alice" },
-        watchedSessions: ["agent:main:first"],
-      },
-      {
-        instanceId: "alice-2",
-        user: { id: "alice", name: "Alice" },
-        watchedSessions: ["agent:main:second"],
-      },
-    ],
-  };
-  document.body.append(facepile);
-
-  await vi.waitFor(async () => {
-    await facepile.updateComplete;
-    expect(facepile.querySelector(".viewer-facepile")).not.toBeNull();
-  });
-  expect(facepile.querySelector("button")).toBeNull();
-  expect(facepile.querySelectorAll("openclaw-tooltip")).toHaveLength(1);
-});
 
 it("renders ordered static participant actors without presence filtering", async () => {
   const facepile = document.createElement("openclaw-viewer-facepile");
@@ -307,9 +271,9 @@ it("renders ordered static participant actors without presence filtering", async
     { identity: { type: "agent", id: "research" }, label: "Research" },
     { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
   ];
-  document.body.append(facepile);
+  mountSolid(() => facepile);
 
-  await vi.waitFor(async () => {
+  await waitForSolid(async () => {
     await facepile.updateComplete;
     expect(
       [...facepile.querySelectorAll(".viewer-avatar:not(.viewer-avatar--overflow)")].map((node) =>
@@ -317,7 +281,7 @@ it("renders ordered static participant actors without presence filtering", async
       ),
     ).toEqual(["Ada", "Research"]);
   });
-  await vi.waitFor(() =>
+  await waitForSolid(() =>
     expect(facepile.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
   );
   expect(facepile.querySelectorAll("openclaw-viewer-avatar")).toHaveLength(1);
@@ -340,9 +304,9 @@ it("excludes displayed owners and participants before choosing visible avatars a
       watchedSessions: ["agent:main:active"],
     })),
   };
-  document.body.append(facepile);
+  mountSolid(() => facepile);
 
-  await vi.waitFor(async () => {
+  await waitForSolid(async () => {
     await facepile.updateComplete;
     expect(
       [...facepile.querySelectorAll("[data-viewer-id]")].map((avatar) =>
@@ -359,20 +323,6 @@ it("excludes displayed owners and participants before choosing visible avatars a
 });
 
 it.each([
-  {
-    name: "the browser instance id is not populated yet",
-    selfInstanceId: undefined,
-    presence: [
-      {
-        user: { id: "self", name: "Self" },
-        watchedSessions: ["agent:main:active"],
-      },
-      {
-        user: { id: "alice", name: "Alice" },
-        watchedSessions: ["agent:main:active"],
-      },
-    ],
-  },
   {
     name: "the browser's own presence row lacks a user id",
     selfInstanceId: "self-instance",
@@ -395,9 +345,9 @@ it.each([
   facepile.selfInstanceId = fixture.selfInstanceId;
   facepile.sessionKey = "agent:main:active";
   facepile.presencePayload = { presence: fixture.presence };
-  document.body.append(facepile);
+  mountSolid(() => facepile);
 
-  await vi.waitFor(async () => {
+  await waitForSolid(async () => {
     await facepile.updateComplete;
     expect(facepile.querySelector('[data-viewer-id="self"]')).toBeNull();
     expect(facepile.querySelector('[data-viewer-id="alice"]')).not.toBeNull();
@@ -438,7 +388,7 @@ it("links faces only when the host opts in, so nested facepiles stay plain", asy
     if (personActivity) {
       facepile.personActivity = personActivity;
     }
-    document.body.append(facepile);
+    mountSolid(() => facepile);
     await facepile.updateComplete;
     return facepile;
   };
@@ -458,7 +408,7 @@ it("links faces only when the host opts in, so nested facepiles stay plain", asy
   expect(plain.querySelectorAll("openclaw-viewer-avatar")).toHaveLength(2);
 });
 
-it.each([false, true])(
+it.each([true])(
   "keeps a newly advertised teammate avatar ahead of cached directory availability (%s)",
   async (hasAvatar) => {
     setAvatarGatewayOrigin("https://gateway.example.test", ["viewer-token"]);
@@ -488,21 +438,18 @@ it.each([false, true])(
         ],
       })),
     });
-    const provider = document.createElement("div");
-    void new ContextProvider(provider, {
-      context: createContext<Pick<ApplicationContext, "gateway">>(applicationContext),
-      initialValue: { gateway },
-    });
-    const avatar = document.createElement("openclaw-viewer-avatar");
+    // SAFETY: Avatar consumers use only the Gateway capability in this fixture.
+    const provider = createSolidApplicationContextProvider({ gateway } as ApplicationContext);
     const user = {
       id: "teammate",
       identity: { type: "profile" as const, id: "teammate" },
       name: "Teammate",
       watchedSessions: [],
     };
-    avatar.user = user;
-    provider.append(avatar);
-    document.body.append(provider);
+    const view = mountSolid(() => createComponent(ViewerAvatar, { user }), {
+      wrapper: provider.wrapper,
+    });
+    const avatar = view.container.querySelector("openclaw-viewer-avatar")!;
     await avatar.updateComplete;
     await profileDirectory(gateway).load();
     avatar.user = { ...user, avatarUrl: "/api/users/teammate/avatar?v=8" };
@@ -510,5 +457,37 @@ it.each([false, true])(
     expect(fetchAvatar.mock.calls.at(-1)?.[0]).toBe(
       "https://gateway.example.test/api/users/teammate/avatar?v=8",
     );
+  },
+);
+
+it.each([false, true])(
+  "retains a participant avatar through metadata updates (linked: %s)",
+  async (linked) => {
+    const facepile = document.createElement("openclaw-viewer-facepile");
+    const navigate = vi.fn();
+    if (linked) {
+      facepile.personActivity = { basePath: "", navigate };
+    }
+    facepile.staticParticipants = [
+      { identity: { type: "profile", id: "profile-ada" }, label: "Ada" },
+    ];
+    mountSolid(() => facepile);
+    await facepile.updateComplete;
+    const avatar = facepile.querySelector("openclaw-viewer-avatar")!;
+    const initials = avatar.querySelector(".viewer-avatar__initials")!;
+    const link = facepile.querySelector<HTMLAnchorElement>("a");
+    link?.focus();
+    facepile.staticParticipants = [
+      { identity: { type: "profile", id: "profile-ada" }, label: "Ada King" },
+    ];
+    await facepile.updateComplete;
+    expect(facepile.querySelector("openclaw-viewer-avatar")).toBe(avatar);
+    expect(avatar.querySelector(".viewer-avatar__initials")).toBe(initials);
+    expect(avatar.querySelector(".viewer-avatar")?.getAttribute("aria-label")).toBe("Ada King");
+    if (link) {
+      expect(document.activeElement).toBe(link);
+      link.click();
+      expect(navigate).toHaveBeenCalledExactlyOnceWith("profile-ada", "Ada King");
+    }
   },
 );

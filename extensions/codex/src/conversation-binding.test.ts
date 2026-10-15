@@ -6,14 +6,20 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ExecApprovalsFile } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  deleteSessionEntry,
+  patchSessionEntry,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
   observeHostDataSql,
-  openIncognitoTestActor,
   useSessionStoreTempDirs,
-  withIncognitoSessionActor,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -386,11 +392,13 @@ describe("codex conversation binding", () => {
   afterAll(() => closeOpenClawAgentDatabasesAsync());
 
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     resetCodexTestBindingStore();
     tempDir = sessionDirs.make();
   });
 
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     publicBindingMocks.readBinding.mockReset();
     publicBindingMocks.readBinding.mockReturnValue({ bindingId: "binding-1" });
     sharedClientMocks.getSharedCodexAppServerClient.mockReset();
@@ -690,44 +698,27 @@ describe("codex conversation binding", () => {
       sourceSessionKey: "agent:main:dashboard:incognito-source",
       destinationSessionKey: "agent:main:telegram:ordinary-destination",
       ephemeral: true,
-      byIdActor: false,
     },
     {
       label: "an ordinary source bound to an incognito destination",
       sourceSessionKey: "agent:main:telegram:ordinary-source",
       destinationSessionKey: "agent:main:dashboard:incognito-destination",
       ephemeral: false,
-      byIdActor: false,
-    },
-    {
-      label: "a private actor source selected only by physical store and session ID",
-      sourceSessionKey: "agent:main:dashboard:incognito-actor-source",
-      destinationSessionKey: "agent:main:telegram:ordinary-destination",
-      ephemeral: true,
-      byIdActor: true,
     },
   ])(
     "uses the persisted source lifecycle for $label",
-    async ({ sourceSessionKey, destinationSessionKey, ephemeral, byIdActor }) => {
+    async ({ sourceSessionKey, destinationSessionKey, ephemeral }) => {
       const sessionFile = path.join(tempDir, "mixed-source-lifecycle.jsonl");
       const bindingId = "binding-mixed-source-lifecycle";
-      const authority = { assertCurrent() {} };
-      const actor = byIdActor
-        ? await openIncognitoTestActor({ OPENCLAW_STATE_DIR: tempDir }, authority)
-        : undefined;
-      const storePath = actor?.path ?? path.join(tempDir, "mixed-source-lifecycle.sqlite");
+      const storePath = path.join(tempDir, "mixed-source-lifecycle.sqlite");
       try {
         const entry = { sessionId: "source-mixed-lifecycle", updatedAt: Date.now() };
-        if (actor) {
-          await actor.sessions.create(authority, { sessionKey: sourceSessionKey, entry });
-        } else {
-          await upsertSessionEntry({
-            agentId: "main",
-            sessionKey: sourceSessionKey,
-            storePath,
-            entry,
-          });
-        }
+        await upsertSessionEntry({
+          agentId: "main",
+          sessionKey: sourceSessionKey,
+          storePath,
+          entry,
+        });
         const operations: Array<{ method: string; params: Record<string, unknown> }> = [];
         const notificationHandlers = new Set<(notification: unknown) => void>();
         const client = {
@@ -783,7 +774,7 @@ describe("codex conversation binding", () => {
             agentId: "main",
             sessionId: "source-mixed-lifecycle",
             threadId: "thread-source-mixed-lifecycle",
-            ...(byIdActor ? {} : { sessionKey: sourceSessionKey }),
+            sessionKey: sourceSessionKey,
             storePath,
           },
           start: { id: "start-mixed-source-lifecycle" },
@@ -794,11 +785,9 @@ describe("codex conversation binding", () => {
           handleCodexConversationInboundClaim(event, ctx, {
             config: { session: { store: path.join(tempDir, "unrelated-session.sqlite") } },
           });
-        const sql = actor ? observeHostDataSql() : undefined;
+        const sql = ephemeral ? observeHostDataSql() : undefined;
         try {
-          await expect(
-            actor ? withIncognitoSessionActor(actor, run) : run(),
-          ).resolves.toMatchObject({
+          await expect(run()).resolves.toMatchObject({
             handled: true,
             reply: {
               text: "Bound reply",
@@ -835,7 +824,6 @@ describe("codex conversation binding", () => {
           ).resolves.toBe(true);
         }
 
-        await actor?.close();
         await denyConversationBinding(data);
 
         expect(operations.at(-1)).toEqual({
@@ -846,7 +834,7 @@ describe("codex conversation binding", () => {
           testCodexAppServerBindingStore.read({ kind: "conversation", bindingId }),
         ).toBeUndefined();
       } finally {
-        await actor?.close();
+        await deleteSessionEntry({ agentId: "main", sessionKey: sourceSessionKey, storePath });
       }
     },
   );
@@ -1183,13 +1171,13 @@ describe("codex conversation binding", () => {
             workspaceDir: tempDir,
             bindingStore: {
               ...testCodexAppServerBindingStore,
-              read: (identity) => {
+              readAsync: async (identity) => {
                 if (resumeAccepted) {
                   if (expiresDuring === "retention") {
                     elapsedClock.mockReturnValue(1_001);
                   }
                 }
-                return testCodexAppServerBindingStore.read(identity);
+                return await testCodexAppServerBindingStore.readAsync(identity);
               },
               mutate: async (...args) => {
                 if (expiresDuring === "commit") {
@@ -1682,6 +1670,8 @@ describe("codex conversation binding", () => {
 
   it("blocks bound Codex CLI node turns when the current OpenClaw session is sandboxed", async () => {
     const resumeCodexCliSessionOnNode = vi.fn();
+    const config = { agents: { defaults: { sandbox: { mode: "all" as const } } } };
+    setRuntimeConfigSnapshot(config);
 
     const result = await handleCodexConversationInboundClaim(
       conversationMessage("continue the task", {
@@ -1701,7 +1691,7 @@ describe("codex conversation binding", () => {
         { channel: "discord", conversationId: "channel-1" },
       ),
       {
-        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+        config,
         resumeCodexCliSessionOnNode,
       },
     );
@@ -2037,7 +2027,11 @@ describe("codex conversation binding", () => {
       { role: "user", content: [{ text: "Earlier question" }] },
       { role: "assistant", content: [{ text: "Earlier answer" }] },
     ]);
-    expect(releaseSource).toHaveBeenCalledExactlyOnceWith("thread-source", expect.any(Function));
+    expect(releaseSource).toHaveBeenCalledExactlyOnceWith(
+      "thread-source",
+      undefined,
+      expect.any(Function),
+    );
     expect(testCodexAppServerBindingStore.read(sourceIdentity)).toBeUndefined();
     await expect(consumeCodexAppServerLiveThread(client, "thread-bound")).resolves.toEqual(
       expect.objectContaining({ release: expect.any(Function) }),

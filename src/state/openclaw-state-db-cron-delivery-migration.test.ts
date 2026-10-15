@@ -7,12 +7,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ensureCronRunReceiptSchema } from "../cron/store/run-receipt-store.js";
 import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import {
-  openOpenClawStateReadConnection,
-  openOpenClawStateReadOnlyLocation,
-} from "./openclaw-state-db-read-connection.js";
+import { openOpenClawStateReadOnlyLocation } from "./openclaw-state-db-read-connection.js";
 import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -36,9 +34,9 @@ function legacyReceiptDatabase() {
   legacy.exec(`
     ALTER TABLE cron_run_receipts DROP COLUMN delivery_attempt_state;
     INSERT INTO cron_run_receipts (
-      receipt_id, store_key, job_id, config_revision, agent_id, status,
+      cursor_id, receipt_id, store_key, job_id, config_revision, agent_id, status,
       owner_pid, owner_start_time, started_at_ms
-    ) VALUES ('legacy-receipt', '/fixture/cron', 'legacy-job', 'revision', 'main', 'running', 123, 1, 2);
+    ) VALUES (1, 'legacy-receipt', '/fixture/cron', 'legacy-job', 'revision', 'main', 'running', 123, 1, 2);
     PRAGMA user_version = 19;
     UPDATE schema_meta SET schema_version = 19;
   `);
@@ -54,14 +52,14 @@ it.each(["managed transaction", "implicit snapshot"] as const)(
   "keeps a reader's %s version until the migrated catalog becomes visible",
   (kind) => {
     const { options, databasePath } = legacyReceiptDatabase();
-    openOpenClawStateReadOnlyLocation(databasePath, databasePath).close();
-    const reader = openOpenClawStateReadConnection(databasePath, databasePath);
+    const reader = openOpenClawStateReadOnlyLocation(databasePath, databasePath);
     const { db } = reader.database;
     try {
       const migrateWhileReading = () => {
         expect(db.prepare("SELECT receipt_id FROM cron_run_receipts").get()).toEqual({
           receipt_id: "legacy-receipt",
         });
+        expect(readStateSchemaContentVersion(db)).toBe(19);
         const writer = openOpenClawStateDatabase(options);
         expect(readStateSchemaContentVersion(writer.db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
         const observation = observeSqliteReadSql(StatementSync.prototype);
@@ -78,7 +76,7 @@ it.each(["managed transaction", "implicit snapshot"] as const)(
       if (kind === "managed transaction") {
         runSqliteDeferredTransactionSync(db, migrateWhileReading);
       } else {
-        runSqliteSchemaReadSnapshotSync(db, migrateWhileReading);
+        runSqliteSchemaReadSnapshotSync(requireNativeSqliteDatabase(db), migrateWhileReading);
       }
       const observation = observeSqliteReadSql(StatementSync.prototype);
       try {
@@ -129,7 +127,11 @@ it.each(["runtime open", "doctor repair"] as const)(
     });
     expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     db.exec("UPDATE cron_run_receipts SET delivery_attempt_state = 'started'");
+    // Reuse remains valid while a sibling is live; final close requires readmission.
+    const survivingReader = openOpenClawStateReadOnlyLocation(database.path, database.path);
     closeOpenClawStateDatabaseForTest();
+    // Final close retires admission; the cold reopen precedes the warm-borrow observation.
+    openOpenClawStateDatabase(options);
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
       expect(
@@ -146,6 +148,7 @@ it.each(["runtime open", "doctor repair"] as const)(
       ).toEqual([]);
     } finally {
       observation.restore();
+      survivingReader.close();
     }
     closeOpenClawStateDatabaseForTest();
     const preflight = await preflightOpenClawDatabaseSchemas({

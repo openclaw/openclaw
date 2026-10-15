@@ -1,3 +1,20 @@
+.chat-subagent-activity-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.chat-subagent-activity__elapsed {
+  padding-top: 9px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .chat-subagent-activity {
   display: grid;
   gap: 4px;

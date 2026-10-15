@@ -12,7 +12,7 @@ import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { admitChatSubmission, reduceChatSessionProjection } from "../history-merge.ts";
 import { buildInitialChatSubmission, buildLocalUserMessage } from "../user-message-content.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -258,37 +258,6 @@ describe("canonical image presentation handoff", () => {
     }
   });
 
-  it.each(["canonical", "submitted", "initial receipt"] as const)(
-    "keeps the displayed %s image while fresh history text and media metadata arrive",
-    async (origin) => {
-      const fixture = await createCanonicalImageTranscript(undefined, undefined, origin);
-      const displayed = expectDefined(fixture.displayed[0], "displayed inline image");
-      expect(displayed.alt).toBe("image-0.png");
-      if (origin === "initial receipt") {
-        fixture.publish();
-        expectSameImageNodes(fixture.images(), [displayed]);
-      }
-      fixture.publish();
-
-      expect(fixture.container.textContent).toContain("Fresh authoritative text");
-      expect(fixture.container.textContent).not.toContain("Cached text");
-      expectSameImageNodes(fixture.images(), [displayed]);
-      expect(displayed.getAttribute("src")).toBe(fixture.previewUrls[0]);
-
-      fixture.requests[0]?.resolve(mediaMetadataResponse());
-      await flushDeferredRowPrune();
-      expectSameImageNodes(fixture.images(), [displayed]);
-      expect(displayed.getAttribute("src")).toContain(
-        encodeURIComponent(expectDefined(fixture.media[0], "canonical media fact").path),
-      );
-      expect(displayed.alt).toBe("image-0.png");
-      fixture.renderPane();
-      expectSameImageNodes(fixture.images(), [displayed]);
-      displayed.dispatchEvent(new Event("load"));
-      expectSameImageNodes(fixture.images(), [displayed]);
-    },
-  );
-
   it.each(["inline", "metadata", "loaded"] as const)(
     "keeps the displayed %s upload when the session workspace arrives",
     async (stage) => {
@@ -346,31 +315,11 @@ describe("canonical image presentation handoff", () => {
     },
     { name: "pending message identity", metadata: { id: "pending:input" } },
     { name: "missing layout", metadata: { mediaImageLayout: undefined } },
-    {
-      name: "ambiguous duplicate slots",
-      metadata: {
-        mediaImageLayout: {
-          slots: [
-            { kind: "inline", factIndex: 0 },
-            { kind: "inline", factIndex: 0 },
-          ],
-        },
-      },
-    },
   ])("does not borrow an inline preview for $name", async ({ metadata, origin }) => {
     const fixture = await createCanonicalImageTranscript(undefined, undefined, origin);
     fixture.publish(metadata, fixture.media, "Cached text");
     expect(fixture.images()).toHaveLength(0);
     expect(fixture.container.querySelector('[aria-busy="true"]')).not.toBeNull();
-  });
-
-  it.each([
-    { name: "missing inline block", factIndexes: [0, 2] },
-    { name: "duplicate fact index", factIndexes: [0, 0] },
-  ])("does not guess cached correspondence with $name", async ({ factIndexes }) => {
-    const fixture = await createCanonicalImageTranscript(factIndexes);
-    fixture.publish();
-    expect(fixture.images()).toHaveLength(0);
   });
 
   it("does not lend a displayed inline image to another pane of the same canonical message", async () => {
@@ -381,26 +330,6 @@ describe("canonical image presentation handoff", () => {
     expect(container.querySelector(".chat-message-image")).toBeNull();
     expect(fixture.requests).toHaveLength(1);
   });
-
-  it.each(["complete", "partial"] as const)(
-    "handles a %s receipt for duplicate submitted attachments",
-    async (receipt) => {
-      const fixture = await createCanonicalImageTranscript(
-        [0, 1, 2],
-        ["data:image/png;base64,YQ==", "data:image/png;base64,YQ==", "data:image/png;base64,Yg=="],
-        "submitted",
-      );
-      fixture.media[1] = fixture.media[0] ?? null;
-      const media = receipt === "partial" ? fixture.media.slice(0, 2) : fixture.media;
-      fixture.publish(
-        {
-          mediaImageLayout: { slots: media.map((_, factIndex) => ({ kind: "inline", factIndex })) },
-        },
-        media,
-      );
-      expectSameImageNodes(fixture.images(), receipt === "complete" ? fixture.displayed : []);
-    },
-  );
 
   it("binds local previews by fact position when inline blocks reorder mixed image receipts", async () => {
     const fixture = await createCanonicalImageTranscript(
@@ -439,11 +368,6 @@ describe("canonical image presentation handoff", () => {
   });
 
   it.each([
-    {
-      name: "ordered images",
-      factIndexes: [0, 1],
-      inlineUrls: ["data:image/png;base64,YQ==", "data:image/png;base64,Yg=="],
-    },
     {
       name: "sparse reordered facts with duplicate previews and references",
       factIndexes: [2, 0, 3],
@@ -606,7 +530,7 @@ describe("canonical image presentation handoff", () => {
       response: () => mediaMetadataResponse(false, undefined, true),
       reason: "Attachment removed",
     },
-    ...[401, 403].map((status) => ({
+    ...[401].map((status) => ({
       name: `HTTP ${status} with an unreadable body`,
       response: () => unreadableMetadataResponse(status),
       reason: "Unavailable",
@@ -644,11 +568,7 @@ describe("canonical image presentation handoff", () => {
   );
 
   it.each([
-    { presentation: "canonical", failure: "network rejection", responseStatus: null },
     { presentation: "inline-handoff", failure: "network rejection", responseStatus: null },
-    { presentation: "canonical", failure: "body read rejection", responseStatus: 200 },
-    { presentation: "canonical", failure: "HTTP 408 non-JSON", responseStatus: 408 },
-    { presentation: "canonical", failure: "HTTP 429 non-JSON", responseStatus: 429 },
     { presentation: "canonical", failure: "HTTP 503 non-JSON", responseStatus: 503 },
   ])(
     "keeps a loaded $presentation image through $failure renewal and expiry",

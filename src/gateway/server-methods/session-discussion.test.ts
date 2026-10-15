@@ -31,9 +31,17 @@ vi.mock("../../agents/utility-model.js", () => ({
 vi.mock("../../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback: mocks.generateConversationLabelWithFallback,
 }));
+// mock-isolation: Title persistence is captured by this fixture without opening a database.
 vi.mock("../../config/sessions/session-accessor.js", () => ({
   patchSessionEntryCore: mocks.updateSessionEntry,
-  loadSessionEntry: () => mocks.loadSessionTarget()?.entry,
+}));
+// mock-isolation: Discussion title tests supply current entry facts without opening SQLite.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async () => mocks.loadSessionTarget()?.entry,
+}));
+// mock-isolation: The title owner reads the same synthetic session through its worker API.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async () => mocks.loadSessionTarget()?.entry,
 }));
 vi.mock("../dashboard-session-title.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../dashboard-session-title.js")>();
@@ -47,8 +55,21 @@ vi.mock("../session-transcript-title-reader.js", () => ({
 vi.mock("./session-change-event.js", () => ({
   emitSessionsChanged: mocks.emitSessionsChanged,
 }));
-vi.mock("./sessions-shared.js", () => ({
-  loadAccessorSessionEntryForGatewayTarget: mocks.loadSessionTarget,
+// mock-isolation: Discussion fixtures own selected targets and rows without admitting physical stores.
+vi.mock("../session-utils-store-lookup.js", () => ({
+  withGatewaySessionStoreTarget: async (
+    _params: unknown,
+    consume: (target: unknown) => unknown,
+  ) => {
+    const selected = mocks.loadSessionTarget();
+    return consume({
+      ...selected.target,
+      canonicalKey: selected.canonicalKey,
+      storePath: selected.storePath,
+      storeKeys: [selected.canonicalKey],
+      store: selected.entry ? { [selected.canonicalKey]: selected.entry } : {},
+    });
+  },
 }));
 
 const cfg = {
@@ -147,9 +168,8 @@ describe("session discussion gateway methods", () => {
     expect(
       await invoke("session.discussion.open", { sessionKey: "global" }, ownedConfig),
     ).toMatchObject({ ok: true, payload: { state: "available" } });
-    expect(mocks.loadSessionTarget).toHaveBeenCalledWith({
-      cfg: ownedConfig,
-      key: "global",
+    expect(registered.open).toHaveBeenCalledWith({
+      sessionKey: "global",
       agentId: "ops",
     });
 

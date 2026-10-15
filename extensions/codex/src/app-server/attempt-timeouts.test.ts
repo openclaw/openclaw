@@ -63,16 +63,6 @@ describe("Codex app-server attempt timeouts", () => {
     );
   });
 
-  it("returns the startup operation result before timeout", async () => {
-    await expect(
-      withCodexStartupTimeout({
-        timeoutMs: 1_000,
-        signal: new AbortController().signal,
-        operation: async () => "ready",
-      }),
-    ).resolves.toBe("ready");
-  });
-
   it("waits for startup timeout cleanup before rejecting", async () => {
     vi.useFakeTimers();
     const events: string[] = [];

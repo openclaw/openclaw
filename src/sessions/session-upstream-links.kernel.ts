@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJson } from "@openclaw/normalization-core";
 import type { Selectable } from "kysely";
@@ -9,6 +8,8 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import {
   getSqliteReadOperationRevision,
@@ -69,9 +70,11 @@ export const sessionUpstreamReadOperations = {
     type: "sessionUpstream.read" as const,
     link: readSessionUpstreamLinkInDatabase(db, input.sessionKey, input.agentId),
   }),
-} satisfies WorkerOperationHandlers<DatabaseSync>;
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
-export function listWatchedSessionUpstreamLinksInDatabase(db: DatabaseSync): SessionUpstreamLink[] {
+export function listWatchedSessionUpstreamLinksInDatabase(
+  db: EngineConnection,
+): SessionUpstreamLink[] {
   // Watch cursors own demand. Their key-only lookup relies on one owning agent per
   // adopted session key, not one agent per native thread. Agent-qualified keys
   // keep separate adoptions of the same thread distinct.
@@ -101,17 +104,17 @@ export type SessionUpstreamLinkInput = Omit<
   "lastScannedAt" | "createdAt" | "updatedAt"
 >;
 
-function getSessionUpstreamKysely(db: DatabaseSync) {
+function getSessionUpstreamKysely(db: EngineConnection) {
   return getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "session_upstream_links">>(db);
 }
 
 // Retain one exact result, including absence, only at the connection owner's admitted revision.
-const upstreamLinkQuery = createSqliteQueryCache((db) => {
+const upstreamLinkQuery = createSqliteQueryCache((db: EngineConnection) => {
   type Key = { sessionKey: string; agentId: string };
   let retained:
     | (Key & { revision: SqliteReadOperationRevision; row: SessionUpstreamLinkRow | undefined })
     | undefined;
-  registerNodeSqliteDisposeCallback(db, () => {
+  registerNodeSqliteDisposeCallback(sqlPublicationAnchor(db), () => {
     retained = undefined;
   });
   return (key: Key): SessionUpstreamLinkRow | undefined => {
@@ -141,7 +144,7 @@ const upstreamLinkQuery = createSqliteQueryCache((db) => {
 });
 
 export function readSessionUpstreamLinkInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionKey: string,
   agentId: string,
 ): SessionUpstreamLink | undefined {
@@ -150,7 +153,7 @@ export function readSessionUpstreamLinkInDatabase(
 }
 
 export function upsertSessionUpstreamLinkInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: SessionUpstreamLinkInput,
   now: number,
   ifAbsent?: true,
@@ -223,7 +226,7 @@ export function upsertSessionUpstreamLinkInDatabase(
 }
 
 export function deleteSessionUpstreamLinkInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionKey: string,
   agentId: string,
   expected?: SessionUpstreamLink,

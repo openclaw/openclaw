@@ -4,7 +4,7 @@ import { MermaidTransientError, renderMermaidSvg } from "@openclaw/mermaid-rende
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { copyToClipboard } from "../lib/clipboard.ts";
-import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { mountMermaidBlocks } from "./markdown-mermaid.tsx";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
@@ -42,9 +42,7 @@ async function mount(...sources: string[]) {
 }
 
 function action(element: MermaidElement, label: string) {
-  const controls = element.querySelectorAll<
-    HTMLButtonElement | HTMLElementTagNameMap["wa-dropdown-item"]
-  >("button, wa-dropdown-item");
+  const controls = element.querySelectorAll<HTMLButtonElement>("button");
   const match = [...(controls ?? [])].find(
     (candidate) =>
       (candidate.getAttribute("aria-label") ?? candidate.textContent?.trim()) === label,
@@ -53,6 +51,14 @@ function action(element: MermaidElement, label: string) {
     throw new Error(`Missing Mermaid action: ${label}`);
   }
   return match;
+}
+
+async function selectAction(element: MermaidElement, label: string) {
+  const trigger = action(element, "Diagram options");
+  trigger.click();
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  action(element, label).click();
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("false"));
 }
 
 function imageSource(element: MermaidElement): string | null | undefined {
@@ -134,8 +140,7 @@ describe("Mermaid Markdown presentation", () => {
 
     expect(renderSvg).toHaveBeenCalledWith(original, expect.objectContaining({ darkMode: false }));
     expect(action(element!, "Expand diagram").disabled).toBe(false);
-    action(element!, "Show source").click();
-    flush();
+    await selectAction(element!, "Show source");
     expect(element!.querySelector("code")?.textContent).toBe(original);
     expect(element!.querySelector("script, img")).toBeNull();
     expect(mountMermaidBlocks(container)).toBe(false);
@@ -146,8 +151,7 @@ describe("Mermaid Markdown presentation", () => {
     );
     expect(copySource.mock.calls.map(([text]) => text)).toEqual([original]);
 
-    action(element!, "Show diagram").click();
-    flush();
+    await selectAction(element!, "Show diagram");
     expect(imageSource(element!)).toBe(imageUrl);
     expect(renderSvg).toHaveBeenCalledTimes(1);
   });

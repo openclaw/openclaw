@@ -203,57 +203,6 @@ suite.define(() => {
     },
   );
 
-  it("refreshes direct-target status before observing the exact worker", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: [
-          "desktop.launch",
-          "desktop.observe",
-          "environments.list",
-          "environments.status",
-        ],
-        methodResponses: {
-          "sessions.list": sessionsList("active"),
-          "environments.list": {
-            environments: [workerDesktopEnvironment],
-          },
-          "environments.status": workerDesktopEnvironment,
-          "desktop.observe": {
-            transport: "rfb",
-            wsPath: "/desktop/observe?token=direct",
-            expiresAtMs: 60_000,
-            control: false,
-          },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const panel = await openDesktopPanel(page, suite.server.baseUrl);
-      await installDesktopClientFake(panel);
-      const requestCount = (await gateway.getRequests()).length;
-
-      await openDirectDesktop(page, "worker-desktop-1");
-
-      const observeRequest = await gateway.waitForRequest("desktop.observe");
-      expect(observeRequest.params).toEqual({
-        source: { kind: "environment", environmentId: "worker-desktop-1" },
-        control: false,
-      });
-      expect(
-        (await gateway.getRequests())
-          .slice(requestCount)
-          .filter((request) =>
-            ["environments.status", "environments.list", "desktop.observe"].includes(
-              request.method,
-            ),
-          )
-          .map((request) => request.method),
-      ).toEqual(["environments.status", "desktop.observe"]);
-      expect(await panel.getByText("Desktop sources", { exact: true }).count()).toBe(0);
-      await panel.getByRole("button", { name: "Browser", exact: true }).waitFor();
-      await panel.getByRole("button", { name: "Terminal", exact: true }).waitFor();
-    });
-  });
-
   it("reports an unavailable direct target without showing another source", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {

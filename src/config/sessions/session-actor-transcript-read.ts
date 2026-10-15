@@ -1,10 +1,7 @@
-import path from "node:path";
-import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.types.js";
 import type { SessionActor } from "./session-actor-contract.js";
 import type { SessionActorMemoryHistoryReads } from "./session-actor-memory-history-contract.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 
@@ -13,78 +10,79 @@ export function captureSessionActorTranscriptRead(
   scope: SessionTranscriptReadScope,
   signal?: AbortSignal,
 ) {
-  if (scope.sessionKey && !isIncognitoSessionKey(scope.sessionKey)) {
+  const namespace = captureSessionActorStorageOwner(scope, {
+    assertCurrent: () => signal?.throwIfAborted(),
+    authorize: () => signal?.throwIfAborted(),
+  });
+  if (!namespace) {
     return undefined;
   }
-  const selected = getSessionActorStorageBinding({});
-  if (!selected) {
-    return undefined;
-  }
-  const agentId =
-    scope.agentId ??
-    (scope.sessionKey ? resolveAgentIdFromSessionKey(scope.sessionKey) : selected.agentId);
-  const sameOwner = agentId === selected.agentId;
-  if (sameOwner) {
-    getSessionActorStorageBinding({ ...scope, sessionKey: undefined });
-  }
+  const selected = namespace.binding;
+  const sameOwner =
+    selected && namespace.agentId === selected.agentId && namespace.path === selected.path;
   const stored = sameOwner
     ? selected.actor.storage!.readCurrent(
         { type: "session.entry.readById", input: { sessionId: scope.sessionId } },
         selected.authority,
       )
-    : undefined;
+    : namespace.owner?.readSessionById(scope.sessionId, namespace.authority);
   const sessionKey = stored?.sessionKey ?? scope.sessionKey ?? "";
   const direct = sameOwner && sessionKey === selected.actor.target.sessionKey;
   const target = captureSessionTranscriptTargetBinding({
-    agentId,
+    agentId: namespace.agentId,
     sessionKey,
     sessionId: scope.sessionId,
-    storePath: sameOwner
-      ? selected.path
-      : resolveIncognitoOpenClawAgentSqlitePath({
-          agentId,
-          env: { OPENCLAW_STATE_DIR: path.resolve(selected.path, "../../../..") },
-        }),
+    storePath: sameOwner ? selected.path : namespace.path,
     env: scope.env,
   });
   const receipt = resolveSessionTranscriptReadFence(target);
   const admission = receipt && structuredClone(receipt);
+  const assertOwnerCurrent = namespace.owner?.captureSessionReadGuard(sessionKey);
   const authority = {
-    ...selected.authority,
+    ...namespace.authority,
     assertCurrent: () => {
       signal?.throwIfAborted();
-      selected.authority.assertCurrent();
+      assertOwnerCurrent?.();
+      selected?.actor.assertReadable();
+      namespace.authority.assertCurrent();
     },
   };
   return {
     target,
     missing: !stored,
     currentEntry() {
+      authority.assertCurrent();
       return sameOwner
         ? selected.actor.storage!.readCurrent(
             { type: "session.entry.read", input: { sessionKey } },
             selected.authority,
           )
-        : undefined;
+        : namespace.owner?.readSession(sessionKey, namespace.authority)?.entry;
     },
-    assertCurrent: () => {
-      signal?.throwIfAborted();
-      selected.actor.assertReadable();
-      selected.authority.assertCurrent();
-    },
+    assertCurrent: authority.assertCurrent,
     async read<Key extends keyof SessionActorMemoryHistoryReads>(
       type: Key,
       input: SessionActorMemoryHistoryReads[Key]["input"],
     ): Promise<SessionActorMemoryHistoryReads[Key]["output"]> {
-      signal?.throwIfAborted();
+      authority.assertCurrent();
       if (!stored) {
         throw new Error("Session transcript window is unavailable");
       }
       let actor: SessionActor | undefined;
       try {
-        actor = direct ? selected.actor : await selected.actor.storage!.acquire(sessionKey);
+        actor = direct
+          ? selected.actor
+          : sameOwner
+            ? await selected.actor.storage!.acquire(sessionKey)
+            : await namespace.owner?.acquireExisting(sessionKey, {
+                assertCurrent: authority.assertCurrent,
+                assertReadable: authority.assertCurrent,
+              });
+        if (!actor) {
+          throw new Error("Session transcript window is unavailable");
+        }
         return await actor.storage!.read(
-          { type, input: { ...input, sessionId: target.sessionId, admission } },
+          { type, input: { admission, ...input, sessionId: target.sessionId } },
           authority,
         );
       } finally {

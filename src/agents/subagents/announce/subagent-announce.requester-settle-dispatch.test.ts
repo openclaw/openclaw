@@ -1,17 +1,17 @@
 import "./subagent-announce.requester-settle-dispatch-mocks.test-support.js";
 import path from "node:path";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
-import { createInternalAgentTurnFacade } from "../../../gateway/agent-turn/internal-facade.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
-import { createGatewayMethodRegistry } from "../../../gateway/methods/registry.js";
-import { createChatRunState } from "../../../gateway/server-chat-state.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
-import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
@@ -21,7 +21,6 @@ import {
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../../process/command-queue.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
-import { trackAsyncWork } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { runWithAgentCommandRecoveryOwner } from "../../agent-command-recovery-owner.js";
@@ -43,11 +42,11 @@ import {
   deliver,
   registryRead,
   startTurn,
-  loadRequester,
   REQUESTER_KEY,
   settledChild,
   publishWakeTransition,
   useRequesterSettleDispatchFixture,
+  createRequesterSettleContext as createContext,
 } from "./subagent-announce.requester-settle-dispatch.test-support.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
 
@@ -57,117 +56,18 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
       await closeOpenClawAgentDatabasesAsync(dir);
     }
     cleanup();
+    clearRuntimeConfigSnapshot();
   }),
 );
 
 const SESSION_LANE = `session:${REQUESTER_KEY}`;
 const GLOBAL_LANE = "subagent-settle-dispatch-proof";
 
-function createContext(): GatewayRequestContext {
-  const chatRunState = createChatRunState();
-  const methodRegistry = createGatewayMethodRegistry([]);
-  const context = Object.assign({} as GatewayRequestContext, {
-    trackExecution: trackAsyncWork,
-    agentRunSeq: new Map(),
-    broadcast: vi.fn(),
-    chatAbortControllers: new Map(),
-    chatRunState,
-    dedupe: new Map(),
-    getRuntimeConfig: () => ({}),
-    getGatewayMethodRegistry: () => methodRegistry,
-    logGateway: { error: vi.fn(), warn: vi.fn() },
-    nodeSendToSession: vi.fn(),
-    removeChatRun: vi.fn(() => undefined),
-  });
-  context.createAgentTurnFacade = (principal) =>
-    createInternalAgentTurnFacade({
-      ...principal,
-      getContext: () => context,
-      getMethodRegistry: () => methodRegistry,
-    });
-  return context;
-}
-
 describe("requester settle dispatch deadline", () => {
   useRequesterSettleDispatchFixture();
 
-  it.each([
-    { name: "WebChat settle", channel: "webchat", pause: false, external: false },
-    { name: "WebChat pause", channel: "webchat", pause: true, external: false },
-    { name: "explicit external completion", channel: "telegram", pause: false, external: true },
-    { name: "saved-route completion", channel: undefined, pause: false, external: true },
-  ])("keeps $name on its owning route despite external session history", async (testCase) => {
-    const requesterSessionKey = "agent:main:dashboard:completion-route";
-    const child = settledChild();
-    child.requesterSessionKey = requesterSessionKey;
-    child.requesterOrigin = testCase.channel ? { channel: testCase.channel } : undefined;
-    if (testCase.pause) {
-      child.pauseReason = "sessions_yield";
-      child.execution.outcome = undefined;
-      child.requesterSettleWake!.pauseNotice = { acknowledgment: "Need direction." };
-    }
-    registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
-    loadRequester.mockReturnValue({
-      cfg: {},
-      canonicalKey: requesterSessionKey,
-      agentId: "main",
-      entry: {
-        sessionId: "requester-session",
-        updatedAt: 1,
-        delivery: {
-          kind: "external",
-          route: { channel: "telegram", target: { to: "12345" } },
-          context: { channel: "telegram", to: "12345", accountId: "bot-1", threadId: 42 },
-          origin: { provider: "webchat", to: requesterSessionKey, surface: "webchat" },
-        },
-      },
-    });
-    setSubagentAnnounceDeliveryDepsForTest({
-      getRuntimeConfig: () => ({}),
-      loadRequesterSessionEntry: loadRequester,
-      getRequesterSessionActivity: () => ({ sessionId: "requester-session", isActive: false }),
-    });
-    deliver.mockImplementation(sendSubagentAnnounceDirectly);
-    startTurn.mockImplementation(async ({ preflight, io }) => {
-      io.emitAcceptance([true, { runId: preflight.request.idempotencyKey, status: "accepted" }]);
-      io.emitFinal([
-        true,
-        {
-          status: "ok",
-          result: {
-            payloads: [{ text: "Completed." }],
-            ...(testCase.external
-              ? { deliveryStatus: { status: "sent", succeeded: true, resultCount: 1 } }
-              : {}),
-          },
-        },
-      ]);
-    });
-    const context = createContext();
-    const completeBatch = vi.fn();
-    const delivered = await withPluginRuntimeGatewayRequestScope(
-      { context, client: createSyntheticPluginRuntimeClient(), isWebchatConnect: () => false },
-      () =>
-        maybeWakeRequesterAfterAllChildrenSettled({
-          requesterSessionKey,
-          requesterOrigin: child.requesterOrigin,
-          isSourceCurrent: () => true,
-          settledEntry: child,
-          transitionBatch: publishWakeTransition,
-          completeBatch,
-        }),
-    );
-    expect(startTurn).toHaveBeenCalledOnce();
-    expect(startTurn.mock.calls[0]![0].preflight.request).toMatchObject({
-      sessionKey: requesterSessionKey,
-      deliver: testCase.external,
-      channel: testCase.external ? "telegram" : "webchat",
-      to: testCase.external ? "12345" : undefined,
-      accountId: testCase.external ? "bot-1" : undefined,
-      threadId: testCase.external ? "42" : undefined,
-    });
-    expect(delivered).toBe(true);
-    expect(completeBatch).toHaveBeenCalledOnce();
+  beforeEach(() => {
+    setRuntimeConfigSnapshot({});
   });
 
   it.each([false, true])(
@@ -603,6 +503,7 @@ describe("requester settle dispatch deadline", () => {
     const accepted = createDeferredCore();
     const finals: string[] = [];
     const cfg = { agents: { defaults: { subagents: { announceTimeoutMs: 20 } } } };
+    setRuntimeConfigSnapshot(cfg);
     startTurn.mockImplementation(async ({ preflight, io }) => {
       const request = preflight.request;
       io.emitAcceptance([true, { runId: request.idempotencyKey, status: "accepted" }], {
@@ -707,6 +608,7 @@ describe("requester settle dispatch deadline", () => {
       const cfg = {
         agents: { defaults: { timeoutSeconds: 1, subagents: { announceTimeoutMs: 20 } } },
       };
+      setRuntimeConfigSnapshot(cfg);
       const executionStarted = createDeferredCore();
       const workDone = createDeferredCore();
       const stop = new AbortController();

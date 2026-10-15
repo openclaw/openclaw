@@ -49,7 +49,7 @@ import {
 
 type DispatchOptions = Parameters<typeof createWorkerPlacementDispatchService>[0];
 
-export function createHarness(
+export async function createHarness(
   database: OpenClawStateDatabase,
   placementStore: PlacementStore,
   options: {
@@ -371,6 +371,7 @@ export function createHarness(
     })),
     getPreparedCandidates: vi.fn(() => []),
     bindPreparedWorkspace: vi.fn(async (request) => ({
+      assertCurrent: request.assertCurrent,
       gatewayNamespace: "dispatch-fixture",
       environmentId: request.environmentId,
       preparationKey: request.preparationKey,
@@ -440,7 +441,7 @@ export function createHarness(
     Object.assign(environments, options.environmentService);
   }
   const service = createWorkerPlacementDispatchService({
-    initialPlacements: placementStore.list(),
+    initialPlacements: await placementStore.listAsync(),
     placements,
     environments,
     isShuttingDown: options.isShuttingDown,
@@ -640,13 +641,13 @@ export function createHarness(
   };
 }
 
-export const createRecoveryService = (
+export const createRecoveryService = async (
   placements: PlacementStore,
   environments: WorkerEnvironmentService,
   isShuttingDown: () => boolean = () => false,
 ) =>
   createWorkerPlacementDispatchService({
-    initialPlacements: placements.list(),
+    initialPlacements: await placements.listAsync(),
     placements,
     environments,
     isShuttingDown,

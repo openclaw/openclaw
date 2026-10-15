@@ -2,23 +2,29 @@
 summary: "Bun workflow for installs, package scripts, and opt-in runtime use"
 read_when:
   - You want to install dependencies or run package scripts with Bun
-  - You want to run OpenClaw with Bun 1.4+
+  - You want to run OpenClaw with the latest stable Bun or pinned OpenClaw fork
   - You hit Bun install/patch/lifecycle script issues
 title: "Bun"
 ---
 
 <Warning>
-Node remains OpenClaw's primary, default, and recommended runtime. Bun 1.4+ builds that provide WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node host as an explicit opt-in. [OpenClaw requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x](/install/bun-compatibility); older Bun versions and builds with unsafe SQLite are rejected.
+Node remains OpenClaw's primary, default, and recommended runtime. The latest stable Bun (currently 1.4.3) and pinned OpenClaw fork can run the CLI, Gateway, and managed node host as an explicit opt-in. Older stock Bun releases are rejected; upgrade before running OpenClaw. [OpenClaw requires SQLite 3.51.3+, 3.50.7+ within 3.50.x, or 3.44.6+ within 3.44.x](/install/bun-compatibility); older Bun versions and builds with unsafe SQLite are rejected.
 </Warning>
 
 Desktop apps manage their own runtime: the native macOS app and fresh local
-Tauri installations on Linux use the same pinned OpenClaw Bun fork. Existing
+Tauri installations on Linux and Windows use the same pinned OpenClaw Bun fork.
+On Windows, [Windows Hub](/platforms/windows#recommended-windows-hub) is the
+recommended desktop app; Tauri is the backup. Existing
 Linux Tauri installations retain their runtime across startup and app updates
 until you explicitly choose **Use bundled runtime…**. macOS Tauri keeps its
 existing behavior, separate from the native macOS app. See
 [Linux companion](/platforms/linux#adopt-the-bundled-runtime).
 
 Bun remains usable as an optional package-script runner. The default package manager remains `pnpm`, which is fully supported and used by docs tooling. Bun cannot use `pnpm-lock.yaml` and ignores it, and current Bun versions fail to resolve this repo's `pnpm-workspace.yaml` layout during `bun install`, so dependency installs should use `pnpm install`.
+
+To compile OpenClaw into an executable with a companion runtime directory, see
+[Standalone builds](/install/standalone). That build uses the production-pinned
+OpenClaw Bun fork and supports JIT and bytecode modes.
 
 ## Install
 
@@ -129,7 +135,7 @@ bun pm trust baileys protobufjs
 
 ## Caveats
 
-On macOS, run `brew install sqlite` first: OpenClaw on Bun refuses Apple's system SQLite, which also lacks native vector search. Bun 1.4.2 can retain SQLite handles and WAL/shared-memory files after close; use Node when prompt file release matters. See [Bun compatibility](/install/bun-compatibility) for library selection, requirements, and limitations.
+On macOS, run `brew install sqlite` first: OpenClaw on Bun refuses Apple's system SQLite, which also lacks native vector search. Bun 1.4.3 can retain SQLite handles and WAL/shared-memory files after close; use Node when prompt file release matters. See [Bun compatibility](/install/bun-compatibility) for library selection, requirements, and limitations.
 
 Some package scripts hardcode `pnpm` internally (for example `check:docs`, `ui:*`, `protocol:check`). Running them via `bun run` still shells out to `pnpm`, so just run those via `pnpm` directly.
 

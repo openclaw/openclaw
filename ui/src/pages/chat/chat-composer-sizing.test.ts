@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import {
   getComposerTextarea,
@@ -257,7 +258,7 @@ describe("chat composer sizing", () => {
     resizeTextarea([], {} as ResizeObserver);
     expect(requestAnimationFrameMock).toHaveBeenCalledTimes(2);
     const pendingAdjustmentFrame = nextAnimationFrameId;
-    render(html``, container);
+    cleanupSolid();
     expect(cancelAnimationFrameMock).toHaveBeenCalledWith(pendingAdjustmentFrame);
   });
 });

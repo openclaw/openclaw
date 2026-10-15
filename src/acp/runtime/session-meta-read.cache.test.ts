@@ -8,17 +8,20 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import type { AdmissionOperations } from "../../infra/sqlite-database-admission.worker.test-support.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
-import { SqliteWorkerBroker } from "../../infra/sqlite-worker-broker.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   withOpenClawStateReadOnlyLocation,
 } from "../../state/openclaw-state-db-read-connection.js";
 import { assertSupportedStateSchemaVersion } from "../../state/openclaw-state-db-schema-version.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
-import { buildAcpDatabaseSessionKey, upsertAcpSessionMetaRow } from "./session-meta-keys.js";
+import {
+  buildAcpDatabaseSessionKey,
+  deleteAcpSessionMetaRows,
+  readPublishedAcpSessionRows,
+  upsertAcpSessionMetaRow,
+} from "./session-meta-keys.js";
 import type { AcpSessionReadCommand } from "./session-meta-read.types.js";
 import {
   prepareAcpSessionMetadataRead,
@@ -88,21 +91,23 @@ function fixture() {
   return { writer, pathname, read };
 }
 
-it("reuses admitted ACP rows until writer-worker settlement without freshness probes", async () => {
+it("reuses admitted ACP rows and committed postimages without rereading metadata", () => {
   const { writer, pathname, read } = fixture();
-  const broker = new SqliteWorkerBroker();
   expect(read().rows).toEqual([null]);
   expect(read().rows).toEqual([null]);
   const observation = observeSqliteReadSql(StatementSync.prototype);
   const metadataReads = () =>
-    observation.queries.filter((sql) => /(?:from|join) "acp_sessions"/iu.test(sql));
+    observation.queries.filter((sql) => /^select\b.*(?:from|join) "acp_sessions"/isu.test(sql));
   try {
     expect(read().rows).toEqual([null]);
     expect(read().rows).toEqual([null]);
     expect(metadataReads()).toHaveLength(0);
     insert(writer, "first");
+    expect(readPublishedAcpSessionRows(pathname, command.entries)?.[0]).toMatchObject({
+      runtime_session_name: "first",
+    });
     expect(read().rows[0]).toMatchObject({ runtime_session_name: "first" });
-    expect(metadataReads()).toHaveLength(1);
+    expect(metadataReads()).toHaveLength(0);
     const rows = read().rows;
     expect(rows[0]).toMatchObject({ runtime_session_name: "first" });
     if (rows[0] && "runtime_session_name" in rows[0]) {
@@ -112,31 +117,19 @@ it("reuses admitted ACP rows until writer-worker settlement without freshness pr
     expect(
       read({ ...command, entries: [{ keys: [key], entry: { sessionId: "successor" } }] }).rows,
     ).toEqual([null]);
-    expect(metadataReads()).toHaveLength(1);
-    const store = await broker.open<AdmissionOperations>({
-      moduleUrl: new URL(
-        "../../infra/sqlite-database-admission.worker.test-support.ts",
-        import.meta.url,
-      ),
-      databasePath: pathname,
-      input: undefined,
-    });
-    const mutate = (sql: string) =>
-      broker.runOperation(store!, (scope) =>
-        scope.execute({
-          type: "writeRows",
-          input: { sql },
-        }),
-      );
-    await mutate("UPDATE acp_sessions SET runtime_session_name = 'second'");
+    expect(metadataReads()).toHaveLength(0);
+    writer.prepare("INSERT INTO config_machine_state VALUES ('unrelated', '{}', 1)").run();
+    expect(read().rows[0]).toMatchObject({ runtime_session_name: "first" });
+    expect(metadataReads()).toHaveLength(0);
+    insert(writer, "second");
     expect(read().rows[0]).toMatchObject({ runtime_session_name: "second" });
-    await mutate("DELETE FROM acp_sessions");
+    deleteAcpSessionMetaRows(writer, [key]);
     expect(read().rows).toEqual([null]);
-    expect(metadataReads()).toHaveLength(3);
+    expect(readPublishedAcpSessionRows(pathname, command.entries)).toEqual([null]);
+    expect(metadataReads()).toHaveLength(0);
     expect(observation.queries.filter((sql) => /data_version/iu.test(sql))).toEqual([]);
   } finally {
     observation.restore();
-    await broker.close();
   }
 });
 
@@ -163,7 +156,7 @@ it("keeps a pinned ACP snapshot and refreshes after it closes", () => {
         expect(readPinned().rows[0]).toMatchObject({
           runtime_session_name: "before",
         });
-        writer.prepare("UPDATE acp_sessions SET runtime_session_name = 'after'").run();
+        insert(writer, "after");
         expect(readPinned().rows[0]).toMatchObject({
           runtime_session_name: "before",
         });
@@ -188,11 +181,11 @@ it("invalidates admitted ACP rows after local native writes and reader retiremen
   const localRead = () =>
     runSqliteReadOperationSync(writer, () => readAcpSessionCommand(writer, command));
   expect(localRead().rows[0]).toMatchObject({ runtime_session_name: "initial" });
-  writer.prepare("UPDATE acp_sessions SET runtime_session_name = 'local'").run();
+  insert(writer, "local");
   expect(localRead().rows[0]).toMatchObject({ runtime_session_name: "local" });
   expect(read().rows[0]).toMatchObject({ runtime_session_name: "local" });
   closeRetainedOpenClawStateReadConnections();
-  writer.prepare("UPDATE acp_sessions SET runtime_session_name = 'reopened'").run();
+  insert(writer, "reopened");
   expect(read().rows[0]).toMatchObject({ runtime_session_name: "reopened" });
 });
 

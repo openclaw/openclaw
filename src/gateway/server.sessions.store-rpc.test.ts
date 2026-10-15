@@ -920,7 +920,13 @@ test("chat.inject writes to the transcript owner after the requested row's facts
     [true, undefined],
     [true, undefined],
   ]);
-  expect(await ownerRows()).toHaveLength(rowsBefore + 2);
+  expect((await ownerRows()).slice(rowsBefore)).toMatchObject([
+    { type: "message", message: { role: "assistant", content: [{ type: "text", text: "first" }] } },
+    {
+      type: "message",
+      message: { role: "assistant", content: [{ type: "text", text: "second" }] },
+    },
+  ]);
 });
 
 test("archiving a session disables cron jobs bound to it", async () => {

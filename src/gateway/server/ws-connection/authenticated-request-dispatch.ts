@@ -26,6 +26,7 @@ import { createLazyPromise } from "../../../shared/lazy-runtime.js";
 import { isGatewayAuthGrantCurrent, isGatewayAuthPolicyCurrent } from "../../auth-policy.js";
 import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
 import { createExpectedProfileBinding } from "../../expected-profile.js";
+import { hasCurrentRemoteControlUiIngress } from "../../ingress-attribution.js";
 import {
   GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
   hasCurrentGatewayOperatorAccess,
@@ -136,15 +137,42 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
       return;
     }
-    const diagnostics = createGatewayRpcDiagnostics(req.method, getMethodRegistry, extraHandlers);
+    const diagnostics = createGatewayRpcDiagnostics(
+      req.method,
+      getMethodRegistry,
+      extraHandlers,
+      req.method === "models.list"
+        ? {
+            clientKind: client.connect.client.id,
+            source: sendResponse === send ? "wire" : "internal",
+            params: req.params,
+          }
+        : undefined,
+    );
     logWs("in", "req", { connId, id: req.id, method: req.method });
     const generationState = SharedGatewaySessionGenerationState.fromReader(
       getRequiredSharedGatewaySessionGeneration,
     );
+    const remoteIngress = client.remoteControlUiIngress;
+    const hasCurrentIngress = () => {
+      if (hasCurrentRemoteControlUiIngress(remoteIngress)) {
+        return true;
+      }
+      invalidateGatewayPolicyClient(client, {
+        reason: "remote-control-ui-ingress-closed",
+        code: 4001,
+        message: "remote Control UI ingress closed",
+        close: () => close(4001, "remote Control UI ingress closed"),
+      });
+      return false;
+    };
     const clientAuthority = captureGatewayDeviceRevocation(
       context,
       { deviceId: client.connect.device?.id, role: client.connect.role },
       () => {
+        if (!hasCurrentIngress()) {
+          return false;
+        }
         if (!hasCurrentGatewayOperatorAccess(client.internal?.operatorAccessAuthority)) {
           invalidateGatewayPolicyClient(client, {
             reason: "operator-access-closed",
@@ -186,10 +214,17 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               sharedGeneration: client.usesSharedGatewayAuth
                 ? client.sharedGatewaySessionGeneration
                 : undefined,
+              authorityOwner: remoteIngress,
             },
             isCurrent: () =>
-              hasCurrentGatewayPolicyClientSource(client) && isCommittedGrantCurrent(),
+              hasCurrentIngress() &&
+              hasCurrentGatewayPolicyClientSource(client) &&
+              isCommittedGrantCurrent(),
             subscribe: (onRevoked) => {
+              remoteIngress?.signal.addEventListener("abort", onRevoked, { once: true });
+              if (remoteIngress?.signal.aborted) {
+                onRevoked();
+              }
               const releaseClient = onGatewayPolicyClientInvalidated(client, onRevoked);
               const releasePolicy = onOperatorRolePolicyChanged((change) => {
                 if (
@@ -208,6 +243,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                   )
                 : undefined;
               return () => {
+                remoteIngress?.signal.removeEventListener("abort", onRevoked);
                 releaseClient();
                 releasePolicy();
                 releaseGeneration?.();
@@ -363,13 +399,19 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         // belongs to its requester so disconnect can release its admission fence.
         const cancelOnDisconnect =
           req.method === "sessions.companion.ask" ||
+          req.method === "sessions.usage" ||
           (req.method === "plugins.reload" &&
             asOptionalRecord(req.params)?.waitForDrain === true) ||
           (req.method === "node.invoke" &&
             client.connect.client.id === GATEWAY_CLIENT_IDS.CLI &&
             client.connect.client.mode === GATEWAY_CLIENT_MODES.CLI);
         const requestController = cancelOnDisconnect ? new AbortController() : undefined;
-        const accessSignal = client.internal?.operatorAccessAuthority?.signal;
+        const operatorAccessSignal = client.internal?.operatorAccessAuthority?.signal;
+        const accessSignal = remoteIngress
+          ? operatorAccessSignal
+            ? AbortSignal.any([remoteIngress.signal, operatorAccessSignal])
+            : remoteIngress.signal
+          : operatorAccessSignal;
         const signal = requestController
           ? accessSignal
             ? AbortSignal.any([requestController.signal, accessSignal])

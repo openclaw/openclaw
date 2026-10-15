@@ -117,11 +117,11 @@ export class ModelProviderDiscoveryController {
                   <div class="model-setup-wizard__body" role="status">
                     {t("common.loading")}
                   </div>
-                  <div class="model-setup-wizard__footer">
+                  <openclaw-modal-actions class="model-setup-wizard__footer">
                     <button class="btn" onClick={() => close()}>
                       {t("common.cancel")}
                     </button>
-                  </div>
+                  </openclaw-modal-actions>
                 </div>
               </openclaw-modal-dialog>
             ) : (

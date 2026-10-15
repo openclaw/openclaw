@@ -59,6 +59,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-attempt-runtime", () => ({
   },
   racePromiseWithAbortSignal: (promise: Promise<unknown>) => promise,
 }));
+// mock-isolation: Environment propagation uses synthetic prompt and side-effect owners, without a live Gateway.
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   agentHarnessAttemptTerminal: { normalize: () => ({ kind: "ok" }) },
   loadAgentHarnessMcpConfig: async () => ({
@@ -96,9 +97,8 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   embeddedAgentLog: { warn: vi.fn() },
   formatErrorMessage: (error: unknown) => String(error),
   resolveAgentDir: () => "/fixture/agent",
-  runAgentEndSideEffects: vi.fn(),
+  runAgentEndSideEffectsAsync: vi.fn(async () => {}),
   runAgentHarnessLlmOutputHook: vi.fn(),
-  sanitizeToolArgs: (args: unknown) => args,
   setActiveEmbeddedRun: vi.fn(),
 }));
 vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
@@ -207,68 +207,12 @@ describe("Agents API attempt environment selection", () => {
       expect(rejected.result.terminal).toMatchObject({
         kind: "failed",
         error: expect.objectContaining({
-          message: expect.stringContaining("web-search policy changed"),
+          message: expect.stringContaining("web-search, or forwarding policy changed"),
         }),
       });
       expect(mocks.fetch).not.toHaveBeenCalled();
       expect(rejected.bind).not.toHaveBeenCalled();
     }
-  });
-
-  it.each([
-    {
-      name: "domains changed",
-      previous: { access: "restricted", allowed_domains: ["api.github.com"] },
-      next: { access: "restricted", allowed_domains: ["pypi.org"] },
-    },
-  ])("requires reset when hosted network policy is $name", async ({ previous, next }) => {
-    const created = await attempt(undefined, undefined, undefined, undefined, {
-      openai_host: { network: previous },
-    });
-    expect(created.result).toMatchObject({ terminal: { kind: "ok" } });
-    mocks.fetch.mockClear();
-
-    const { result, bind } = await attempt(
-      undefined,
-      created.bind.mock.calls[0]![0],
-      undefined,
-      undefined,
-      { openai_host: { network: next } },
-    );
-
-    expect(result).toMatchObject({
-      terminal: {
-        kind: "failed",
-        error: expect.objectContaining({
-          message: expect.stringContaining("reset the OpenClaw session"),
-        }),
-      },
-    });
-    expect(mocks.fetch).not.toHaveBeenCalled();
-    expect(bind).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { name: "hosted to self-hosted", previous: undefined, next: "self_hosted" },
-    {
-      name: "self-hosted workspace change",
-      previous: "self_hosted",
-      next: "self_hosted",
-      workspaceDir: "/fixture/other-project",
-    },
-  ])("requires reset for $name before native writes", async ({ previous, next, workspaceDir }) => {
-    const { result, bind } = await attempt(next, savedBinding(previous), workspaceDir);
-
-    expect(result).toMatchObject({
-      terminal: {
-        kind: "failed",
-        error: expect.objectContaining({
-          message: expect.stringContaining("reset the OpenClaw session"),
-        }),
-      },
-    });
-    expect(mocks.fetch).not.toHaveBeenCalled();
-    expect(bind).not.toHaveBeenCalled();
   });
 
   it.each(["self_hosted"])(
@@ -423,19 +367,6 @@ describe("Agents API attempt environment selection", () => {
     },
   );
 
-  it("rejects an invalid runtime environment setting before native writes", async () => {
-    const { result, bind } = await attempt("hosted");
-
-    expect(result).toMatchObject({
-      terminal: {
-        kind: "failed",
-        error: expect.objectContaining({ message: expect.stringContaining("environment") }),
-      },
-    });
-    expect(mocks.fetch).not.toHaveBeenCalled();
-    expect(bind).not.toHaveBeenCalled();
-  });
-
   it("carries hosted attachments through session creation, input mapping, and reply delivery", async () => {
     const media = [{ path: "/fixture/input.txt" }];
     const file: AgentsApiInputFile = {
@@ -451,6 +382,7 @@ describe("Agents API attempt environment selection", () => {
     const network = { access: "restricted", allowed_domains: ["api.github.com"] };
     const { result } = await attempt("openai_hosted", undefined, undefined, media, {
       openai_host: { network },
+      forwarding: { gatewayTools: false, mcpServers: false },
     });
 
     expect(result).toMatchObject({
@@ -491,12 +423,6 @@ describe("Agents API attempt environment selection", () => {
 
   it.each([
     { name: "prepared prompt", preparedPrompt: true, replacePrompt: false, recorderMedia: false },
-    {
-      name: "deferred transcript media",
-      preparedPrompt: false,
-      replacePrompt: false,
-      recorderMedia: true,
-    },
     {
       name: "inline document pages with a hook-replaced prompt",
       preparedPrompt: true,

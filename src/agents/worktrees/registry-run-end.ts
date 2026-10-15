@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto";
 import { SqliteWorkerError, type SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
+  type SqliteWorkerAdmissionFactory,
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-state-lease-worker-owner.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
+import type { DomainScope } from "../../state/openclaw-state-worker-store.types.js";
 import {
   readWorktreeRegistryWorkerReceipt,
   withWorktreeRegistryPublication,
@@ -27,6 +29,74 @@ import {
   WORKTREE_UNKNOWN_OWNER_SELECTION,
 } from "./run-end-lifecycle.js";
 import type { WorktreeRegistryPredicate, WorktreeWorkerAuthority } from "./types.js";
+
+/** Delivery failure does not undo a committed write; native settlement owns its outcome. */
+export async function runWorktreeRegistryCommand<T>(
+  context: OpenClawStateWorkerContext,
+  execute: (scope: DomainScope) => Promise<T>,
+  options: {
+    unknownMessage: string;
+    signal?: AbortSignal;
+    assertCurrent?: () => void;
+    createAdmission?: SqliteWorkerAdmissionFactory;
+    mutation: { observeTransaction(): void; settle(unknown: boolean): void };
+    onSettlement?: (kind: SqliteWorkerOperationSettlement["kind"]) => void;
+    recover: (
+      receipt: NonNullable<ReturnType<typeof readWorktreeRegistryWorkerReceipt>>,
+    ) => { value: T } | undefined;
+  },
+): Promise<T> {
+  let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
+  let admission: SqliteWorkerOperationAdmission | undefined;
+  let result: { value: T } | { error: unknown };
+  try {
+    const { runOpenClawStateWorkerOperation } =
+      await import("../../state/openclaw-state-worker-store.js");
+    result = {
+      value: await runOpenClawStateWorkerOperation(context, execute, {
+        signal: options.signal,
+        assertCurrent: options.assertCurrent,
+        createAdmission: withWorktreeRegistryPublication((operation) => {
+          settled = operation.settled;
+          const owner = options.createAdmission?.(operation) ?? {
+            nativeLocations: [context.admission.databasePath],
+            admission: createSqliteWorkerOperationAdmission((_request, grant) => {
+              context.admission.assertCurrent();
+              options.assertCurrent?.();
+              grant();
+            }),
+          };
+          admission = owner.admission;
+          admission.observeRequests((request) => {
+            if (request.stage === "transaction") {
+              options.mutation.observeTransaction();
+            }
+          });
+          return owner;
+        }, context),
+      }),
+    };
+  } catch (error) {
+    result = { error };
+  }
+  const outcome = await settled;
+  options.mutation.settle(outcome?.kind === "unknown");
+  options.onSettlement?.(outcome?.kind ?? "not-entered");
+  if (outcome?.kind === "unknown") {
+    throw Object.assign(new SqliteWorkerError(options.unknownMessage, "outcome-unknown"), {
+      cause: ("error" in result ? result.error : undefined) ?? outcome.error,
+    });
+  }
+  if ("value" in result) {
+    return result.value;
+  }
+  const receipt = readWorktreeRegistryWorkerReceipt(admission?.committed?.facts);
+  const recovered = outcome?.kind === "completed" && receipt ? options.recover(receipt) : undefined;
+  if (recovered) {
+    return recovered.value;
+  }
+  throw result.error;
+}
 
 type RunEndCommands = Pick<
   OpenClawStateWorkerOperations,
@@ -167,71 +237,24 @@ export function runWorktreeRunEndCommand(
     ) {
       throw new Error("Worktree settlement lease set belongs to another database");
     }
-    const execute = async (leases?: LeaseSetAdmission) => {
-      let admission: SqliteWorkerOperationAdmission | undefined;
-      let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
-      let failure: { error: unknown } | undefined;
-      try {
-        const { runOpenClawStateWorkerOperation } =
-          await import("../../state/openclaw-state-worker-store.js");
-        await runOpenClawStateWorkerOperation(
-          leaseSet?.context ?? context,
-          (scope) =>
-            scope.execute({
-              type: captured.type,
-              input: { ...captured.input, predicates, leases: leases?.identities },
-            }),
-          {
-            signal: authority.signal,
-            assertCurrent: leases?.assertCurrent ?? assertCurrent,
-            createAdmission: withWorktreeRegistryPublication((operation) => {
-              settled = operation.settled;
-              const result = leases
-                ? leases.createAdmission(operation)
-                : {
-                    nativeLocations: [context.admission.databasePath],
-                    admission: createSqliteWorkerOperationAdmission((_request, grant) => {
-                      context.admission.assertCurrent();
-                      assertCurrent?.();
-                      grant();
-                    }),
-                  };
-              admission = result.admission;
-              admission.observeRequests((request) => {
-                if (request.stage === "transaction") {
-                  mutation.observeTransaction();
-                }
-              });
-              return result;
-            }, context),
-          },
-        );
-      } catch (error) {
-        failure = { error };
-      }
-      const outcome = await settled;
-      mutation.settle(outcome?.kind === "unknown");
-      if (outcome?.kind === "unknown") {
-        throw Object.assign(
-          new SqliteWorkerError(
-            "Worktree settlement outcome is unknown; recovery custody retained",
-            "outcome-unknown",
-          ),
-          { cause: failure?.error ?? outcome.error },
-        );
-      }
-      // The native receipt acknowledges this exact write without replaying a lost reply.
-      if (
-        failure &&
-        !(
-          outcome?.kind === "completed" &&
-          readWorktreeRegistryWorkerReceipt(admission?.committed?.facts)?.receipt ===
-            captured.input.receipt
-        )
-      ) {
-        throw failure.error;
-      }
-    };
+    const execute = (leases?: LeaseSetAdmission) =>
+      runWorktreeRegistryCommand(
+        leaseSet?.context ?? context,
+        (scope) =>
+          scope.execute({
+            type: captured.type,
+            input: { ...captured.input, predicates, leases: leases?.identities },
+          }),
+        {
+          signal: authority.signal,
+          assertCurrent: leases?.assertCurrent ?? assertCurrent,
+          createAdmission: leases?.createAdmission,
+          mutation,
+          unknownMessage: "Worktree settlement outcome is unknown; recovery custody retained",
+          recover: (receipt) =>
+            receipt.receipt === captured.input.receipt ? { value: undefined } : undefined,
+        },
+      );
     try {
       await (leaseSet
         ? withOpenClawStateLeasesWorkerAdmission(leaseSet.leases, leaseSet.context, execute, {

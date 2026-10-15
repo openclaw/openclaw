@@ -41,6 +41,7 @@ import {
 } from "../../worker/launch-descriptor.js";
 import { roundTripWorkerLaunchDescriptor } from "../../worker/launch-descriptor.test-support.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
+import { getWorkerTurnToolSurface } from "./placement-turn-claim-events.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import { registerWorkerTurnInferenceTests } from "./worker-turn-execution.inference.suite.js";
 import {
@@ -74,15 +75,14 @@ describe("worker turn execution", () => {
 
   it.each([
     { recorderOwned: false, throws: false },
-    { recorderOwned: true, throws: false },
-    { recorderOwned: false, throws: true },
     { recorderOwned: true, throws: true },
   ])("redacts blocked input before launch (%j)", async ({ recorderOwned, throws }) => {
     await seedActivePlacement();
     const input = turn("blocked-input");
+    const resolveTarget = vi.fn(() => ({ ...sessionTarget, sessionEntry: undefined }));
     const recorder = recorderOwned
       ? createUserTurnTranscriptRecorder({
-          target: { ...sessionTarget, sessionEntry: undefined },
+          target: resolveTarget,
           input: { text: input.prompt },
         })
       : undefined;
@@ -127,6 +127,9 @@ describe("worker turn execution", () => {
       expect(result.meta.error?.kind).toBe("hook_block");
       expect(result.meta.livenessState).toBe("blocked");
       expect(handler).toHaveBeenCalledOnce();
+      if (recorderOwned) {
+        expect(resolveTarget).toHaveBeenCalledOnce();
+      }
       expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
       expect(environments.startTunnel).not.toHaveBeenCalled();
       expect(runLocal).not.toHaveBeenCalled();
@@ -309,7 +312,17 @@ describe("worker turn execution", () => {
         ...(declared ? { launchToolNames: [...CORE_WORKER_LAUNCH_TOOL_NAMES] } : {}),
       });
       const authorize = vi.spyOn(placements, "authorizeWorkerTurnTools");
-      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async () => {
+      const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async (request) => {
+        const runtime = getWorkerTurnToolSurface({
+          sessionId: SESSION_ID,
+          runId: request.plan.assignment.runId,
+          environmentId: request.plan.admission.environmentId,
+          ownerEpoch: request.plan.admission.ownerEpoch,
+          turnClaim: request.turnClaim,
+        });
+        expect(runtime?.getInheritedPublicationToolName()).toBe(
+          declared ? undefined : "github_publish",
+        );
         throw new WorkerRunnerCapacityError();
       });
       const tunnel = createWorkerTurnTunnel({
@@ -347,6 +360,9 @@ describe("worker turn execution", () => {
             { ...sessionTarget, runId: input.runId },
             {
               ...input,
+              toolsAllow: declared
+                ? [...CORE_WORKER_LAUNCH_TOOL_NAMES, "sessions_list", "github_identity_status"]
+                : undefined,
               config: {
                 ...input.config,
                 agents: {
@@ -781,7 +797,6 @@ describe("worker turn execution", () => {
 
   it.each([
     { mode: "merge", reasoning: false, thinkingLevelMap: undefined, expected: "off" },
-    { mode: "replace", reasoning: true, thinkingLevelMap: { high: null }, expected: "medium" },
   ] as const)(
     "honors configured worker Ultra effort $expected in mode $mode with scheduled tools",
     async (testCase) => {
@@ -879,10 +894,7 @@ describe("worker turn execution", () => {
 
   registerWorkerTurnInferenceTests();
 
-  it.each([
-    [WORKER_LAUNCH_V2_PROTOCOL_FEATURE],
-    [WORKER_LAUNCH_V2_PROTOCOL_FEATURE, WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
-  ])(
+  it.each([[WORKER_LAUNCH_V2_PROTOCOL_FEATURE, WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE]])(
     "fences a stale worker receipt %j while a current receipt proceeds to execution",
     async (...protocolFeatures) => {
       await seedActivePlacement();

@@ -12,13 +12,12 @@ import {
   readRepositoryGitHubPublicationBranchInDatabase,
   readRepositoryGitHubPublicationInDatabase,
 } from "../gateway/github-repository-publication-store.worker.js";
-import type { PublicationReadOperations } from "./github-publication-worker.types.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { WorkerOperationHandlers } from "./worker-operation-registry.js";
 
 export const publicationReadOperations = {
   "githubPublications.sharedRead": (
-    input: PublicationReadOperations["githubPublications.sharedRead"]["input"],
+    input: Parameters<typeof readGitHubPublicationRequest>[1],
     { open },
   ) => {
     const { db } = open();
@@ -30,14 +29,17 @@ export const publicationReadOperations = {
     };
   },
   "githubPublications.sharedList": (
-    input: PublicationReadOperations["githubPublications.sharedList"]["input"],
+    input: Parameters<typeof listSharedGitHubPublicationsInDatabase>[1],
     { open },
   ) => ({
     type: "githubPublications.sharedList" as const,
     rows: listSharedGitHubPublicationsInDatabase(open().db, input),
   }),
   "githubPublications.claimRequests": (
-    input: PublicationReadOperations["githubPublications.claimRequests"]["input"],
+    input: {
+      claim: Parameters<typeof listGitHubPublicationsForClaimInDatabase>[1];
+      pendingOnly?: boolean;
+    },
     { open },
   ) => ({
     type: "githubPublications.claimRequests" as const,

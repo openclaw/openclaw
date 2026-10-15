@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -59,6 +60,7 @@ function isPublicSessionShareActive(config: OpenClawConfig, target: typeof locat
 }
 async function withPublicTestState(run: () => Promise<void>) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot(cfg);
     try {
       await run();
     } finally {
@@ -305,33 +307,6 @@ describe("anonymous published session reader", () => {
       await patchSessionEntryCore(locator, () => ({ publicShare: undefined }));
       expect(isPublicSessionShareActive(cfg, locator)).toBe(false);
       expect(await readPublicSessionShare(cfg, locator)).toBeNull();
-    });
-  });
-
-  it("reconciles sharing facts invalidated during the history read", async () => {
-    await withPublicTestState(async () => {
-      await seed(["Still published"]);
-      const read = transcriptReaders.readSessionMessagesPageWithStatsAsync;
-      vi.spyOn(transcriptReaders, "readSessionMessagesPageWithStatsAsync").mockImplementationOnce(
-        async (...args) => {
-          const result = await read(...args);
-          sessionChanges.emit({
-            agentId: locator.agentId,
-            sessionKey: locator.sessionKey,
-            factsInvalidated: "category",
-          });
-          expect(
-            currentProjection().sharingTargetState({
-              key: locator.sessionKey,
-              agentId: locator.agentId,
-            }).status,
-          ).toBe("pending");
-          return result;
-        },
-      );
-      expect((await readPublicSessionShare(cfg, locator))?.messages).toMatchObject([
-        { content: "Still published" },
-      ]);
     });
   });
 

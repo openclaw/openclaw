@@ -14,6 +14,8 @@ export type GatewayInstanceAgentDispatchOptions = {
   /** Exact source custody to re-admit; the instance reads its private durable record itself. */
   restartRecoveryOperatorTarget?: import("./operator-run-recovery.js").OperatorRecoveryTarget;
   assertAdmissionCurrent?: () => void;
+  /** Refresh source facts immediately before dispatch; the accepted turn owns execution. */
+  prepareDispatchCurrent?: () => Promise<void>;
   allowModelOverride?: boolean;
   allowSyntheticModelOverride?: boolean;
   allowSyntheticCronRunContinuation?: boolean;
@@ -36,7 +38,7 @@ export type GatewayInstanceAgentDispatchOptions = {
 };
 
 export type GatewayApprovalEventPublisher = {
-  /** @deprecated Use publishRequestedAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use publishRequestedAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
   publishRequested: (kind: ChannelApprovalKind, request: unknown) => number;
   publishRequestedAsync?: (kind: ChannelApprovalKind, request: unknown) => Promise<number>;
   publishResolved: (kind: ChannelApprovalKind, resolved: unknown) => void;

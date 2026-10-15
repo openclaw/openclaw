@@ -1,4 +1,8 @@
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../../infra/sqlite-number.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -29,62 +33,106 @@ export function captureSecretStoreExpiryCutoffs(): SecretStoreExpiryCutoffs {
   };
 }
 
+export type SecretStoreExpiryResult = {
+  removed: number;
+  nextExpiryAtMs: number | null;
+};
+
 export function purgeExpiredSecretStoreEntriesInDatabase(
   cutoffs: SecretStoreExpiryCutoffs,
   databaseOptions?: OpenClawStateDatabaseOptions,
-): number {
+): SecretStoreExpiryResult {
   const state = openOpenClawStateDatabase(databaseOptions);
+  const sqlite = state.db;
+  const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
   const { threshold, handoffThreshold, deviceThreshold } = cutoffs;
-  return withMissingSecretStoreFallback(() => {
-    return runOpenClawStateWriteTransaction(
-      ({ db: sqlite }) => {
-        const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
-        const deleted = executeSqliteQuerySync(
+  return withMissingSecretStoreFallback(
+    () => {
+      const readExpiry = () => {
+        const deleted = executeSqliteQueryTakeFirstSync(
           sqlite,
           db
-            .deleteFrom("secret_store_entries")
-            .where("deleted_at_ms", "is not", null)
-            .where("deleted_at_ms", "<", threshold),
+            .selectFrom("secret_store_entries")
+            .select((eb) => eb.fn.min("deleted_at_ms").as("deletedAtMs")),
         );
-        const hiddenRows = executeSqliteQuerySync(
+        const deletedAtMs = normalizeSqliteNumber(deleted?.deletedAtMs ?? null);
+        let nextExpiryAtMs =
+          deletedAtMs === undefined ? null : deletedAtMs + SECRET_STORE_RETENTION_MS + 1;
+        const hidden = executeSqliteQuerySync(
           sqlite,
           db
             .selectFrom("secret_store_entries")
             .select(["scope_kind", "scope_id", "name", "created_at_ms"])
-            // Materialize only transient prefixes; the classifier below still owns exact names.
+            // Materialize only transient metadata; retained secret values stay in the database.
             .where((eb) =>
               eb.or([
                 eb("name", ">=", "github-device-").and("name", "<", "github-device."),
                 eb("name", ">=", "github-setup-").and("name", "<", "github-setup."),
               ]),
             )
-            .where("deleted_at_ms", "is", null)
-            .where("created_at_ms", "<=", Math.max(handoffThreshold, deviceThreshold)),
-        ).rows.filter((row) => {
+            .where("deleted_at_ms", "is", null),
+        ).rows;
+        const expiredHidden = hidden.filter((row) => {
           const kind = classifyHiddenGitHubStoreName(row.name);
           const createdAtMs = normalizeSqliteNumber(row.created_at_ms);
+          if (createdAtMs === undefined || (kind !== "setup" && kind !== "device")) {
+            return false;
+          }
+          const expiry =
+            createdAtMs +
+            (kind === "setup"
+              ? GITHUB_SETUP_HANDOFF_MAX_AGE_MS + 1
+              : GITHUB_DEVICE_STORE_MAX_AGE_MS);
+          nextExpiryAtMs = Math.min(nextExpiryAtMs ?? expiry, expiry);
           return (
-            createdAtMs !== undefined &&
-            ((kind === "setup" && createdAtMs < handoffThreshold) ||
-              (kind === "device" && createdAtMs <= deviceThreshold))
+            (kind === "setup" && createdAtMs < handoffThreshold) ||
+            (kind === "device" && createdAtMs <= deviceThreshold)
           );
         });
-        let expiredHidden = 0;
-        for (const row of hiddenRows) {
-          const result = executeSqliteQuerySync(
-            sqlite,
-            db
-              .deleteFrom("secret_store_entries")
-              .where("scope_kind", "=", row.scope_kind)
-              .where("scope_id", "=", row.scope_id)
-              .where("name", "=", row.name),
-          );
-          expiredHidden += Number(result.numAffectedRows ?? 0n);
-        }
-        return Number(deleted.numAffectedRows ?? 0n) + expiredHidden;
-      },
-      { ...databaseOptions, database: state },
-      { operationLabel: "secrets.store.purge" },
-    );
-  }, 0);
+        return { deletedAtMs, expiredHidden, nextExpiryAtMs };
+      };
+      let expiry = readExpiry();
+      let removed = 0;
+      if (
+        (expiry.deletedAtMs !== undefined && expiry.deletedAtMs < threshold) ||
+        expiry.expiredHidden.length > 0
+      ) {
+        removed = runOpenClawStateWriteTransaction(
+          () => {
+            let count = 0;
+            if (expiry.deletedAtMs !== undefined && expiry.deletedAtMs < threshold) {
+              const deleted = executeSqliteQuerySync(
+                sqlite,
+                db.deleteFrom("secret_store_entries").where("deleted_at_ms", "<", threshold),
+              );
+              count += Number(deleted.numAffectedRows ?? 0n);
+            }
+            for (const row of expiry.expiredHidden) {
+              const deleted = executeSqliteQuerySync(
+                sqlite,
+                db
+                  .deleteFrom("secret_store_entries")
+                  .where("scope_kind", "=", row.scope_kind)
+                  .where("scope_id", "=", row.scope_id)
+                  .where("name", "=", row.name)
+                  // A handoff refreshed while acquiring the writer retains its new lifetime.
+                  .where("created_at_ms", "=", row.created_at_ms)
+                  .where("deleted_at_ms", "is", null),
+              );
+              count += Number(deleted.numAffectedRows ?? 0n);
+            }
+            return count;
+          },
+          { ...databaseOptions, database: state },
+          { operationLabel: "secrets.store.purge" },
+        );
+        expiry = readExpiry();
+      }
+      return {
+        removed,
+        nextExpiryAtMs: expiry.nextExpiryAtMs,
+      };
+    },
+    { removed: 0, nextExpiryAtMs: null },
+  );
 }

@@ -1,4 +1,3 @@
-// Control UI E2E covers the real session-dashboard provider and transcript bridge.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
@@ -322,7 +321,7 @@ suite.define(() => {
       .poll(() => widgetActions.evaluate((element) => getComputedStyle(element).opacity))
       .toBe("1");
     await page.keyboard.press("Enter");
-    await expect.poll(() => preview.locator("wa-dropdown[open]").count()).toBe(1);
+    await expect.poll(() => preview.locator(".oc-menu:popover-open").count()).toBe(1);
     await page.keyboard.press("Escape");
     for (const width of [796, 794, 390]) {
       await page.setViewportSize({ width, height: 900 });
@@ -523,8 +522,8 @@ suite.define(() => {
     await page.mouse.move(0, 0);
     await pin.focus();
     await pin.hover();
-    const hint = page.locator("wa-tooltip[open]");
-    await hint.locator('[part="body"]').waitFor({ state: "visible" });
+    const hint = page.locator(".tooltip-surface[popover]:popover-open");
+    await hint.locator(".tooltip-content").waitFor({ state: "visible" });
     expect(await hint.textContent()).toContain("Could not pin to dashboard. Try again.");
     expect(await page.getByText("internal path detail", { exact: false }).count()).toBe(0);
     if (recordProof) {

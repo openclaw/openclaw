@@ -405,13 +405,17 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("classifies a direct HTTP rejection as a provider failure without logging its text", async () => {
+  it("logs HTTP rejection details separately from transport failure metadata", async () => {
     const logWarn = vi.fn();
     configureAiTransportHost({ logWarn });
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
       new Response(
         JSON.stringify({
-          error: { message: "hostile prompt echo in a 400 body", code: "invalid_request" },
+          error: {
+            message: "hostile prompt echo in a 400 body",
+            code: "invalid_request",
+            type: "invalid_request_error",
+          },
         }),
         { status: 400, statusText: "Bad Request" },
       ),
@@ -426,8 +430,26 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     }).result();
 
     expect(result.stopReason).toBe("error");
-    expect(logWarn).toHaveBeenCalledTimes(1);
-    const logged = logWarn.mock.calls[0]?.[2];
+    expect(result.errorType).toBe("invalid_request_error");
+    expect(logWarn).toHaveBeenCalledWith(
+      "provider-error",
+      "Model request failed",
+      expect.objectContaining({
+        status: 400,
+        code: "invalid_request",
+        type: "invalid_request_error",
+        body: {
+          message: "hostile prompt echo in a 400 body",
+          code: "invalid_request",
+          type: "invalid_request_error",
+        },
+      }),
+    );
+    const transportWarnings = logWarn.mock.calls.filter(
+      ([category]) => category === "openai-transport",
+    );
+    expect(transportWarnings).toHaveLength(1);
+    const logged = transportWarnings[0]?.[2];
     expect(logged).toMatchObject({ stopReason: "error", failureKind: "provider-failure" });
     const serialized = JSON.stringify(logged);
     for (const hostile of ["hostile", "invalid_request", "400 body"]) {
@@ -511,10 +533,16 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
         },
       },
     ]);
-    // Provider message text reaches the stream consumer only; the transport
-    // log keeps timing and classification and never the message body.
-    expect(logWarn).toHaveBeenCalledTimes(1);
-    const logged = logWarn.mock.calls[0]?.[2];
+    expect(logWarn).toHaveBeenCalledWith(
+      "provider-error",
+      "Model request failed",
+      expect.objectContaining({ responseId: "resp_failed", body: failedResponse.response.error }),
+    );
+    const transportWarnings = logWarn.mock.calls.filter(
+      ([category]) => category === "openai-transport",
+    );
+    expect(transportWarnings).toHaveLength(1);
+    const logged = transportWarnings[0]?.[2];
     expect(logged).toEqual({
       api: "openai-chatgpt-responses",
       elapsedMs: expect.any(Number),

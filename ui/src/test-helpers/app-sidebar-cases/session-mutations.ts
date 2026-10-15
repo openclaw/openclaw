@@ -3,6 +3,7 @@ import type { ControlUiAction } from "../../../../src/plugin-sdk/control-ui.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import "../../lib/toast-host.ts";
 import { publishSidebarSessionList } from "../../components/session-data-controller-events.ts";
 import {
   pauseSessionPlacementRecovery,
@@ -19,6 +20,7 @@ import {
 } from "../app-sidebar.ts";
 import { registerSessionPluginAction } from "../control-ui-plugin-action.ts";
 import { gatewayHelloForMethods } from "../gateway-methods.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import {
   answerConfirmDialog,
   installDialogPolyfill,
@@ -196,7 +198,7 @@ describe("AppSidebar session mutation feedback", () => {
     await sidebar.updateComplete;
     const menu = await openMenu();
     publish([replacement]);
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     await menu.updateComplete;
     expect(menu.querySelector(actionSelector)).toBeNull();
   });
@@ -323,7 +325,9 @@ describe("AppSidebar session mutation feedback", () => {
     menu.querySelector("wa-dropdown")?.dispatchEvent(
       new CustomEvent("wa-select", {
         bubbles: true,
-        detail: { item: { value: "assign-owner:human:profile-bob" } },
+        detail: {
+          item: menu.querySelector('wa-dropdown-item[value="assign-owner:human:profile-bob"]')!,
+        },
       }),
     );
 
@@ -349,7 +353,7 @@ describe("AppSidebar session mutation feedback", () => {
     selfMenu.querySelector("wa-dropdown")?.dispatchEvent(
       new CustomEvent("wa-select", {
         bubbles: true,
-        detail: { item: { value: selfItem?.getAttribute("value") } },
+        detail: { item: selfItem },
       }),
     );
 
@@ -492,7 +496,7 @@ describe("AppSidebar session mutation feedback", () => {
     expect(error?.closest(".sidebar-recent-sessions")).toBeNull();
 
     error?.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     expect(sidebar.querySelector("[data-sidebar-session-error]")).toBeNull();
   });
 
