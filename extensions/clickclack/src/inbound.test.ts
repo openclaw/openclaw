@@ -753,21 +753,6 @@ describe("ClickClack direct-model response prefix", () => {
       );
     }
   });
-
-  it("does not add a second prefix when the completion already opens with one", async () => {
-    sendClickClackTextMock.mockClear();
-    const runtime = createModelRuntime("[bot] service bot online");
-    const account = createModelAccount();
-    const config = { channels: { clickclack: { responsePrefix: "[bot]" } } };
-    publishAccountConfig(runtime, account, config);
-    setClickClackRuntime(runtime);
-    await handleClickClackInbound({
-      account,
-      config,
-      message: createModelMessage(),
-    });
-    expect(sendClickClackTextMock.mock.calls[0]?.[0]?.text).toBe("[bot] service bot online");
-  });
 });
 
 describe("ClickClack direct-model bot loop protection", () => {

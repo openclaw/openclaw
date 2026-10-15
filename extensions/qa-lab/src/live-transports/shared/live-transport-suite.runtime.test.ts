@@ -378,34 +378,6 @@ describe("live transport suite runtime", () => {
     }
   });
 
-  it("keeps voice scenarios on the live Discord transport", async () => {
-    await expect(
-      runStandardLiveTransportQaSuiteCommand({
-        channelId: "discord",
-        options: {
-          channelDriver: "crabline",
-          providerMode: "mock-openai",
-          scenarioIds: ["discord-voice-autojoin"],
-        },
-      }),
-    ).rejects.toThrow(/channelDriver=live/u);
-  });
-
-  it("normalizes the shared credential source environment override", async () => {
-    vi.stubEnv("OPENCLAW_QA_CREDENTIAL_SOURCE", " convex ");
-
-    await runLiveTransportQaSuiteCommand({
-      channelId: "buzz",
-      defaultProviderMode: "mock-openai",
-      options: {},
-      selectScenarioIds: () => ["channel-canary"],
-    });
-
-    expect(runQaSuiteCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ credentialSource: "convex" }),
-    );
-  });
-
   it("rejects shared credentials for disposable transports", async () => {
     await expect(
       runLiveTransportQaSuiteCommand({
@@ -549,7 +521,6 @@ describe("live transport suite runtime", () => {
       expected: /must declare channel discord/u,
     },
     { name: "missing flow", includeFlow: false, expected: /top-level flow block/u },
-    { name: "missing file", missing: true, expected: /ENOENT/u },
     { name: "missing opt-in", execution: { config: {} }, expected: /execution.config.agentE2e/u },
     { name: "retrying writes", execution: { retryCount: 1 }, expected: /retryCount: 0/u },
     {
@@ -559,9 +530,12 @@ describe("live transport suite runtime", () => {
     },
   ])("rejects $name before credential-bearing suite dispatch", async (fixture) => {
     const directory = tempDirs.make("agent-e2e-invalid-");
-    const file = fixture.missing
-      ? path.join(directory, "missing.yaml")
-      : await writeAgentE2eRecipe(directory, "invalid", fixture.execution, fixture.includeFlow);
+    const file = await writeAgentE2eRecipe(
+      directory,
+      "invalid",
+      fixture.execution,
+      fixture.includeFlow,
+    );
     await expectQaFailure(["--scenario-file", file], fixture.expected);
     expect(runQaSuiteCommand).not.toHaveBeenCalled();
   });

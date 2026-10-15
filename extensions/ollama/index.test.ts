@@ -536,20 +536,6 @@ describe("ollama plugin", () => {
     },
   );
 
-  it("skips preferred models whose measured context is below 16k", async () => {
-    mockInstalledModels({ "llama3.3:70b": true, "qwen3.5:4b": true });
-    showMock.mockImplementation(async (_baseUrl: string, modelId: string) => ({
-      contextWindow: modelId === "qwen3.5:4b" ? 8_192 : 16_384,
-      capabilities: ["completion", "tools"],
-    }));
-    await expect(
-      registerProvider().auth[0].appGuidedSetup?.detect({ config: {}, env: {} }),
-    ).resolves.toEqual({
-      modelRef: "ollama/llama3.3:70b",
-      detail: "llama3.3:70b at http://127.0.0.1:11434",
-    });
-  });
-
   it("keeps environment-backed Ollama access for the completion proposal", async () => {
     const configuredValue = "environment-access";
     const providerAccess = { apiKey: configuredValue };

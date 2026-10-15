@@ -1,6 +1,5 @@
 // Regression: input_file callers declare their MIME; a cosmetic filename must
 // not reroute classification past an operator-configured allowlist.
-import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classify";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { describe, expect, it } from "vitest";
 import {
