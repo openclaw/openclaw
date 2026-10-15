@@ -58,6 +58,7 @@ describe("Testbox lease freshness", () => {
         "scripts/testbox-lease-freshness.mts",
         ".github/actions/prepare-testbox-shell/action.yml",
         ".github/actions/prepare-testbox-shell/preserve-command-cwd.py",
+        ".github/actions/setup-android-toolchain/action.yml",
         ...(workflow ? [workflow] : []),
       ];
       for (const owner of owners) {

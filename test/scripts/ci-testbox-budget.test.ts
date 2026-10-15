@@ -145,6 +145,7 @@ describe("Testbox spending admission", () => {
 
   it.each([
     ["ci-check-testbox.yml", "check", "check"],
+    ["ci-android-focused-testbox.yml", "check", "check-focused"],
     ["ci-check-high-memory-testbox.yml", "check", "check-memory"],
     ["ci-check-arm-testbox.yml", "check-arm", "arm"],
     ["ci-build-artifacts-testbox.yml", "build-artifacts", "build"],
