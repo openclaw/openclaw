@@ -5090,5 +5090,29 @@
   {
     "source": "Standalone builds",
     "target": "独立可执行文件构建"
+  },
+  {
+    "source": "Speechify",
+    "target": "Speechify"
+  },
+  {
+    "source": "speechify",
+    "target": "speechify"
+  },
+  {
+    "source": "Speechify provider",
+    "target": "Speechify provider"
+  },
+  {
+    "source": "Speechify plugin reference",
+    "target": "Speechify 插件参考"
+  },
+  {
+    "source": "Text-to-Speech",
+    "target": "文本转语音"
+  },
+  {
+    "source": "Media Overview",
+    "target": "媒体概览"
   }
 ]
