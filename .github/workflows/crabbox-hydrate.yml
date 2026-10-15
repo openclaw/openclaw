@@ -256,6 +256,22 @@ jobs:
           PNPM
           sudo chmod 0755 /usr/local/bin/pnpm
 
+      - &crabbox_prepare_control_ui_e2e_step
+        name: Prepare Control UI E2E environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          # SSH umask 002 leaves lease ancestry writable by the group, which private artifacts reject.
+          directory="$(pwd -P)"
+          while [ "$directory" != / ] && [ ! -L "$directory" ] && [ -O "$directory" ]; do
+            chmod go-w "$directory"
+            directory="$(dirname "$directory")"
+          done
+          mkdir -p .artifacts
+          chmod go-w .artifacts
+          node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium
+          pnpm --dir ui exec playwright install --with-deps webkit
+
       - &crabbox_ensure_docker_step
         name: Ensure Docker is running
         shell: bash
@@ -315,15 +331,15 @@ jobs:
             case "$arch" in
               aarch64|arm64)
                 buildx_arch=arm64
-                buildx_sha256=e5cc9fe3bbff5cbc91230981f7860e06076110730a2db997082652199042a1f2
+                buildx_sha256=38e890e1a162bfdbf32fbe91404991dc4fc28e55b0de901b34374a061bab4d2c
                 ;;
               x86_64|amd64)
                 buildx_arch=amd64
-                buildx_sha256=9447199cdb435f25880548343c128a4b6650e8891ee598905d8d29d39a8e359b
+                buildx_sha256=4fe4cc38adf48169132749b6ca22a990928db0118e3407584ee553723115d287
                 ;;
               *) echo "unsupported buildx arch: $arch" >&2; exit 2 ;;
             esac
-            buildx_version="v0.37.1"
+            buildx_version="v0.38.0"
             mkdir -p "$HOME/.docker/cli-plugins"
             curl --fail --show-error --location \
               --connect-timeout "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}" \
@@ -385,6 +401,7 @@ jobs:
             for key in CI GITHUB_ACTIONS GITHUB_WORKSPACE GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_NUMBER GITHUB_RUN_ATTEMPT GITHUB_REF GITHUB_REF_NAME GITHUB_SHA GITHUB_EVENT_NAME GITHUB_ACTOR RUNNER_OS RUNNER_ARCH RUNNER_TEMP RUNNER_TOOL_CACHE XDG_CACHE_HOME COREPACK_HOME NODE_BIN OPENCLAW_CRABBOX_DOCKER_AVAILABLE PNPM_HOME PNPM_CONFIG_CHILD_CONCURRENCY PNPM_CONFIG_NETWORK_CONCURRENCY PNPM_CONFIG_PACKAGE_IMPORT_METHOD PNPM_CONFIG_STORE_DIR PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN PATH; do
               write_export "$key"
             done
+            echo 'umask go-w'
           } > "${env_file}.tmp"
           mv "${env_file}.tmp" "$env_file"
           {
@@ -440,7 +457,7 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
 
@@ -714,6 +731,7 @@ jobs:
           PNPM
           sudo chmod 0755 /usr/local/bin/pnpm
 
+      - *crabbox_prepare_control_ui_e2e_step
       - *crabbox_ensure_docker_step
       - name: Ensure SSH is available
         shell: bash
@@ -807,6 +825,7 @@ jobs:
             for key in CI GITHUB_ACTIONS GITHUB_WORKSPACE GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_NUMBER GITHUB_RUN_ATTEMPT GITHUB_REF GITHUB_REF_NAME GITHUB_SHA GITHUB_EVENT_NAME GITHUB_ACTOR RUNNER_OS RUNNER_ARCH RUNNER_TEMP RUNNER_TOOL_CACHE COREPACK_HOME NODE_BIN OPENCLAW_CRABBOX_DOCKER_AVAILABLE PNPM_HOME PNPM_CONFIG_CHILD_CONCURRENCY PNPM_CONFIG_NETWORK_CONCURRENCY PNPM_CONFIG_PACKAGE_IMPORT_METHOD PNPM_CONFIG_STORE_DIR PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN PATH; do
               write_export "$key"
             done
+            echo 'umask go-w'
           } > "${env_file}.tmp"
           mv "${env_file}.tmp" "$env_file"
           {

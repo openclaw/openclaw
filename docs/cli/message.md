@@ -160,7 +160,7 @@ openclaw message send --channel discord \
   `chart`, `table`, `buttons`, and `select` blocks, rendered per channel
   capability. See [Message Presentation](/plugins/message-presentation).
 - `--delivery <json>`: generic delivery preferences, for example `{"pin":
-true}`. `--pin` is shorthand for pinned delivery when the channel supports
+  true}`. `--pin` is shorthand for pinned delivery when the channel supports
   it.
 - `--reply-to <id>`, `--thread-id <id>` (Telegram forum topic; Slack thread
   timestamp, same field as `--reply-to`).
@@ -174,6 +174,10 @@ When a send is suppressed by a message hook, fails, or only partially succeeds,
 the command explains the outcome and exits nonzero. Partial delivery keeps any
 confirmed message ID. JSON failures include `ok: false`, `deliveryStatus`, and
 `error`; successful JSON responses retain their existing shape.
+
+Session transcript mirrors show attachment filenames while retaining their media
+references. Different attachments with the same filename and caption remain
+distinct; repeating the same text and media at the transcript tail is deduplicated.
 
 ```bash
 openclaw message send --channel discord \

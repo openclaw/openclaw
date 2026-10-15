@@ -4,6 +4,7 @@ import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -199,7 +200,7 @@ export function enqueueSessionEventForHost(
   let deliveryAmbiguous = false;
   let deliverySuppressionReason: NormalizeReplySkipReason | undefined;
   let summary: string | undefined;
-  let failure: string | undefined;
+  let failure: Error | string | undefined;
   let settlement: "settling" | "finished" | undefined;
   let settings = options.expectedTarget?.settings;
   let settingsAdmitted = false;
@@ -290,13 +291,13 @@ export function enqueueSessionEventForHost(
           agentId,
           sessionKey,
           eventId: occurrence.id,
-          error: failure,
+          error: String(failure),
         });
       }
       if (!accepted) {
         acceptance.resolve({
           ok: false,
-          error: failure ?? "Session event was cancelled before acceptance",
+          error: failure ? String(failure) : "Session event was cancelled before acceptance",
         });
       }
       signal.removeEventListener("abort", onAbort);
@@ -318,7 +319,8 @@ export function enqueueSessionEventForHost(
           operation?.result?.kind === "aborted" &&
           operation.result.code === "aborted_for_supersession",
         summary,
-        ...(failure ? { error: failure } : {}),
+        ...(failure ? { error: String(failure) } : {}),
+        ...(failure instanceof SessionWorkStartError ? { retryable: failure.retryable } : {}),
       });
     };
     if (operation?.ownerSettlement) {
@@ -440,7 +442,7 @@ export function enqueueSessionEventForHost(
         dispatcherOptions: {
           deliver: (payload, info) => deliver(payload, info.kind),
           onError: (error) => {
-            failure = String(error);
+            failure = error instanceof Error ? error : String(error);
           },
           onSkip: (_payload, info) => {
             if (info.kind === "final") {
@@ -488,7 +490,7 @@ export function enqueueSessionEventForHost(
                 }
               : {}),
             onFailed: (error) => {
-              failure ??= String(error);
+              failure ??= error instanceof Error ? error : String(error);
             },
             onSuppressed: (reason) => {
               deliverySuppressionReason = reason === "silent" ? "silent" : undefined;
@@ -521,7 +523,7 @@ export function enqueueSessionEventForHost(
                 await deliver(payload, batch.completion.kind === "progress" ? "block" : "final");
               }
             } catch (error) {
-              failure = String(error);
+              failure = error instanceof Error ? error : String(error);
               throw error;
             }
           },
@@ -589,7 +591,7 @@ export function enqueueSessionEventForHost(
   )
     .catch((error: unknown) => {
       // Admission can reject before invoking the callback (for example on restart).
-      failure = String(error);
+      failure = error instanceof Error ? error : String(error);
       finish();
       return settled.then(() => undefined);
     })

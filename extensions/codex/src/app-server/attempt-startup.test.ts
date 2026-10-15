@@ -303,12 +303,6 @@ describe("startCodexAttemptThread", () => {
       method: "thread/start",
       stage: "thread-lifecycle",
       acquireBoundary: undefined,
-      loggerThrows: false,
-    },
-    {
-      method: "thread/start",
-      stage: "thread-lifecycle",
-      acquireBoundary: undefined,
       loggerThrows: true,
     },
   ])(

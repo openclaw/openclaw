@@ -78,6 +78,7 @@ it("shows interrupted accepted input to a continuation without replaying or cons
     expect(prepared.promptForModel).toBe("cont");
     for (const privateContext of [false, true]) {
       const cli = await prepareCliTurnPromptContext({
+        backendId: "fixture-cli",
         agentId: scope.agentId,
         sessionKey: scope.sessionKey,
         sessionTarget: { ...scope, storePath: database.path },

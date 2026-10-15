@@ -6,13 +6,15 @@ import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
 import { disposeQuestionPromptState } from "../../app/question-prompt.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
-import { ChatPane } from "./chat-pane-render.ts";
-import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
+import { ChatPaneRuntime } from "./chat-pane-render.ts";
+import { createGatewayBrowserClientFixture, createPaneTestHost } from "./chat-pane.test-support.ts";
 import { refreshChatMetadata, retireChatMetadataRequests } from "./chat-state-refresh.ts";
-import { renderChat, type ChatProps } from "./chat-view.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
+import { renderChat } from "./chat-view-render.test-support.ts";
+import type { ChatProps } from "./chat-view.tsx";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -57,7 +59,7 @@ function createRecoveringComposer(draft: string) {
   };
 }
 
-class SuggestionRecoveryPane extends ChatPane {
+class SuggestionRecoveryPane extends ChatPaneRuntime {
   chatProps: ChatProps | undefined;
 
   initialize({ state, context }: ReturnType<typeof createRefreshChatPane>) {
@@ -79,21 +81,26 @@ class SuggestionRecoveryPane extends ChatPane {
     return html``;
   }
 }
-customElements.define("openclaw-suggestion-recovery-test", SuggestionRecoveryPane);
 
 it.each([
-  { draft: "Keep this draft", control: false },
-  { draft: "/stop", control: true },
-  { draft: "/approve approval-123 allow-once", control: true },
+  { draft: "Keep this draft", control: false, cached: false },
+  { draft: "/stop", control: true, cached: false },
+  { draft: "Keep the cached reader in place", control: false, cached: true },
 ])(
   "holds early input until recovery is ready, preserving live controls: $draft",
-  ({ draft, control }) => {
+  ({ draft, control, cached }) => {
     const { state, container, draw, finishRecovery } = createRecoveringComposer(draft);
+    if (cached) {
+      state.currentSessionId = "cached-session";
+      state.chatMessages = [{ role: "assistant", content: "Cached reply", timestamp: 1 }];
+      state.chatLoading = false;
+    }
     try {
       const held = draw();
       expect(held.input.disabled).toBe(false);
       expect(held.input.value).toBe(draft);
       expect(held.send.disabled).toBe(!control);
+      expect(container.querySelector(".agent-chat__composer-status")).toBeNull();
       if (!control) {
         expect(held.send.getAttribute("aria-label")).toBe(
           "Finishing connection recovery. Try sending again when it is ready.",
@@ -111,7 +118,7 @@ it.each([
 
       finishRecovery();
       const ready = draw();
-      expect(state.chatLoading).toBe(true);
+      expect(state.chatLoading).toBe(!cached);
       expect(ready.input.value).toBe(draft);
       expect(ready.send.disabled).toBe(false);
       expect(ready.send.getAttribute("aria-busy")).toBe("false");
@@ -139,6 +146,22 @@ it("keeps ordinary input usable while the initial placement turn is pending", ()
     expect(send.disabled).toBe(false);
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(state.handleSendChat).toHaveBeenCalledOnce();
+  } finally {
+    render(nothing, container);
+  }
+});
+
+it("explains an unresolved initial turn while offline without blocking the outbox", () => {
+  const { state, container, draw } = createRecoveringComposer("Queue this follow-up");
+  state.hasPendingInitialTurn = () => true;
+  state.connected = false;
+  try {
+    const { input, send } = draw();
+    expect(container.querySelector(".agent-chat__composer-status-band")?.textContent).toBe(
+      "The initial message is unresolved. Reconnect if needed, then review it before sending another message.",
+    );
+    expect(input.disabled).toBe(false);
+    expect(send.disabled).toBe(false);
   } finally {
     render(nothing, container);
   }
@@ -184,7 +207,7 @@ it.each(["Keep this suggestion", "/stop"])(
     const fixture = createRecoveringComposer(draft);
     const { state, context, container } = fixture;
     state.sessionKey = "agent:main:suggestion-recovery";
-    const pane = new SuggestionRecoveryPane();
+    const pane = createPaneTestHost("openclaw-suggestion-recovery-test", SuggestionRecoveryPane);
     pane.initialize(fixture);
     const methods = context.gateway.snapshot.hello?.features?.methods;
     assert(methods);
@@ -288,7 +311,6 @@ it.each([
 
 it.each([
   { draft: "Hello", allowed: false, restricted: false },
-  { draft: "/models", allowed: true, restricted: false },
   { draft: "Hello", allowed: false, restricted: true },
   { draft: "/models", allowed: true, restricted: true },
 ])(
@@ -424,6 +446,9 @@ it.each([
     };
     try {
       const initial = draw();
+      await waitForSolid(() =>
+        expect(container.querySelector("[data-chat-model-select]")).not.toBeNull(),
+      );
       expect(state.chatModelCatalogInitialized).toBe(false);
       expect(initial.modelSetupRequired).toBe(false);
       expect(initial.modelRequiredReason).toBeUndefined();
@@ -559,6 +584,9 @@ describe("subagent composer", () => {
       try {
         pane.render();
         render(renderChat(pane.chatProps!), container);
+        pane.chatProps!.transcript.hostConnected();
+        pane.chatProps!.transcript.hostUpdated();
+        flush();
         expect(container.textContent).toContain("The workspace review is complete.");
         expect(container.querySelector("textarea")).toBeNull();
         expect(container.querySelector(".chat-reply-btn")).toBeNull();

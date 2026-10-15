@@ -15,10 +15,40 @@ import {
   interruptSessionWorkAdmissions,
   isCompetingSessionWorkAdmissionActive,
   isSessionWorkAdmissionActive,
+  observeSessionWorkAdmissionReleases,
   captureGatewaySessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
   startSessionWorkAdmissionInterruption,
 } from "./session-lifecycle-admission.js";
+
+it("notifies only the released scope when acquired identity protection shrinks", async () => {
+  const scope = "release-observer.sqlite";
+  const listener = vi.fn();
+  const otherListener = vi.fn();
+  const unsubscribe = observeSessionWorkAdmissionReleases(` ${scope} `, listener);
+  const unsubscribeOther = observeSessionWorkAdmissionReleases("other.sqlite", otherListener);
+  const first = await beginSessionWorkAdmission({ scope, identities: ["shared"] });
+  const second = await beginSessionWorkAdmission({ scope, identities: ["shared"] });
+  const unrelated = await beginSessionWorkAdmission({ scope, identities: ["unrelated"] });
+  try {
+    first.release();
+    expect(listener).not.toHaveBeenCalled();
+    second.release();
+    second.release();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(otherListener).not.toHaveBeenCalled();
+    expect(isSessionWorkAdmissionActive(scope, ["unrelated"])).toBe(true);
+    unsubscribe();
+    unrelated.release();
+    expect(listener).toHaveBeenCalledTimes(1);
+  } finally {
+    unsubscribe();
+    unsubscribeOther();
+    first.release();
+    second.release();
+    unrelated.release();
+  }
+});
 
 it.each(["completed", "cancelled", "cancelled-then-restart", "restart", "timeout"] as const)(
   "uses the adopted run's %s outcome when capturing restart work",
@@ -108,7 +138,23 @@ it.each(["released", "interrupted", "undeclared", "caller", "wrong receipt"] as 
       }
       expect(captured[0]!.interrupt(createAgentRunDirectAbortError())).toBe(false);
       expect(onInterrupt).toHaveBeenCalledTimes(state === "wrong receipt" ? 1 : 0);
-      expect(capture()).toEqual([]);
+      const remaining = capture();
+      if (state === "interrupted" || state === "wrong receipt") {
+        expect(remaining).toHaveLength(1);
+        expect(remaining[0]!.interrupt(createAgentRunDirectAbortError())).toBe(false);
+        let released = false;
+        const completion = remaining[0]!.released.then(() => {
+          released = true;
+        });
+        await Promise.resolve();
+        expect(released).toBe(false);
+        admission.release();
+        await completion;
+        expect(released).toBe(true);
+        expect(capture()).toEqual([]);
+      } else {
+        expect(remaining).toEqual([]);
+      }
     } finally {
       admission.release();
     }
@@ -320,9 +366,10 @@ it("rejects arrivals during awaited cleanup and its final microtask, then reopen
   const entered = createDeferred();
   const release = createDeferred();
   const reason = createAgentRunDirectAbortError();
+  const onInterrupt = vi.fn();
   let lateResult: unknown;
   const late = () =>
-    beginSessionWorkAdmission({ scope, identities, assertAllowed: () => {} }).then(
+    beginSessionWorkAdmission({ scope, identities, assertAllowed: () => {}, onInterrupt }).then(
       (lease) => {
         lease.release();
         return "incorrectly admitted";
@@ -347,6 +394,7 @@ it("rejects arrivals during awaited cleanup and its final microtask, then reopen
   try {
     const whileAwaiting = await late();
     expect(whileAwaiting).toBe(reason);
+    expect(onInterrupt).toHaveBeenCalledExactlyOnceWith(reason);
     const other = await beginSessionWorkAdmission({
       scope,
       identities: ["other-session"],
@@ -356,8 +404,15 @@ it("rejects arrivals during awaited cleanup and its final microtask, then reopen
     release.resolve();
     await stop;
     expect(lateResult).toBe(reason);
-    const fresh = await beginSessionWorkAdmission({ scope, identities, assertAllowed: () => {} });
+    expect(onInterrupt).toHaveBeenCalledTimes(2);
+    const fresh = await beginSessionWorkAdmission({
+      scope,
+      identities,
+      assertAllowed: () => {},
+      onInterrupt,
+    });
     fresh.release();
+    expect(onInterrupt).toHaveBeenCalledTimes(2);
   } finally {
     release.resolve();
     await stop;
@@ -518,6 +573,8 @@ it("an initial validator finishing after pending cancellation cannot enter the w
   const entered = createDeferred();
   const release = createDeferred();
   const writer = vi.fn();
+  const released = vi.fn();
+  const unsubscribe = observeSessionWorkAdmissionReleases(scope, released);
   const reason = createAgentRunDirectAbortError();
   const pending = beginSessionWorkAdmission({
     scope,
@@ -540,11 +597,13 @@ it("an initial validator finishing after pending cancellation cannot enter the w
       await interruptSessionWorkAdmissions({ scope, identities, reason, timeoutMs: 1000 }),
     ).toBe(true);
     expect(await pending).toBe(reason);
+    expect(released).not.toHaveBeenCalled();
     release.resolve();
     // A later mutation must wait for the validator's existing identity lock to finish.
     await runExclusiveSessionLifecycleMutation("patch", { scope, identities, run: async () => {} });
     expect(writer).not.toHaveBeenCalled();
   } finally {
+    unsubscribe();
     release.resolve();
     await pending;
   }

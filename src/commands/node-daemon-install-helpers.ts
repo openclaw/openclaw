@@ -38,6 +38,7 @@ export async function buildNodeInstallPlan(params: {
   devMode?: boolean;
   runtimePath?: string;
   pinnedRuntimePath?: string;
+  serviceCli?: { executable: string; entrypoint: string };
   wrapperPath?: string;
   warn?: DaemonInstallWarnFn;
 }): Promise<
@@ -46,10 +47,12 @@ export async function buildNodeInstallPlan(params: {
   const wrapperPath = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
   const { devMode, runtime, runtimePath } = await resolveDaemonInstallRuntimeInputs({
     ...params,
+    devMode: params.serviceCli ? false : params.devMode,
     wrapperPath,
   });
   const cliEntrypoint =
-    !devMode && !wrapperPath ? await resolveDurableNodeEntrypoint(params.env) : undefined;
+    params.serviceCli?.entrypoint ??
+    (!devMode && !wrapperPath ? await resolveDurableNodeEntrypoint(params.env) : undefined);
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     cliEntrypoint,
     host: params.host,
@@ -81,6 +84,7 @@ export async function buildNodeInstallPlan(params: {
 
   const environment = buildNodeServiceEnvironment({
     env: params.env,
+    execPath: params.serviceCli?.executable,
     runtime,
     // Match the Gateway install path so supervised services keep the chosen
     // runtime toolchain on PATH for sibling binaries when needed.

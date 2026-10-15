@@ -90,7 +90,7 @@ describe("command palette input", () => {
     flush();
     mounted.unmount();
     expect(disconnect).toHaveBeenCalledOnce();
-    expect(inputRef).toHaveBeenLastCalledWith(undefined);
+    expect(inputRef).toHaveBeenLastCalledWith(undefined, input);
     Object.defineProperties(input, {
       scrollHeight: { configurable: true, value: 100 },
       clientHeight: { configurable: true, value: 20 },

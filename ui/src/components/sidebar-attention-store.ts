@@ -1,5 +1,7 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CronCompactJob, ModelAuthStatusResult } from "../api/types.ts";
 import { createMentionsCapability, type MentionsCapability } from "../app/mentions.ts";
+import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import type {
   SidebarAttentionStoreController as StoreController,
   SidebarAttentionStoreSources,
@@ -39,6 +41,41 @@ type SidebarAttentionOwner = {
   dismissalKey: string | null;
 };
 
+function isCronAttentionJob(job: unknown): job is CronAttentionJob {
+  if (
+    !isRecord(job) ||
+    typeof job.id !== "string" ||
+    !job.id ||
+    typeof job.name !== "string" ||
+    typeof job.enabled !== "boolean" ||
+    typeof job.updatedAtMs !== "number" ||
+    (job.agentId !== undefined && typeof job.agentId !== "string") ||
+    !isRecord(job.state)
+  ) {
+    return false;
+  }
+  const state = job.state;
+  const disabled = state.autoDisabled;
+  return (
+    [job.updatedAtMs, state.nextRunAtMs, state.lastRunAtMs, state.runningAtMs].every(
+      (value) =>
+        value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0),
+    ) &&
+    [state.lastRunStatus, state.lastStatus].every(
+      (value) => value === undefined || value === "ok" || value === "error" || value === "skipped",
+    ) &&
+    (disabled === undefined ||
+      (isRecord(disabled) &&
+        (disabled.reason === "consecutive-failures" || disabled.reason === "schedule-errors") &&
+        typeof disabled.atMs === "number" &&
+        Number.isFinite(disabled.atMs) &&
+        disabled.atMs >= 0 &&
+        typeof disabled.consecutiveErrors === "number" &&
+        Number.isSafeInteger(disabled.consecutiveErrors) &&
+        disabled.consecutiveErrors > 0))
+  );
+}
+
 export class SidebarAttentionStoreController implements StoreController {
   readonly mentions: MentionsCapability;
   private cronJobs: CronAttentionJob[] = [];
@@ -57,7 +94,8 @@ export class SidebarAttentionStoreController implements StoreController {
   private cronRefresh: { generation: number; requested: boolean } | null = null;
   private cronRefreshNeeded = false;
   private cronRetryAt?: number;
-  private modelAuthRefresh: { generation: number; requested: boolean } | null = null;
+  private modelAuthRefresh: { generation: number; agentId: string; requested: boolean } | null =
+    null;
   private readonly stopSubscriptions: Array<() => void>;
   private outboxRuntime: typeof import("../pages/chat/chat-outbox-owner.ts") | null = null;
   private disposed = false;
@@ -75,9 +113,11 @@ export class SidebarAttentionStoreController implements StoreController {
       sources.gateway.subscribe(() => this.synchronizeGateway()),
       sources.gateway.subscribeEvents((event) => {
         if (event.event === "cron") {
-          this.load(false);
+          if (!this.applyCronEvent(event.payload)) {
+            this.load(false);
+          }
         } else if (event.event === "config.changed") {
-          this.load();
+          this.load(false);
         } else if (modelAuthEventInvalidates(event)) {
           this.load(true, false);
         }
@@ -269,10 +309,62 @@ export class SidebarAttentionStoreController implements StoreController {
     });
   }
 
+  private applyCronEvent(payload: unknown): boolean {
+    // A pending/partial inventory still needs its trailing read. Applying an event
+    // there would let an older page overwrite it or certify missing rows.
+    if (
+      this.cronRefresh ||
+      this.cronRefreshNeeded ||
+      this.cronSchedulerEnabled === null ||
+      !isGatewayAvailable(this.sources.gateway.snapshot) ||
+      document.visibilityState === "hidden" ||
+      !isRecord(payload) ||
+      typeof payload.action !== "string" ||
+      !["removed", "started", "finished", "scheduled"].includes(payload.action) ||
+      !isCronAttentionJob(payload.job) ||
+      payload.jobId !== payload.job.id
+    ) {
+      return false;
+    }
+    const job = payload.job;
+    const scopeId = this.sources.agentSelection.state.scopeId;
+    const index = this.cronJobs.findIndex((entry) => entry.id === job.id);
+    // Events do not establish list membership: even All agents can be access-
+    // filtered, and completion can carry a removed job's historical snapshot.
+    if (index < 0) {
+      return false;
+    }
+    if (payload.action === "removed") {
+      this.cronJobs.splice(index, 1);
+    } else {
+      const { id, name, agentId, enabled, updatedAtMs } = job;
+      const { nextRunAtMs, lastRunAtMs, lastRunStatus, lastStatus, runningAtMs, autoDisabled } =
+        job.state;
+      // Retain attention facts only; event jobs also contain full task payloads.
+      const attention = {
+        id,
+        name,
+        agentId,
+        enabled,
+        updatedAtMs,
+        state: { nextRunAtMs, lastRunAtMs, lastRunStatus, lastStatus, runningAtMs, autoDisabled },
+      };
+      this.cronJobs[index] = attention;
+    }
+    this.reconcileDismissals({ cronInventoryComplete: scopeId === null, modelAuthAgentId: null });
+    this.scheduleHealthRefresh();
+    this.onChange();
+    return true;
+  }
+
   private load(refreshModelAuth = true, refreshCron = true): void {
     const gateway = this.sources.gateway.snapshot;
     const client = gateway.client;
-    if (!isGatewayAvailable(gateway) || !client) {
+    if (
+      !isGatewayAvailable(gateway) ||
+      !client ||
+      !hasOperatorReadAccess(gateway.hello?.auth ?? null)
+    ) {
       return;
     }
     const owner = this.owner();
@@ -286,7 +378,6 @@ export class SidebarAttentionStoreController implements StoreController {
       isGatewayAvailable(this.sources.gateway.snapshot) &&
       this.sources.gateway.snapshot.client === client &&
       this.ownerEquals(owner, this.owner()) &&
-      this.sources.agentSelection.state.selectedId === agentScope.selectedId &&
       this.sources.agentSelection.state.scopeId === agentScope.scopeId;
     const publishSource = (scope: {
       cronInventoryComplete: boolean;
@@ -386,20 +477,27 @@ export class SidebarAttentionStoreController implements StoreController {
       agentScope.selectedId
     ) {
       this.modelAuthRefreshAt = undefined;
-      if (this.modelAuthRefresh?.generation === generation) {
+      if (
+        this.modelAuthRefresh?.generation === generation &&
+        this.modelAuthRefresh.agentId === agentScope.selectedId
+      ) {
         // Only explicit freshness loads queue auth work; cron events cannot
         // invalidate a pending auth response or schedule another auth request.
         this.modelAuthRefresh.requested ||= refreshModelAuth;
       } else {
-        const refresh = { generation, requested: true };
         const agentId = agentScope.selectedId;
+        const refresh = { generation, agentId, requested: true };
+        const currentAuth = () =>
+          current() &&
+          this.modelAuthRefresh === refresh &&
+          this.sources.agentSelection.state.selectedId === agentId;
         this.modelAuthRefresh = refresh;
         void (async () => {
           try {
-            while (refresh.requested && current()) {
+            while (refresh.requested && currentAuth()) {
               refresh.requested = false;
               const status = await loadModelAuthStatus(client, { agentId }).catch(() => null);
-              if (current()) {
+              if (currentAuth()) {
                 this.modelAuthStatus = status;
                 this.modelAuthAgentId = agentId;
                 this.modelAuthRefreshAt = status ? nextModelAuthStatusRefreshAt(status) : undefined;
@@ -427,7 +525,11 @@ export class SidebarAttentionStoreController implements StoreController {
       this.dismissalKey = key;
       this.dismissed = loadDismissals(key);
     }
-    if (snapshot.phase !== "connected" || !snapshot.client) {
+    if (
+      snapshot.phase !== "connected" ||
+      !snapshot.client ||
+      !hasOperatorReadAccess(snapshot.hello?.auth ?? null)
+    ) {
       this.loadGeneration += 1;
       this.loadedOwner = null;
       this.loadedClient = null;
@@ -454,6 +556,18 @@ export class SidebarAttentionStoreController implements StoreController {
       agentScope.selectedId === this.loadedAgentScope.selectedId &&
       agentScope.scopeId === this.loadedAgentScope.scopeId
     ) {
+      return;
+    }
+    if (
+      !ownerChanged &&
+      snapshot.client === this.loadedClient &&
+      agentScope.scopeId === this.loadedAgentScope.scopeId
+    ) {
+      // Chat selection changes auth ownership, not the Inbox inventory's filter.
+      this.modelAuthStatus = null;
+      this.modelAuthAgentId = null;
+      this.load(true, false);
+      this.onChange();
       return;
     }
     let scopeChanged = false;

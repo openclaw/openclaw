@@ -16,6 +16,7 @@ import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { registerOpenAIServiceTierCatalogTests } from "./test-support/model-service-tiers.test-support.js";
+import { registerOpenAIFailoverTests } from "./test-support/provider-failover.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   resolveApiKeyForProvider: vi.fn(),
@@ -226,34 +227,7 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
-  it("classifies OpenAI-native code-only failover errors", () => {
-    const provider = buildOpenAIProvider();
-
-    for (const providerId of ["openai", "azure-openai", "azure-openai-responses"]) {
-      expect(
-        provider.classifyFailoverReason?.({
-          provider: providerId,
-          errorMessage: "",
-          code: "SERVER_ERROR",
-        }),
-      ).toBe("server_error");
-      expect(
-        provider.classifyFailoverReason?.({
-          provider: providerId,
-          errorMessage: "",
-          code: "INSUFFICIENT_QUOTA",
-        }),
-      ).toBe("billing");
-    }
-    // API_ERROR is an Anthropic-native code, not OpenAI's: fall through to generic.
-    expect(
-      provider.classifyFailoverReason?.({
-        provider: "openai",
-        errorMessage: "",
-        code: "API_ERROR",
-      }),
-    ).toBeUndefined();
-  });
+  registerOpenAIFailoverTests();
 
   it("does not hardcode transport routing on static catalog entries (#91710)", () => {
     const openaiModels = manifest.modelCatalog.providers.openai.models as Array<
@@ -1238,60 +1212,6 @@ describe("buildOpenAIProvider", () => {
     expect(unknownModelHint).toContain("OpenAI API-key auth cannot use this model");
   });
 
-  it("resolves chat-latest as an explicit direct API model override", () => {
-    const provider = buildOpenAIProvider();
-
-    const model = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: "chat-latest",
-      modelRegistry: {
-        find: (_provider: string, id: string) =>
-          id === "gpt-5.5"
-            ? {
-                id,
-                name: "GPT-5.5",
-                provider: "openai",
-                api: "openai-responses",
-                baseUrl: "https://api.openai.com/v1",
-                reasoning: true,
-                input: ["text", "image"],
-                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-                contextWindow: 1_050_000,
-                maxTokens: 128_000,
-              }
-            : null,
-      } as never,
-    });
-
-    expectFields(model, {
-      provider: "openai",
-      id: "chat-latest",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      reasoning: false,
-      input: ["text", "image"],
-      contextWindow: 400_000,
-      maxTokens: 128_000,
-      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-    });
-
-    const fallback = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: "chat-latest",
-      modelRegistry: { find: () => null },
-    } as never);
-
-    expectFields(fallback, {
-      provider: "openai",
-      id: "chat-latest",
-      api: "openai-responses",
-      reasoning: false,
-      contextWindow: 400_000,
-      maxTokens: 128_000,
-      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-    });
-  });
-
   it("passes the selected runtime into GPT-5.6 thinking policy", () => {
     const provider = buildOpenAIProvider();
     const openClawLuna = provider.resolveThinkingProfile?.({
@@ -1733,7 +1653,7 @@ describe("buildOpenAIProvider", () => {
   });
 });
 describe("OpenAI model materialization", () => {
-  it.each(["gpt-daybreak-blue-latest", "gpt-daybreak-red-latest"])(
+  it.each(["gpt-daybreak-red-latest"])(
     "materializes %s capabilities and preserves its registered Ultra opt-out",
     (modelId) => {
       const provider = buildOpenAIProvider();

@@ -73,7 +73,7 @@ suite.define(() => {
           await gateway.deferNext("cron.run", { id: alpha.id, mode });
           if (mode === "due") {
             await alphaRow.locator(".cron-job-menu__trigger").click();
-            await alphaRow.locator('wa-dropdown-item[value="run-if-due"]').click();
+            await alphaRow.locator('[data-value="run-if-due"]').click();
           } else {
             await page.locator(`[data-test-id="cron-row-run-${alpha.id}"]`).click();
           }

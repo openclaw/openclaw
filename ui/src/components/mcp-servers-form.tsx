@@ -1,14 +1,41 @@
+import { Show } from "solid-js";
+import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { McpServerForm } from "./mcp-server-form.ts";
+
+registerMcpEnglish();
 
 export function McpServersForm(props: {
   busy: boolean;
   disabled: boolean;
   blockedReason: string | null;
+  autofocus?: boolean;
+  presentation?: "inline" | "modal";
+  error?: string | null;
   onSubmit: (form: McpServerForm) => void;
   onCancel: () => void;
 }) {
   const disabled = () => props.busy || props.disabled;
+  const actions = () => (
+    <>
+      <button
+        type="submit"
+        class="btn btn--sm"
+        title={props.blockedReason ?? ""}
+        disabled={disabled()}
+      >
+        {props.busy ? t("mcpServers.adding") : t("mcpServers.add")}
+      </button>
+      <button
+        type="button"
+        class="btn btn--sm"
+        disabled={props.busy}
+        onClick={() => props.onCancel()}
+      >
+        {t("common.cancel")}
+      </button>
+    </>
+  );
   return (
     <form
       class="mcp-server-form"
@@ -29,6 +56,7 @@ export function McpServersForm(props: {
         <span>{t("mcpServers.nameLabel")}</span>
         <input
           name="mcp-name"
+          autofocus={props.autofocus}
           class="settings-input"
           type="text"
           required
@@ -64,24 +92,21 @@ export function McpServersForm(props: {
           disabled={disabled()}
         />
       </label>
-      <div class="mcp-server-form__actions">
-        <button
-          type="submit"
-          class="btn btn--sm"
-          title={props.blockedReason ?? ""}
-          disabled={disabled()}
-        >
-          {props.busy ? t("mcpServers.adding") : t("mcpServers.add")}
-        </button>
-        <button
-          type="button"
-          class="btn btn--sm"
-          disabled={props.busy}
-          onClick={() => props.onCancel()}
-        >
-          {t("common.cancel")}
-        </button>
-      </div>
+      <Show when={props.error}>
+        {(error) => (
+          <div class="mcp-server-message mcp-server-message--error" role="alert">
+            {error()}
+          </div>
+        )}
+      </Show>
+      <Show
+        when={props.presentation === "modal"}
+        fallback={<div class="mcp-server-form__actions">{actions()}</div>}
+      >
+        <openclaw-modal-actions class="mcp-server-form__actions">
+          {actions()}
+        </openclaw-modal-actions>
+      </Show>
     </form>
   );
 }

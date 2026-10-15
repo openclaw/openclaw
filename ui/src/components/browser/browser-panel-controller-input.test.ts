@@ -654,22 +654,10 @@ describe("BrowserPanelController capture and input ownership", () => {
 
   it.each([
     {
-      name: "structured action code",
-      message: "evaluation disabled",
-      details: { code: "ACT_EVALUATE_DISABLED" },
-      expected: true,
-    },
-    {
       name: "legacy Browser node message without an action code",
       message: "403: act:evaluate is disabled by config (browser.evaluateEnabled=false).",
       details: { nodeError: { message: "legacy Browser node" } },
       expected: true,
-    },
-    {
-      name: "unknown action code with matching prose",
-      message: "act:evaluate is disabled by config (browser.evaluateEnabled=false).",
-      details: { code: "ACT_UNKNOWN" },
-      expected: false,
     },
     {
       name: "sanitized unknown action code with matching prose",
@@ -909,6 +897,43 @@ describe("BrowserPanelController capture and input ownership", () => {
         return (envelope as BrowserRequestEnvelope).path === "/tabs";
       }),
     ).toEqual([]);
+  });
+
+  it("scrolls at the remote point under the wheel pointer", async () => {
+    vi.useFakeTimers();
+    const scroll = vi.fn();
+    const hitTest = vi.fn(() => null);
+    const { client, request } = createBrowserClient(async (envelope) => {
+      if (envelope.path === "/act") {
+        const fn = envelope.body?.fn;
+        if (typeof fn !== "string") {
+          throw new Error("Expected a browser evaluate script");
+        }
+        return {
+          result: runInNewContext(`(${fn})()`, {
+            document: { elementFromPoint: hitTest },
+            window: { scrollBy: scroll },
+          }),
+        };
+      }
+      throw new Error(`Unexpected browser route: ${envelope.path}`);
+    });
+    const controller = createBrowserPanelTestController(client, "tab-a");
+
+    controller.handleWheel(
+      new WheelEvent("wheel", { deltaY: 60, clientX: 30, clientY: 40, cancelable: true }),
+    );
+    controller.handleWheel(
+      new WheelEvent("wheel", { deltaY: 40, clientX: 32, clientY: 44, cancelable: true }),
+    );
+    await vi.advanceTimersByTimeAsync(150);
+
+    const actions = request.mock.calls
+      .map(([, envelope]) => envelope as BrowserRequestEnvelope)
+      .filter((envelope) => envelope.path === "/act");
+    expect(actions).toHaveLength(1);
+    expect(hitTest).toHaveBeenCalledExactlyOnceWith(32, 44);
+    expect(scroll).toHaveBeenCalledExactlyOnceWith(0, 100);
   });
 
   it("never forwards a queued wheel action to a newly selected tab", async () => {

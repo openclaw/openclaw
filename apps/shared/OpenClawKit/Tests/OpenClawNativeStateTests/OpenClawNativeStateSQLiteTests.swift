@@ -7,6 +7,67 @@ import Darwin.membership
 #endif
 
 struct OpenClawNativeStateSQLiteTests {
+    @Test(arguments: ["device_identities", "device_auth_tokens"])
+    func `newer shared schemas admit only unchanged credential tables`(_ name: String) throws {
+        try self.withDatabase { database in
+            try database.ensureCanonicalTable(.deviceIdentities)
+            try database.ensureCanonicalTable(.deviceAuthTokens)
+            try database.ensureCanonicalTable(.execApprovalsConfig)
+            try database.ensureCanonicalTable(.macosPortGuardianRecords)
+            // STRICT migrations rename a temporary table, leaving its name quoted in sqlite_schema.
+            try database.execute("ALTER TABLE \(name) RENAME TO migration_temporary")
+            try database.execute("ALTER TABLE migration_temporary RENAME TO \"\(name)\"")
+            try self.createConfigMachineState(database)
+            try database.execute("PRAGMA user_version = 2147483647; UPDATE schema_meta SET schema_version = 2147483647")
+
+            try database.ensureCanonicalTable(.deviceIdentities)
+            try database.ensureCanonicalTable(.deviceAuthTokens)
+            #expect(throws: OpenClawNativeStateError.self) {
+                try database.ensureCanonicalTable(.execApprovalsConfig)
+            }
+            #expect(throws: OpenClawNativeStateError.self) {
+                try database.ensureCanonicalTable(.macosPortGuardianRecords)
+            }
+            #expect(try database.scalarInt64("PRAGMA user_version") == 2_147_483_647)
+        }
+    }
+
+    @Test(arguments: [
+        "UPDATE schema_meta SET role = 'agent'",
+        "UPDATE schema_meta SET schema_version = 1",
+        "DROP TABLE schema_meta",
+        "DROP TABLE device_auth_tokens",
+        "ALTER TABLE device_auth_tokens ADD COLUMN future_policy TEXT",
+        "DROP INDEX idx_device_auth_tokens_updated",
+        "CREATE UNIQUE INDEX future_token_constraint ON device_auth_tokens(token)",
+        """
+        CREATE TRIGGER future_token_cleanup AFTER DELETE ON device_auth_tokens
+        BEGIN DELETE FROM config_machine_state; END
+        """,
+        """
+        DROP TABLE device_auth_tokens;
+        CREATE TABLE device_auth_tokens (
+          device_id TEXT NOT NULL, role TEXT NOT NULL, token TEXT NOT NULL CHECK(length(token) > 5),
+          scopes_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL, PRIMARY KEY(device_id, role)
+        ) STRICT;
+        CREATE INDEX idx_device_auth_tokens_updated ON device_auth_tokens(updated_at_ms DESC, device_id, role)
+        """,
+    ])
+    func `newer credential admission refuses changed contracts without writing`(_ mutation: String) throws {
+        try self.withDatabaseURL { database, url in
+            try database.ensureCanonicalTable(.deviceAuthTokens)
+            try self.createConfigMachineState(database)
+            try database.execute("PRAGMA user_version = 2147483647; UPDATE schema_meta SET schema_version = 2147483647")
+            try database.execute(mutation)
+            let original = try Data(contentsOf: url)
+
+            #expect(throws: OpenClawNativeStateError.self) {
+                try database.ensureCanonicalTable(.deviceAuthTokens)
+            }
+            #expect(try Data(contentsOf: url) == original)
+        }
+    }
+
     @Test(arguments: [
         "PRAGMA user_version = 2147483647; UPDATE schema_meta SET schema_version = 2147483647",
         "UPDATE schema_meta SET schema_version = 2",
@@ -60,6 +121,40 @@ struct OpenClawNativeStateSQLiteTests {
             #expect(try Data(contentsOf: url) == original)
             #expect(try writer.schemaObjectExists(type: "table", name: "config_machine_state") == false)
         }
+    }
+
+    @Test func `read-only config opens checkpointed WAL without sidecars`() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-native-wal-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("openclaw.sqlite")
+        do {
+            let writer = try OpenClawNativeStateSQLite(databaseURL: url)
+            try self.createConfigMachineState(writer)
+            try writer.execute("PRAGMA journal_mode=WAL")
+            try writer.execute("INSERT INTO config_machine_state VALUES ('fixture', 'retained-pin', 10)")
+            try #require(writer.scalarInt64("PRAGMA wal_checkpoint(TRUNCATE)") == 0)
+        }
+        // Node removes these on last close; Apple's writer may retain its empty WAL.
+        for suffix in ["-wal", "-shm"] {
+            if FileManager.default.fileExists(atPath: url.path + suffix) {
+                if suffix == "-wal" {
+                    try #require(FileManager.default.attributesOfItem(atPath: url.path + suffix)[.size] as? Int == 0)
+                }
+                try FileManager.default.removeItem(atPath: url.path + suffix)
+            }
+            try #require(!FileManager.default.fileExists(atPath: url.path + suffix))
+        }
+        let original = try Data(contentsOf: url)
+        let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
+
+        #expect(try reader.configMachineStateValue(key: "fixture") == .init(
+            value: "retained-pin",
+            updatedAtMilliseconds: 10))
+        #expect(throws: OpenClawNativeStateError.self) {
+            try reader.execute("UPDATE config_machine_state SET value_json = 'unexpected'")
+        }
+        #expect(try Data(contentsOf: url) == original)
     }
 
     @Test func `admitted config reads observe foreign rows without replacing their handle`() throws {

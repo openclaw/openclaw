@@ -145,10 +145,10 @@ describe("createApplicationGateway authentication diagnostics", () => {
   }
 
   it.each([
-    { action: "resume", jitter: 0, elapsed: 1_000, probes: 2, reloads: 1 },
-    { action: "stop during initial jitter", jitter: 0.5, elapsed: 30_000, probes: 0, reloads: 0 },
-    { action: "stop during probe retry", jitter: 0, elapsed: 30_000, probes: 1, reloads: 0 },
-  ])("keeps build recovery owned by the current connection: $action", async (scenario) => {
+    { action: "resume", jitter: 0, elapsed: 1_000, reloads: 1 },
+    { action: "stop during initial jitter", jitter: 0.5, elapsed: 30_000, reloads: 0 },
+    { action: "stop during probe retry", jitter: 0, elapsed: 30_000, reloads: 0 },
+  ])("keeps build reload owned by the current connection: $action", async (scenario) => {
     vi.useFakeTimers();
     vi.mocked(Math.random).mockReturnValue(scenario.jitter);
     const { replace, fetchMock } = stubBuildReloadDocument();
@@ -167,9 +167,8 @@ describe("createApplicationGateway authentication diagnostics", () => {
 
     await vi.advanceTimersByTimeAsync(scenario.elapsed);
     expect(replace).toHaveBeenCalledTimes(scenario.reloads);
-    expect(fetchMock).toHaveBeenCalledTimes(scenario.probes);
-    expect(sessionStorage.getItem(RELOAD_GUARD_KEY)).toBe(
-      scenario.reloads ? "replacement-build" : null,
+    expect(JSON.parse(sessionStorage.getItem(RELOAD_GUARD_KEY) ?? "null")).toEqual(
+      scenario.reloads ? { buildId: "replacement-build", at: expect.any(Number) } : null,
     );
   });
 

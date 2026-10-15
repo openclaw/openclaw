@@ -1,4 +1,4 @@
-import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { coerceErrorMessage, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isJsonObject, type JsonValue } from "./protocol.js";
 
 export const CODEX_APP_SERVER_OVERLOADED_ERROR_CODE = -32_001;
@@ -79,5 +79,13 @@ export class CodexAppServerLocalRequestCancellationError extends Error {
 export function isCodexAppServerOverloadError(error: unknown): error is CodexAppServerRpcError {
   return (
     error instanceof CodexAppServerRpcError && error.code === CODEX_APP_SERVER_OVERLOADED_ERROR_CODE
+  );
+}
+
+export function isMissingCodexParentThreadError(error: unknown): boolean {
+  const message = formatErrorMessage(error);
+  return (
+    message.includes("no rollout found for thread id") ||
+    message.includes("includeTurns is unavailable before first user message")
   );
 }

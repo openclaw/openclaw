@@ -9,6 +9,8 @@ on:
       - "test/scripts/stage-openclaw-bun.test.ts"
       - ".github/workflows/linux-app.yml"
       - ".github/workflows/linux-app-release.yml"
+      - "!apps/linux/README.md"
+      - "!apps/linux/omarchy/README.md"
   workflow_dispatch:
 
 concurrency:
@@ -26,7 +28,8 @@ jobs:
     name: Build Linux companion
     # Match the release build base for native tests and manually built bundles.
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    # Leave room for cold source packaging and the native desktop proof afterward.
+    timeout-minutes: 105
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -102,7 +105,8 @@ jobs:
           node --test \
             apps/linux/scripts/test-native-control-auth.mjs \
             apps/linux/scripts/test-runtime-boundary.mjs \
-            apps/linux/scripts/test-stage-runtime.mjs
+            apps/linux/scripts/test-stage-runtime.mjs \
+            apps/linux/scripts/test-stage-package.mjs
 
       - name: Test packaged runtime ABI scanner
         run: |
@@ -134,8 +138,13 @@ jobs:
 
       - name: Build native inline browser candidate
         working-directory: apps/linux/src-tauri
+        env:
+          # Cold Linux declarations also exceed the package builder's 45-minute default.
+          OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS: "3600000"
         run: |
           node ../scripts/stage-runtime.mjs
+          # The native fixture supplies its CLI at the same build-time boundary.
+          python3 ../tests/stage_onboarding_runtime.py target/desktop-runtime
           cargo +stable build --locked
 
       - name: Test native inline browser
@@ -151,7 +160,7 @@ jobs:
 
       - name: Upload native inline browser proof
         if: always() && steps.inline-browser.outcome != 'skipped'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-inline-browser
           retention-days: 14
@@ -169,15 +178,23 @@ jobs:
             --artifacts-dir "${RUNNER_TEMP}/linux-gateway-switch" \
             2>&1 | tee "${RUNNER_TEMP}/linux-gateway-switch/run.log"
           mkdir -p "${RUNNER_TEMP}/linux-gateway-switch/onboarding"
+          node scripts/run-node-package-bin.mts vite build --config apps/linux/tests/fixtures/vite.onboarding.config.ts
           xvfb-run -a -s '-screen 0 1440x1080x24' dbus-run-session -- \
             /usr/bin/python3 apps/linux/tests/first_run.py \
             apps/linux/src-tauri/target/debug/openclaw-desktop --gateway-onboarding \
             --artifacts-dir "${RUNNER_TEMP}/linux-gateway-switch/onboarding" \
             2>&1 | tee "${RUNNER_TEMP}/linux-gateway-switch/onboarding/run.log"
+          # Startup failure requires the same fixture CLI compiled into this candidate.
+          mkdir -p "${RUNNER_TEMP}/linux-gateway-switch/startup-failure"
+          xvfb-run -a -s '-screen 0 1280x1024x24' dbus-run-session -- \
+            /usr/bin/python3 apps/linux/tests/first_run.py \
+            apps/linux/src-tauri/target/debug/openclaw-desktop --local-start-failure \
+            --artifacts-dir "${RUNNER_TEMP}/linux-gateway-switch/startup-failure" \
+            2>&1 | tee "${RUNNER_TEMP}/linux-gateway-switch/startup-failure/run.log"
 
       - name: Upload native Gateway switching proof
         if: always() && steps.gateway-switch.outcome != 'skipped'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-gateway-switch
           retention-days: 14
@@ -197,7 +214,7 @@ jobs:
 
       - name: Upload native desktop sharing proof
         if: always() && steps.desktop-sharing.outcome != 'skipped'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-desktop-sharing
           retention-days: 14
@@ -218,7 +235,7 @@ jobs:
 
       - name: Upload native Quick Chat proof
         if: always() && steps.quick-chat.outcome != 'skipped'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-quick-chat
           retention-days: 14
@@ -262,7 +279,7 @@ jobs:
           XDG_CACHE_HOME: ${{ runner.temp }}/openclaw-tauri-cache
         run: apps/linux/scripts/finalize-appimage.sh apps/linux/src-tauri/target/release/bundle/appimage
 
-      - name: Test native first-run setup and failed Gateway startup
+      - name: Test packaged first-run setup choices
         id: first-run
         if: github.event_name == 'workflow_dispatch'
         shell: bash
@@ -271,14 +288,10 @@ jobs:
             /usr/bin/python3 apps/linux/tests/first_run.py \
             apps/linux/src-tauri/target/release/openclaw-desktop \
             2>&1 | tee "${RUNNER_TEMP}/linux-first-run.log"
-          xvfb-run -a -s '-screen 0 1280x1024x24' dbus-run-session -- \
-            /usr/bin/python3 apps/linux/tests/first_run.py \
-            apps/linux/src-tauri/target/release/openclaw-desktop --local-start-failure \
-            2>&1 | tee -a "${RUNNER_TEMP}/linux-first-run.log"
 
       - name: Upload first-run failure log
         if: github.event_name == 'workflow_dispatch' && failure() && steps.first-run.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-first-run-failure
           retention-days: 14
@@ -306,7 +319,7 @@ jobs:
 
       - name: Upload packaged runtime failure evidence
         if: github.event_name == 'workflow_dispatch' && failure() && steps.packaged-runtime.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-packaged-runtime-failure
           retention-days: 14
@@ -315,7 +328,7 @@ jobs:
 
       - name: Upload bundles
         if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-linux-companion
           retention-days: 14
@@ -379,10 +392,10 @@ jobs:
         run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture
 
   test-windows-power:
-    name: Test Windows power lifecycle
-    # Match the optional Windows desktop-test bundle runner.
+    name: Test Windows desktop
+    # Match the regular Windows installer build runner.
     runs-on: windows-2022
-    timeout-minutes: 45
+    timeout-minutes: 105
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -394,6 +407,12 @@ jobs:
 
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "false"
 
       - name: Cache Cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -410,6 +429,23 @@ jobs:
         working-directory: apps/linux/src-tauri
         run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture
 
-      - name: Verify desktop sharing process ownership on Windows
+      - name: Verify Windows runtime, installer, and desktop boundaries
         working-directory: apps/linux/src-tauri
-        run: cargo +stable test --locked --bin openclaw-desktop desktop_node_process::tests::job_joins_a_real_command_wrapper_and_its_descendant -- --nocapture
+        run: |
+          node --test ../scripts/test-stage-runtime.mjs ../scripts/test-stage-package.mjs
+          cargo +stable test --locked --bin openclaw-desktop
+
+      - name: Build Windows installer without publishing
+        working-directory: apps/linux/src-tauri
+        env:
+          # Cold Windows declarations can exceed the package builder's 45-minute default.
+          OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS: "3600000"
+        run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: openclaw-windows-desktop
+          retention-days: 14
+          if-no-files-found: error
+          path: apps/linux/src-tauri/target/release/bundle/nsis/*.exe

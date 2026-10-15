@@ -1,11 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { completeUpdateFailureSummary } from "./update-failure-result.js";
 import { encodeRun, isRetainedStep, type UpdateRunLedgerOptions } from "./update-run-codec.js";
@@ -23,14 +22,10 @@ import { updateRunStepKey } from "./update-run-step-key.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
 
-export const updateRunLedgerSchema = extractSqliteTableSchema(
-  OPENCLAW_STATE_SCHEMA_SQL,
-  "update_runs",
-  {
-    endMarker: "ON update_runs(status, created_at_ms DESC, run_id);",
-    errorMessage: "Update run schema markers are missing",
-  },
-);
+export const updateRunLedgerSchema = getOpenClawStateFeatureSchemaSql("update_runs", {
+  endMarker: "ON update_runs(status, created_at_ms DESC, run_id);",
+  errorMessage: "Update run schema markers are missing",
+});
 
 export function upsertStep(record: UpdateRunRecord, input: UpdateRunStep): void {
   const step = { ...input, step: updateRunStepKey(input.step) };
@@ -110,7 +105,7 @@ export function applyUpdateRunStep(
 }
 
 export function persistRun(
-  db: DatabaseSync,
+  db: EngineConnection,
   record: UpdateRunRecord,
   options: UpdateRunLedgerOptions,
 ): UpdateRunRecord {
@@ -127,7 +122,7 @@ export function persistRun(
 }
 
 export function mutateRunInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   runId: string,
   update: (record: UpdateRunRecord) => void,
   options: UpdateRunLedgerOptions,

@@ -1,5 +1,9 @@
 import { QUEUED_USER_MESSAGE_MARKER } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import * as execApprovals from "../../../infra/exec-approvals.js";
 import { withMockedPlatform } from "../../../test-utils/vitest-spies.js";
@@ -18,7 +22,6 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   info: vi.fn(),
-  promptPressureKeys: new Set<string>(),
   reconcileToolResultPromptProjectionState: vi.fn(),
   resolveLiveToolResultAggregateMaxChars: vi.fn(() => 200),
   resolveLiveToolResultMaxChars: vi.fn(() => 100),
@@ -29,21 +32,11 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("../logger.js", () => ({
   log: { info: hoisted.info, warn: hoisted.warn },
 }));
+// mock-isolation: Control projection decisions without the runtime truncation state.
 vi.mock("../tool-result-truncation.js", () => ({
   resolveLiveToolResultAggregateMaxChars: hoisted.resolveLiveToolResultAggregateMaxChars,
   resolveLiveToolResultMaxChars: hoisted.resolveLiveToolResultMaxChars,
   reconcileToolResultPromptProjectionState: hoisted.reconcileToolResultPromptProjectionState,
-  toolResultWarningDedupe: {
-    promptPressure: {
-      check: (key: string) => {
-        if (hoisted.promptPressureKeys.has(key)) {
-          return true;
-        }
-        hoisted.promptPressureKeys.add(key);
-        return false;
-      },
-    },
-  },
   truncateOversizedToolResultsInMessages: hoisted.truncateOversizedToolResultsInMessages,
 }));
 
@@ -102,9 +95,11 @@ function createInput(options?: {
 }) {
   const replaceSessionMessages = vi.fn();
   const report = options?.report ?? ({} as SessionSystemPromptReport);
+  const attempt = options?.attempt ?? createAttempt({ trigger: "user" });
+  setRuntimeConfigSnapshot(attempt.config ?? {});
   return {
     input: {
-      attempt: options?.attempt ?? createAttempt({ trigger: "user" }),
+      attempt,
       capabilityToolNames: new Set<string>(),
       includeBoundaryTimestamp: false,
       isRawModelRun: false,
@@ -125,11 +120,11 @@ function createInput(options?: {
 }
 
 beforeEach(async () => {
+  setRuntimeConfigSnapshot({ agents: { defaults: { userTimezone: "UTC" } } });
   vi.clearAllMocks();
   vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-09T12:00:00Z"));
   vi.spyOn(mediaTaskStatus, "buildMediaTaskRuntimeContext").mockResolvedValue(undefined);
   await resetSubagentRegistryForTests({ persist: false });
-  hoisted.promptPressureKeys.clear();
   hoisted.reconcileToolResultPromptProjectionState.mockReset();
   hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
     messages: inputMessages,
@@ -145,16 +140,19 @@ afterEach(async () => {
   deleteSession("exec-a");
   deleteSession("exec-z");
   await resetSubagentRegistryForTests({ persist: false });
+  clearRuntimeConfigSnapshot();
 });
 
 describe("prepareEmbeddedAttemptPromptContext", () => {
   it("carries current Windows approval hints without changing system or user prompt bytes", () =>
     withMockedPlatform("win32", async () => {
-      const load = vi.spyOn(execApprovals, "loadExecApprovals").mockReturnValue({ version: 1 });
+      const load = vi
+        .spyOn(execApprovals, "loadExecApprovalsReadOnlyAsync")
+        .mockResolvedValue({ version: 1 });
       const fixture = createInput();
       fixture.input.capabilityToolNames.add("exec");
       const before = await prepareEmbeddedAttemptPromptContext(fixture.input);
-      load.mockReturnValue({
+      load.mockResolvedValue({
         version: 1,
         agents: { "agent-1": { allowlist: [{ pattern: "C:\\Tools\\node.exe" }] } },
       });
@@ -302,11 +300,11 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(hoisted.reconcileToolResultPromptProjectionState).not.toHaveBeenCalled();
   });
 
-  it("reports aggregate tool-result pressure for compact-then-truncate routing", async () => {
+  it.each([0, 2])("logs only actual truncation with %s changed tool results", async (count) => {
     hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
-      messages: [...inputMessages],
-      truncatedCount: 2,
-      aggregateTruncatedCount: 1,
+      messages: count ? [...inputMessages] : inputMessages,
+      truncatedCount: count,
+      aggregateTruncatedCount: count ? 1 : 0,
       aggregatePressureEngaged: true,
       aggregateBudgetChars: 200,
     }));
@@ -317,9 +315,13 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     const result = await prepareEmbeddedAttemptPromptContext(fixture.input);
 
     expect(result.aggregatePressureEngaged).toBe(true);
-    expect(hoisted.warn).toHaveBeenCalledWith(
-      expect.stringContaining("aggregate tool-result pressure"),
-    );
+    expect(hoisted.warn).not.toHaveBeenCalled();
+    expect(hoisted.info).toHaveBeenCalledTimes(count ? 1 : 0);
+    if (count) {
+      expect(hoisted.info).toHaveBeenCalledWith(
+        expect.stringContaining("Truncated 2 tool result(s)"),
+      );
+    }
   });
 
   it.each([4])(

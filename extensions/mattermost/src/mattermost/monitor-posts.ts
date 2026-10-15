@@ -17,7 +17,6 @@ import {
   normalizeTrimmedStringList,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { MattermostPostSchema } from "./client.js";
 import { normalizeMattermostAllowEntry } from "./ingress-identity.js";
 import { resolveMattermostInboundMentionDecision } from "./monitor-activation.js";
@@ -501,9 +500,8 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
             normalizeEntry: normalizeMattermostAllowEntry,
           })
         : null;
-    const previewLine = truncateUtf16Safe(bodyText, 200).replace(/\n/g, "\\n");
     monitor.logVerboseMessage(
-      `mattermost inbound: from=${ctxPayload.From} len=${bodyText.length} preview="${previewLine}"`,
+      `mattermost inbound: from=${ctxPayload.From} id=${post.id} len=${bodyText.length}`,
     );
 
     await dispatchMattermostInboundTurn(monitor, {

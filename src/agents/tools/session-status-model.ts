@@ -11,6 +11,7 @@ import {
 } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
+import { prepareAuthProfileProvider } from "../auth-profiles/store-runtime.js";
 import {
   buildModelAliasIndex,
   modelKey,
@@ -133,8 +134,12 @@ export async function patchSessionStatusModel(params: {
         selected.ref.provider === configured.provider && selected.ref.model === configured.model,
     };
   }
-  const applySelection = (entry: SessionEntry) =>
-    applyModelOverrideWithAuthProfileCompatibility({
+  const applySelection = async (entry: SessionEntry) => {
+    const pinnedProfile = entry.authProfileOverride?.trim();
+    const recordedProvider = pinnedProfile
+      ? await prepareAuthProfileProvider({ agentDir: params.agentDir, profileId: pinnedProfile })
+      : undefined;
+    return applyModelOverrideWithAuthProfileCompatibility({
       cfg,
       agentDir: params.agentDir,
       entry,
@@ -142,17 +147,19 @@ export async function patchSessionStatusModel(params: {
         entry.providerOverride?.trim() || entry.modelProvider?.trim() || configured.provider,
       selection: modelSelection,
       explicitDefaultSelection: modelSelection.isDefault,
+      recordedProvider,
       markLiveSwitchPending: true,
     });
-  const applied = applySelection({ ...resolved.entry });
+  };
+  const applied = await applySelection({ ...resolved.entry });
   if (!applied.updated) {
     return { resolved, changedModel: false };
   }
   const patched = await patchSessionEntryWithKey(
     { agentId, sessionKey: resolved.key, storePath: params.storePath },
-    (entry, context) => {
+    async (entry, context) => {
       const next: SessionEntry = { ...entry };
-      applySelection(next);
+      await applySelection(next);
       if (!next.sessionId.trim() && !context.existingEntry?.sessionId?.trim()) {
         next.sessionId = randomUUID();
       }

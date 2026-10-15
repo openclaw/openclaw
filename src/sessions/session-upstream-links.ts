@@ -1,6 +1,8 @@
 /** Best-effort shared-state registry for adopted upstream sessions. */
+import { getOrLoadSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
@@ -11,6 +13,7 @@ import {
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
 import {
+  emptyWatchedSessionUpstreamLinksAdmission,
   upsertSessionUpstreamLinkInDatabase,
   deleteSessionUpstreamLinkInDatabase,
   type SessionUpstreamLink,
@@ -22,7 +25,7 @@ export type { SessionUpstreamLink } from "./session-upstream-links.kernel.js";
 
 const log = createSubsystemLogger("sessions/upstream-links");
 
-/** @deprecated Use upsertSessionUpstreamLinkAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Await upsertSessionUpstreamLinkAsync. Final compatibility day: 2026-12-31. */
 export function upsertSessionUpstreamLink(
   input: SessionUpstreamLinkInput,
   options: OpenClawStateDatabaseOptions & {
@@ -31,6 +34,12 @@ export function upsertSessionUpstreamLink(
     assertCommitAllowed?: () => void;
   } = {},
 ): boolean {
+  warnPluginSdkDeprecation({
+    family: "session-upstream-links",
+    method: "session-catalog.upsertSessionUpstreamLink",
+    replacement: "await upsertSessionUpstreamLinkAsync",
+    code: "DEP_SESSION_PERSISTENCE",
+  });
   const now = options.now ?? Date.now();
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
@@ -46,7 +55,7 @@ export function upsertSessionUpstreamLink(
   }
 }
 
-/** @deprecated Use deleteSessionUpstreamLinkAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Await deleteSessionUpstreamLinkAsync. Final compatibility day: 2026-12-31. */
 export function deleteSessionUpstreamLink(
   sessionKey: string,
   agentId: string,
@@ -55,6 +64,12 @@ export function deleteSessionUpstreamLink(
     assertCommitAllowed?: () => void;
   } = {},
 ): "deleted" | "absent" | "changed" | undefined {
+  warnPluginSdkDeprecation({
+    family: "session-upstream-links",
+    method: "session-catalog.deleteSessionUpstreamLink",
+    replacement: "await deleteSessionUpstreamLinkAsync",
+    code: "DEP_SESSION_PERSISTENCE",
+  });
   try {
     return runOpenClawStateWriteTransaction(({ db }) => {
       options.assertCommitAllowed?.();
@@ -165,7 +180,17 @@ export async function listWatchedSessionUpstreamLinks(
 ): Promise<Map<string, SessionUpstreamLink[]>> {
   const grouped = new Map<string, SessionUpstreamLink[]>();
   try {
-    const links = await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(options), {
+    const context = captureOpenClawStateWorkerContext(options);
+    if (
+      getOrLoadSqliteDatabaseAdmissionForPath(
+        context.admission.databasePath,
+        emptyWatchedSessionUpstreamLinksAdmission,
+        () => undefined,
+      )
+    ) {
+      return grouped;
+    }
+    const links = await executeOpenClawStateWorker(context, {
       type: "sessionUpstream.listWatched",
       input: undefined,
     });

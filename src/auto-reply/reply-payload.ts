@@ -223,7 +223,7 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
 export type SessionWriterDeliveryAuthority = {
   agentId?: string;
-  /** Current facts from the original process-owned actor, never a replacement. */
+  /** Current facts from the original actor or its receipt-backed delivery preparation. */
   readCurrentSession?: () =>
     | {
         sessionId: string;
@@ -272,14 +272,20 @@ export type ReplyPayloadMetadata = {
   assistantMediaFailures?: ReplyMediaFailure[];
   /** The runtime owns the transcript decision for this assistant payload. */
   assistantTranscriptOwned?: boolean;
+  /** The local source observer confirmed this model reply in committed chat history. */
+  localTranscriptDeliveryConfirmed?: true;
   /** Exact decoration added by normalization, not model-authored text. */
   responsePrefix?: string;
+  /** Exact usage footer appended by the host. */
+  responseUsageLine?: string;
   /** Exact channel/account transform owner that already accepted this payload. */
   channelReplyTransformOwner?: object;
   /** Exact dispatcher that already ran its full normalization before side effects. */
   replyDispatcherNormalizationOwner?: object;
   /** The command owner produced this terminal reply without starting an agent run. */
   commandReply?: true;
+  /** Inline acknowledgements accompany a model turn and do not own another command input. */
+  inlineCommandReply?: true;
   /** A read-only status command exchange belongs in history, not model context. */
   contextFreeCommand?: true;
   /** Host-owned acknowledgement after this final payload is confirmed delivered. */
@@ -307,6 +313,8 @@ export type ReplyPayloadMetadata = {
     sessionKey: string;
     storePath: string;
   };
+  /** The final-dispatch owner joins cleanup to the core dispatcher's settled receipt. */
+  pendingFinalDeliveryCleanup?: { preserveActivity?: boolean };
   /** replyToId existed before reply threading could inject an implicit target. */
   replyToIdExplicit?: boolean;
   /** The host's single-use reply policy already consumed its target. */
@@ -326,6 +334,8 @@ export type ReplyPayloadMetadata = {
   deliverDespiteSourceReplySuppression?: boolean;
   /** An independently delivered message does not complete the active turn's answer. */
   independentDeliveryIntentId?: string;
+  /** Explicit progress/final marker retained from the source-reply owner. */
+  sourceReplyFinal?: boolean;
   /**
    * A message-tool reply to the active internal UI source. The final payload is
    * the live delivery vehicle unless transcriptOwner identifies an already
@@ -348,7 +358,11 @@ export type ReplyPayloadMetadata = {
   /** Payload preparation generated this provider error; it is not an authored answer. */
   terminalProviderError?: true;
   /** Model fallback uses observed failure facts, never the displayed wording. */
-  providerFailure?: { reason: FailoverReason | null; rawError?: string };
+  providerFailure?: {
+    reason: FailoverReason | null;
+    rawError?: string;
+    rateLimitRetriesExhausted?: number;
+  };
   /** The warning owner observed this tool failure; presentation text is not evidence. */
   toolErrorWarning?: { toolName: string };
   /** Warning synthesized from an observed tool error after the run produced assistant output. */

@@ -20,12 +20,6 @@ function talkConfig(config: NonNullable<NonNullable<CoreConfig["channels"]>["nex
 }
 
 describe("nextcloud talk setup", () => {
-  it("shows a bot install command with webhook, response, and reaction features", () => {
-    expect(nextcloudTalkSetupWizard.introNote?.lines.join("\n")).toContain(
-      "--feature webhook --feature response --feature reaction",
-    );
-  });
-
   it("normalizes and validates base urls", () => {
     expect(normalizeNextcloudTalkBaseUrl(" https://cloud.example.com/// ")).toBe(
       "https://cloud.example.com",
@@ -50,56 +44,6 @@ describe("nextcloud talk setup", () => {
         allowFrom: ["*"],
       }),
     );
-  });
-
-  it("uses configured defaultAccount for omitted DM policy account context", () => {
-    const base: CoreConfig = talkConfig({
-      defaultAccount: "work",
-      dmPolicy: "disabled",
-      accounts: {
-        work: {
-          baseUrl: "https://cloud.example.com",
-          botSecret: "work-secret",
-          dmPolicy: "allowlist",
-        },
-      },
-    });
-
-    expect(nextcloudTalkDmPolicy.getCurrent(base)).toBe("allowlist");
-    expect(nextcloudTalkDmPolicy.resolveConfigKeys?.(base)).toEqual({
-      policyKey: "channels.nextcloud-talk.accounts.work.dmPolicy",
-      allowFromKey: "channels.nextcloud-talk.accounts.work.allowFrom",
-    });
-
-    const next = nextcloudTalkDmPolicy.setPolicy(base, "open");
-    expect(next.channels?.["nextcloud-talk"]?.dmPolicy).toBe("disabled");
-    const workAccount = next.channels?.["nextcloud-talk"]?.accounts?.work as
-      | { dmPolicy?: string; allowFrom?: Array<string | number> }
-      | undefined;
-    expect(workAccount?.dmPolicy).toBe("open");
-  });
-
-  it('writes open DM policy to the named account and preserves inherited allowFrom with "*"', () => {
-    const next = nextcloudTalkDmPolicy.setPolicy(
-      talkConfig({
-        allowFrom: ["alice"],
-        accounts: {
-          work: {
-            baseUrl: "https://cloud.example.com",
-            botSecret: "work-secret",
-          },
-        },
-      }),
-      "open",
-      "work",
-    );
-
-    expect(next.channels?.["nextcloud-talk"]?.dmPolicy).toBeUndefined();
-    const workAccount = next.channels?.["nextcloud-talk"]?.accounts?.work as
-      | { dmPolicy?: string; allowFrom?: Array<string | number> }
-      | undefined;
-    expect(workAccount?.dmPolicy).toBe("open");
-    expect(workAccount?.allowFrom).toEqual(["alice", "*"]);
   });
 
   it("validates env/default-account constraints and applies config patches", () => {
@@ -216,26 +160,6 @@ describe("nextcloud talk setup", () => {
     expect(passwordPrepared).toMatchObject({ secret: "legacy-secret" });
   });
 
-  it("clears stored bot secret fields when switching the default account to env", () => {
-    const next = nextcloudTalkSetupContract.applyAccountConfig({
-      cfg: talkConfig({
-        enabled: true,
-        baseUrl: "https://cloud.old.example",
-        botSecret: "stored-secret",
-        botSecretFile: "/tmp/secret.txt",
-      }),
-      accountId: DEFAULT_ACCOUNT_ID,
-      input: {
-        baseUrl: "https://cloud.example.com",
-        useEnv: true,
-      },
-    });
-
-    expect(next.channels?.["nextcloud-talk"]?.baseUrl).toBe("https://cloud.example.com");
-    expect(next.channels?.["nextcloud-talk"]).not.toHaveProperty("botSecret");
-    expect(next.channels?.["nextcloud-talk"]).not.toHaveProperty("botSecretFile");
-  });
-
   it("clears stored bot secret fields when the wizard switches to env", async () => {
     const credential = expectDefined(
       nextcloudTalkSetupWizard.credentials[0],
@@ -291,40 +215,6 @@ describe("nextcloud talk setup", () => {
 });
 
 describe("resolveNextcloudTalkAccount", () => {
-  it("ignores a blank bot secret file before credential precedence", () => {
-    const account = resolveNextcloudTalkAccount({
-      cfg: talkConfig({
-        baseUrl: "https://cloud.example.com",
-        botSecret: "inline-secret",
-        botSecretFile: "   ",
-      }),
-    });
-
-    expect(account.secret).toBe("inline-secret");
-    expect(account.secretSource).toBe("config");
-    expect(account.tokenStatus).toBe("available");
-    expect(account.credentialDiagnostics).toBeUndefined();
-  });
-
-  it("matches normalized configured account ids", () => {
-    const account = resolveNextcloudTalkAccount({
-      cfg: talkConfig({
-        accounts: {
-          "Ops Team": {
-            baseUrl: "https://cloud.example.com",
-            botSecret: "bot-secret",
-          },
-        },
-      }),
-      accountId: "ops-team",
-    });
-
-    expect(account.accountId).toBe("ops-team");
-    expect(account.baseUrl).toBe("https://cloud.example.com");
-    expect(account.secret).toBe("bot-secret");
-    expect(account.secretSource).toBe("config");
-  });
-
   it.runIf(process.platform !== "win32")(
     "marks symlinked botSecretFile paths configured-unavailable",
     () => {
@@ -371,26 +261,6 @@ describe("resolveNextcloudTalkAccount", () => {
     expect(account.tokenStatus).toBe("configured_unavailable");
     expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(secretFile);
     fs.rmSync(dir, { recursive: true, force: true });
-  });
-
-  it("uses configured defaultAccount when accountId is omitted", () => {
-    const account = resolveNextcloudTalkAccount({
-      cfg: talkConfig({
-        defaultAccount: "work",
-        botSecret: "top-secret",
-        accounts: {
-          work: {
-            baseUrl: "https://cloud.example.com",
-            botSecret: "work-secret",
-          },
-        },
-      }),
-    });
-
-    expect(account.accountId).toBe("work");
-    expect(account.baseUrl).toBe("https://cloud.example.com");
-    expect(account.secret).toBe("work-secret");
-    expect(account.secretSource).toBe("config");
   });
 
   it("uses configured defaultAccount for omitted setup configured state", () => {

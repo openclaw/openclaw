@@ -1,11 +1,15 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { createSqliteCommitReceipt } from "../../infra/sqlite-commit-receipt.js";
-import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import {
-  assertTransactionUsable,
-  runSqliteDeferredTransactionSync,
+  prepareSqliteTransactionCommit,
+  withSqlitePostCommitPublications,
+} from "../../infra/sqlite-post-commit.js";
+import {
+  runSqliteSingleStatementSync,
   runSqliteWorkerTransactionSync,
 } from "../../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
@@ -19,13 +23,14 @@ import {
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import { updatePreparedSessionProfileInvolvement } from "./session-accessor.sqlite-involvement.js";
+import { updatePreparedSessionProfileInvolvement } from "./session-accessor.sqlite-involvement.worker.js";
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { readSqliteSessionParticipantProjection } from "./session-accessor.sqlite-participant-projection.js";
 import { recordSessionParticipantFromWorker } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { applySessionGroupCategoryMutation } from "./session-group-categories.kernel.js";
 import { readSessionGroupCategoryKeys } from "./session-group-categories.read.js";
+import { prepareSessionParticipantContribution } from "./session-participant-contribution.worker.js";
 import { addSessionMember, removeSessionMember } from "./session-sharing-store.native.js";
 import type {
   MembershipPublication,
@@ -34,11 +39,11 @@ import type {
   SessionSharingCommitReceipt,
 } from "./session-sharing-store.types.js";
 import {
-  addSessionSuggestion,
-  claimSessionSuggestionDispatch,
-  finalizeSessionSuggestionClaim,
-  releaseSessionSuggestionDispatch,
-} from "./session-suggestion-store.js";
+  addSessionSuggestionInDatabase,
+  claimSessionSuggestionDispatchInDatabase,
+  finalizeSessionSuggestionClaimInDatabase,
+  releaseSessionSuggestionDispatchInDatabase,
+} from "./session-suggestion-store.kernel.js";
 export type { SessionSharingWorkerOperations } from "./session-sharing-store.types.js";
 
 /** The canonical agent executor retains the connection and both live admission checks. */
@@ -64,7 +69,7 @@ export function bindSqliteWorkerBackend(
     }
     return database;
   };
-  return {
+  return bindSqliteWorkerDatabase<SessionSharingWorkerOperations>(db, {
     execute(command) {
       const scope = { ...command.input.scope };
       const target = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteScope(scope)));
@@ -78,23 +83,56 @@ export function bindSqliteWorkerBackend(
       scope.storePath = context.databasePath;
       if (command.type === "category.prepare") {
         const database = workerDatabase(scope);
-        return withSqlitePostCommitPublications(db, () =>
-          runSqliteDeferredTransactionSync(db, () => {
-            categoryPlan = {
-              from: command.input.from,
-              storePath: database.path,
-              keys: readSessionGroupCategoryKeys(database, command.input.from),
-            };
-            return categoryPlan.keys;
-          }),
+        categoryPlan = {
+          from: command.input.from,
+          storePath: database.path,
+          keys: readSessionGroupCategoryKeys(database, command.input.from),
+        };
+        return categoryPlan.keys;
+      }
+      if (command.type === "participant" && typeof source.identity === "string") {
+        const contribution = prepareSessionParticipantContribution(
+          workerDatabase(scope),
+          scope,
+          command.input.params,
         );
+        if (contribution) {
+          const candidate: SessionSharingCommitReceipt = {
+            kind: "session-collaboration-committed",
+            type: command.type,
+            result: contribution.result,
+            publication: createSqliteCommitReceipt<
+              readonly SessionCollaborationFact[],
+              typeof source
+            >({
+              source,
+              domain: "session-collaboration",
+              keys: [scope.sessionKey],
+              readFact: () => ({ kind: "unchanged" }),
+            }),
+          };
+          context.admit("transaction");
+          context.admit("commit", (request, dispatch) => {
+            if (!isRecord(request.facts)) {
+              throw new Error("Session collaboration commit omitted its facts");
+            }
+            dispatch({ ...request, facts: { ...request.facts, publication: candidate } });
+          });
+          return runSqliteSingleStatementSync(db, () => {
+            contribution.stage();
+            deferSqliteWorkerCommitReceipt(db, candidate);
+            prepareSqliteTransactionCommit(sqlPublicationAnchor(db));
+            contribution.statement();
+            return contribution.result;
+          });
+        }
       }
       let candidate: SessionSharingCommitReceipt | undefined;
       let keys = [scope.sessionKey];
       let participantResult: SessionSharingWorkerOperations["participant"]["output"] | undefined;
       let membershipResult: MembershipPublication | undefined;
       let ownerResult: SessionSharingWorkerOperations["owner.assign"]["output"] | undefined;
-      return withSqlitePostCommitPublications(db, () =>
+      return withSqlitePostCommitPublications(sqlPublicationAnchor(db), () =>
         runSqliteWorkerTransactionSync(
           {
             ...context,
@@ -126,16 +164,36 @@ export function bindSqliteWorkerBackend(
                 return ownerResult;
               }
               if (command.type === "suggestion.add") {
-                return addSessionSuggestion(scope, command.input.params);
+                const database = workerDatabase(scope);
+                return addSessionSuggestionInDatabase(
+                  database,
+                  scope.sessionKey,
+                  command.input.params,
+                );
               }
               if (command.type === "suggestion.claim") {
-                return claimSessionSuggestionDispatch(scope, command.input.params);
+                const database = workerDatabase(scope);
+                return claimSessionSuggestionDispatchInDatabase(
+                  database,
+                  scope.sessionKey,
+                  command.input.params,
+                );
               }
               if (command.type === "suggestion.release") {
-                return releaseSessionSuggestionDispatch(scope, command.input.params);
+                const database = workerDatabase(scope);
+                return releaseSessionSuggestionDispatchInDatabase(
+                  database,
+                  scope.sessionKey,
+                  command.input.params,
+                );
               }
               if (command.type === "suggestion.finalize") {
-                return finalizeSessionSuggestionClaim(scope, command.input.params);
+                const database = workerDatabase(scope);
+                return finalizeSessionSuggestionClaimInDatabase(
+                  database,
+                  scope.sessionKey,
+                  command.input.params,
+                );
               }
               if (command.type === "category.apply") {
                 const database = workerDatabase(scope);
@@ -156,15 +214,16 @@ export function bindSqliteWorkerBackend(
                 );
               }
               if (command.type === "participant") {
-                const value = recordSessionParticipantFromWorker(
+                const result = recordSessionParticipantFromWorker(
                   workerDatabase(scope),
                   scope,
                   command.input.params,
                 );
                 participantResult = {
-                  value,
-                  projectionChanged: false,
-                  participants: readSqliteSessionParticipantProjection(db, scope.sessionKey),
+                  ...result,
+                  participants: result.projectionChanged
+                    ? readSqliteSessionParticipantProjection(db, scope.sessionKey)
+                    : {},
                 };
                 return participantResult;
               }
@@ -202,8 +261,7 @@ export function bindSqliteWorkerBackend(
               } else if (ownerResult && facts.kind === "owner") {
                 ownerResult.facts = facts;
                 recordFact(change.sessionKey, facts);
-              } else if (participantResult && facts.kind === "participants") {
-                participantResult.projectionChanged = true;
+              } else if (participantResult?.projectionChanged && facts.kind === "participants") {
                 recordFact(change.sessionKey, {
                   ...facts,
                   projection: participantResult.participants,
@@ -252,12 +310,5 @@ export function bindSqliteWorkerBackend(
         ),
       );
     },
-    assertSettled() {
-      assertTransactionUsable(db);
-      if (db.isTransaction) {
-        throw new Error("Session collaboration transaction did not settle");
-      }
-    },
-    close() {},
-  };
+  });
 }

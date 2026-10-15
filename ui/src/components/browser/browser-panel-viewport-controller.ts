@@ -7,6 +7,7 @@ interface BrowserPanelViewportHost {
   readonly host: { browserPanelIsOpen(): boolean };
   readonly native: { readonly activeTab: NativeBrowserTab | undefined };
   readonly activeTargetId: string | null;
+  readonly canAutoResizeViewport: boolean;
   readonly view: BrowserPanelView | null;
   readonly operations: Pick<BrowserPanelOperationOwnership, "captureClient">;
   runAction(action: (client: BrowserRequestClient) => Promise<void>): Promise<boolean>;
@@ -65,6 +66,7 @@ export class BrowserPanelViewportController {
 
   private schedule(): void {
     if (
+      !this.controller.canAutoResizeViewport ||
       this.controller.native.activeTab ||
       !this.controller.host.browserPanelIsOpen() ||
       !this.observedViewportSize
@@ -82,6 +84,7 @@ export class BrowserPanelViewportController {
     const observed = this.observedViewportSize;
     const view = this.controller.view;
     if (
+      !this.controller.canAutoResizeViewport ||
       this.controller.native.activeTab ||
       !this.controller.host.browserPanelIsOpen() ||
       !this.controller.operations.captureClient() ||

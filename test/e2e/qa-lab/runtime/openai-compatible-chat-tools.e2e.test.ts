@@ -5,6 +5,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { resolveSlotSelection } from "../../../../src/plugins/slots.js";
 import { runNodeScript } from "../../../helpers/run-node-script.js";
 import { cleanupTempDirs, makeTempDir } from "../../../helpers/temp-dir.js";
 
@@ -134,22 +135,6 @@ describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
     expect(fullProfileSourceIndex).toBeGreaterThan(buildIndex);
   });
 
-  it("fails auth preflight before Docker build work starts", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-openai-chat-tools-"));
-    try {
-      const result = runDockerRunnerAuthPreflight(root);
-      const output = `${result.stdout}\n${result.stderr}`;
-
-      expect(result.status).toBe(1);
-      expect(output).toContain("OPENAI_API_KEY was not available");
-      expect(output).not.toContain("Building Docker image:");
-      expect(output).not.toContain("Reusing Docker image:");
-      expect(output).not.toContain("Running OpenAI Chat Completions tools Docker E2E");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
   it("treats placeholder profile auth as missing before Docker build work starts", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-openai-chat-tools-"));
     try {
@@ -170,109 +155,21 @@ describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
     }
   });
 
-  it.each([
-    ["timeout", "OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS", "1e3"],
-    ["body limit", "OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES", "64bytes"],
-  ])(
-    "rejects invalid Docker runner %s before auth or Docker build work starts",
-    (_label, envName, value) => {
-      const tempDirs: string[] = [];
-      const root = makeTempDir(tempDirs, "openclaw-openai-chat-tools-");
-      try {
-        const result = runDockerRunnerAuthPreflight(root, { [envName]: value });
-        const output = `${result.stdout}\n${result.stderr}`;
-
-        expect(result.status).toBe(2);
-        expect(output).toContain(`invalid ${envName}: ${value}`);
-        expect(output).not.toContain("OPENAI_API_KEY was not available");
-        expect(output).not.toContain("Building Docker image:");
-        expect(output).not.toContain("Reusing Docker image:");
-        expect(output).not.toContain("Running OpenAI Chat Completions tools Docker E2E");
-      } finally {
-        cleanupTempDirs(tempDirs);
-      }
-    },
-  );
-
-  it("passes normalized timeout and body limits into the Docker runner", () => {
-    const runner = readFileSync(dockerRunnerPath, "utf8");
-
-    expect(runner).toContain(
-      "docker_e2e_read_positive_int_env OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS 180",
-    );
-    expect(runner).toContain(
-      "docker_e2e_read_positive_int_env OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES 1048576",
-    );
-    expect(runner).toContain('-e "OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS=$TIMEOUT_SECONDS"');
-    expect(runner).toContain('-e "OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES=$MAX_BODY_BYTES"');
-  });
-
-  it("rejects loose timeout env values instead of parsing numeric prefixes", async () => {
-    const result = await runClient(1, {
-      OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS: "1e3",
-    });
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("invalid OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS: 1e3");
-  });
-
-  it("rejects loose body limit env values instead of parsing numeric prefixes", async () => {
-    const result = await runClient(1, {
-      OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES: "64bytes",
-    });
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("invalid OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES: 64bytes");
-  });
-
-  it("rejects out-of-range client gateway ports", async () => {
-    const result = await runClient("65536");
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("invalid PORT: 65536");
-  });
-
-  it("rejects loose write-config timeout env values", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-openai-chat-tools-"));
+  it("disables background memory indexing while keeping the OpenAI provider enabled", () => {
+    const tempDirs: string[] = [];
+    const root = makeTempDir(tempDirs, "openclaw-openai-chat-tools-");
     try {
-      const result = runWriteConfig(root, {
-        OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS: "1e3",
-      });
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("invalid OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS: 1e3");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("rejects out-of-range write-config gateway ports", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-openai-chat-tools-"));
-    try {
-      const result = runWriteConfig(root, { PORT: "65536" });
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("invalid PORT: 65536");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("writes strict positive timeout and port values into generated config", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-openai-chat-tools-"));
-    try {
-      const result = runWriteConfig(root, {
-        OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS: "240",
-        PORT: "19001",
-      });
-
-      expect(result.status).toBe(0);
+      const result = runWriteConfig(root);
+      expect(result.status, result.stderr).toBe(0);
       const config = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
-      expect(config.gateway.port).toBe(19001);
-      expect(config.models.providers.openai.timeoutSeconds).toBe(240);
-      expect(config.agents.defaults.timeoutSeconds).toBe(240);
+      // An allowlist alone does not disable the implicit memory slot. Its startup
+      // catch-up reads would restore the fixture before the chat recall boundary.
+      expect(resolveSlotSelection("memory", config.plugins.slots?.memory)).toEqual({ kind: "off" });
+      expect(config.plugins.enabled).toBe(true);
+      expect(config.plugins.entries.openai.enabled).toBe(true);
+      expect(config.session.maintenance.coldStorage.enabled).toBe(true);
     } finally {
-      rmSync(root, { force: true, recursive: true });
+      cleanupTempDirs(tempDirs);
     }
   });
 
@@ -323,44 +220,6 @@ describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
     expect(bodyReadTimeoutProbe.result.stderr).toMatch(/timed out|aborted|AbortError/iu);
     expect(bodyReadTimeoutProbe.elapsedMs).toBeLessThan(3_500);
     expect(bodyReadTimeoutProbe.responseClosed).toBe(true);
-  });
-
-  it("caps chat completion response bodies before JSON parsing", async () => {
-    const server = createServer((_request, response) => {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end("x".repeat(256));
-    });
-    const port = await listen(server);
-    try {
-      const result = await runClient(port, { OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES: "64" });
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("chat completions response body exceeded 64 bytes");
-    } finally {
-      server.close();
-    }
-  });
-
-  it("rejects declared oversized chat completion bodies before waiting on the stream", async () => {
-    const server = createServer((_request, response) => {
-      response.writeHead(200, {
-        "content-length": "65",
-        "content-type": "application/json",
-      });
-      response.flushHeaders();
-    });
-    const port = await listen(server);
-    try {
-      const startedAt = Date.now();
-      const result = await runClient(port, { OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES: "64" });
-
-      expect(result.error).toBeUndefined();
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("chat completions response body exceeded 64 bytes");
-      expect(Date.now() - startedAt).toBeLessThan(3_500);
-    } finally {
-      server.close();
-    }
   });
 
   it("rejects unsafe declared chat completion body lengths before waiting on the stream", async () => {

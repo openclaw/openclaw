@@ -143,6 +143,47 @@ async function captureRegisteredRequest(params: {
 }
 
 describe("Baseten sparse live model transport", () => {
+  it("forwards configured references through the registered live catalog", async () => {
+    clearLiveCatalogCacheForTests();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        data: [{ id: "chat-local", object: "model" }],
+      }),
+    );
+    onTestFinished(() => {
+      fetchMock.mockRestore();
+      clearLiveCatalogCacheForTests();
+    });
+    const provider = await registerSingleProviderPlugin(basetenPlugin);
+    if (!provider.catalog) {
+      throw new Error("Registered Baseten catalog is missing");
+    }
+    const result = await provider.catalog.run({
+      config: { agents: { defaults: { model: "baseten/chat-typo" } } },
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: TEST_VALUE }),
+      resolveProviderAuth: () => ({
+        apiKey: TEST_VALUE,
+        discoveryApiKey: TEST_VALUE,
+        profileId: "baseten:fixture",
+        mode: "api_key",
+        source: "profile",
+      }),
+    });
+    expect(result?.outcomes).toEqual([
+      {
+        provider: "baseten",
+        profileId: "baseten:fixture",
+        status: "ready",
+        modelIdCatalog: {
+          baseUrl: expect.any(String),
+          modelIds: ["chat-local"],
+        },
+      },
+    ]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it.each(["off", "low", "high", "max"] as const)(
     "sends documented %s effort through both registered hooks",
     async (reasoning) => {
@@ -199,6 +240,24 @@ describe("Baseten sparse live model transport", () => {
         }),
       ]),
     );
+  });
+
+  it("disables the current Pro thinking envelope when thinking is off", async () => {
+    const { provider, model } = await resolveSparseLiveModel("deepseek-ai/DeepSeek-V4-Pro-0813");
+    const body = await captureRegisteredRequest({
+      provider,
+      model,
+      reasoning: "off",
+      maxTokens: 64,
+      forceTool: false,
+      context: { messages: [{ role: "user", content: "Reply with exactly ok.", timestamp: 0 }] },
+    });
+    // Baseten rejects effort "none" next to an enabled envelope with a 400.
+    expect(body).toMatchObject({
+      model: "deepseek-ai/DeepSeek-V4-Pro-0813",
+      reasoning_effort: "none",
+      thinking: { type: "disabled" },
+    });
   });
 
   it("sends the current Pro replay through its registered transport", async () => {

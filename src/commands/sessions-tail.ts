@@ -7,7 +7,7 @@ import {
 } from "../agents/agent-run-terminal-outcome.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
@@ -106,9 +106,7 @@ function safePreview(event: TrajectoryEvent): string {
       return `prompt skipped${reason ? `: ${reason}` : ""}`;
     }
     case "tool.call":
-      // Tool arguments may contain secrets or user text; tail output shows only
-      // the tool name and a redacted placeholder.
-      return `${toolName(data)} {...redacted...}`;
+      return `${toolName(data)} ${JSON.stringify(data?.arguments ?? data?.args ?? {})}`;
     case "tool.timeout":
       return `${toolName(data)} timeout`;
     case "tool.result":
@@ -131,7 +129,7 @@ function formatProgressLine(event: TrajectoryEvent): string {
   const sessionKey = event.sessionKey ?? event.sessionId;
   const sessionLabel = formatTextCell(sanitizeTerminalText(sessionKey), SESSION_KEY_PAD);
   const typeLabel = formatTextCell(sanitizeTerminalText(event.type), EVENT_TYPE_PAD);
-  const preview = safePreview(event);
+  const preview = sanitizeTerminalText(safePreview(event));
   return [formatTimestamp(event.ts).padEnd(9), typeLabel, sessionLabel, preview]
     .join(" ")
     .trimEnd();
@@ -158,7 +156,7 @@ async function selectSessionsToTail(
     runtime.log("explicit store: ordered by activity");
   } else {
     try {
-      const cfg = getRuntimeConfig();
+      const cfg = await captureRuntimeConfigAsyncReader()();
       const { sessions } = await callGatewayFromCliWithTransport<{
         sessions: Pick<GatewaySessionRow, "key" | "sessionId" | "hasActiveRun" | "status">[];
       }>(
@@ -282,7 +280,7 @@ export async function sessionsTailCommand(
     return;
   }
 
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const targets = resolveCommandSessionStoreTargets({
     cfg,
     opts: {

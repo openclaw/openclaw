@@ -99,7 +99,7 @@ export function prepareSessionFollowupCleanup(params: {
   sessionKeyAliases?: readonly string[];
   sessionId?: string;
   assertCurrent: () => void;
-}): () => number {
+}): (sessionId?: string) => number {
   const keys = new Set(
     params.keys.map((key) => normalizeOptionalString(key)).filter((key) => key !== undefined),
   );
@@ -120,7 +120,7 @@ export function prepareSessionFollowupCleanup(params: {
     return [{ key, queue, isPending, sources }];
   });
   let consumed = false;
-  return () => {
+  return (sessionId = params.sessionId) => {
     if (consumed) {
       return 0;
     }
@@ -132,7 +132,7 @@ export function prepareSessionFollowupCleanup(params: {
         continue;
       }
       const matchesCurrentTarget = (source: FollowupRun) =>
-        isPending(source) && matchesSessionFollowupRun(source, params);
+        isPending(source) && matchesSessionFollowupRun(source, { ...params, sessionId });
       const current = sources.filter(matchesCurrentTarget);
       const pending = current.filter((source) => queue.items.includes(source));
       const summaries = current.filter(
@@ -152,9 +152,22 @@ export function prepareSessionFollowupCleanup(params: {
       );
       const detached = new Set([...pending, ...summaries]);
       removed += detached.size;
-      completeFollowupRuns(detached, (error) => {
+      const onSettlementError = (error: unknown) => {
         defaultRuntime.error?.(`followup queue cancellation settlement failed: ${String(error)}`);
-      });
+      };
+      for (const source of detached) {
+        for (const correlation of source.deliveryCorrelations ?? []) {
+          try {
+            const end = correlation.begin();
+            if (typeof end === "function") {
+              end({ visibleReplySent: false, failed: true });
+            }
+          } catch (error) {
+            onSettlementError(error);
+          }
+        }
+      }
+      completeFollowupRuns(detached, onSettlementError);
       // Settlement of accepted removals is unconditional; later effects need current authority.
       params.assertCurrent();
       if (
@@ -188,7 +201,7 @@ export function clearSessionLifecycleQueues(
 
 export function prepareSessionLifecycleQueueCleanup(
   params: SessionLifecycleQueueTarget & { assertCurrent: () => void },
-): () => ClearSessionQueueResult {
+): (sessionId?: string) => ClearSessionQueueResult {
   params.assertCurrent();
   const { keys, sessionKeyAliases, matchesLaneEntry } = resolveSessionLifecycleQueueKeys(params);
   const clearFollowups = prepareSessionFollowupCleanup({
@@ -199,13 +212,15 @@ export function prepareSessionLifecycleQueueCleanup(
   const lanes = keys.map((key) =>
     prepareCommandLaneClear(resolveEmbeddedSessionLane(key), matchesLaneEntry(key)),
   );
-  return () => {
+  return (sessionId = params.sessionId) => {
     params.assertCurrent();
-    const followupCleared = clearFollowups();
+    const followupCleared = clearFollowups(sessionId);
     let laneCleared = 0;
     for (const clearLane of lanes) {
       params.assertCurrent();
-      laneCleared += clearLane();
+      laneCleared += clearLane(
+        (target) => !target || sessionId === undefined || target.sessionId === sessionId,
+      );
     }
     return { followupCleared, laneCleared, keys };
   };

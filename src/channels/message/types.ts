@@ -90,6 +90,8 @@ export type MessageReceipt = {
   deleteToken?: string;
   sentAt: number;
   raw?: readonly MessageReceiptSourceResult[];
+  /** Normalized physical send evidence, retained even when a source has no platform ID. */
+  sourceResults?: readonly MessageReceiptSourceResult[];
 };
 
 export type RenderedMessageBatchPlanKind =
@@ -162,6 +164,8 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   cfg: TConfig;
   to: string;
   text: string;
+  /** Host-resolved session that produced this send, distinct from the destination session. */
+  sessionKey?: string;
   accountId?: string | null;
   deps?: OutboundSendDeps;
   replyToId?: string | null;

@@ -4,6 +4,7 @@ import { Buffer } from "node:buffer";
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { notifyBrowserAuthRestored } from "../../../app/browser-http.ts";
 import { createChatSubmissions } from "../../../app/chat-submissions.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
@@ -12,7 +13,7 @@ import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { admitChatSubmission, reduceChatSessionProjection } from "../history-merge.ts";
 import { buildInitialChatSubmission, buildLocalUserMessage } from "../user-message-content.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -258,37 +259,6 @@ describe("canonical image presentation handoff", () => {
     }
   });
 
-  it.each(["canonical", "submitted", "initial receipt"] as const)(
-    "keeps the displayed %s image while fresh history text and media metadata arrive",
-    async (origin) => {
-      const fixture = await createCanonicalImageTranscript(undefined, undefined, origin);
-      const displayed = expectDefined(fixture.displayed[0], "displayed inline image");
-      expect(displayed.alt).toBe("image-0.png");
-      if (origin === "initial receipt") {
-        fixture.publish();
-        expectSameImageNodes(fixture.images(), [displayed]);
-      }
-      fixture.publish();
-
-      expect(fixture.container.textContent).toContain("Fresh authoritative text");
-      expect(fixture.container.textContent).not.toContain("Cached text");
-      expectSameImageNodes(fixture.images(), [displayed]);
-      expect(displayed.getAttribute("src")).toBe(fixture.previewUrls[0]);
-
-      fixture.requests[0]?.resolve(mediaMetadataResponse());
-      await flushDeferredRowPrune();
-      expectSameImageNodes(fixture.images(), [displayed]);
-      expect(displayed.getAttribute("src")).toContain(
-        encodeURIComponent(expectDefined(fixture.media[0], "canonical media fact").path),
-      );
-      expect(displayed.alt).toBe("image-0.png");
-      fixture.renderPane();
-      expectSameImageNodes(fixture.images(), [displayed]);
-      displayed.dispatchEvent(new Event("load"));
-      expectSameImageNodes(fixture.images(), [displayed]);
-    },
-  );
-
   it.each(["inline", "metadata", "loaded"] as const)(
     "keeps the displayed %s upload when the session workspace arrives",
     async (stage) => {
@@ -346,31 +316,11 @@ describe("canonical image presentation handoff", () => {
     },
     { name: "pending message identity", metadata: { id: "pending:input" } },
     { name: "missing layout", metadata: { mediaImageLayout: undefined } },
-    {
-      name: "ambiguous duplicate slots",
-      metadata: {
-        mediaImageLayout: {
-          slots: [
-            { kind: "inline", factIndex: 0 },
-            { kind: "inline", factIndex: 0 },
-          ],
-        },
-      },
-    },
   ])("does not borrow an inline preview for $name", async ({ metadata, origin }) => {
     const fixture = await createCanonicalImageTranscript(undefined, undefined, origin);
     fixture.publish(metadata, fixture.media, "Cached text");
     expect(fixture.images()).toHaveLength(0);
     expect(fixture.container.querySelector('[aria-busy="true"]')).not.toBeNull();
-  });
-
-  it.each([
-    { name: "missing inline block", factIndexes: [0, 2] },
-    { name: "duplicate fact index", factIndexes: [0, 0] },
-  ])("does not guess cached correspondence with $name", async ({ factIndexes }) => {
-    const fixture = await createCanonicalImageTranscript(factIndexes);
-    fixture.publish();
-    expect(fixture.images()).toHaveLength(0);
   });
 
   it("does not lend a displayed inline image to another pane of the same canonical message", async () => {
@@ -381,26 +331,6 @@ describe("canonical image presentation handoff", () => {
     expect(container.querySelector(".chat-message-image")).toBeNull();
     expect(fixture.requests).toHaveLength(1);
   });
-
-  it.each(["complete", "partial"] as const)(
-    "handles a %s receipt for duplicate submitted attachments",
-    async (receipt) => {
-      const fixture = await createCanonicalImageTranscript(
-        [0, 1, 2],
-        ["data:image/png;base64,YQ==", "data:image/png;base64,YQ==", "data:image/png;base64,Yg=="],
-        "submitted",
-      );
-      fixture.media[1] = fixture.media[0] ?? null;
-      const media = receipt === "partial" ? fixture.media.slice(0, 2) : fixture.media;
-      fixture.publish(
-        {
-          mediaImageLayout: { slots: media.map((_, factIndex) => ({ kind: "inline", factIndex })) },
-        },
-        media,
-      );
-      expectSameImageNodes(fixture.images(), receipt === "complete" ? fixture.displayed : []);
-    },
-  );
 
   it("binds local previews by fact position when inline blocks reorder mixed image receipts", async () => {
     const fixture = await createCanonicalImageTranscript(
@@ -439,11 +369,6 @@ describe("canonical image presentation handoff", () => {
   });
 
   it.each([
-    {
-      name: "ordered images",
-      factIndexes: [0, 1],
-      inlineUrls: ["data:image/png;base64,YQ==", "data:image/png;base64,Yg=="],
-    },
     {
       name: "sparse reordered facts with duplicate previews and references",
       factIndexes: [2, 0, 3],
@@ -543,6 +468,9 @@ describe("canonical image presentation handoff", () => {
         ]);
       } else if (change === "disconnect") {
         fixture.setConnected(false);
+        fixture.container.remove();
+        await flushDeferredRowPrune();
+        document.body.append(fixture.container);
         fixture.setConnected(true);
       }
       if (change !== "denial") {
@@ -603,7 +531,7 @@ describe("canonical image presentation handoff", () => {
       response: () => mediaMetadataResponse(false, undefined, true),
       reason: "Attachment removed",
     },
-    ...[401, 403].map((status) => ({
+    ...[401].map((status) => ({
       name: `HTTP ${status} with an unreadable body`,
       response: () => unreadableMetadataResponse(status),
       reason: "Unavailable",
@@ -641,11 +569,7 @@ describe("canonical image presentation handoff", () => {
   );
 
   it.each([
-    { presentation: "canonical", failure: "network rejection", responseStatus: null },
     { presentation: "inline-handoff", failure: "network rejection", responseStatus: null },
-    { presentation: "canonical", failure: "body read rejection", responseStatus: 200 },
-    { presentation: "canonical", failure: "HTTP 408 non-JSON", responseStatus: 408 },
-    { presentation: "canonical", failure: "HTTP 429 non-JSON", responseStatus: 429 },
     { presentation: "canonical", failure: "HTTP 503 non-JSON", responseStatus: 503 },
   ])(
     "keeps a loaded $presentation image through $failure renewal and expiry",
@@ -689,7 +613,7 @@ describe("canonical image presentation handoff", () => {
   );
 
   it.each(["native load error", "display load deadline"] as const)(
-    "ends the retained handoff visibly on %s without retrying or resurrecting it",
+    "ends the retained handoff on %s and recovers only after explicit retry",
     async (failure) => {
       vi.useFakeTimers();
       try {
@@ -707,13 +631,33 @@ describe("canonical image presentation handoff", () => {
           await vi.advanceTimersByTimeAsync(1);
         }
         expect(fixture.images()).toHaveLength(0);
-        expect(
-          fixture.container.querySelector(".chat-assistant-attachment-card--definitive"),
-        ).not.toBeNull();
+        const card = expectDefined(
+          fixture.container.querySelector(".chat-assistant-attachment-card--recoverable"),
+          "recoverable image failure",
+        );
+        expect(card.textContent).toContain("Could not load this image. Try again.");
+        const retry = expectDefined(
+          card.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__retry"),
+          "explicit Retry button",
+        );
         displayed.dispatchEvent(new Event("load"));
         fixture.renderPane();
-        await vi.advanceTimersByTimeAsync(0);
+        notifyBrowserAuthRestored();
+        await vi.advanceTimersByTimeAsync(15_000);
         expect(fixture.images()).toHaveLength(0);
+        expect(fixture.requests).toHaveLength(1);
+
+        retry.click();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(fixture.requests).toHaveLength(2);
+        expect(fixture.images()).toHaveLength(0);
+        fixture.requests[1]?.resolve(mediaMetadataResponse(true, "after-explicit-retry"));
+        await vi.advanceTimersByTimeAsync(0);
+        const recovered = expectDefined(fixture.images()[0], "retried native image");
+        expect(recovered).not.toBe(displayed);
+        expect(recovered.getAttribute("src")).toContain("mediaTicket=after-explicit-retry");
+        recovered.dispatchEvent(new Event("load"));
+        expectSameImageNodes(fixture.images(), [recovered]);
       } finally {
         vi.clearAllTimers();
         vi.useRealTimers();

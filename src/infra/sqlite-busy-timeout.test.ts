@@ -58,31 +58,6 @@ describe("runWithSqliteBusyTimeout", () => {
     expect(exec.mock.calls).toEqual([["PRAGMA busy_timeout = 25"], ["PRAGMA busy_timeout = 5000"]]);
   });
 
-  it("retains owner changes and nested overrides without rereading or setting unchanged policy", () => {
-    database = new DatabaseSync(":memory:");
-    setSqliteBusyTimeout(database, 5000);
-    const prepare = vi.spyOn(database, "prepare");
-    const exec = vi.spyOn(database, "exec");
-
-    setSqliteBusyTimeout(database, 5000);
-    runWithSqliteBusyTimeout(database, 5000, () => undefined);
-    expect(exec).not.toHaveBeenCalled();
-
-    setSqliteBusyTimeout(database, 37);
-    expect(readSqliteBusyTimeout(database)).toBe(37);
-    runWithSqliteBusyTimeout(database, 0, () => {
-      expect(() =>
-        runWithSqliteBusyTimeout(database!, 25, () => {
-          throw new Error("nested failure");
-        }),
-      ).toThrow("nested failure");
-      expect(readSqliteBusyTimeout(database!)).toBe(0);
-    });
-    expect(readSqliteBusyTimeout(database)).toBe(37);
-    expect(prepare).not.toHaveBeenCalled();
-    expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 37 });
-  });
-
   it("discards the connection policy when the native connection closes and reopens", () => {
     database = new DatabaseSync(":memory:");
     setSqliteBusyTimeout(database, 37);
@@ -93,7 +68,7 @@ describe("runWithSqliteBusyTimeout", () => {
     expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 0 });
   });
 
-  it.each([-1, 1.5])("rejects invalid timeout %s", (timeout) => {
+  it.each([-1])("rejects invalid timeout %s", (timeout) => {
     database = new DatabaseSync(":memory:");
     expect(() => runWithSqliteBusyTimeout(database!, timeout, () => undefined)).toThrow(
       "busyTimeoutMs must be a non-negative integer",

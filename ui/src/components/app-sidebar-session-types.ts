@@ -96,6 +96,7 @@ export type SidebarRecentSession = {
   agentId?: string;
   sessionId?: string;
   displayName?: string;
+  titlePending?: boolean;
   incognito?: boolean;
   createdActor?: SessionCreatedActor;
   owner?: SessionOwner;
@@ -116,6 +117,8 @@ export type SidebarRecentSession = {
   active: boolean;
   visuallyActive: boolean;
   hasActiveRun: boolean;
+  /** Defaults to logical activity for rows without a live activity projection. */
+  isRunVisuallyActive?: boolean;
   /** Raw Gateway liveness used for operations even when display status is terminal. */
   gatewayHasActiveRun?: boolean;
   hasActiveSubagentRun?: boolean;
@@ -256,6 +259,20 @@ export function rowDemandsVisibility(
         row.attention.kind !== "none";
 }
 
+const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
+export function visibleSessionChildren(params: {
+  session: SidebarRecentSession;
+  fullyShown: boolean;
+}): readonly SidebarRecentSession[] {
+  // Active, running, and attention-bearing branches must bypass the quiet-child cap.
+  return params.fullyShown
+    ? params.session.children
+    : params.session.children.filter(
+        (child, index) =>
+          index < SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT || rowDemandsVisibility(child),
+      );
+}
+
 export type SidebarSessionMenuState = {
   session: SidebarRecentSession;
   x: number;
@@ -277,21 +294,6 @@ export type SidebarSessionOwnerFilter = {
 };
 export type SidebarSessionsScrollState = "none" | "top" | "middle" | "bottom";
 
-export function resolveSidebarSessionsScrollState(
-  element: HTMLElement,
-): SidebarSessionsScrollState {
-  const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
-  if (maxScrollTop <= 1) {
-    return "none";
-  }
-  if (element.scrollTop <= 1) {
-    return "top";
-  }
-  if (element.scrollTop >= maxScrollTop - 1) {
-    return "bottom";
-  }
-  return "middle";
-}
 export type SidebarSectionDropTarget = {
   sectionId: string;
   position: "before" | "after";

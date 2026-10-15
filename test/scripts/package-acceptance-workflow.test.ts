@@ -198,9 +198,9 @@ const RELEASE_FILTER_VALIDATOR = "scripts/github/validate-release-suite-filters.
 const VERIFY_PROVIDER_SECRETS_SCRIPT =
   ".agents/skills/release-openclaw-ci/scripts/verify-provider-secrets.mjs";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
-const SETUP_NODE_V6 = "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020";
-const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
-const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+const SETUP_NODE_V6 = "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1";
+const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333";
+const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9";
 const RUN_TESTBOX_WITH_FAILURE_REPORTING =
   "steipete/run-testbox@2b6b1be536ec7f3c73757fedf5460a27ab4856b4";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -1942,7 +1942,7 @@ describe("frozen admission workflow barriers", () => {
     const setup = workflowStep(job, "Setup Node environment");
     expect(steps[0]).toEqual({
       name: "Setup supported Node runtime",
-      uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      uses: "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
       with: { "node-version": "${{ env.NODE_VERSION }}", "package-manager-cache": false },
     });
     expect(steps.indexOf(identity)).toBe(1);
@@ -4486,6 +4486,7 @@ function writePreflightConsumerTooling(toolingDir: string) {
     "npm-preflight-tooling-identity.mjs",
     "npm-prepared-bundle.mjs",
     "openclaw-npm-extended-stable-release.mjs",
+    "plugin-sdk-api-release-evidence.mjs",
     "release-tooling-identity.mjs",
     "lib/actions-artifact-archive.mjs",
     "lib/npm-core-release-packages.mjs",
@@ -10739,7 +10740,7 @@ describe("package artifact reuse", () => {
     const imageWorkflow = readFileSync(LIVE_MEDIA_RUNNER_IMAGE_WORKFLOW, "utf8");
     const buildJob = workflowJob(LIVE_MEDIA_RUNNER_IMAGE_WORKFLOW, "build");
     const buildStep = workflowStep(buildJob, "Build and push live media runner image");
-    expect(imageDockerfile).toMatch(/^FROM ubuntu:24\.04$/m);
+    expect(imageDockerfile).toMatch(/^FROM ubuntu:24\.04@sha256:[a-f0-9]{64}$/m);
     expect(imageDockerfile).toContain("apt-get install -y --no-install-recommends");
     for (const packageName of ["bash", "curl", "ffmpeg", "git", "openssh-client", "zstd"]) {
       expect(imageDockerfile).toContain(`    ${packageName} \\`);
@@ -10801,6 +10802,11 @@ describe("package artifact reuse", () => {
       "validate_live_provider_suites",
       "native-live-src-gateway-profiles-opencode-go-deepseek-glm",
     );
+    const openCodeGoSmoke = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-opencode-go-smoke",
+    );
 
     expect(deepSeek).toMatchObject({
       command:
@@ -10808,9 +10814,12 @@ describe("package artifact reuse", () => {
       profiles: "full",
     });
     expect(openCodeGo.command).toContain(
-      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash-vision-exp,opencode-go/glm-5.2,opencode-go/glm-5.3",
+      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2,opencode-go/glm-5.3 ",
     );
-    expect(openCodeGo.command).not.toContain("opencode-go/deepseek-v4-flash,");
+    expect(openCodeGo.command).not.toContain("opencode-go/deepseek-v4-flash");
+    expect(openCodeGoSmoke.command).toContain(
+      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3 OPENCLAW_LIVE_GATEWAY_SMOKE=1",
+    );
     expect(openCodeGo.command).not.toContain("opencode-go/deepseek-v4-pro");
   });
 
@@ -10834,8 +10843,8 @@ describe("package artifact reuse", () => {
     );
 
     expect(openCodeModels).toMatchObject({
-      models: "opencode-go/deepseek-v4-flash-vision-exp,opencode-go/glm-5.2,opencode-go/glm-5.3",
-      max_models: "3",
+      models: "opencode-go/glm-5.2,opencode-go/glm-5.3",
+      max_models: "2",
     });
     expect(kimi.command).toContain("OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/kimi-k2.7-code");
     expect(kimi.command).not.toContain("kimi-k2.6");

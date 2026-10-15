@@ -81,6 +81,8 @@ Example:
 
 Sensitive values in `url` (userinfo) and `headers` are redacted in logs and status output. `openclaw mcp doctor` warns when sensitive-looking `headers` or `env` entries contain literal values, so operators can move those values out of committed config.
 
+Doctor checks the authored values, including values from `$include` files, before environment substitution. References such as `${MCP_TOKEN}` and `Bearer ${MCP_TOKEN}` do not trigger the literal-value warning when the variable is set. Nonempty literal fallbacks such as `${MCP_TOKEN:-literal-token}`, escaped placeholders, and literal text around references still warn; `Bearer` and `Basic` auth scheme prefixes are allowed. Connection probes still use the resolved values.
+
 If a legacy SSE message endpoint returns HTTP 404, or a stateful Streamable HTTP
 session expires, OpenClaw retires that connection and reconnects on the next
 discovery. The failed call is reported without replaying it, because a tool may
@@ -158,6 +160,8 @@ The shared operator flow uses the following commands:
     ```
 
     OpenClaw starts the registered loopback callback, prints the authorization URL, and stores temporary OAuth verifier state in shared SQLite. Approve the request in the browser and return to the terminal; token exchange completes automatically after the callback arrives.
+
+    Providers may register an HTTP loopback callback without a port, as allowed by RFC 8252. OpenClaw retains that registration for the same `127.0.0.1`, `[::1]`, or `localhost` callback while sending the listener's port in authorization and token requests. Other callback components must match; non-loopback callbacks still require an exact match.
 
   </Step>
   <Step title="Use the manual fallback when needed">

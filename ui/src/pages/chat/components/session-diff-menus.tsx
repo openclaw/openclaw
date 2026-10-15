@@ -48,6 +48,7 @@ export type SessionDiffMenuData = SessionDiffMenuDraft & {
 };
 
 export type SessionDiffMenuAction =
+  | { kind: "collapse-code" | "collapse-functions" | "expand-code"; path: string }
   | { kind: "collapse-all" }
   | { kind: "expand-all" }
   | { kind: "open-editor"; editor: EditorId; path: string }
@@ -124,7 +125,14 @@ function SessionDiffMenuContent(
       "scope:uncommitted": { kind: "scope", value: { scope: "uncommitted" } },
     };
     const menu = props.menu;
-    if (menu?.kind === "file" && (value === "open-file" || value === "reveal-file")) {
+    if (
+      menu?.kind === "file" &&
+      (value === "open-file" ||
+        value === "reveal-file" ||
+        value === "collapse-code" ||
+        value === "collapse-functions" ||
+        value === "expand-code")
+    ) {
       run({ kind: value, path: menu.path });
       return;
     }
@@ -150,6 +158,10 @@ function SessionDiffMenuContent(
   function FileMenu(fileProps: { menu: Extract<SessionDiffMenuData, { kind: "file" }> }) {
     return (
       <>
+        <MenuItem value="collapse-code" label={t("chat.sessionDiff.collapseCode")} />
+        <MenuItem value="collapse-functions" label={t("chat.sessionDiff.collapseFunctions")} />
+        <MenuItem value="expand-code" label={t("chat.sessionDiff.expandCode")} />
+        <div class="session-menu__separator" role="separator" />
         <CopyRow value={fileProps.menu.path} label={t("chat.sessionDiff.copyPath")} />
         <wa-dropdown-item
           class="session-menu__item"

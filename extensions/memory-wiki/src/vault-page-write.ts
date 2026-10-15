@@ -25,9 +25,14 @@ export async function readWikiPageStat(vault: VaultRoot, pagePath: string) {
   });
 }
 
+export function isMissingWikiPageError(error: unknown): boolean {
+  return error instanceof FsSafeError && error.code === "not-found";
+}
+
 export async function readExistingWikiPage(
   read: () => Promise<string>,
   emptyOn: (error: unknown) => boolean,
+  fallback: () => string = () => "",
 ): Promise<string> {
   try {
     return await read();
@@ -37,11 +42,47 @@ export async function readExistingWikiPage(
       return await read();
     } catch (error) {
       if (emptyOn(error)) {
-        return "";
+        return fallback();
       }
       throw error;
     }
   }
+}
+
+export async function writeManagedMarkdownFile(params: {
+  rootDir: string;
+  relativePath: string;
+  title: string;
+  startMarker: string;
+  endMarker: string;
+  body: string;
+  signal?: AbortSignal;
+}): Promise<boolean> {
+  params.signal?.throwIfAborted();
+  const root = await fsRoot(params.rootDir);
+  const original = await readExistingWikiPage(
+    async () => decodeWikiPageUtf8(await root.readBytes(params.relativePath), params.relativePath),
+    isMissingWikiPageError,
+    () => `# ${params.title}\n`,
+  );
+  params.signal?.throwIfAborted();
+  // Generated indexes bypass page discovery. Parse existing content here so
+  // managed-block updates cannot rewrite malformed frontmatter.
+  parseWikiMarkdown(original);
+  const updated = replaceManagedMarkdownBlock({
+    original,
+    heading: "## Generated",
+    startMarker: params.startMarker,
+    endMarker: params.endMarker,
+    body: params.body,
+  });
+  const rendered = withTrailingNewline(updated);
+  if (rendered === original) {
+    return false;
+  }
+  await root.write(params.relativePath, rendered);
+  params.signal?.throwIfAborted();
+  return true;
 }
 
 export async function writeGuardedVaultPage(params: {
@@ -81,40 +122,4 @@ export async function writeGuardedVaultPage(params: {
     }
     throw error;
   }
-}
-
-export async function writeManagedMarkdownFile(params: {
-  rootDir: string;
-  relativePath: string;
-  title: string;
-  startMarker: string;
-  endMarker: string;
-  body: string;
-  signal?: AbortSignal;
-}): Promise<boolean> {
-  params.signal?.throwIfAborted();
-  const root = await fsRoot(params.rootDir);
-  const originalBytes = await root.readBytes(params.relativePath).catch(() => null);
-  const original =
-    originalBytes === null
-      ? `# ${params.title}\n`
-      : decodeWikiPageUtf8(originalBytes, params.relativePath);
-  params.signal?.throwIfAborted();
-  // Generated indexes bypass page discovery. Parse existing content here so
-  // managed-block updates cannot rewrite malformed frontmatter.
-  parseWikiMarkdown(original);
-  const updated = replaceManagedMarkdownBlock({
-    original,
-    heading: "## Generated",
-    startMarker: params.startMarker,
-    endMarker: params.endMarker,
-    body: params.body,
-  });
-  const rendered = withTrailingNewline(updated);
-  if (rendered === original) {
-    return false;
-  }
-  await root.write(params.relativePath, rendered);
-  params.signal?.throwIfAborted();
-  return true;
 }

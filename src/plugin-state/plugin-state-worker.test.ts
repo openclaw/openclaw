@@ -8,6 +8,7 @@ import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
 import type {
@@ -27,6 +28,7 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cach
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { VERSION } from "../version.js";
 import {
@@ -38,7 +40,6 @@ import {
 } from "./plugin-state-store.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
-import { sweepExpiredPluginStateEntriesInWorker } from "./plugin-state-worker-client.js";
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -104,7 +105,12 @@ describe("worker plugin state", () => {
 
   it("keeps a session-bound comparison from claiming state after its session changes", async () => {
     await withOpenClawTestState({ label: "plugin-state-session-current" }, async (state) => {
-      const target = { agentId: "main", sessionKey: "agent:main:claim", env: state.env };
+      const target = {
+        agentId: "main",
+        sessionKey: "agent:main:claim",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env }),
+        env: state.env,
+      };
       const entry = { sessionId: "claim-session", updatedAt: 1, lifecycleRevision: "original" };
       await upsertSessionEntryCore(target, entry);
       const read = await withSessionEntryReadOnlyInWorker(
@@ -160,6 +166,7 @@ describe("worker plugin state", () => {
       const targets = ["lease", "mutation"].map((key) => ({
         agentId: "main",
         sessionKey: `agent:main:${key}`,
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env }),
         env: state.env,
       }));
       for (const target of targets) {
@@ -266,13 +273,18 @@ describe("worker plugin state", () => {
     },
   );
 
-  it("opens cold state and sweeps reopened state without host data SQL", async () => {
-    await withOpenClawTestState({ label: "plugin-state-worker-sweep" }, async (state) => {
+  it("opens cold state and cleans expired rows on reopened writes without host data SQL", async () => {
+    await withOpenClawTestState({ label: "plugin-state-worker-expiry" }, async (state) => {
       const databasePath = resolveOpenClawStateSqlitePath(state.env);
+      const store = createPluginStateKeyedStore("fixture-plugin", {
+        namespace: "expiry",
+        maxEntries: 10,
+        env: state.env,
+      });
       const observation = observeHostDataSql();
       try {
         expect(existsSync(databasePath)).toBe(false);
-        expect(await sweepExpiredPluginStateEntriesInWorker({ env: state.env })).toBe(0);
+        await store.register("permanent", true);
         expect(existsSync(databasePath)).toBe(true);
         for (const method of observation.calls) {
           expect(method).not.toHaveBeenCalled();
@@ -282,14 +294,14 @@ describe("worker plugin state", () => {
         seedPluginStateEntriesForTests([
           {
             pluginId: "fixture-plugin",
-            namespace: "sweep",
+            namespace: "expiry",
             key: "expired",
             value: { expired: true },
             expiresAt: now - 1,
           },
           {
             pluginId: "fixture-plugin",
-            namespace: "sweep",
+            namespace: "expiry",
             key: "live",
             value: { live: true },
             expiresAt: now + 86_400_000,
@@ -299,8 +311,9 @@ describe("worker plugin state", () => {
         for (const method of observation.calls) {
           method.mockClear();
         }
-        expect(await sweepExpiredPluginStateEntriesInWorker({ env: state.env })).toBe(1);
-        expect(await sweepExpiredPluginStateEntriesInWorker({ env: state.env })).toBe(0);
+        await store.register("permanent", true);
+        expect(await store.lookup("expired")).toBeUndefined();
+        expect(await store.lookup("live")).toEqual({ live: true });
         for (const method of observation.calls) {
           expect(method).not.toHaveBeenCalled();
         }
@@ -308,7 +321,7 @@ describe("worker plugin state", () => {
         observation.restore();
       }
       const persisted = createPluginStateSyncKeyedStore("fixture-plugin", {
-        namespace: "sweep",
+        namespace: "expiry",
         maxEntries: 10,
         env: state.env,
       });
@@ -352,12 +365,12 @@ describe("worker plugin state", () => {
           .spyOn(worker, "postMessage")
           .mockImplementation((message, transferList) => {
             const request = asOptionalRecord(message);
+            const command =
+              request?.type === "execute" && request.input instanceof Uint8Array
+                ? asOptionalRecord(deserialize(request.input))?.type
+                : undefined;
             nativePost(message, transferList);
-            if (
-              request?.type === "execute" &&
-              request.input instanceof Uint8Array &&
-              asOptionalRecord(deserialize(request.input))?.type === "pluginState." + operation
-            ) {
+            if (command === "pluginState." + operation) {
               posted.resolve();
             }
           });
@@ -670,7 +683,7 @@ describe("worker plugin state", () => {
       const options = { namespace, maxEntries: expected.length };
       const sync = createPluginStateSyncKeyedStore(pluginId, options);
       const store = createPluginStateKeyedStore(pluginId, options);
-      const { db } = openOpenClawStateDatabase();
+      const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
       const reads = trackSqliteStatementExecutions(db, ["listing"], (sql) =>
         sql.startsWith("select ") && sql.includes('"plugin_state_entries"') ? "listing" : null,
       );

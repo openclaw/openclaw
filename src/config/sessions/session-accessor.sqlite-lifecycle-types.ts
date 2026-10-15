@@ -1,9 +1,5 @@
-import type { SubagentRunsDurableBasis } from "../../agents/subagents/registry/subagent-registry-read.types.js";
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal.js";
-import type {
-  DatabaseFileIdentity,
-  DatabasePathIdentity,
-} from "../../infra/sqlite-worker-identity.js";
+import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -35,8 +31,10 @@ import type {
 import type {
   SessionEntryCommitContext,
   SessionEntryCreateWithTranscriptOptions,
+  TranscriptEvent,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -46,7 +44,7 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 /** Transportable planning facts; live guards and native identity remain with their owners. */
 type SessionDeletionPlanningParams = Omit<
   DeleteSessionEntryLifecycleParams,
-  "commitGuard" | "env" | "expectedDatabaseIdentity" | "descendantRunBasis"
+  "commitGuard" | "env" | "expectedDatabaseIdentity"
 >;
 
 export type SessionEntryDeletionPlanInput = {
@@ -117,6 +115,7 @@ export type LifecycleRemovalProjectionInput = {
 export type ProjectedLifecycleCommitResult = {
   archivedTranscripts: SessionLifecycleArchivedTranscript[];
   beforeCount: number;
+  afterCount: number;
   maintenancePlans: SessionEntryMaintenancePlan[];
   removedSessionKeys: string[];
   pendingArchives: boolean;
@@ -128,12 +127,20 @@ export type ProjectedLifecycleCommitInput = {
   projected: ProjectedLifecycleMutation;
   materializationFailed: boolean;
   allowCanonicalRepair?: boolean;
+  creation?: SessionLifecycleCreation;
   maintenance: SessionEntryMaintenanceInput | null;
 };
 
+type SessionLifecycleCreation = {
+  preparedTranscript?: {
+    sessionKey: string;
+    sessionId: string;
+    events: readonly TranscriptEvent[];
+  };
+  ownerAssignment?: { sessionKey: string; owner: SessionOwnerAssignment };
+};
+
 export type SessionEntryLifecycleMutationParams = {
-  /** Internal durable comparison paired with the caller's live descendant guard. */
-  descendantRunBasis?: SubagentRunsDurableBasis;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   storePath: string;
@@ -151,8 +158,7 @@ export type SessionEntryLifecycleMutationParams = {
   allowCanonicalRepair?: boolean;
   /** Doctor-only synchronous state transfer that commits with the destination entry. */
   afterUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
-  /** Fresh-row sidecar writes that must not retry unrelated pending archives. */
-  afterFreshUpsertsInTransaction?: (database: OpenClawAgentDatabase) => void;
+  creation?: SessionLifecycleCreation;
   /**
    * Revalidate caller and external lifecycle owners at each synchronous deletion boundary.
    * Must not write the deleting agent database: its Worker may hold the transaction lock.
@@ -180,7 +186,7 @@ export type SqliteSessionReclamationCallbacks = {
 
 export type ReclamationDeleteParams = Omit<
   DeleteSessionEntryLifecycleParams,
-  "commitGuard" | "env" | "descendantRunBasis"
+  "commitGuard" | "env"
 >;
 
 /** Internal scope: a historical request cannot authorize whole-entry reclamation. */
@@ -192,8 +198,10 @@ export type SessionEntryMaintenanceInput = {
   activeSessionKeys?: readonly string[];
   archiveDirectory: string;
   forceMaintenance?: boolean;
+  /** Automatic cap work yields between operations; inline cleanup remains exhaustive. */
+  maxCapEntries?: number;
   maintenance: ResolvedSessionMaintenanceConfig;
-  preservation: SessionMaintenancePreservationSnapshot | null;
+  preservation: SessionMaintenancePreservationSnapshot;
   storePath: string;
 };
 
@@ -203,7 +211,6 @@ export type SessionMaintenanceLiveProtection = Pick<
 >;
 
 type SessionReclamationPlanBase = {
-  descendantRunBasis?: SubagentRunsDurableBasis;
   databaseOptions: ReclamationDatabaseOptions;
   materializedPlans: MaterializedSessionStateDeletePlan[];
 };
@@ -214,7 +221,6 @@ export type SessionMaintenanceMetadataCommand =
       kind: "maintenance-age";
       ageChanges?: readonly SessionEntryMaintenanceAgeChange[];
       maintenance: ResolvedSessionMaintenanceConfig;
-      readOnly?: { input: SessionEntryMaintenanceInput };
     }
   | {
       kind: "maintenance-plan";
@@ -229,24 +235,13 @@ export type SessionMaintenanceMetadataResult =
       nextAt: number | undefined;
       ageFact?: SessionEntryMaintenanceAgeFact;
     }
-  | { kind: "maintenance-preservation-required" }
   | { kind: "maintenance-plan-stale" }
   | {
       kind: "maintenance-plan";
       value: SessionEntryMaintenancePlan;
       nextAt: number | undefined;
       ageFact?: SessionEntryMaintenanceAgeFact;
-      readOnlyInput?: SessionEntryMaintenanceInput;
     };
-
-export type SessionMaintenanceReadCommand = Exclude<
-  SessionMaintenanceMetadataCommand,
-  { kind: "maintenance-statistics" }
-> & { expectedIdentity: DatabasePathIdentity };
-
-export type SessionMaintenanceReadResult =
-  | { kind: "maintenance-write-required" }
-  | Exclude<SessionMaintenanceMetadataResult, { kind: "maintenance-statistics" }>;
 
 export type SqliteSessionReclamationPlan =
   | (SessionReclamationPlanBase & {
@@ -358,6 +353,8 @@ type SessionEntryMaintenanceCounts = {
   capped: number;
 };
 export type SessionEntryMaintenancePlan = SessionEntryMaintenanceCounts & {
+  /** An exhaustive over-cap scan found only durable protection, without runtime/recent guards. */
+  durableNoCandidates?: true;
   /** Exact rows written by planning; parent publication must not rescan the store. */
   archivedEntries: Array<{ sessionKey: string; sessionId?: string }>;
   entryRemovals: SessionEntryRemovalPlan[];

@@ -1,5 +1,12 @@
 import { render } from "lit";
 import { onTestFinished } from "vitest";
+import type { ToolCard } from "../../../lib/chat/chat-types.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
+import { ChatToolCard, type ToolCardOptions } from "./chat-tool-cards.solid.tsx";
+
+export function renderToolCard(card: ToolCard, options: ToolCardOptions) {
+  return solidContent(ChatToolCard, { card, options });
+}
 
 export async function settleToolBridges(container: HTMLElement) {
   const settled = new Set<HTMLElement>();

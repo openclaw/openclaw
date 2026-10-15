@@ -21,7 +21,11 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./config-preflight-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./config-preflight-snapshot.js")>()),
-  readConfigPreflightSnapshot: mocks.read,
+  createConfigPreflightSnapshotReader: () => ({
+    read: mocks.read,
+    takePluginCache: () => undefined,
+    [Symbol.asyncDispose]: async () => {},
+  }),
   readAdmittedConfigSnapshot: mocks.read,
 }));
 vi.mock("../infra/sqlite-readonly-worker.js", () => ({
@@ -29,6 +33,10 @@ vi.mock("../infra/sqlite-readonly-worker.js", () => ({
 }));
 vi.mock("../state/openclaw-state-db-readonly.js", () => ({
   isArtifactPreservingStateRead: () => mocks.preserving,
+}));
+vi.mock("../state/openclaw-state-db.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-db.js")>()),
+  initializeNativeOpenClawStateDatabase: vi.fn(),
 }));
 vi.mock("./doctor-sqlite-maintenance-lock.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./doctor-sqlite-maintenance-lock.js")>()),

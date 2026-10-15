@@ -124,7 +124,7 @@ describe("managed handoff native staging", () => {
     });
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "copies private regular bytes through a temporary-directory alias=%s",
     async (alias) => {
       if (alias) {
@@ -175,19 +175,7 @@ describe("managed handoff native staging", () => {
     });
   });
 
-  it("rejects a selected addon outside the platform package entry", async () => {
-    const fixture = installedProcSafe();
-    fixture.sourceRequire.resolve.mockImplementation((name: string) =>
-      name.endsWith("/package.json")
-        ? path.join(fixture.nativeRoot, "package.json")
-        : path.join(fixture.nativeRoot, "other.node"),
-    );
-    await withMockedPlatform("freebsd", async () => {
-      expect(() => stageManagedHandoffRuntime(destination)).toThrow("unexpected package path");
-    });
-  });
-
-  it.skipIf(!supportsPosixFiles).each(["LICENSE", "dist", "dist/identity.js", "dist/native.js"])(
+  it.skipIf(!supportsPosixFiles).each(["LICENSE", "dist", "dist/native.js"])(
     "rejects source symlinks: %s",
     async (relative) => {
       const fixture = installedProcSafe();

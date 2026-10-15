@@ -18,7 +18,7 @@ import {
   type GatewayRequestHandler,
 } from "../test-helpers/gateway-client.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
-import type { CommandPalette } from "./command-palette.ts";
+import type { CommandPalette } from "./command-palette.tsx";
 
 type GatewayHarness = {
   gateway: ApplicationGateway;
@@ -68,8 +68,8 @@ export function createGateway(
     if (args[0] === "environments.list") {
       return { environments: [], profiles: [] };
     }
-    // Required placement bootstraps independently of palette search. Keep these
-    // fixtures focused on search traffic and provide the canonical empty policy.
+    // The roster carries the placement policy. Keep these fixtures focused on
+    // search traffic and provide the canonical empty roster and policy.
     if (
       args[0] === "agents.list" &&
       args[1] &&

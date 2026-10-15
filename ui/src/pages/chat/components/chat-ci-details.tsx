@@ -211,24 +211,13 @@ class ChatCiDetailsController extends ChatCiDisclosure {
     }
     clearTimeout(this.refreshTimer);
     const generation = ++this.requestGeneration;
-    const target = this.targetKey();
-    const connectionGeneration = scope.client.connectionGeneration;
-    const connectionRevision = gateway.connectionRevision;
     const controller = new AbortController();
     this.requestController = controller;
     this.loading = true;
     this.error = null;
     this.publish();
     const current = () =>
-      this.visible &&
-      generation === this.requestGeneration &&
-      target === this.targetKey() &&
-      gateway === this.gateway &&
-      gateway.connectionRevision === connectionRevision &&
-      gateway.snapshot.client === scope.client &&
-      gateway.snapshot.phase === "connected" &&
-      this.connection.isCurrent(scope) &&
-      scope.client.connectionGeneration === connectionGeneration;
+      this.visible && generation === this.requestGeneration && this.connection.isCurrent(scope);
     try {
       const result = await scope.client.request<ControlUiSessionPullRequestCheckDetails>(
         "controlUi.sessionPullRequests.checks",
@@ -242,16 +231,6 @@ class ChatCiDetailsController extends ChatCiDisclosure {
         { signal: controller.signal },
       );
       if (!current()) {
-        return;
-      }
-      if (
-        result.owner.toLowerCase() !== pr.owner.toLowerCase() ||
-        result.repo.toLowerCase() !== pr.repo.toLowerCase() ||
-        result.number !== pr.number ||
-        result.headSha !== pr.headSha
-      ) {
-        this.result = undefined;
-        this.error = t("chat.pullRequests.checksUnavailable");
         return;
       }
       this.result = result;

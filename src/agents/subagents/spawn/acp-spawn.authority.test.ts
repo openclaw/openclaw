@@ -17,6 +17,7 @@ import {
 import * as acpSessionEntry from "../../../acp/runtime/session-meta-entry.js";
 import type { CliDeps } from "../../../cli/deps.types.js";
 import {
+  captureRuntimeConfigAsyncReader,
   clearConfigCache,
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
@@ -116,6 +117,7 @@ beforeEach(async () => {
   );
   clearConfigCache();
   clearRuntimeConfigSnapshot();
+  await captureRuntimeConfigAsyncReader()();
   // Prepare the real browser cleanup surface outside the provisional-session RPC deadline.
   await loadActivatedBundledPluginPublicSurfaceModule({
     dirName: "browser",
@@ -178,7 +180,7 @@ it.each([
         promptedAt: 1,
       });
     }
-    const context = withLocalGatewayRequestScope(
+    const context = await withLocalGatewayRequestScope(
       { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
       () => getPluginRuntimeGatewayRequestScope()!.context!,
     );

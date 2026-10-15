@@ -4,7 +4,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
-import { setReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
   markBeforeAgentRunBlockedPayloads,
@@ -26,6 +26,7 @@ import {
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { enqueueFollowupRun, refreshQueuedFollowupSession } from "./queue.js";
+import { isInternalSourceReplyChannel } from "./source-reply-delivery-mode.js";
 import {
   buildStrandedReplyDeliveryFailurePayload,
   resolveStrandedReplyRecovery,
@@ -207,11 +208,33 @@ export async function completeReplyAgentRun(input: {
       });
       pendingText = stripped.shouldSkip ? "" : stripped.text || pendingText;
     }
+    // The local source observer confirms the committed answer in chat history.
+    // Its live notification needs no second durable delivery state machine.
+    const canUseLocalTranscript =
+      isInternalSourceReplyChannel(sessionCtx) && !prepared.reminderNoteAppended;
     const sendableFinalPayloads = sourceReplyPolicy.suppressDelivery
       ? []
-      : finalPayloads.filter(
-          (payload) => normalizePendingFinalDeliveryPayloads([payload]).length > 0,
-        );
+      : finalPayloads.filter((payload) => {
+          const metadata = getReplyPayloadMetadata(payload);
+          const committedLocalText =
+            canUseLocalTranscript &&
+            metadata?.localTranscriptDeliveryConfirmed === true &&
+            !metadata.assistantMediaFailures?.length &&
+            !payload.mediaUrl &&
+            !payload.mediaUrls?.length &&
+            !payload.attachments?.length &&
+            !payload.presentation &&
+            !payload.interactive &&
+            !payload.channelData &&
+            !payload.location &&
+            !payload.btw &&
+            !payload.delivery &&
+            !payload.spokenText &&
+            !payload.ttsSupplement &&
+            !metadata?.responsePrefix &&
+            !metadata?.responseUsageLine;
+          return !committedLocalText && normalizePendingFinalDeliveryPayloads([payload]).length > 0;
+        });
     if (sendableFinalPayloads.length > 0) {
       const commandOwner = getCommandOwnerAuthority(followupRun.run);
       const commandOwnerReference = commandOwner
@@ -271,7 +294,7 @@ export async function completeReplyAgentRun(input: {
   }
   activeSessionEntry = (await completion?.complete()) ?? activeSessionEntry;
   const result = returnWithQueuedFollowupDrain(
-    finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
+    finalPayloads.length <= 1 ? finalPayloads[0] : finalPayloads,
   );
   scheduleReplySessionMaintenance({ context, accounting, sessionEntry: activeSessionEntry });
   return result;

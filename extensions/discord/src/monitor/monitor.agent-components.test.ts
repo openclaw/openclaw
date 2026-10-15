@@ -3,6 +3,7 @@ import { ChannelType, ComponentType } from "discord-api-types/v10";
 import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { logDebug } from "openclaw/plugin-sdk/logging-core";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   clearRuntimeConfigSnapshot,
@@ -35,6 +36,11 @@ import {
   createAgentSelectMenu,
 } from "./agent-components.system-controls.js";
 import { createDiscordLivePolicyReader } from "./live-policy.js";
+
+vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>()),
+  logDebug: vi.fn(),
+}));
 
 describe("agent components", () => {
   const defaultDmSessionKey = buildAgentSessionKey({
@@ -186,6 +192,7 @@ describe("agent components", () => {
   beforeEach(() => {
     resetDiscordComponentRuntimeMocks();
     resetSystemEventsForTest();
+    vi.mocked(logDebug).mockClear();
   });
 
   it("does not create pairing after policy is revoked during the component store read", async () => {
@@ -388,6 +395,10 @@ describe("agent components", () => {
       },
     );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
+    const diagnostics = vi.mocked(logDebug).mock.calls.flat().join("\n");
+    expect(diagnostics).toContain("interaction=interaction-1");
+    expect(diagnostics).not.toContain("alpha");
+    expect(diagnostics).not.toContain("Alice");
   });
 
   it("keeps malformed percent cid values without throwing", async () => {

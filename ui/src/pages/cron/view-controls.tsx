@@ -1,10 +1,11 @@
+import { createUniqueId } from "solid-js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import type { CronJob } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { CronProps } from "./view-types.ts";
-import "../../components/web-awesome.ts";
 export function ErrorBanner(props: { error: string | null }) {
   return (
     <>
@@ -33,23 +34,52 @@ export function AdminRequired(props: CronProps) {
 // Run now and pause/resume are visible controls (rows and detail header);
 // the menu only carries the low-traffic actions.
 export function JobMenu(props: CronProps & { job: CronJob }) {
+  const id = createUniqueId();
   const systemOwned = () => isSystemMonitorDeclaration(props.job.declarationKey);
   const displayName = () => props.job.displayName ?? props.job.name;
   return (
-    <wa-dropdown
+    <Menu
+      id={id}
+      label={t("cron.actions.moreJob", { name: displayName() })}
       class="cron-job-menu"
+      triggerClass="btn btn--sm btn--ghost cron-job-menu__trigger"
+      triggerAttributes={{ title: t("cron.actions.moreJob", { name: displayName() }) }}
+      trigger={<Icon name="moreHorizontal" />}
       placement="bottom-end"
-      onWa-select={(
-        event: CustomEvent<{
-          item: {
-            value?: string;
-          };
-        }>,
-      ) => {
+      items={[
+        ...(props.job.schedule.kind === "event"
+          ? []
+          : [
+              {
+                id: "run-if-due",
+                label: t("cron.actions.runIfDue"),
+                class: "cron-job-menu__item",
+                disabled: props.busy || !props.canManage,
+              },
+            ]),
+        ...(systemOwned()
+          ? []
+          : [
+              {
+                id: "clone",
+                label: t("cron.actions.clone"),
+                class: "cron-job-menu__item",
+                disabled: props.busy || !props.canManage,
+              },
+              {
+                id: "remove",
+                label: t("cron.actions.remove"),
+                class: "cron-job-menu__item danger",
+                variant: "danger" as const,
+                disabled: props.busy || !props.canManage,
+              },
+            ]),
+      ]}
+      onSelect={(item) => {
         if (!props.canManage) {
           return;
         }
-        switch (event.detail.item.value) {
+        switch (item.id) {
           case "run-if-due":
             props.onRun(props.job, "due");
             break;
@@ -63,28 +93,9 @@ export function JobMenu(props: CronProps & { job: CronJob }) {
               props.onRemove(props.job);
             }
             break;
-          case undefined:
-            break;
         }
       }}
-    >
-      <button
-        slot="trigger"
-        type="button"
-        class="btn btn--sm btn--ghost cron-job-menu__trigger"
-        aria-label={t("cron.actions.moreJob", { name: displayName() })}
-        title={t("cron.actions.moreJob", { name: displayName() })}
-      >
-        <Icon name="moreHorizontal" />
-      </button>
-      <MenuItem {...props} value="run-if-due" label={t("cron.actions.runIfDue")} />
-      {systemOwned() ? undefined : (
-        <MenuItem {...props} value="clone" label={t("cron.actions.clone")} />
-      )}
-      {systemOwned() ? undefined : (
-        <MenuItem {...props} value="remove" label={t("cron.actions.remove")} danger />
-      )}
-    </wa-dropdown>
+    />
   );
 }
 export function EnabledSwitch(
@@ -116,23 +127,5 @@ export function EnabledSwitch(
       />
       {props.compact ? undefined : <span class="cron-detail-sub">{stateLabel()}</span>}
     </span>
-  );
-}
-function MenuItem(
-  props: CronProps & {
-    value: string;
-    label: string;
-    danger?: boolean;
-  },
-) {
-  return (
-    <wa-dropdown-item
-      class={props.danger ? "cron-job-menu__item danger" : "cron-job-menu__item"}
-      value={props.value}
-      variant={props.danger ? "danger" : "default"}
-      disabled={props.busy || !props.canManage}
-    >
-      {props.label}
-    </wa-dropdown-item>
   );
 }

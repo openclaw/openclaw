@@ -150,7 +150,7 @@ describe("current cron delivery origin", () => {
             "missing-last": {
               label: "announce -> last",
               detail: expect.stringContaining(
-                "last -> no route, will fail-closed: Delivering to telegram requires target",
+                "last -> no route, will be blocked: Delivering to telegram requires target",
               ),
             },
             "missing-explicit": {
@@ -313,7 +313,6 @@ describe("current cron delivery origin", () => {
     { surface: "webchat", channelCount: 1, sessionTarget: "current" as const },
     { surface: "dashboard", channelCount: 2, sessionTarget: "isolated" as const },
     { surface: "webchat", channelCount: 1, sessionTarget: "isolated" as const },
-    { surface: "webchat", channelCount: 0, sessionTarget: "isolated" as const },
   ])(
     "keeps a $sessionTarget $surface completion in its conversation with $channelCount unrelated channels",
     async (options) => {
@@ -350,7 +349,7 @@ describe("current cron delivery origin", () => {
             expect(preview.label).toBe(
               "to" in coordinates ? "announce -> last:recipient" : "announce -> last",
             );
-            expect(preview.detail).toContain("will fail-closed");
+            expect(preview.detail).toContain("will be blocked");
           }
         },
       );
@@ -396,7 +395,7 @@ describe("current cron delivery origin", () => {
           });
           expect(resolved).toMatchObject({ ok: false, channel: "unavailable-plugin" });
           expect((await resolveCronDeliveryPreview({ cfg, job })).detail).toContain(
-            "will fail-closed",
+            "will be blocked",
           );
         },
       );
@@ -505,7 +504,7 @@ describe("current cron delivery origin", () => {
         job.payload = { kind: "command", argv: ["echo", "report"] };
         const preview = await resolveCronDeliveryPreview({ cfg, job });
         expect(preview.label).toBe("announce -> last");
-        expect(preview.detail).toContain("will fail-closed");
+        expect(preview.detail).toContain("will be blocked");
       });
     },
   );

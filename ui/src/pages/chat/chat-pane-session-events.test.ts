@@ -10,6 +10,7 @@ import type {
   SessionRowEventListener,
   SessionRowObservation,
 } from "../../lib/sessions/session-capability.ts";
+import { solidContent } from "../../lit/solid-content.tsx";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
@@ -21,7 +22,7 @@ import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { renderChatPermissionPicker } from "./components/chat-permission-picker.ts";
+import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -699,7 +700,10 @@ describe("mounted pane session event ownership", () => {
       expect(selectedChatSessionRow(state)).toMatchObject(observed);
       const container = document.createElement("div");
       const draw = () => {
-        render(renderChatPermissionPicker(composerControls(state).permissionPicker), container);
+        render(
+          solidContent(ChatPermissionPicker, composerControls(state).permissionPicker),
+          container,
+        );
         return container.querySelector<HTMLButtonElement>("[data-chat-permission-select]");
       };
       expect(draw()?.dataset.chatSelectValue).toBe("workspace");

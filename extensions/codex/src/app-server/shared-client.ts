@@ -120,6 +120,7 @@ type CodexAppServerClientStartupOptions = Omit<
     | "onStartedClient"
     | "onAcquireObservation"
     | "assertCurrent"
+    | "assertCurrentAsync"
   > & {
     lifetime: CodexAppServerStartupLifetime;
     authProfileId: string | null | undefined;
@@ -200,6 +201,8 @@ export type CodexAppServerClientOptions = {
   abandonSignal?: AbortSignal;
   /** Caller authority for startup of an isolated, caller-owned client. */
   assertCurrent?: () => void;
+  /** Caller row authority, awaited immediately before isolated startup effects. */
+  assertCurrentAsync?: () => Promise<void>;
 };
 
 /** Factory used by attempt startup and side turns to acquire a leased client. */
@@ -395,6 +398,7 @@ export type CodexAppServerLeasedRequestOptions = {
   timeoutMs: number;
   signal?: AbortSignal;
   assertCurrent: () => void;
+  withCurrent?: (write: () => void) => Promise<void>;
 };
 
 /** Shares a deadline and live lease check across one operation's requests. */
@@ -437,7 +441,19 @@ export async function withCodexAppServerClientRequestScope<T>(params: {
     requestOptions();
     return await params.run(client, () => {
       assertCurrent();
-      return { ...requestOptions(), assertCurrent };
+      return {
+        ...requestOptions(),
+        assertCurrent,
+        ...(params.options?.assertCurrentAsync
+          ? {
+              withCurrent: async (write: () => void) => {
+                await params.options?.assertCurrentAsync?.();
+                assertCurrent();
+                write();
+              },
+            }
+          : {}),
+      };
     });
   } finally {
     scopeActive = false;
@@ -650,6 +666,7 @@ function createSharedCodexAppServerClientStartup(
 export async function createIsolatedCodexAppServerClient(
   options?: CodexAppServerClientOptions,
 ): Promise<CodexAppServerClient> {
+  await options?.assertCurrentAsync?.();
   options?.assertCurrent?.();
   const { context, lifetime, abandonSignal, startedAt, assertCurrent } =
     await prepareCodexAppServerClient(options);
@@ -671,6 +688,7 @@ export async function createIsolatedCodexAppServerClient(
       timeoutMs: resolveRemainingAcquireTimeout(timeoutMs, startedAt),
       abandonSignal,
       assertCurrent: options?.assertCurrent,
+      assertCurrentAsync: options?.assertCurrentAsync,
       onAcquireObservation: options?.onAcquireObservation,
       onStartedClient: (client) => {
         const state = getSharedCodexAppServerClientState();
@@ -817,7 +835,8 @@ async function startInitializedCodexAppServerClientOnce(
     try {
       observeAcquire(params, { boundary: "transport-registration" });
       client = await waitForStartup(() => {
-        starting = CodexAppServerClient.start(startOptions, () => {
+        starting = CodexAppServerClient.start(startOptions, async () => {
+          await params.assertCurrentAsync?.();
           assertStartupCurrent();
           resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt);
         });
@@ -945,6 +964,7 @@ async function startInitializedCodexAppServerClientOnce(
           startOptions,
           config: params.config,
           assertCurrent: assertStartupCurrent,
+          assertCurrentAsync: params.assertCurrentAsync,
           ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
         }),
       );

@@ -26,14 +26,35 @@ import type {
 } from "openclaw/plugin-sdk/video-generation";
 import { TOGETHER_BASE_URL } from "./models.js";
 
-const DEFAULT_TOGETHER_VIDEO_MODEL = "Wan-AI/Wan2.2-T2V-A14B";
-const TOGETHER_IMAGE_TO_VIDEO_MODELS = new Set(["Wan-AI/Wan2.2-I2V-A14B"]);
+const DEFAULT_TOGETHER_VIDEO_MODEL = "Wan-AI/wan2.7-t2v";
+const TOGETHER_IMAGE_TO_VIDEO_MODELS = new Set(["Wan-AI/wan2.7-i2v"]);
 const TOGETHER_VIDEO_BASE_URL = "https://api.together.xyz/v2";
 const DEFAULT_TIMEOUT_MS = 120_000;
+// Live Wan 2.7 generations have taken about 10 minutes to complete.
+const DEFAULT_OPERATION_TIMEOUT_MS = 1_200_000;
 const POLL_INTERVAL_MS = 5_000;
-const MAX_POLL_ATTEMPTS = 120;
+const MAX_POLL_ATTEMPTS = 240;
 const TOGETHER_MIN_DURATION_SECONDS = 1;
 const TOGETHER_MAX_DURATION_SECONDS = 10;
+// Wan's documented minimum is 2s; retain OpenClaw's existing 10s ceiling.
+const TOGETHER_WAN_DURATIONS = [2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
+const TOGETHER_MODEL_DURATIONS = {
+  "Wan-AI/wan2.7-t2v": TOGETHER_WAN_DURATIONS,
+  "Wan-AI/wan2.7-i2v": TOGETHER_WAN_DURATIONS,
+};
+// https://docs.together.ai/docs/wan2.7-quickstart#prompting-tips
+const TOGETHER_WAN_SIZES: Record<string, { resolution: string; ratio: string }> = {
+  "1280x720": { resolution: "720P", ratio: "16:9" },
+  "1920x1080": { resolution: "1080P", ratio: "16:9" },
+  "720x1280": { resolution: "720P", ratio: "9:16" },
+  "1080x1920": { resolution: "1080P", ratio: "9:16" },
+  "960x960": { resolution: "720P", ratio: "1:1" },
+  "1440x1440": { resolution: "1080P", ratio: "1:1" },
+  "1104x832": { resolution: "720P", ratio: "4:3" },
+  "1648x1248": { resolution: "1080P", ratio: "4:3" },
+  "832x1104": { resolution: "720P", ratio: "3:4" },
+  "1248x1648": { resolution: "1080P", ratio: "3:4" },
+};
 
 type TogetherVideoResponse = {
   id?: string;
@@ -87,12 +108,12 @@ function readTogetherVideoFailureMessage(payload: TogetherVideoResponse): string
     : undefined;
 }
 
-function resolveTogetherDurationSeconds(value: unknown): string | undefined {
+function resolveTogetherDurationSeconds(value: unknown, min: number): string | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
   }
   const duration = asSafeIntegerInRange(Math.round(value), {
-    min: TOGETHER_MIN_DURATION_SECONDS,
+    min,
     max: TOGETHER_MAX_DURATION_SECONDS,
   });
   return duration === undefined ? undefined : String(duration);
@@ -103,25 +124,22 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
     id: "together",
     label: "Together",
     defaultModel: DEFAULT_TOGETHER_VIDEO_MODEL,
-    models: [
-      DEFAULT_TOGETHER_VIDEO_MODEL,
-      "Wan-AI/Wan2.2-I2V-A14B",
-      "minimax/hailuo-02",
-      "kwaivgI/kling-2.1-master",
-    ],
+    models: [DEFAULT_TOGETHER_VIDEO_MODEL, "Wan-AI/wan2.7-i2v", "minimax/hailuo-02"],
     isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "together", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,
         maxDurationSeconds: TOGETHER_MAX_DURATION_SECONDS,
+        supportedDurationSecondsByModel: TOGETHER_MODEL_DURATIONS,
         supportsSize: true,
       },
       imageToVideo: {
         enabled: true,
         maxInputImagesByModel: {
-          "Wan-AI/Wan2.2-I2V-A14B": 1,
+          "Wan-AI/wan2.7-i2v": 1,
         },
         maxDurationSeconds: TOGETHER_MAX_DURATION_SECONDS,
+        supportedDurationSecondsByModel: TOGETHER_MODEL_DURATIONS,
         supportsSize: true,
       },
       videoToVideo: {
@@ -160,17 +178,30 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
           capability: "video",
           transport: "http",
         });
+      const model = normalizeOptionalString(req.model) ?? DEFAULT_TOGETHER_VIDEO_MODEL;
+      const isWanModel =
+        model === DEFAULT_TOGETHER_VIDEO_MODEL || TOGETHER_IMAGE_TO_VIDEO_MODELS.has(model);
       const body: Record<string, unknown> = {
-        model: normalizeOptionalString(req.model) ?? DEFAULT_TOGETHER_VIDEO_MODEL,
+        model,
         prompt: req.prompt,
       };
-      const model = String(body.model);
-      const duration = resolveTogetherDurationSeconds(req.durationSeconds);
+      const duration = resolveTogetherDurationSeconds(
+        req.durationSeconds,
+        isWanModel ? TOGETHER_WAN_DURATIONS[0] : TOGETHER_MIN_DURATION_SECONDS,
+      );
       if (duration !== undefined) {
         body.seconds = duration;
       }
       const size = normalizeOptionalString(req.size);
-      if (size) {
+      if (size && isWanModel) {
+        const dimensions = TOGETHER_WAN_SIZES[size];
+        if (!dimensions) {
+          throw new Error(
+            `Together video model ${model} does not support size ${size}. Use ${Object.keys(TOGETHER_WAN_SIZES).join(", ")} or omit size.`,
+          );
+        }
+        Object.assign(body, dimensions);
+      } else if (size) {
         const match = /^(\d+)x(\d+)$/u.exec(size);
         if (match) {
           body.width = Number.parseInt(match[1] ?? "", 10);
@@ -180,7 +211,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
       if (req.inputImages?.[0]) {
         if (!TOGETHER_IMAGE_TO_VIDEO_MODELS.has(model)) {
           throw new Error(
-            `Together video model ${model} does not support image reference inputs. Use Wan-AI/Wan2.2-I2V-A14B or omit input images.`,
+            `Together video model ${model} does not support image reference inputs. Use Wan-AI/wan2.7-i2v or omit input images.`,
           );
         }
         const input = req.inputImages[0];
@@ -192,7 +223,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
         if (!value) {
           throw new Error("Together reference image is missing image data.");
         }
-        body.media = { reference_images: [value] };
+        body.media = { frame_images: [{ input_image: value, frame: "first" }] };
       }
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/videos`,
@@ -229,7 +260,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
                 deadline:
                   deadline.deadlineAtMs === undefined
                     ? createProviderOperationDeadline({
-                        timeoutMs: DEFAULT_TIMEOUT_MS,
+                        timeoutMs: DEFAULT_OPERATION_TIMEOUT_MS,
                         label: `Together video generation task ${videoId}`,
                       })
                     : { ...deadline, label: `Together video generation task ${videoId}` },

@@ -295,7 +295,7 @@ describe("runCliAgent before_agent_reply seam", () => {
           expect(effect).toHaveBeenCalledOnce();
           if (scenario === "current root") {
             expect(heldRequest).toThrow("no longer active");
-            expect(heldClaim).toThrow("generation is unavailable");
+            expect(heldClaim).toThrow("no longer active");
           }
         }
         expect(prepareMock).not.toHaveBeenCalled();
@@ -445,6 +445,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(authSuccessMock).toHaveBeenCalledWith({
       store,
       profileId,
+      modelId: runParams.model,
       provider: "google-gemini-cli",
       agentDir: "/tmp/agent",
     });
@@ -644,6 +645,12 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(result.meta.agentMeta?.sessionId).toBe("");
     expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
     expect(result.payloads?.[0]?.text).toBe(SILENT_REPLY_TOKEN);
+    expect(result.meta).toMatchObject({
+      finalAssistantRawText: "NO_REPLY",
+      providerStarted: false,
+    });
+    const { resolveDiagnosticModelResponse } = await import("./diagnostic-model-response.js");
+    expect(resolveDiagnosticModelResponse(result)).toBeUndefined();
     expect(prepareMock).not.toHaveBeenCalled();
     expect(executeMock).not.toHaveBeenCalled();
   });
@@ -758,7 +765,11 @@ describe("runCliAgent before_agent_reply seam", () => {
   });
 
   it("preserves delivery after failed MCP retirement", async () => {
-    executeMock.mockResolvedValue({ text: "", didSendViaMessagingTool: true });
+    executeMock.mockResolvedValue({
+      text: "",
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+    });
     retireMock.mockImplementation(async ({ onError }: { onError?: (error: unknown) => void }) => {
       onError?.(new Error("session mcp retire failed"));
       return false;

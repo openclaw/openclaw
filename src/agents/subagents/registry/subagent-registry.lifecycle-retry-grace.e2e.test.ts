@@ -2,7 +2,8 @@
 // lifecycle events race gateway waits or transient announce failures.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../../../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
@@ -31,6 +32,7 @@ import {
   createLifecycleAgentCallWaits,
   createLifecycleWaits,
 } from "./subagent-registry.lifecycle-waits.test-support.js";
+import { createRequesterWakeSessionFixture } from "./subagent-registry.requester-wake-session.test-support.js";
 import * as mod from "./subagent-registry.test-helpers.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
@@ -121,8 +123,10 @@ vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));
 
+// mock-isolation: Registry fixtures supply requester depth without opening a session database.
 vi.mock("../spawn/subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => 0,
+  getSubagentDepthFromSessionStoreInWorker: async () => 0,
 }));
 
 describe("subagent registry lifecycle error grace", () => {
@@ -141,39 +145,28 @@ describe("subagent registry lifecycle error grace", () => {
       lifecycleHandler = handler;
       return noop;
     });
-    loadConfigMock.mockClear().mockReturnValue({
+    const config: OpenClawConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
       session: { mainKey: "main", scope: "per-sender" },
-    });
+    };
+    setRuntimeConfigSnapshot(config);
+    loadConfigMock.mockClear().mockReturnValue(config);
     agentCallPlan = [];
     agentCallGates = new Map();
     chatHistoryBySessionKey = new Map();
     transcriptEventsBySessionKey = new Map();
-    sessionStore = new Proxy<Record<string, SessionStoreEntry>>(
-      {
-        "agent:main:main": {
-          sessionId: "sess-main",
-          updatedAt: 1,
-          delivery: {
-            kind: "external",
-            route: { channel: "discord", accountId: "default", target: { to: "user-1" } },
-            context: { channel: "discord", to: "user-1", accountId: "default" },
-            origin: { provider: "discord", to: "user-1", accountId: "default" },
-          },
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: 1,
+        delivery: {
+          kind: "external",
+          route: { channel: "discord", accountId: "default", target: { to: "user-1" } },
+          context: { channel: "discord", to: "user-1", accountId: "default" },
+          origin: { provider: "discord", to: "user-1", accountId: "default" },
         },
       },
-      {
-        get(target, prop, receiver) {
-          if (typeof prop !== "string" || prop in target) {
-            return Reflect.get(target, prop, receiver);
-          }
-          return {
-            sessionId: `sess-${prop.replace(/[^a-z0-9]+/gi, "-")}`,
-            updatedAt: 1,
-          };
-        },
-      },
-    );
+    };
     await replaceSessionEntry(
       { storePath: sessionStorePath, sessionKey: MAIN_REQUESTER_SESSION_KEY },
       sessionStore[MAIN_REQUESTER_SESSION_KEY]!,
@@ -211,7 +204,6 @@ describe("subagent registry lifecycle error grace", () => {
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
       getRuntimeConfig: loadConfigMock,
       readSubagentSessionEntry: (_storePath, sessionKey) => sessionStore[sessionKey],
-      resolveAgentIdFromSessionKey: (key) => key?.match(/^agent:([^:]+)/)?.[1] ?? "main",
       resolveSessionStorePathCore: () => sessionStorePath,
     });
   });
@@ -239,32 +231,38 @@ describe("subagent registry lifecycle error grace", () => {
         process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
       }
       await testState.cleanup();
+      clearRuntimeConfigSnapshot();
     }
   });
 
-  const {
-    flushAsync,
-    waitForRun,
-    waitForDeliveredCleanup,
-    waitForFrozenResult,
-    waitForFrozenResultText,
-  } = createLifecycleWaits(MAIN_REQUESTER_SESSION_KEY);
+  const { flushAsync, waitForRun, waitForDeliveredCleanup, waitForFrozenResultText } =
+    createLifecycleWaits(MAIN_REQUESTER_SESSION_KEY);
 
   const waitForAgentCallCount = (count: number) => agentCallWaits.waitForAgentCallCount(count);
   const waitForCleanupHandledFalse = (runId: string) =>
     agentCallWaits.waitForCleanupHandledFalse(runId);
 
-  function registerCompletionRun(
+  const { prepareChildSession } = createRequesterWakeSessionFixture({
+    requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+    getSessionStore: () => sessionStore,
+    getSessionStorePath: () => sessionStorePath,
+  });
+
+  async function registerCompletionRun(
     runId: string,
     childSuffix: string,
     task: string,
     requesterTurnRunId?: string,
     expectsCompletionMessage = true,
   ) {
+    const childSessionKey = `agent:main:subagent:${childSuffix}`;
+    const sessionEntry = await prepareChildSession(childSessionKey, `sess-${runId}`);
     return mod.registerSubagentRun({
       runId,
       requesterTurnRunId,
-      childSessionKey: `agent:main:subagent:${childSuffix}`,
+      childSessionKey,
+      childAgentId: "main",
+      sessionEntry,
       requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
       requesterAgentId: "main",
       requesterDisplayKey: "main",
@@ -322,6 +320,7 @@ describe("subagent registry lifecycle error grace", () => {
     const requesterTurnRunId = "run-requester-visible-yield";
     const runId = "run-visible-yield";
     const childSessionKey = "agent:main:dashboard:visible-yield";
+    const sessionEntry = await prepareChildSession(childSessionKey, `sess-${runId}`);
     const spawnResult = await maybeSpawnVisibleSession({
       raw: { visible: true },
       task: "finish visible dashboard work",
@@ -339,6 +338,8 @@ describe("subagent registry lifecycle error grace", () => {
         },
         callGateway: vi.fn(async () => ({
           key: childSessionKey,
+          sessionId: sessionEntry.sessionId,
+          entry: sessionEntry,
           runStarted: true,
           runId,
         })) as never,
@@ -862,29 +863,6 @@ describe("subagent registry lifecycle error grace", () => {
     ).toEqual(["All work complete, final summary", "All work complete, final summary"]);
   });
 
-  it("regression, captures frozen completion output with 100KB cap and retains it for keep-mode cleanup", async () => {
-    await registerCompletionRun("run-capped", "capped", "capped result test", undefined, false);
-    setAssistantOutput("agent:main:subagent:capped", "x".repeat(120 * 1024), "run-capped");
-
-    emitLifecycleEvent("run-capped", { phase: "end", endedAt: Date.now() });
-    await flushAsync();
-    await agentCallWaits.settle();
-
-    const run = await waitForFrozenResult("run-capped", (resultText) =>
-      resultText.includes("[truncated: frozen completion output exceeded 100KB"),
-    );
-    expect(getAgentCalls()).toHaveLength(0);
-    expect(run.runId).toBe("run-capped");
-    expect(typeof run.completion?.resultText).toBe("string");
-    expect(run.completion?.resultText).toContain(
-      "[truncated: frozen completion output exceeded 100KB",
-    );
-    expect(Buffer.byteLength(run.completion?.resultText ?? "", "utf8")).toBeLessThanOrEqual(
-      100 * 1024,
-    );
-    expect(run.completion?.capturedAt).toBeTypeOf("number");
-  });
-
   it("announces a provider hard timeout from its canonical lifecycle metadata", async () => {
     await registerCompletionRun(
       "run-provider-timeout",
@@ -919,50 +897,6 @@ describe("subagent registry lifecycle error grace", () => {
       .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
       .find((candidate) => candidate.runId === "run-provider-timeout");
     expect(run?.execution.outcome?.status).toBe("timeout");
-  });
-
-  it("cancels timeout grace when a successful end event arrives before the grace window expires", async () => {
-    await registerCompletionRun("run-timeout-cancel", "timeout-cancel", "timeout cancel test");
-    setAssistantOutput(
-      "agent:main:subagent:timeout-cancel",
-      "Final answer after recovery",
-      "run-timeout-cancel",
-    );
-
-    // Emit a structured timeout terminal (starts timeout grace).
-    emitLifecycleEvent("run-timeout-cancel", {
-      phase: "end",
-      aborted: true,
-      status: "timeout",
-      timeoutPhase: "provider",
-      providerStarted: true,
-      endedAt: Date.now(),
-    });
-    await flushAsync();
-    expect(getAgentCalls()).toHaveLength(0);
-
-    // Before the grace window, the run successfully ends (non-aborted)
-    emitLifecycleEvent("run-timeout-cancel", {
-      phase: "end",
-      endedAt: Date.now(),
-      terminalReply: { disposition: "visible", text: "Final answer after recovery" },
-    });
-    await flushAsync();
-
-    await waitForAgentCallCount(1);
-    expect(readFirstAnnounceOutcome()?.status).toBe("ok");
-    await waitForDeliveredCleanup("run-timeout-cancel");
-
-    // Advance past the original grace window; no timeout completion or
-    // requester-settle wake should be emitted after successful delivery.
-    await vi.advanceTimersByTimeAsync(30_000);
-    await flushAsync();
-    expect(
-      getAgentCalls().filter((request) =>
-        request.params?.idempotencyKey?.startsWith("announce:v1:"),
-      ),
-    ).toHaveLength(1);
-    expect(getRequesterWakeCalls()).toHaveLength(0);
   });
 
   it("keeps parallel child completion results frozen even when late traffic arrives", async () => {

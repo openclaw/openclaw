@@ -1,8 +1,10 @@
-import type { TalkVoiceChangeEvent } from "@openclaw/gateway-protocol";
+import type { TalkConfigResult, TalkVoiceChangeEvent } from "@openclaw/gateway-protocol";
+import type { RealtimeVoiceCloseOptions } from "../../../../src/talk/provider-types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { loadSettings, patchSettings, type UiSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import {
   createRealtimeTalkConversationState,
   continueRealtimeTalkConversation,
@@ -17,6 +19,7 @@ import {
 } from "./talk/input.ts";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 import { RealtimeTalkSession, type RealtimeTalkStatus } from "./talk/session.ts";
+import type { SplitTalkOptions } from "./talk/split.ts";
 import { RealtimeTalkVoiceSelection } from "./talk/voice-selection.ts";
 
 export type ChatRealtimeState = {
@@ -71,7 +74,7 @@ export function createInitialChatRealtimeState(): Pick<
 
 export function stopChatRealtimeTalk(
   state: ChatRealtimeState,
-  options: { preserveConversation?: boolean } = {},
+  options: RealtimeVoiceCloseOptions & { preserveConversation?: boolean } = {},
 ) {
   const session = state.realtimeTalkSession;
   state.realtimeTalkVoiceController?.dispose();
@@ -93,7 +96,7 @@ export function stopChatRealtimeTalk(
   state.realtimeTalkConversationState = options.preserveConversation
     ? continueRealtimeTalkConversation(state.realtimeTalkConversationState)
     : createRealtimeTalkConversationState();
-  void session?.stop();
+  void session?.stop({ disposition: options.disposition ?? "detach" });
 }
 
 export function dismissRealtimeTalkError(state: ChatRealtimeState) {
@@ -106,6 +109,8 @@ export function dismissRealtimeTalkError(state: ChatRealtimeState) {
 export function attachChatRealtimeActions(
   state: ChatRealtimeState,
   canStart: () => boolean = () => true,
+  sendMessage?: SplitTalkOptions["sendMessage"],
+  maxSpeechTextLength?: () => number | Promise<number>,
 ) {
   let conversationGeneration = 0;
   const talkStatusIsError = () => state.realtimeTalkStatus === "error";
@@ -190,6 +195,14 @@ export function attachChatRealtimeActions(
       ? undefined
       : talkSettings.realtimeTalkInputDeviceId?.trim() || undefined;
     const { client, sessionKey } = state;
+    let voiceController = state.realtimeTalkVoiceController;
+    const playback = new GatewaySpeechPlayback();
+    const onSuperseded = () => {
+      if (state.realtimeTalkVoiceController === voiceController) {
+        stopChatRealtimeTalk(state);
+        state.requestUpdate();
+      }
+    };
     const replacementTransport = voiceChange
       ? state.realtimeTalkSession?.getTransport()
       : undefined;
@@ -208,7 +221,13 @@ export function attachChatRealtimeActions(
       );
       conversationGeneration += 1;
       state.requestUpdate();
-      await closed;
+      try {
+        playback.prepare(client, onSuperseded);
+        await closed;
+      } catch (error) {
+        playback.stop();
+        throw error;
+      }
       if (
         state.realtimeTalkVoiceController !== previousController ||
         state.client !== client ||
@@ -216,6 +235,7 @@ export function attachChatRealtimeActions(
         !state.connected ||
         !canStart()
       ) {
+        playback.stop();
         return undefined;
       }
     } else {
@@ -238,9 +258,9 @@ export function attachChatRealtimeActions(
           state.requestUpdate();
         },
       });
+      voiceController = controller;
       state.realtimeTalkVoiceController = controller;
     }
-    const voiceController = state.realtimeTalkVoiceController;
     const itemPrefix = voiceChange ? `voice-${conversationGeneration}:` : "";
     const orderOffset = voiceChange ? state.realtimeTalkConversationState.entries.length : 0;
     const videoDeviceId = talkSettings.realtimeTalkVideoDeviceId?.trim() || undefined;
@@ -256,6 +276,53 @@ export function attachChatRealtimeActions(
     state.realtimeTalkInputLevel.set(0);
     if (!voiceChange) {
       state.resetRealtimeTalkConversation();
+    }
+    state.requestUpdate();
+    let split: SplitTalkOptions | undefined;
+    if (!voiceChange) {
+      try {
+        playback.prepare(client, onSuperseded);
+        const [result, maxTextLength] = await Promise.all([
+          client.request<TalkConfigResult>("talk.config", {}),
+          maxSpeechTextLength?.(),
+        ]);
+        if (
+          state.realtimeTalkVoiceController !== voiceController ||
+          state.client !== client ||
+          !state.connected ||
+          state.sessionKey !== sessionKey ||
+          !canStart()
+        ) {
+          playback.stop();
+          if (state.realtimeTalkVoiceController === voiceController) {
+            stopChatRealtimeTalk(state);
+            state.requestUpdate();
+          }
+          return undefined;
+        }
+        const talk = result.config?.talk;
+        if (talk?.realtime?.mode === "stt-tts") {
+          if (!sendMessage) {
+            throw new Error(t("chat.voice.replyFailed"));
+          }
+          split = {
+            silenceTimeoutMs: talk.silenceTimeoutMs ?? 900,
+            speechMethod: talk.provider || talk.resolved?.provider ? "talk.speak" : "tts.speak",
+            sendMessage,
+            playback,
+            maxTextLength,
+          };
+        }
+      } catch (error) {
+        playback.stop();
+        if (state.realtimeTalkVoiceController === voiceController) {
+          stopChatRealtimeTalk(state);
+          state.realtimeTalkStatus = "error";
+          state.realtimeTalkDetail = formatUiError(error);
+          state.requestUpdate();
+        }
+        return undefined;
+      }
     }
     const forCurrentSession =
       <Args extends unknown[]>(callback: (...args: Args) => void) =>
@@ -366,7 +433,7 @@ export function attachChatRealtimeActions(
             transport: replacementTransport,
           }
         : {},
-      { inputDeviceId, videoDeviceId },
+      { inputDeviceId, videoDeviceId, split, playback },
     );
     state.realtimeTalkSession = session;
     try {
@@ -405,7 +472,7 @@ export function attachChatRealtimeActions(
   };
   state.toggleRealtimeTalk = async () => {
     if (state.realtimeTalkSession || state.realtimeTalkActive) {
-      stopChatRealtimeTalk(state);
+      stopChatRealtimeTalk(state, { disposition: "abort" });
       state.requestUpdate();
       return;
     }

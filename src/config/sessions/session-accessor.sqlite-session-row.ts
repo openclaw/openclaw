@@ -7,6 +7,7 @@ import { normalizeSessionRowChatType, normalizeText } from "./session-accessor.s
 import { bindSessionEntryProvenance } from "./session-accessor.sqlite-provenance.js";
 import { normalizeStatus } from "./session-accessor.sqlite-status.js";
 import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
+import { resolveSessionWindowCreatedAt } from "./session-window-created-at.js";
 import type { SessionEntry } from "./types.js";
 
 export function bindSessionRoot(params: {
@@ -21,7 +22,7 @@ export function bindSessionRoot(params: {
     session_id: params.entry.sessionId,
     session_key: params.sessionKey,
     reason: null,
-    created_at: resolveSqliteSessionCreatedAt(params.entry, updatedAt),
+    created_at: resolveSessionWindowCreatedAt(params.entry, updatedAt),
     updated_at: updatedAt,
     ...bindSessionEntryProvenance(params.entry),
     ...bindSessionWindowEntryProjection(params),
@@ -120,15 +121,6 @@ function resolveSqliteSessionScope(
     return chatType;
   }
   return "conversation";
-}
-
-function resolveSqliteSessionCreatedAt(entry: SessionEntry, updatedAt: number): number {
-  for (const candidate of [entry.sessionStartedAt, entry.startedAt, entry.updatedAt, updatedAt]) {
-    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0) {
-      return candidate;
-    }
-  }
-  return updatedAt;
 }
 
 function finiteSqliteNumber(value: unknown): number | null {

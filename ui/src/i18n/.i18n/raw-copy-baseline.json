@@ -122,52 +122,24 @@
     },
     {
       "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/app-sidebar-session-indicators.tsx",
+      "text": "0ms"
+    },
+    {
+      "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
-      "path": "ui/src/components/app-topbar.ts",
+      "path": "ui/src/components/app-topbar-solid.tsx",
       "text": "OpenClaw"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/app-topbar.ts",
+      "path": "ui/src/components/app-topbar-solid.tsx",
       "text": "OpenClaw"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/components/board/board-view.test-support.ts",
-      "text": "Alpha status"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/components/board/board-view.test-support.ts",
-      "text": "Beta chart"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/components/board/board-view.test-support.ts",
-      "text": "Main"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/components/board/board-view.test-support.ts",
-      "text": "Operations"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/components/board/board-view.test-support.ts",
-      "text": "Queue depth"
     },
     {
       "count": 1,
@@ -210,20 +182,6 @@
       "name": "placeholder",
       "path": "ui/src/components/login-gate-solid.tsx",
       "text": "wss://gateway.example:443"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/components/mcp-server-form.ts",
-      "text": "context7"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/components/mcp-server-form.ts",
-      "text": "https://mcp.example.com/mcp · npx some-mcp-server"
     },
     {
       "count": 1,
@@ -280,6 +238,27 @@
       "name": "label",
       "path": "ui/src/components/provider-icon-data.ts",
       "text": "Machine0"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/sidebar-build-chip.tsx",
+      "text": "v"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/solid/sidebar-community-invite.tsx",
+      "text": "follow"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/solid/sidebar-community-invite.tsx",
+      "text": "join"
     },
     {
       "count": 1,
@@ -362,57 +341,85 @@
       "count": 1,
       "kind": "object-property",
       "name": "title",
-      "path": "ui/src/pages/chat/components/chat-pane-header.test-support.ts",
-      "text": "Session title"
+      "path": "ui/src/pages/chat/components/chat-sidebar-editor-menu.tsx",
+      "text": "Open in editor"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-welcome.tsx",
+      "text": "Assistant"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/config/mcp.ts",
+      "path": "ui/src/pages/chat/components/chat-welcome.tsx",
+      "text": "Assistant"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/cloud-workers/cloud-worker-snapshot-rows.tsx",
+      "text": ".openclaw/worktree-setup.sh"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/config/mcp.tsx",
       "text": "openclaw mcp doctor --probe"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/config/mcp.ts",
+      "path": "ui/src/pages/config/mcp.tsx",
       "text": "openclaw mcp login &lt;name&gt;"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/config/mcp.ts",
+      "path": "ui/src/pages/config/mcp.tsx",
       "text": "openclaw mcp reload"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/config/mcp.ts",
+      "path": "ui/src/pages/config/mcp.tsx",
       "text": "openclaw mcp status --verbose"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/config/updates.ts",
+      "path": "ui/src/pages/config/updates.tsx",
       "text": "openclaw triage"
     },
     {
       "count": 1,
       "kind": "html-attribute",
       "name": "placeholder",
-      "path": "ui/src/pages/config/view-appearance-preferences.ts",
+      "path": "ui/src/pages/config/view-appearance-preferences.tsx",
       "text": "48rem"
     },
     {
       "count": 1,
       "kind": "html-attribute",
       "name": "placeholder",
-      "path": "ui/src/pages/config/view-appearance.ts",
+      "path": "ui/src/pages/config/view-appearance.tsx",
       "text": "https://tweakcn.com/editor/theme?theme=... or amethyst-haze"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/config/view-appearance.tsx",
+      "text": "tweakcn"
     },
     {
       "count": 1,
@@ -446,6 +453,13 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
+      "path": "ui/src/pages/custodian/custodian-setup-card.tsx",
+      "text": "openclaw onboard"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
       "path": "ui/src/pages/debug/view.tsx",
       "text": "openclaw security audit --deep"
     },
@@ -460,43 +474,29 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "path": "ui/src/pages/new-session/cloud-target-view.tsx",
       "text": "openclaw config set nodeHost.workerRuns.enabled true"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "path": "ui/src/pages/new-session/cloud-target-view.tsx",
       "text": "openclaw node install --force"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "path": "ui/src/pages/new-session/cloud-target-view.tsx",
       "text": "openclaw node restart"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "path": "ui/src/pages/new-session/cloud-target-view.tsx",
       "text": "openclaw update"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/new-session/where-chip.test-support.ts",
-      "text": "Build runner"
-    },
-    {
-      "count": 2,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/new-session/where-chip.test-support.ts",
-      "text": "Duplicate runner"
     },
     {
       "count": 2,
@@ -511,104 +511,6 @@
       "name": "text",
       "path": "ui/src/pages/plugins/consent-dialog.tsx",
       "text": "v"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Chat with your agent from Telegram groups and direct messages."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Connect OpenClaw to Matrix rooms and direct messages."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Coordinate work using the included calendar plugin."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Dashboard workboard for agent-owned issues and sessions."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Matrix access token"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Matrix homeserver URL"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Plan and coordinate work from a shared calendar."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Run typed workflows with resumable approvals."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Send and receive Matrix messages."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Web extraction and crawling."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Access token"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Enabled"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Homeserver"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/pages/plugins/plugins.e2e.test-support.ts",
-      "text": "Mode"
     },
     {
       "count": 1,
@@ -628,7 +530,7 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/skills/library-detail.ts",
+      "path": "ui/src/pages/skills/library-detail.tsx",
       "text": "SKILL.md"
     },
     {
@@ -637,13 +539,6 @@
       "name": "text",
       "path": "ui/src/pages/skills/library-view.tsx",
       "text": "SKILL.md"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/skills/view.test-support.ts",
-      "text": "Skill description"
     },
     {
       "count": 1,

@@ -44,6 +44,8 @@ export type QaMockProviderDispatchResult = {
   previewPauseMs?: number;
   previewPause?: () => Promise<void>;
   responsePauseMs?: number;
+  /** Holds an accepted SSE stream open with comment keepalives during the pause. */
+  responseKeepaliveMs?: number;
 };
 
 export type StreamEvent =
@@ -445,6 +447,15 @@ export function isPreviewCompletion(
   );
 }
 
+export function writeSseHeaders(res: ServerResponse, contentLength?: number) {
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+    ...(contentLength === undefined ? {} : { "content-length": contentLength }),
+  });
+}
+
 export async function writeSse(
   res: ServerResponse,
   events: Array<StreamEvent | AnthropicStreamEvent>,
@@ -463,12 +474,9 @@ export async function writeSse(
   const body =
     frames.slice(Math.max(0, completionIndex)).join("") +
     (protocol === "responses" ? "data: [DONE]\n\n" : "");
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-    ...(completionIndex < 0 ? { "content-length": Buffer.byteLength(body) } : {}),
-  });
+  if (!res.headersSent) {
+    writeSseHeaders(res, completionIndex < 0 ? Buffer.byteLength(body) : undefined);
+  }
   if (completionIndex >= 0) {
     // Flush preview deltas before delaying the final text and completion frames.
     res.write(frames.slice(0, completionIndex).join(""));

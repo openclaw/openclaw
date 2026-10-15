@@ -24,13 +24,17 @@ import {
   computeSkillMissing,
   computeSkillReasons,
   isSkillAvailable,
-  renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
 import type { ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
 import { LitContent } from "../../lit/solid-bridge.ts";
 import { SkillDiscovery } from "./discovery-view.tsx";
 import { ClawHubDetailDialog, MarkdownContent, SkillReaderDialog } from "./skill-reader-dialog.tsx";
-import { SkillStateStatus, verdictForSkill, verdictStatus } from "./skill-status.tsx";
+import {
+  SkillStateStatus,
+  SkillStatusChips,
+  verdictForSkill,
+  verdictStatus,
+} from "./skill-status.tsx";
 import type { SkillDetailTab, SkillsProps, SkillsStatusFilter } from "./view-types.ts";
 
 registerSkillsBrowserEnglish();
@@ -296,19 +300,43 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
           <span>{props.skill.name}</span>
         </div>
       }
+      footer={
+        <Show when={installOption() || props.skill.primaryEnv}>
+          <openclaw-modal-actions class="skill-reader-dialog__actions">
+            <Show when={installOption()}>
+              {(option) => (
+                <button
+                  class="btn"
+                  disabled={skillInstallLocked(props.view)}
+                  onClick={() =>
+                    props.view.onInstall(props.skill.skillKey, props.skill.name, option().id)
+                  }
+                >
+                  {active() ? t("skillsPage.installing") : option().label}
+                </button>
+              )}
+            </Show>
+            <Show when={props.skill.primaryEnv}>
+              <button
+                class="btn primary"
+                disabled={updateLocked() || !editValue().trim()}
+                onClick={() => props.view.onSaveKey(props.skill.skillKey)}
+              >
+                {t("skillsPage.saveKey")}
+              </button>
+            </Show>
+          </openclaw-modal-actions>
+        </Show>
+      }
     >
       <div class="skill-reader-dialog__body" style={{ display: "grid", gap: "var(--space-4)" }}>
         <div>
           <div style={{ "font-size": "14px", "line-height": "1.5", color: "var(--text)" }}>
             {props.skill.description}
           </div>
-          <LitContent
-            render={() =>
-              renderSkillStatusChips({
-                skill: props.skill,
-                showBundledBadge: props.skill.bundled && props.skill.source !== "openclaw-bundled",
-              })
-            }
+          <SkillStatusChips
+            skill={props.skill}
+            showBundledBadge={props.skill.bundled && props.skill.source !== "openclaw-bundled"}
           />
         </div>
         <Show when={hasTabs()}>
@@ -373,19 +401,6 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
           <span style={{ "font-size": "13px", "font-weight": "500" }}>
             {props.skill.disabled ? t("skillsPage.disabled") : t("skillsPage.enabled")}
           </span>
-          <Show when={installOption()}>
-            {(option) => (
-              <button
-                class="btn"
-                disabled={skillInstallLocked(props.view)}
-                onClick={() =>
-                  props.view.onInstall(props.skill.skillKey, props.skill.name, option().id)
-                }
-              >
-                {active() ? t("skillsPage.installing") : option().label}
-              </button>
-            )}
-          </Show>
         </div>
         <Show when={message()}>
           {(value) => (
@@ -426,13 +441,6 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
                 </div>
               )}
             </Show>
-            <button
-              class="btn primary"
-              disabled={updateLocked() || !editValue().trim()}
-              onClick={() => props.view.onSaveKey(props.skill.skillKey)}
-            >
-              {t("skillsPage.saveKey")}
-            </button>
           </div>
         </Show>
         <div

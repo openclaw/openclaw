@@ -164,6 +164,7 @@ describe("plugin-state-store.authority", () => {
                 // Service node setup probes this host binding even when the service never invokes nodes.
                 subagent: {
                   complete: unexpectedSubagent,
+                  forkSession: unexpectedSubagent,
                   run: unexpectedSubagent,
                   waitForRun: unexpectedSubagent,
                   getSessionMessages: unexpectedSubagent,
@@ -204,10 +205,13 @@ describe("plugin-state-store.authority", () => {
                 throw new Error("Visitor Access did not create its invitation tool");
               }
               providerConfirmed = false;
-              const posting = vi.spyOn(Worker.prototype, "postMessage");
-              const submittedRenewals = () => {
-                const submitted: unknown[] = [];
-                for (const [message] of posting.mock.calls) {
+              const submittedRenewals: unknown[] = [];
+              // oxlint-disable-next-line typescript/unbound-method -- call supplies the intercepted worker receiver.
+              const nativePost = Worker.prototype.postMessage;
+              const posting = vi
+                .spyOn(Worker.prototype, "postMessage")
+                .mockImplementation(function (this: Worker, message, transferList) {
+                  let renewalJson: string | undefined;
                   const request = asOptionalRecord(message);
                   if (request?.type === "execute" && request.input instanceof Uint8Array) {
                     const operation = asOptionalRecord(deserialize(request.input));
@@ -222,15 +226,17 @@ describe("plugin-state-store.authority", () => {
                       if (typeof input.valueJson !== "string") {
                         throw new Error("Expected the native visitor grant submission");
                       }
-                      submitted.push(JSON.parse(input.valueJson));
+                      renewalJson = input.valueJson;
                     }
                   }
-                }
-                return submitted;
-              };
+                  nativePost.call(this, message, transferList);
+                  if (renewalJson !== undefined) {
+                    submittedRenewals.push(JSON.parse(renewalJson));
+                  }
+                });
               let heldCommit = false;
               const admission = probe.admission(mutationAdmission, (request, grant, admit) => {
-                if (request.stage === "commit" && !heldCommit && submittedRenewals().length > 0) {
+                if (request.stage === "commit" && !heldCommit && submittedRenewals.length > 0) {
                   heldCommit = true;
                   // The native transaction already wrote its candidate; only its real commit guard remains.
                   vi.setSystemTime(previous.expiresAt + 1);
@@ -240,7 +246,7 @@ describe("plugin-state-store.authority", () => {
               try {
                 const renewal = await invite.execute("renew", { email, days: 2 });
                 expect(heldCommit).toBe(true);
-                expect(submittedRenewals()).toEqual([
+                expect(submittedRenewals).toEqual([
                   { ...previous, expiresAt: previous.createdAt + 2 * 86_400_000 },
                 ]);
                 expect(renewal).toMatchObject({ isError: true, details: { error: true } });

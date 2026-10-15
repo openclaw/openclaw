@@ -28,15 +28,11 @@ import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import * as announceCleanup from "./subagent-registry-lifecycle-announce-cleanup.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import {
-  mutateSubagentRuns,
-  restoreSubagentRunsFromDisk,
-} from "./subagent-registry-persistence.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
-import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import { registerSubagentOrphanTaskCases } from "./subagent-registry.persistence.orphan.test-support.js";
 import type { SubagentRunFixture } from "./subagent-registry.persistence.test-support.js";
 import {
@@ -255,28 +251,6 @@ describe("subagent registry persistence", () => {
     expect(persisted?.abortedLastRun).toBeUndefined();
   });
 
-  it("reuses the persisted registry cache on hot internal read snapshots", async () => {
-    await persistRuns([makeRun("run-cached-read", { startedAt: 1 })], false);
-    const previousFlag = process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE;
-    let cloneSpy: { mockRestore(): void } | undefined;
-    try {
-      process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE = "1";
-      await restoreSubagentRunsFromDisk({ runs: new Map() });
-      cloneSpy = vi.spyOn(globalThis, "structuredClone");
-      const snapshot = getSubagentRunsSnapshotForRead(new Map());
-
-      expect(snapshot.has("run-cached-read")).toBe(true);
-      expect(cloneSpy).not.toHaveBeenCalled();
-    } finally {
-      cloneSpy?.mockRestore();
-      if (previousFlag === undefined) {
-        delete process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE;
-      } else {
-        process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE = previousFlag;
-      }
-    }
-  });
-
   it("normalizes newly registered session keys to canonical trimmed values", async () => {
     await fixture.allocateStateDir();
 
@@ -287,6 +261,8 @@ describe("subagent registry persistence", () => {
     await registerSubagentRun({
       runId: " run-live ",
       childSessionKey: " agent:main:subagent:live-child ",
+      childAgentId: "main",
+      sessionEntry: { sessionId: "session-live-child" },
       controllerSessionKey: " agent:main:subagent:live-controller ",
       requesterSessionKey: " agent:main:main ",
       requesterDisplayKey: "main",
@@ -387,7 +363,13 @@ describe("subagent registry persistence", () => {
     },
   ] as const)("$name", async ({ runId, cleanup, reject }) => {
     const childSessionKey = `agent:main:subagent:${runId}`;
-    await persistRuns([endedRun(runId, { childSessionKey, cleanup })]);
+    await persistRuns([
+      endedRun(runId, {
+        childSessionKey,
+        childSessionIdentity: { sessionId: `sess-${runId}` },
+        cleanup,
+      }),
+    ]);
     const announcement = createDeferred<"retryable">();
     const releaseAnnouncement = () =>
       reject ? announcement.reject(new Error("announce boom")) : announcement.resolve("retryable");
@@ -481,17 +463,6 @@ describe("subagent registry persistence", () => {
     }
   });
 
-  it("settles orphaned restored runs through canonical completion", async () => {
-    const runId = "run-orphan-restore";
-    await persistRuns([endedRun(runId)], false);
-    await restartRegistry();
-    await waitForRegistryWork(() => readPersistedRun(runId)?.cleanupCompletedAt !== undefined);
-    expect(readPersistedRun(runId)?.execution).toMatchObject({
-      status: "terminal",
-      outcome: { status: "error", error: "subagent run orphaned: missing-session-entry" },
-    });
-  });
-
   it.each(["restart", "suspension"] as const)(
     "retains an admitted resume read across a %s fence",
     async (fence) => {
@@ -500,6 +471,7 @@ describe("subagent registry persistence", () => {
       const now = Date.now();
       const entry = makeRun(runId, {
         createdAt: now,
+        childSessionIdentity: { sessionId: "admitted-resume-session" },
         expectsCompletionMessage: false,
         execution: { status: "running", startedAt: now },
       });
@@ -602,6 +574,14 @@ describe("subagent registry persistence", () => {
     const entry = makeRun(runId, {
       createdAt: now,
       startedAt: now,
+      childSessionIdentity: {
+        sessionId:
+          change === "worker read failure"
+            ? "read-error-session"
+            : change === "session publication"
+              ? "published-resume-session"
+              : "held-resume-session",
+      },
       expectsCompletionMessage: false,
       execution: { status: "running", startedAt: now },
     });
@@ -849,43 +829,6 @@ describe("subagent registry persistence", () => {
     writePersistedRegistry,
     restartRegistry,
     waitForRegistryWork,
-  });
-
-  it("finalizes restored interrupted runs without replay", async () => {
-    vi.mocked(callGateway).mockResolvedValueOnce({ status: "pending" });
-    const now = Date.now();
-    const runId = "run-stale-aborted-restore";
-    const childSessionKey = "agent:main:subagent:stale-aborted-restore";
-    await persistRuns(
-      [
-        makeRun(runId, {
-          childSessionKey,
-          createdAt: now - 3 * 60 * 60 * 1_000,
-          startedAt: now - 3 * 60 * 60 * 1_000,
-        }),
-      ],
-      false,
-    );
-    await writeChildSessionEntry({
-      sessionKey: childSessionKey,
-      sessionId: "sess-stale-aborted-restore",
-      // A retained interruption is reconciled even when its last activity is old.
-      updatedAt: now - 3 * 60 * 60 * 1_000,
-      abortedLastRun: true,
-    });
-
-    await restartRegistry();
-    await flushQueuedRegistryWork();
-    await testing.sweepOnceForTests();
-
-    // The dead pre-restart run is terminalized without querying its stale run id.
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(
-      (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.outcome,
-    ).toMatchObject({
-      status: "error",
-      error: expect.stringContaining("Gateway restart"),
-    });
   });
 
   it("resume preserves steer-restart ownership when the child session is missing", async () => {

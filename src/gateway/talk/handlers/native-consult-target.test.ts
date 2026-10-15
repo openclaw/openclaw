@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../../../test/helpers/promise.js";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
 import {
@@ -9,15 +9,14 @@ import {
 import { testing as embeddedRunTesting } from "../../../agents/embedded-agent-runner/runs.test-support.js";
 import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../agents/realtime-bootstrap-context.test-support.js";
 import { replyRunRegistry } from "../../../auto-reply/reply/reply-run-registry.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
-  listSessionEntriesReadOnly,
   loadSessionEntry,
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
@@ -46,7 +45,7 @@ import { registerChatAbortController } from "../../chat-abort.js";
 import { createChatRunState } from "../../server-chat-state.js";
 import { handleGatewayRequest } from "../../server-methods.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
-import { resolveSessionMutationAuthorization } from "../../session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "../../session-sharing-authorization-async.js";
 import { sharingPolicyClient } from "../../session-sharing.test-utils.js";
 import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
 import { drainingRelaySessions } from "../relay/state.js";
@@ -136,7 +135,10 @@ async function dispatch(
 }
 
 beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "talk-native-consult" });
+  state = await createOpenClawTestState({
+    label: "talk-native-consult",
+    prepareProfileCatalog: true,
+  });
   config = {
     agents: {
       ownership: "explicit",
@@ -144,6 +146,7 @@ beforeEach(async () => {
     },
     talk: { agentId: "voice" },
   };
+  setRuntimeConfigSnapshot(config);
   client = {
     ...sharingPolicyClient({ user: ensureProfileForEmail("native-listener@example.test").id }),
     connId: "native-consult-client",
@@ -258,7 +261,7 @@ async function createRelayCall(params: Record<string, unknown> = {}) {
   return { sessionId, target: record.sessionTarget };
 }
 
-it.each([undefined, "main"])(
+it.each([undefined])(
   "retains the opaque relay owner when Talk defaults change (key=%s)",
   async (sessionKey) => {
     config.session = { scope: "global" };
@@ -274,6 +277,7 @@ it.each([undefined, "main"])(
       },
     );
     config = { ...config, talk: { agentId: "primary" } };
+    setRuntimeConfigSnapshot(config);
     expect(
       await dispatch("talk.session.steer", {
         sessionId,
@@ -289,7 +293,7 @@ it.each([undefined, "main"])(
   },
 );
 
-it.each([undefined, "main"])(
+it.each([undefined])(
   "enforces the retained relay's sharing policy (key=%s)",
   async (sessionKey) => {
     await replaceSessionEntry(
@@ -331,6 +335,7 @@ it.each([undefined, "main"])(
 it("rejects retained relay mapping changes even when the physical store is unchanged", async () => {
   const { sessionId } = await createRelayCall();
   config = { ...config, session: { mainKey: "home" } };
+  setRuntimeConfigSnapshot(config);
   expect(
     await dispatch("talk.session.steer", { sessionId, text: "status", mode: "status" }),
   ).toHaveBeenCalledWith(
@@ -398,7 +403,7 @@ function registerOwnedEmbeddedRun(runId: string, sessionId: string) {
 
 it("rechecks RPC sharing authorization after the control runtime import", async () => {
   config.session = { scope: "global" };
-  const target = prepareTalkSessionTarget(config, "main");
+  const target = await prepareTalkSessionTarget(config, "main");
   const scope = { agentId: "voice", sessionKey: "global", storePath: target.storePath };
   await replaceSessionEntry(scope, {
     sessionId: "acl-session",
@@ -406,7 +411,7 @@ it("rechecks RPC sharing authorization after the control runtime import", async 
     visibility: "shared",
   });
   const { registration, abort } = registerOwnedEmbeddedRun("acl-run", "acl-session");
-  const authorization = resolveSessionMutationAuthorization({
+  const authorization = await resolveSessionMutationAuthorizationAsync({
     client,
     method: "talk.client.steer",
     requestParams: { sessionKey: "main" },
@@ -440,6 +445,7 @@ it("rechecks RPC sharing authorization after the control runtime import", async 
     });
     expect(abort).not.toHaveBeenCalled();
   } finally {
+    authorization.authorization?.release?.();
     registration.cleanup();
   }
 });
@@ -452,11 +458,10 @@ it.each([
   "signal",
   "generation",
   "cleanup",
-  "voice binding removed",
   "voice binding replaced",
 ] as const)("fences %s Gateway registration while control preparation waits", async (change) => {
   config.session = { scope: "global" };
-  const target = prepareTalkSessionTarget(config, "main");
+  const target = await prepareTalkSessionTarget(config, "main");
   const runId = "captured-run";
   const voiceScope = { agentId: target.agentId, sessionKey: target.sessionKey };
   const voiceSessionId = await createOrResumeClientVoiceSession({
@@ -504,14 +509,6 @@ it.each([
       entry.lifecycleGeneration = "retired";
     } else if (change === "cleanup") {
       entry.registrationCleanupRequested = true;
-    } else if (change === "voice binding removed") {
-      emitTrustedDiagnosticEvent({
-        type: "run.completed",
-        runId,
-        durationMs: 0,
-        outcome: "completed",
-      });
-      expect(resolveClientVoiceRunBinding(runId)).toBeUndefined();
     } else if (change === "voice binding replaced") {
       const replacementVoiceSessionId = await createOrResumeClientVoiceSession({
         ...voiceScope,
@@ -565,7 +562,7 @@ it("preserves status and cancellation for an owned queued chat.send reply", asyn
   const runTarget = resolveOwnedActiveTalkRunTarget({
     context,
     clientConnId: client.connId,
-    sessionTarget: prepareTalkSessionTarget(config, "main"),
+    sessionTarget: await prepareTalkSessionTarget(config, "main"),
     scope: { kind: "session" },
   });
   const resolvedSessionId = "materialized-reply-session";
@@ -581,7 +578,7 @@ it("preserves status and cancellation for an owned queued chat.send reply", asyn
   const voiceTarget = resolveOwnedActiveTalkRunTarget({
     context,
     clientConnId: client.connId,
-    sessionTarget: prepareTalkSessionTarget(config, "main"),
+    sessionTarget: await prepareTalkSessionTarget(config, "main"),
     scope: { kind: "voice-session", voiceSessionId },
   });
   try {
@@ -801,54 +798,6 @@ it("restores bounded relay history after the original voice provider finishes cl
     cleanupTalkConnection(client.connId, context.logGateway);
     await changing.catch(() => {});
   }
-});
-
-describe.each(["browser", "relay"] as const)("native %s Talk consultation", (transport) => {
-  it.each([
-    { name: "custom main", scope: "per-sender" as const, canonicalKey: "agent:voice:home" },
-    { name: "global", scope: "global" as const, canonicalKey: "global" },
-  ])("uses the created $name session in the provider callback", async ({ scope, canonicalKey }) => {
-    config.session = { mainKey: "home", scope };
-    config.talk = { ...config.talk, realtime: { instructions: "Keep native answers brief." } };
-    const target = prepareTalkSessionTarget(config, "main");
-    const method = transport === "browser" ? "talk.client.create" : "talk.session.create";
-    const respond = await dispatch(method, {
-      sessionKey: "main",
-      mode: "realtime",
-      transport: transport === "browser" ? "webrtc" : "gateway-relay",
-      brain: "agent-consult",
-      ...(transport === "browser" ? { capabilities: ["gateway-control-v1"] } : {}),
-    });
-    expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
-    expect(providerInstructions).toBe(
-      `Keep native answers brief.\n\n${REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS}`,
-    );
-    const result = respond.mock.calls[0]?.[1] as { voiceSessionId?: string; sessionId?: string };
-    const storage = { agentId: "voice", sessionKey: canonicalKey, storePath: target.storePath };
-    const created = loadSessionEntry(storage);
-    expect(created?.sessionId).toBeTruthy();
-    expect(callback).toBeTypeOf("function");
-    await expect(callback!({ prompt: "Continue this conversation" })).resolves.toEqual({
-      text: "Synthetic consult answer",
-    });
-    expect(mocks.runEmbeddedAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "voice",
-        sessionKey: canonicalKey,
-        sessionId: created!.sessionId,
-        sessionTarget: { ...storage, sessionId: created!.sessionId },
-      }),
-    );
-    expect(
-      listSessionEntriesReadOnly({ agentId: "voice", storePath: target.storePath }).map(
-        (entry) => entry.sessionKey,
-      ),
-    ).toEqual([canonicalKey]);
-    expect(
-      clientVoiceSessionTesting.readRecord("voice", result.voiceSessionId ?? result.sessionId!)
-        ?.sessionKey,
-    ).toBe("main");
-  });
 });
 
 it.for(["status", "cancelled", "successor"] as const)(

@@ -10,7 +10,7 @@ type CronAutoDisableReason = NonNullable<CronJobState["autoDisabled"]>["reason"]
 
 /**
  * Run failures get more room than schedule errors (10 vs. 3) because provider
- * and network errors are often transient, and restart-interrupted runs count too.
+ * and network errors are often transient.
  */
 const MAX_CONSECUTIVE_RUN_FAILURES = 10;
 
@@ -25,13 +25,16 @@ export function autoDisableCronJob(params: {
   atMs: number;
   consecutiveErrors: number;
   deferredNotifications: DeferredCronNotifications;
+  /** A terminal one-shot is already disabled when its notification is finalized. */
+  terminalOneShot?: boolean;
+  notify?: boolean;
 }): boolean {
   const { job } = params;
   // Gateway convergence owns these jobs; clients cannot re-enable them, so failures stay visible while they retry on schedule.
   if (isSystemMonitorDeclaration(job.declarationKey)) {
     return false;
   }
-  if (!job.enabled || job.state.autoDisabled) {
+  if ((!job.enabled && !params.terminalOneShot) || job.state.autoDisabled) {
     return false;
   }
 
@@ -43,6 +46,9 @@ export function autoDisableCronJob(params: {
     consecutiveErrors: params.consecutiveErrors,
   };
 
+  if (params.notify === false) {
+    return true;
+  }
   const name = truncateUtf16Safe((job.name || job.id).replace(/\s+/g, " ").trim(), 120);
   const errorReason =
     params.reason === "consecutive-failures" ? job.state.lastErrorReason : undefined;

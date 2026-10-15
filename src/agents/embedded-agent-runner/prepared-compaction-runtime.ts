@@ -26,7 +26,7 @@ import {
   resolveBootstrapContextForRun,
   resolveContextInjectionMode,
 } from "../bootstrap-files.js";
-import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
 import { prepareAgentMemoryPrompt } from "../memory-prompt-prepare.js";
 import {
@@ -181,8 +181,7 @@ export async function buildPreparedCompactionRuntime(
     const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(
       bootstrapBudget.bootstrapPromptWarning.lines,
     );
-    // Apply contextTokens cap to model so session runtime's auto-compaction
-    // threshold uses the effective limit, not the native context window.
+    // Keep session sizing separate from the summarizer's native request window.
     const contextTokenBudget = resolveCompactionContextTokenBudget({
       config: params.config,
       provider: contextConfigProvider,
@@ -192,12 +191,7 @@ export async function buildPreparedCompactionRuntime(
       fallbackTokenBudget: params.tokenBudget,
     });
     const modelWithAuth = applyAuthHeaderOverride(
-      applyLocalNoAuthHeaderOverride(
-        contextTokenBudget < (runtimeModel.contextWindow ?? Infinity)
-          ? { ...runtimeModel, contextWindow: contextTokenBudget }
-          : runtimeModel,
-        apiKeyInfo,
-      ),
+      applyLocalNoAuthHeaderOverride(runtimeModel, apiKeyInfo),
       // Skip header injection when runtime auth exchange produced a
       // different credential — the SDK reads the exchanged token from
       // authStorage automatically.
@@ -277,7 +271,7 @@ export async function buildPreparedCompactionRuntime(
       spawnWorkspaceDir,
       skillsSnapshot: skillsSnapshotForRun,
     };
-    const runtimeCapabilityProfile = resolveConversationCapabilityProfile({
+    const runtimeCapabilityProfile = await prepareConversationCapabilityProfile({
       ...conversationContext,
       agentId: sandboxAgentId,
       conversationToolPolicy: params.conversationToolPolicy,
@@ -406,12 +400,18 @@ export async function buildPreparedCompactionRuntime(
     const promptAllowedToolNames = collectAllowedToolNames({ tools: promptTools });
     runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
     const machineName = await getMachineDisplayName();
-    const { runtimeChannel, runtimeCapabilities, reactionGuidance, messageToolHints } =
-      resolveRuntimeChannelPromptContext({
-        cfg: params.config,
-        channel: params.messageChannel ?? params.messageProvider,
-        accountId: params.agentAccountId,
-      });
+    const {
+      runtimeChannel,
+      runtimeCapabilities,
+      reactionGuidance,
+      messageToolHints,
+      customInlineButtonHint,
+    } = resolveRuntimeChannelPromptContext({
+      cfg: params.config,
+      channel: params.messageChannel ?? params.messageProvider,
+      accountId: params.agentAccountId,
+      requester: params,
+    });
 
     const runtimeInfo = {
       agentId: sessionAgentId,
@@ -426,6 +426,7 @@ export async function buildPreparedCompactionRuntime(
       channel: runtimeChannel,
       chatType: params.chatType,
       capabilities: runtimeCapabilities,
+      customInlineButtonHint,
       activeProcessSessions: listActiveProcessSessionReferences({
         scopeKey: resolveProcessToolScopeKey({
           sessionKey: params.sessionKey,

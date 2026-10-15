@@ -165,14 +165,14 @@ async function resolveSessionWorkspace(params: {
 }): Promise<WorkerSessionWorkspace | undefined> {
   const article = params.method === "sessions.dispatch" ? "a" : "the";
   try {
-    const resolved = await resolveWorkerPlacementSessionTarget({
+    using resolved = await resolveWorkerPlacementSessionTarget({
       sessionRuntime: await loadWorkerPlacementSessionRuntimeModule(),
       config: params.config,
       sessionId: params.entry.sessionId,
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       expectedEntry: params.entry,
-      errorMessage: `${params.method} requires ${article} session-owned worktree or repository workspace`,
+      errorMessage: `${params.method} requires ${article} session-owned worktree, repository workspace, or device folder`,
     });
     params.assertCurrent?.();
     return resolved.workspace;
@@ -257,6 +257,18 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       const { cfg, entry, session, service: dispatchService } = resolved;
       const { sessionId, sessionKey, agentId } = session;
       let { dispatchTarget } = resolved;
+      if (
+        entry.deviceFolder &&
+        (params.autoDevice === true ||
+          params.profileId !== undefined ||
+          params.deviceId !== entry.deviceFolder.deviceId)
+      ) {
+        respondInvalidWorkerSession(
+          respond,
+          `This session uses a folder on device ${entry.deviceFolder.deviceId}; dispatch explicitly to that device. Auto and cloud profiles are unavailable.`,
+        );
+        return;
+      }
       const autoDevice = params.autoDevice === true;
       const canUseProjectProfile =
         !autoDevice && params.profileId === undefined && params.deviceId === undefined;
@@ -276,6 +288,13 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
         assertCurrent: sessionMutationAuthorization?.assertCurrent,
       });
       const { executionMode, devicePlacement } = resolveWorkerPlacementCapabilities(sessionRuntime);
+      if (entry.deviceFolder && executionMode !== "worker-turn") {
+        respondInvalidWorkerSession(
+          respond,
+          "Existing device folders currently require the OpenClaw harness; choose an OpenClaw model instead of remote execution.",
+        );
+        return;
+      }
       if (!executionMode) {
         respondInvalidWorkerSession(
           respond,
@@ -538,6 +557,13 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     return withWorkerSessionTarget("move", params, context, respond, async (resolved) => {
       const { entry, session, service: placementService } = resolved;
       const { sessionId, sessionKey } = session;
+      if (entry.deviceFolder) {
+        respondInvalidWorkerSession(
+          respond,
+          "This folder lives only on its paired device and cannot move or Continue on Gateway. Reconnect that device, or create a new session in another workspace.",
+        );
+        return;
+      }
       if (entry.archivedAt !== undefined) {
         respondInvalidWorkerSession(respond, "cannot move an archived session");
         return;
@@ -618,6 +644,13 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     return withWorkerSessionTarget("reclaim", params, context, respond, async (resolved) => {
       const { entry, session, service: placementService } = resolved;
       const { sessionId, sessionKey } = session;
+      if (entry.deviceFolder && params.recoverToGateway) {
+        respondInvalidWorkerSession(
+          respond,
+          "This folder lives only on its paired device. Reconnect it to continue; recovery to Gateway is unavailable.",
+        );
+        return;
+      }
       const existingPlacement = await readSessionWorkerPlacementAsync({ context, sessionId });
       sessionMutationAuthorization?.assertCurrent();
       const reportPlacementChange = (placement: WorkerSessionPlacementRecord | undefined): void => {

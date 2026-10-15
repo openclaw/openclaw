@@ -1,0 +1,1082 @@
+{
+  "language": "sv",
+  "tabs": [
+    {
+      "tab": "Kom igång",
+      "groups": [
+        {
+          "group": "Översikt",
+          "pages": [
+            "sv/index"
+          ]
+        },
+        {
+          "group": "Första stegen",
+          "pages": [
+            "sv/start/getting-started"
+          ]
+        },
+        {
+          "group": "Konfigurationsguider och referens",
+          "pages": [
+            "sv/start/openclaw"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Installation",
+      "groups": [
+        {
+          "group": "Installationsöversikt",
+          "pages": [
+            "sv/install/index"
+          ]
+        },
+        {
+          "group": "Körmiljöer",
+          "pages": [
+            "sv/install/node"
+          ]
+        },
+        {
+          "group": "Underhåll",
+          "pages": [
+            "sv/install/backups",
+            {
+              "group": "Uppdatering",
+              "pages": [
+                "sv/install/updating/update-methods"
+              ]
+            },
+            {
+              "group": "Migrering",
+              "pages": [
+                "sv/install/migrating"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Containrar",
+          "pages": [
+            "sv/install/docker",
+            {
+              "group": "Docker",
+              "pages": [
+                "sv/install/docker/environment-variables"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Drift",
+          "pages": [
+            "sv/vps",
+            {
+              "group": "Applikationsplattformar",
+              "pages": [
+                "sv/install/cloudflare"
+              ]
+            },
+            {
+              "group": "Molnservrar",
+              "pages": [
+                "sv/install/azure"
+              ]
+            },
+            {
+              "group": "Egen och lokal drift",
+              "pages": [
+                "sv/install/ansible"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Avancerad konfiguration",
+          "pages": [
+            "sv/start/setup"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Kanaler",
+      "groups": [
+        {
+          "group": "Översikt",
+          "pages": [
+            "sv/channels/index"
+          ]
+        },
+        {
+          "group": "Vanliga meddelandeplattformar",
+          "pages": [
+            "sv/channels/googlechat",
+            {
+              "group": "Discord",
+              "pages": [
+                "sv/channels/discord"
+              ]
+            },
+            {
+              "group": "iMessage",
+              "pages": [
+                "sv/channels/imessage"
+              ]
+            },
+            {
+              "group": "Matrix",
+              "pages": [
+                "sv/channels/matrix"
+              ]
+            },
+            {
+              "group": "Microsoft Teams",
+              "pages": [
+                "sv/channels/msteams"
+              ]
+            },
+            {
+              "group": "Slack",
+              "pages": [
+                "sv/channels/slack"
+              ]
+            },
+            {
+              "group": "Telegram",
+              "pages": [
+                "sv/channels/telegram"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Utveckling och egen drift",
+          "pages": [
+            "sv/channels/a2a"
+          ]
+        },
+        {
+          "group": "Regionala plattformar",
+          "pages": [
+            "sv/channels/line",
+            {
+              "group": "Feishu",
+              "pages": [
+                "sv/channels/feishu"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Konfiguration",
+          "pages": [
+            "sv/channels/pairing"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Agenter",
+      "groups": [
+        {
+          "group": "Agentens körmiljö",
+          "pages": [
+            "sv/concepts/architecture"
+          ]
+        },
+        {
+          "group": "Agentens arbetsyta",
+          "pages": [
+            "sv/concepts/agent-workspace"
+          ]
+        },
+        {
+          "group": "Sessioner och minne",
+          "pages": [
+            "sv/concepts/main-session",
+            {
+              "group": "Minne",
+              "pages": [
+                "sv/concepts/memory",
+                {
+                  "group": "Active Memory",
+                  "pages": [
+                    "sv/concepts/active-memory/enabling"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Flera agenter",
+          "pages": [
+            "sv/concepts/multi-agent"
+          ]
+        },
+        {
+          "group": "Meddelanden och leverans",
+          "pages": [
+            "sv/concepts/messages"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Funktioner",
+      "groups": [
+        {
+          "group": "Översikt",
+          "pages": [
+            "sv/tools/index"
+          ]
+        },
+        {
+          "group": "Pluginer",
+          "pages": [
+            "sv/tools/plugin"
+          ]
+        },
+        {
+          "group": "Pluginguider",
+          "pages": [
+            "sv/plugins/agentsapi",
+            {
+              "group": "Codex",
+              "pages": [
+                "sv/plugins/codex-computer-use",
+                {
+                  "group": "Codex harness",
+                  "pages": [
+                    "sv/plugins/codex-harness/placement"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Möten och samtal",
+              "pages": [
+                "sv/plugins/meeting-plugins",
+                {
+                  "group": "Google Meet",
+                  "pages": [
+                    "sv/plugins/google-meet/transports"
+                  ]
+                },
+                {
+                  "group": "Röstsamtal",
+                  "pages": [
+                    "sv/plugins/voice-call/configuration"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Modeller och minne",
+              "pages": [
+                "sv/plugins/apple-fm"
+              ]
+            },
+            {
+              "group": "Hemligheter och valv",
+              "pages": [
+                "sv/plugins/onepassword"
+              ]
+            },
+            {
+              "group": "Automatisering och integrationer",
+              "pages": [
+                "sv/plugins/admin-http-rpc"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Bygga pluginer",
+          "pages": [
+            "sv/plugins/building-plugins",
+            {
+              "group": "Kanalpluginer",
+              "pages": [
+                "sv/plugins/sdk-channel-plugins/message-adapter"
+              ]
+            },
+            {
+              "group": "Leverantörspluginer",
+              "pages": [
+                "sv/plugins/sdk-provider-plugins/model-catalogs"
+              ]
+            },
+            {
+              "group": "Pluginhändelser",
+              "pages": [
+                "sv/plugins/hooks/reference"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Skills",
+          "pages": [
+            "sv/tools/skills"
+          ]
+        },
+        {
+          "group": "Automatisering",
+          "pages": [
+            "sv/automation/index",
+            {
+              "group": "Automatiseringar",
+              "pages": [
+                "sv/automation/cron-jobs/how-it-works"
+              ]
+            },
+            {
+              "group": "Händelsekrokar",
+              "pages": [
+                "sv/automation/hooks/writing-hooks"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Verktyg",
+          "pages": [
+            {
+              "group": "Kodkörning och godkännanden",
+              "pages": [
+                "sv/tools/apply-patch"
+              ]
+            },
+            {
+              "group": "Medier och dokument",
+              "pages": [
+                "sv/tools/media-overview",
+                {
+                  "group": "Text till tal",
+                  "pages": [
+                    "sv/tools/tts/quickstart"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Verktygskataloger och arbetsflöden",
+              "pages": [
+                "sv/tools/code-mode",
+                {
+                  "group": "Code Mode",
+                  "pages": [
+                    "sv/tools/code-mode/quickstart"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Kontext och resonemang",
+              "pages": [
+                "sv/tools/loop-detection"
+              ]
+            },
+            {
+              "group": "Chatt- och gränssnittsverktyg",
+              "pages": [
+                "sv/tools/ask-user"
+              ]
+            },
+            {
+              "group": "Surfa och hämta sidor",
+              "pages": [
+                "sv/tools/browser",
+                {
+                  "group": "Webbläsare",
+                  "pages": [
+                    "sv/tools/browser/setup"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Webbsökning",
+              "pages": [
+                "sv/tools/web"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Agentsamordning",
+          "pages": [
+            "sv/tools/agent-send",
+            {
+              "group": "Underagenter",
+              "pages": [
+                "sv/tools/subagents/slash-command"
+              ]
+            },
+            {
+              "group": "ACP-agenter",
+              "pages": [
+                "sv/tools/acp-agents/quickstart"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Modeller",
+      "groups": [
+        {
+          "group": "Översikt",
+          "pages": [
+            "sv/providers/index"
+          ]
+        },
+        {
+          "group": "Begrepp och konfiguration",
+          "pages": [
+            "sv/concepts/models",
+            {
+              "group": "Modellleverantörer",
+              "pages": [
+                "sv/concepts/model-providers/quick-rules"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Leverantörer",
+          "pages": [
+            {
+              "group": "Chatt- och kodmodeller",
+              "pages": [
+                "sv/providers/alibaba",
+                {
+                  "group": "OpenAI",
+                  "pages": [
+                    "sv/providers/openai/setup"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Tal och ljud",
+              "pages": [
+                "sv/providers/azure-speech"
+              ]
+            },
+            {
+              "group": "Bild, video och musik",
+              "pages": [
+                "sv/providers/comfy"
+              ]
+            },
+            {
+              "group": "Gateways och routrar",
+              "pages": [
+                "sv/providers/claude-max-api-proxy"
+              ]
+            },
+            {
+              "group": "Lokala körmiljöer",
+              "pages": [
+                "sv/providers/ds4",
+                {
+                  "group": "Ollama",
+                  "pages": [
+                    "sv/providers/ollama/setup"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Plattformar",
+      "groups": [
+        {
+          "group": "Plattformsöversikt",
+          "pages": [
+            "sv/platforms/index"
+          ]
+        },
+        {
+          "group": "macOS-kompanjonapp",
+          "pages": [
+            {
+              "group": "Konfiguration",
+              "pages": [
+                "sv/platforms/mac/dev-setup"
+              ]
+            },
+            {
+              "group": "Körmiljö",
+              "pages": [
+                "sv/platforms/mac/bundled-gateway"
+              ]
+            },
+            {
+              "group": "Funktioner",
+              "pages": [
+                "sv/platforms/mac/voicewake"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Gateway och drift",
+      "groups": [
+        {
+          "group": "Gateway",
+          "pages": [
+            "sv/gateway/index",
+            {
+              "group": "Konfiguration",
+              "pages": [
+                "sv/gateway/configuration",
+                {
+                  "group": "Konfiguration",
+                  "pages": [
+                    "sv/gateway/configuration/common-tasks"
+                  ]
+                },
+                {
+                  "group": "Agenter",
+                  "pages": [
+                    "sv/gateway/config-agents/workspace-and-bootstrap"
+                  ]
+                },
+                {
+                  "group": "Kanaler",
+                  "pages": [
+                    "sv/gateway/config-channels/shared-policies"
+                  ]
+                },
+                {
+                  "group": "Verktyg",
+                  "pages": [
+                    "sv/gateway/config-tools/tool-policy"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Autentisering och hemligheter",
+              "pages": [
+                "sv/gateway/authentication",
+                {
+                  "group": "Hantering av hemligheter",
+                  "pages": [
+                    "sv/gateway/secrets/runtime-model"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Hälsa och diagnostik",
+              "pages": [
+                "sv/gateway/health",
+                {
+                  "group": "Doctor",
+                  "pages": [
+                    "sv/gateway/doctor/running"
+                  ]
+                },
+                {
+                  "group": "OpenTelemetry",
+                  "pages": [
+                    "sv/gateway/opentelemetry/setup"
+                  ]
+                },
+                {
+                  "group": "Felsökning",
+                  "pages": [
+                    "sv/gateway/troubleshooting/updates-and-rollbacks"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Skalning och drift",
+              "pages": [
+                "sv/gateway/gateway-lock",
+                {
+                  "group": "Cloud Workers",
+                  "pages": [
+                    "sv/gateway/cloud-workers/warm-images"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Säkerhet och sandlådor",
+              "pages": [
+                "sv/gateway/security/index",
+                {
+                  "group": "Sandlådor",
+                  "pages": [
+                    "sv/gateway/sandboxing/what-gets-sandboxed"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Protokoll och API:er",
+              "pages": [
+                "sv/gateway/clients",
+                {
+                  "group": "Gateway-protokoll",
+                  "pages": [
+                    "sv/gateway/protocol/transport"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Modeller och lokala leverantörer",
+              "pages": [
+                "sv/gateway/cli-backends"
+              ]
+            },
+            {
+              "group": "Nätverk och identifiering",
+              "pages": [
+                "sv/network"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Fjärråtkomst",
+          "pages": [
+            "sv/gateway/remote"
+          ]
+        },
+        {
+          "group": "Säkerhet",
+          "pages": [
+            "sv/security/network-proxy"
+          ]
+        },
+        {
+          "group": "Noder och medier",
+          "pages": [
+            "sv/nodes/index",
+            {
+              "group": "Mediefunktioner",
+              "pages": [
+                "sv/nodes/media-understanding"
+              ]
+            },
+            {
+              "group": "Nodfunktioner",
+              "pages": [
+                "sv/nodes/computer-use",
+                {
+                  "group": "Samtalsläge",
+                  "pages": [
+                    "sv/nodes/talk/realtime-sessions"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Webbgränssnitt",
+          "pages": [
+            "sv/web/index",
+            {
+              "group": "Kontrollgränssnitt",
+              "pages": [
+                "sv/web/control-ui/connect-and-pair"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Referens",
+      "groups": [
+        {
+          "group": "CLI-kommandon",
+          "pages": [
+            "sv/cli/index",
+            {
+              "group": "Köra tjänsten",
+              "pages": [
+                "sv/cli/daemon",
+                {
+                  "group": "Gateway",
+                  "pages": [
+                    "sv/cli/gateway/running"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Konfiguration och underhåll",
+              "pages": [
+                "sv/cli/backup",
+                {
+                  "group": "Uppdatering",
+                  "pages": [
+                    "sv/cli/update/status-and-history"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Diagnostik och säkerhet",
+              "pages": [
+                "sv/cli/doctor",
+                {
+                  "group": "Doctor",
+                  "pages": [
+                    "sv/cli/doctor/running"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Agenter, modeller och sessioner",
+              "pages": [
+                "sv/cli/agent"
+              ]
+            },
+            {
+              "group": "Händelser och granskningsposter",
+              "pages": [
+                "sv/cli/audit"
+              ]
+            },
+            {
+              "group": "Kanaler och meddelanden",
+              "pages": [
+                "sv/cli/channels"
+              ]
+            },
+            {
+              "group": "Verktyg och körning",
+              "pages": [
+                "sv/cli/approvals"
+              ]
+            },
+            {
+              "group": "Konfiguration",
+              "pages": [
+                "sv/cli/config"
+              ]
+            },
+            {
+              "group": "Pluginer och Skills",
+              "pages": [
+                "sv/cli/plugins",
+                {
+                  "group": "CLI för pluginer",
+                  "pages": [
+                    "sv/cli/plugins/authoring"
+                  ]
+                },
+                {
+                  "group": "Policy",
+                  "pages": [
+                    "sv/cli/policy/authoring"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Gränssnitt",
+              "pages": [
+                "sv/cli/attach"
+              ]
+            },
+            {
+              "group": "Hjälpverktyg",
+              "pages": [
+                "sv/cli/acp",
+                {
+                  "group": "MCP",
+                  "pages": [
+                    "sv/cli/mcp/serve"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "group": "RPC och API",
+          "pages": [
+            "sv/reference/rpc"
+          ]
+        },
+        {
+          "group": "Referens för Codex körmiljö",
+          "pages": [
+            "sv/plugins/codex-harness-reference",
+            {
+              "group": "Referens för Codex harness",
+              "pages": [
+                "sv/plugins/codex-harness-reference/supervision"
+              ]
+            },
+            {
+              "group": "Körmiljö för Codex harness",
+              "pages": [
+                "sv/plugins/codex-harness-runtime/recovery"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Pluginreferens",
+          "pages": [
+            "sv/plugins/plugin-inventory"
+          ]
+        },
+        {
+          "group": "Referens för Plugin SDK",
+          "pages": [
+            "sv/plugins/sdk-overview",
+            {
+              "group": "Översikt över Plugin SDK",
+              "pages": [
+                "sv/plugins/sdk-overview/imports"
+              ]
+            },
+            {
+              "group": "Pluginmanifest",
+              "pages": [
+                "sv/plugins/manifest/models"
+              ]
+            },
+            {
+              "group": "Pluginernas startpunkter",
+              "pages": [
+                "sv/plugins/sdk-entrypoints/tool-policy-and-sandbox"
+              ]
+            },
+            {
+              "group": "Hjälpfunktioner för pluginernas körmiljö",
+              "pages": [
+                "sv/plugins/sdk-runtime/config-and-utilities"
+              ]
+            },
+            {
+              "group": "Pluginer för agentharness",
+              "pages": [
+                "sv/plugins/sdk-agent-harness/core-ownership"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Pluginernas interna struktur",
+          "pages": [
+            "sv/plugins/architecture",
+            {
+              "group": "Pluginarkitekturens interna struktur",
+              "pages": [
+                "sv/plugins/architecture-internals/load-pipeline"
+              ]
+            },
+            {
+              "group": "Migrering av Plugin SDK",
+              "pages": [
+                "sv/plugins/sdk-migration/how-to-migrate"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Mallar",
+          "pages": [
+            "sv/reference/AGENTS.default",
+            {
+              "group": "Agentmallar för utveckling",
+              "pages": [
+                "sv/reference/templates/AGENTS.dev"
+              ]
+            },
+            {
+              "group": "Avvecklade arbetsytefiler",
+              "pages": [
+                "sv/reference/templates/HEARTBEAT"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Teknisk referens",
+          "pages": [
+            "sv/agent-runtime-architecture",
+            {
+              "group": "Fördjupning i sessionshantering",
+              "pages": [
+                "sv/reference/session-management-compaction/store"
+              ]
+            },
+            {
+              "group": "Databasscheman",
+              "pages": [
+                "sv/reference/database-schemas/layout"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Scheman och formatering",
+          "pages": [
+            "sv/concepts/typebox"
+          ]
+        },
+        {
+          "group": "Projekt och bidrag",
+          "pages": [
+            "sv/reference/credits",
+            {
+              "group": "Underhållsskript",
+              "pages": [
+                "sv/reference/scripts/pr-preparation"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Utgåvor",
+      "groups": [
+        {
+          "group": "Versionsinformation",
+          "pages": [
+            "sv/releases/index"
+          ]
+        },
+        {
+          "group": "Utgivningsprocess",
+          "pages": [
+            "sv/reference/RELEASING",
+            {
+              "group": "Fullständig utgåvevalidering",
+              "pages": [
+                "sv/reference/full-release-validation/dispatch"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Bidra",
+      "groups": [
+        {
+          "group": "Mognad",
+          "pages": [
+            "sv/maturity/scorecard"
+          ]
+        },
+        {
+          "group": "Testning och CI",
+          "pages": [
+            "sv/reference/test",
+            {
+              "group": "Tester",
+              "pages": [
+                "sv/reference/test/local"
+              ]
+            },
+            {
+              "group": "CI",
+              "pages": [
+                "sv/ci/pipeline",
+                {
+                  "group": "Omfattning och routning",
+                  "pages": [
+                    "sv/ci/scope-and-routing/selection"
+                  ]
+                },
+                {
+                  "group": "Utgåvevalidering",
+                  "pages": [
+                    "sv/ci/release-validation/full-release-validation"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "QA-verktyg",
+              "pages": [
+                "sv/concepts/qa-e2e-automation/command-surface"
+              ]
+            },
+            {
+              "group": "Testguide",
+              "pages": [
+                "sv/help/testing/suites"
+              ]
+            },
+            {
+              "group": "Guide för livetester",
+              "pages": [
+                "sv/help/testing-live/quick-smokes"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Hjälp",
+      "groups": [
+        {
+          "group": "Börja här",
+          "pages": [
+            "sv/help/index"
+          ]
+        },
+        {
+          "group": "Vanliga frågor",
+          "pages": [
+            "sv/help/faq",
+            {
+              "group": "Ämnen för vanliga frågor",
+              "pages": [
+                "sv/help/faq/what-is-openclaw"
+              ]
+            },
+            {
+              "group": "Vanliga frågor vid första körningen",
+              "pages": [
+                "sv/help/faq-first-run/quick-start"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Diagnostik",
+          "pages": [
+            "sv/help/environment"
+          ]
+        },
+        {
+          "group": "Gemenskap och projektinformation",
+          "pages": [
+            "sv/start/lore"
+          ]
+        }
+      ]
+    }
+  ]
+}

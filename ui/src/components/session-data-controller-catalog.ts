@@ -1,5 +1,4 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ReactiveControllerHost } from "lit";
 import type {
   SessionCatalog,
   SessionsCatalogArchiveParams,
@@ -9,6 +8,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import type { PresencePayload } from "../app/user-profile.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { readSessionMethodScopeAccess } from "../lib/session-method-access.ts";
 import {
@@ -16,6 +16,7 @@ import {
   type CatalogSessionContinuedDetail,
 } from "../lib/sessions/catalog-key.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
 import {
   refreshSessionCatalogsLive,
   SessionCatalogLiveState,
@@ -36,15 +37,25 @@ import type {
 } from "./app-sidebar-session-types.ts";
 import {
   completePanelRefresh,
+  createPanelRefreshStatus,
   failPanelRefresh,
   type PanelRefreshStatus,
 } from "./panel-refresh-status.ts";
+import type { ContextualSidebar } from "./sidebar-context-state.ts";
 
-export interface SessionDataControllerHost extends ReactiveControllerHost {
+export interface SessionDataControllerHost extends SolidControllerHost {
   readonly isConnected: boolean;
   readonly connected: boolean;
+  readonly navigationVisible: boolean;
+  readonly navigationView: "sessions" | "online" | "pages";
+  readonly contextualSidebar?: ContextualSidebar;
+  readonly sidebarAgentsMode: "chip" | "roster";
+  shouldPublishSessionData(): boolean;
   readonly activeRouteId?: string;
+  readonly sessionCatalogRowsVisible: boolean;
+  samePresence(previous: PresencePayload | undefined, next: PresencePayload | undefined): boolean;
   getRouteSessionKey(): string;
+  childSessionParents(): Set<string>;
   readonly sessionDataContext: ApplicationContext | undefined;
   dismissTransientMenus(): boolean;
   expandedAgentId(): string;
@@ -60,6 +71,7 @@ export interface SessionCatalogDataOwner {
   readonly context: ApplicationContext | undefined;
   readonly isSessionDataHostConnected: boolean;
   readonly sessionDataHostConnected: boolean;
+  readonly sessionCatalogRowsVisible: boolean;
   sessionCatalogs: SessionCatalog[];
   sessionCatalogRefreshStatus: PanelRefreshStatus;
   loadingMoreSessionCatalogIds: ReadonlySet<string>;
@@ -73,6 +85,29 @@ export interface SessionCatalogDataOwner {
   requestSessionDataUpdate(): void;
   refreshSessionCatalogs(): Promise<void>;
   sessionCatalogIdsWithoutVisibleRows(): readonly string[];
+}
+
+interface SessionCatalogResetOwner extends SessionCatalogDataOwner {
+  sessionScopeGeneration: number;
+  pendingCatalogArchives: ReadonlySet<string>;
+  sessionsLoading: boolean;
+}
+
+export function retireSessionCatalogData(owner: SessionCatalogResetOwner): void {
+  owner.sessionScopeGeneration += 1;
+  owner.pendingCatalogArchives = new Set();
+  owner.sessionsLoading = false;
+  owner.loadingMoreSessionCatalogIds = new Set();
+  owner.sessionCatalogLive.clear();
+}
+
+export function resetSessionCatalogConnection(owner: SessionCatalogResetOwner): void {
+  retireSessionCatalogData(owner);
+  owner.sessionCatalogRevision += 1;
+  owner.sessionCatalogs = [];
+  owner.sessionCatalogRefreshStatus = createPanelRefreshStatus();
+  owner.sessionCatalogPageDepths.clear();
+  owner.requestSessionDataUpdate();
 }
 
 /** A completed list RPC can still leave pending hosts or hidden discovery pages. */
@@ -240,7 +275,9 @@ export function applySessionCatalogHostEvent(
     return;
   }
   owner.sessionCatalogs = update.catalogs;
-  owner.requestSessionDataUpdate();
+  if (owner.sessionCatalogRowsVisible) {
+    owner.requestSessionDataUpdate();
+  }
 }
 
 export function applySessionCatalogContinuation(

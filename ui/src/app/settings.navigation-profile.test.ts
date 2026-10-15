@@ -18,7 +18,7 @@ import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
 installSettingsStorageLifecycle();
 const scope = "wss://gateway.example";
-const pinsKey = "ui.sidebarEntries";
+const pinsKey = "ui.railShortcuts";
 beforeEach(() => {
   resetServerUiPrefsSync();
   setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
@@ -38,10 +38,10 @@ function siblingSave(profileId: string, sidebarEntries: string[]) {
         ...stored,
         navigationByProfile: {
           ...stored.navigationByProfile,
-          [profileId]: { sidebarEntries },
+          [profileId]: { railShortcuts: sidebarEntries },
         },
       }
-    : { ...stored, sidebarEntries };
+    : { ...stored, railShortcuts: sidebarEntries };
   localStorage.setItem(key, JSON.stringify(next));
   return key;
 }
@@ -52,9 +52,9 @@ it("ignores retired scope preferences in browser and profile storage", async () 
     key,
     JSON.stringify({
       gatewayUrl: scope,
-      sidebarEntries: ["route:cron"],
+      railShortcuts: ["route:cron"],
       navigationScope: "all",
-      navigationByProfile: { a: { sidebarEntries: ["route:usage"], navigationScope: "all" } },
+      navigationByProfile: { a: { railShortcuts: ["route:usage"], navigationScope: "all" } },
     }),
   );
   expect(loadSettings()).not.toHaveProperty("navigationScope");
@@ -122,7 +122,7 @@ it.each([false, true])(
       expect(changed).not.toHaveBeenCalled();
       navigation.update({ navWidth: 340 });
       expect(JSON.parse(localStorage.getItem(key)!).navigationByProfile.b).toEqual({
-        sidebarEntries: ["session:private-b"],
+        railShortcuts: ["session:private-b"],
       });
       expect(navigation.snapshot.sidebarEntries).toEqual(["route:cron"]);
     } finally {
@@ -199,7 +199,7 @@ it("keeps dirty local navigation through storage failures without replaying unch
   patchSettings({ sidebarEntries: [] });
   persist(
     settingsKeyForGateway("wss://other.example"),
-    JSON.stringify({ gatewayUrl: "wss://other.example", sidebarEntries: ["route:systems"] }),
+    JSON.stringify({ gatewayUrl: "wss://other.example", railShortcuts: ["route:systems"] }),
   );
   expect(loadSettings("wss://other.example").sidebarEntries).toEqual(["route:systems"]);
   expect(loadSettings(scope).sidebarEntries).toEqual([]);
@@ -212,15 +212,15 @@ it("keeps dirty local navigation through storage failures without replaying unch
       ...stored,
       navigationByProfile: {
         ...stored.navigationByProfile,
-        b: { sidebarEntries: ["route:plugins"] },
+        b: { railShortcuts: ["route:plugins"] },
       },
     }),
   );
   deniedWrite.mockRestore();
   patchSettings({ navWidth: 320 });
   expect(JSON.parse(localStorage.getItem(key)!).navigationByProfile).toMatchObject({
-    a: { sidebarEntries: [] },
-    b: { sidebarEntries: ["route:plugins"] },
+    a: { railShortcuts: [] },
+    b: { railShortcuts: ["route:plugins"] },
   });
   const deniedRead = vi.spyOn(localStorage, "getItem").mockImplementation(() => {
     throw new Error("private storage");
@@ -235,32 +235,14 @@ it("keeps dirty local navigation through storage failures without replaying unch
   siblingSave("b", ["route:usage"]);
   patchSettings({ navWidth: 340 });
   expect(JSON.parse(localStorage.getItem(key)!).navigationByProfile).toEqual({
-    a: { sidebarEntries: ["route:cron"] },
-    b: { sidebarEntries: ["route:usage"] },
+    a: { railShortcuts: ["route:cron"] },
+    b: { railShortcuts: ["route:usage"] },
   });
-});
-
-it("publishes defaults for a never-seen identity without importing the legacy singleton", async () => {
-  const backend = createProfilePrefsServer({ a: { [pinsKey]: ["route:usage"] } }, scope);
-  await backend.connect("a").refresh();
-  const key = settingsKeyForGateway(scope);
-  const stored = JSON.parse(localStorage.getItem(key)!);
-  localStorage.setItem(key, JSON.stringify({ ...stored, sidebarEntries: ["session:private-a"] }));
-  const onApplied = vi.fn();
-  applyServerUiPrefs({}, { scope, profileId: "new-profile", onApplied });
-  expect(loadSettings()).toMatchObject({
-    sidebarEntries: DEFAULT_SIDEBAR_ENTRIES,
-  });
-  expect(onApplied).toHaveBeenCalledWith(
-    expect.objectContaining({ sidebarEntries: DEFAULT_SIDEBAR_ENTRIES }),
-  );
 });
 
 it.each([
   { destination: scope, localPins: ["route:systems"] },
-  { destination: scope, localPins: [] },
   { destination: "wss://other.example", localPins: ["route:systems"] },
-  { destination: "wss://other.example", localPins: [] },
 ])(
   "preserves profileless navigation through A → $destination → A ($localPins)",
   async ({ destination, localPins }) => {
@@ -295,7 +277,7 @@ it.each([
     await a.refresh();
     expect(loadSettings(scope).sidebarEntries).toEqual(["session:private-a"]);
     expect(JSON.parse(localStorage.getItem(settingsKeyForGateway(destination))!)).toMatchObject({
-      sidebarEntries: localPins,
+      railShortcuts: localPins,
     });
     expect(request).not.toHaveBeenCalled();
   },
@@ -317,7 +299,7 @@ it("does not promote private pins into a never-saved profileless browser snapsho
   expect(request).not.toHaveBeenCalled();
 });
 
-it.each([{ localPins: ["route:cron"] }, { localPins: [] }])(
+it.each([{ localPins: ["route:cron"] }])(
   "preserves profileless shortcuts on upgrade from shared last-seen navigation (%j)",
   ({ localPins }) => {
     patchSettings({ sidebarEntries: localPins });

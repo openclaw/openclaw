@@ -6,6 +6,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
@@ -55,7 +56,8 @@ export function listTranscriptArchivesFromDatabase(
   if (!tableExists(db, "session_transcript_archives")) {
     return [];
   }
-  let query = getNodeSqliteKysely<ArchiveDatabase>(db)
+  const selected = sqliteStringSet(selectors);
+  const query = getNodeSqliteKysely<ArchiveDatabase>(db)
     .selectFrom("session_transcript_archives")
     .select([
       "archive_name as archiveName",
@@ -64,15 +66,17 @@ export function listTranscriptArchivesFromDatabase(
       "created_at as createdAt",
     ])
     .orderBy("created_at")
-    .orderBy("session_id");
-  query = query.where((expression) =>
-    expression.or([
-      ...(selectors.length > 0
-        ? [expression("session_id", "in", selectors), expression("session_key", "in", selectors)]
-        : []),
-      ...(archiveNames.length > 0 ? [expression("archive_name", "in", archiveNames)] : []),
-    ]),
-  );
+    .orderBy("session_id")
+    .where((expression) =>
+      expression.or([
+        ...(selectors.length > 0
+          ? [expression("session_id", "in", selected), expression("session_key", "in", selected)]
+          : []),
+        ...(archiveNames.length > 0
+          ? [expression("archive_name", "in", sqliteStringSet(archiveNames))]
+          : []),
+      ]),
+    );
   const rows = executeSqliteQuerySync(db, query).rows;
   return rows
     .map((row) =>
@@ -81,7 +85,7 @@ export function listTranscriptArchivesFromDatabase(
     .filter((row) => logicalAgentId === undefined || row.agentId === logicalAgentId);
 }
 
-export function hasTranscriptArchiveInDatabase(
+function hasTranscriptArchiveInDatabase(
   database: Pick<OpenClawAgentDatabase, "db" | "agentId">,
   target: Pick<TranscriptArchiveReadPlan, "logicalAgentId" | "sessionId" | "sessionKey">,
 ): boolean {

@@ -304,6 +304,12 @@ export const mainLanes: DockerE2eLane[] = [
     stateScenario: "empty",
     weight: 3,
   }),
+  npmLane("muse-runtime", {
+    needsPackage: true,
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 20 * 60 * 1000,
+  }),
   serviceLane("codex-media-path", {
     prepublishPluginPackages: ["@openclaw/codex"],
     resources: ["npm"],
@@ -420,6 +426,11 @@ export const mainLanes: DockerE2eLane[] = [
     "published-driver-update", // Outlives the script's 1125 s envelope; hosted after #162858: p50 521 s, max 659 s.
     { resources: ["service"], stateScenario: "empty", timeoutMs: 20 * 60 * 1000 },
   ),
+  npmLane("published-driver-scoped-restore", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 20 * 60 * 1000,
+  }),
   upgradeSurvivorLane(
     "dreaming-cron-doctor",
     dreamingCronDoctorCommand,

@@ -36,14 +36,6 @@ function firstMockArg(
   return arg as Record<string, unknown>;
 }
 
-const slackConfig = {
-  channels: {
-    slack: {
-      enabled: true,
-    },
-  },
-} as OpenClawConfig;
-
 function registerTestChatPlugin(outbound: NonNullable<ChannelPlugin["outbound"]>) {
   setActivePluginRegistry(
     createTestRegistry([
@@ -289,6 +281,7 @@ describe("runMessageAction core send routing", () => {
         message: "threaded",
         replyTo: "child-1",
       },
+      preparedMessageId: "platform-message-1",
       toolContext: {
         currentChannelProvider: "testchat",
         currentChannelId: "channel:C1",
@@ -303,6 +296,7 @@ describe("runMessageAction core send routing", () => {
       replyToId: "root-1",
       replyToIdSource: "explicit",
       threadId: "root-1",
+      preparedMessageId: "platform-message-1",
     });
   });
 
@@ -373,55 +367,6 @@ describe("runMessageAction core send routing", () => {
       });
     },
   );
-
-  it("carries a prepared conversation-turn id to the channel send", async () => {
-    const sendText = registerSlackTextPlugin();
-
-    await runMessageAction({
-      cfg: slackConfig,
-      action: "send",
-      params: {
-        channel: "slack",
-        target: "channel:C123",
-        message: "correlated hello",
-      },
-      preparedMessageId: "platform-message-1",
-      dryRun: false,
-    });
-
-    expect(firstMockArg(sendText, "send text").preparedMessageId).toBe("platform-message-1");
-  });
-
-  it("uses an active gateway-mode adapter directly when the Gateway owns the turn", async () => {
-    const sendText = vi.fn().mockResolvedValue({
-      channel: "testchat",
-      messageId: "reef-message-1",
-      chatId: "molty",
-    });
-    registerTestChatPlugin({
-      deliveryMode: "gateway",
-      sendText,
-    });
-
-    const result = await runMessageAction({
-      cfg: { channels: { testchat: { enabled: true } } } as OpenClawConfig,
-      action: "send",
-      params: {
-        channel: "testchat",
-        target: "channel:C123",
-        message: "correlated hello",
-      },
-      preparedMessageId: "reef-message-1",
-      gatewayOwnedDelivery: true,
-      dryRun: false,
-    });
-
-    expect(sendText).toHaveBeenCalledOnce();
-    expect(result).toMatchObject({
-      kind: "send",
-      sendResult: { via: "gateway", result: { messageId: "reef-message-1" } },
-    });
-  });
 
   it.each([
     { name: "plugin default", expected: "ada" },

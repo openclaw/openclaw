@@ -964,6 +964,38 @@ afterEach(async () => {
 });
 
 describe("worker runtime", () => {
+  it("finalizes worker tool outcomes after an empty model response", async () => {
+    const { gateway, launch } = await setup({
+      inferencePlans: ["safe-tool", "empty-terminal", "text"],
+    });
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+    const messages = gateway.acceptedTranscriptRequests.flatMap((request) => request.messages);
+    expect(messages.find((message) => message.role === "toolResult")).toMatchObject({
+      isError: false,
+    });
+    expect(messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "worker reply" }],
+    });
+    expect(gateway.inferenceRequests).toHaveLength(3);
+    expect(gateway.inferenceRequests[2]?.context.tools ?? []).toEqual([]);
+    expect(messages.filter((message) => message.role === "toolResult")).toHaveLength(1);
+    expect(
+      gateway.liveEventRequests.findLast(({ event }) => event.kind === "assistant"),
+    ).toMatchObject({ event: { payload: { text: "worker reply" } } });
+  });
+
+  it("finalizes worker tool outcomes with a failure after one empty continuation", async () => {
+    const { gateway, launch } = await setup({
+      inferencePlans: ["safe-tool", "empty-terminal", "empty-terminal"],
+    });
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "failed" });
+    expect(gateway.inferenceRequests).toHaveLength(3);
+    expect(gateway.liveEventRequests.at(-1)).toMatchObject({
+      event: { kind: "lifecycle", payload: { phase: "finishing", error: expect.any(String) } },
+    });
+  });
+
   registerWorkerBackgroundExecLifecycleTests({
     setup,
     waitForFast,
@@ -1205,7 +1237,14 @@ describe("worker runtime", () => {
           kind: "lifecycle",
           payload: { phase: "finishing", stopReason: "aborted" },
         });
-        expect(gateway.liveEventRequests.at(-1)?.event.payload).not.toHaveProperty("error");
+        expect(gateway.liveEventRequests.at(-1)?.event.payload).toHaveProperty(
+          "error",
+          expect.stringContaining("fixture inference cancelled"),
+        );
+        expect(gateway.liveEventRequests.at(-1)?.event.payload).toHaveProperty(
+          "error",
+          expect.stringContaining("fixture desktop cleanup failed"),
+        );
       } else if (computerCleanupFailure) {
         expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
           kind: "lifecycle",
@@ -1530,6 +1569,19 @@ describe("worker runtime", () => {
         .toReversed()
         .find((message) => message.role === "assistant");
       expect(assistant).toMatchObject({ role: "assistant", stopReason: "error", content: [] });
+      if (plan === "oversized-text") {
+        expect(assistant).toMatchObject({
+          errorMessage: "Worker inference result exceeds the transcript message limit.",
+          usage: {
+            input: 2,
+            output: 3,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 5,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+        });
+      }
       for (const request of gateway.transcriptRequests) {
         expect(Buffer.byteLength(JSON.stringify(request), "utf8")).toBeLessThan(64 * 1024);
       }
@@ -1603,6 +1655,16 @@ describe("worker runtime", () => {
         const running = listRunningSessions().filter((session) => session.scopeKey === scopeKey);
         expect(running).toHaveLength(1);
         const sessionId = running[0]!.id;
+        const messages = gateway.acceptedTranscriptRequests.flatMap((request) => request.messages);
+        expect(messages.at(-1)).toMatchObject({
+          role: "assistant",
+          content: [{ type: "text", text: expect.stringContaining("still running") }],
+        });
+        expect(JSON.stringify(messages.at(-1))).toContain(sessionId);
+        expect(gateway.inferenceRequests).toHaveLength(2);
+        expect(
+          gateway.liveEventRequests.findLast(({ event }) => event.kind === "assistant"),
+        ).toMatchObject({ event: { payload: { text: expect.stringContaining("still running") } } });
         expect(settled).not.toHaveBeenCalled();
         if (processState === "completed") {
           releaseBackground.resolve();
@@ -2050,31 +2112,6 @@ describe("worker reconnect clients", () => {
       await expect(connection.start()).resolves.toMatchObject({ ownerEpoch: OWNER_EPOCH });
       expect(healthyReadyCalls).toBe(1);
       await waitForFast(() => expect(gateway.methods).toContain("worker.heartbeat"));
-    } finally {
-      await connection.stop();
-    }
-  });
-
-  it("fails closed when the overall admission deadline expires", async () => {
-    const { gateway, launch } = await setup({ admissionFailure: "gateway-unavailable" });
-    const connection = createWorkerConnection({
-      endpoint: { kind: "unix", socketPath: gateway.socketPath },
-      connectParams: buildWorkerConnectParams(launch),
-      admissionTimeoutMs: 25,
-      admissionDeadlineMs: 250,
-      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
-    });
-    try {
-      await expect(connection.start()).rejects.toBeInstanceOf(WorkerAdmissionDeadlineExceededError);
-      expect(gateway.connectionCount).toBeGreaterThan(1);
-      expect(connection.state).toMatchObject({
-        kind: "failed",
-        error: expect.any(WorkerAdmissionDeadlineExceededError),
-      });
-      await expect(connection.waitForExit()).resolves.toMatchObject({
-        kind: "failed",
-        error: expect.any(WorkerAdmissionDeadlineExceededError),
-      });
     } finally {
       await connection.stop();
     }

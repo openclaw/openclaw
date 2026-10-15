@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listSessionParticipantsReadOnly,
@@ -14,7 +15,7 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "../gateway/session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetWithStoreAsync } from "../gateway/session-utils-store-lookup.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -43,7 +44,7 @@ vi.mock("../acp/runtime/session-meta.js", () => ({
   }) => {
     params.assertCurrent?.();
     const cfg = params.cfg ?? config;
-    const target = resolveGatewaySessionStoreTargetWithStore({
+    const target = await resolveGatewaySessionStoreTargetWithStoreAsync({
       cfg,
       key: params.sessionKey,
       agentId: params.agentId,
@@ -70,13 +71,15 @@ vi.mock("../acp/runtime/session-meta.js", () => ({
     };
   },
 }));
+// mock-isolation: Keep ACP database reads controlled by each coordination scenario.
 vi.mock("../acp/runtime/session-meta-readonly.js", async () => {
   const { rowToAcpSessionMeta } = await vi.importActual<
     typeof import("../acp/runtime/session-meta-readonly.js")
   >("../acp/runtime/session-meta-readonly.js");
   return {
     rowToAcpSessionMeta,
-    readAcpSessionMetaForEntry: (params: unknown) => readAcpSessionMetaForEntryMock(params),
+    readAcpSessionMetaForEntryAsync: async (params: unknown) =>
+      readAcpSessionMetaForEntryMock(params),
   };
 });
 vi.mock("../gateway/call.js", () => ({ callGateway: (opts: unknown) => callGatewayMock(opts) }));
@@ -215,6 +218,7 @@ describe("sessions_send child coordination", () => {
       dmScope: "main",
       store: state.path("configured", "agents", "{agentId}", "sessions", "sessions.json"),
     };
+    setRuntimeConfigSnapshot(config);
     resetGatewayWorkAdmission();
     callGatewayMock.mockReset();
     calls.length = 0;
@@ -831,15 +835,15 @@ describe("sessions_send child coordination", () => {
       // join its metadata against the entry already selected by sessions_send.
       readAcpSessionMetaMock.mockImplementation(
         (params: Parameters<typeof metadata.readAcpSessionEntry>[0]) =>
-          metadataRead.readAcpSessionMetaForEntry({
+          metadataRead.readAcpSessionMetaForEntryAsync({
             ...params,
             databasePath,
             entry: { sessionId, lifecycleRevision, sessionStartedAt: 50 },
           }),
       );
       readAcpSessionMetaForEntryMock.mockImplementation(
-        (params: Parameters<typeof metadataRead.readAcpSessionMetaForEntry>[0]) =>
-          metadataRead.readAcpSessionMetaForEntry({ ...params, databasePath }),
+        (params: Parameters<typeof metadataRead.readAcpSessionMetaForEntryAsync>[0]) =>
+          metadataRead.readAcpSessionMetaForEntryAsync({ ...params, databasePath }),
       );
       await writeEntry(peerKey, { sessionId: "peer-session", updatedAt: 1 });
       await writeEntry(reusedKey, currentEntry);

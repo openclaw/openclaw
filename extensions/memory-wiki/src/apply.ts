@@ -4,7 +4,7 @@ import {
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { readFiniteNumberParam } from "openclaw/plugin-sdk/param-readers";
-import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   asNonArrayRecord,
   normalizeSingleOrTrimmedStringList,
@@ -22,9 +22,9 @@ import {
   type WikiClaim,
 } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
+import { resolveQueryableWikiPageByLookup } from "./query-page-lookup.js";
 import { readQueryableWikiPages } from "./query-pages.js";
-import { resolveQueryableWikiPageByLookup } from "./query.js";
-import { readExistingWikiPage } from "./vault-page-write.js";
+import { isMissingWikiPageError, readExistingWikiPage } from "./vault-page-write.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const GENERATED_START = "<!-- openclaw:wiki:generated:start -->";
@@ -173,10 +173,6 @@ function buildSynthesisBody(params: {
     body: params.generatedBody,
   });
   return ensureHumanNotesBlock(withGenerated);
-}
-
-function isMissingWikiPageError(error: unknown): boolean {
-  return error instanceof FsSafeError && error.code === "not-found";
 }
 
 async function writeWikiPage(params: {

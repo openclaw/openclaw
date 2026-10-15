@@ -332,6 +332,9 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
         logicalAgentId: target.agentId,
         storePaths: [target.storePath],
         assertCurrent: () => readerLifetime.signal.throwIfAborted(),
+        readEntry: async () => {
+          throw new Error("Constructor propagation does not execute a database cohort");
+        },
         withRead: async () => {
           throw new Error("Constructor propagation does not execute a database cohort");
         },

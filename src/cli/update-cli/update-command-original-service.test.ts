@@ -3,14 +3,18 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, aroundEach, beforeEach, expect, it, vi } from "vitest";
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { readConfigFileSnapshot } from "../../config/io.runtime.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
+  replaceSessionEntrySync,
   upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
+} from "../../config/sessions/session-accessor.sqlite-entry.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayServiceState } from "../../daemon/service.js";
 import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
+import * as stateMetadata from "../../infra/update-candidate-state.sizes.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../plugins/installed-plugin-index-record-reader.js";
@@ -56,7 +60,8 @@ const mocks = vi.hoisted(() => ({
   suspend: vi.fn(),
   resume: vi.fn(),
 }));
-vi.mock("../../daemon/service-process-membership.js", () => ({
+vi.mock("../../daemon/service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/service-process-membership.js")>()),
   inspectServiceProcessMembershipSync: (pid: number) => (pid === 4242 ? "outside" : "unknown"),
 }));
 vi.mock("../../daemon/schtasks.js", async (original) => ({
@@ -109,6 +114,9 @@ let stopped = false;
 const schemas = { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: OPENCLAW_AGENT_SCHEMA_VERSION };
 beforeEach(async () => {
   vi.clearAllMocks();
+  vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation((files, { signal }) =>
+    stateMetadata.readUpdateStateDatabaseSizesInProcess(files, signal),
+  );
   // Service selection must not change the runtime of real schema and state workers.
   serviceNodeRunner = getNodeRuntimeFixture().execPath;
   state = await createOpenClawTestState({
@@ -125,10 +133,12 @@ beforeEach(async () => {
   vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: state.home });
   delete state.env.OPENCLAW_HOME;
   delete process.env.OPENCLAW_HOME;
-  await state.writeConfig({
+  const config: OpenClawConfig = {
     agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
     plugins: { enabled: false },
-  });
+  };
+  await state.writeConfig(config);
+  setRuntimeConfigSnapshot(config);
   rootA = state.path("A");
   rootB = state.path("B");
   for (const [root, version] of [
@@ -260,7 +270,8 @@ beforeEach(async () => {
     mocks.running = true;
     return "accepted";
   });
-  await upsertSessionEntryCore(
+  // Seed through the sync storage owner; this fixture does not exercise session writer startup.
+  replaceSessionEntrySync(
     { agentId: "main", sessionKey: "agent:main:before", env: state.env },
     { sessionId: "before", updatedAt: 1 },
   );
@@ -479,7 +490,6 @@ it.for([
           name: "UpdateCommandPendingRecoveryFailure",
           exitCode: 1,
           cause: { kind: "newer-schema" },
-          automaticTriage: undefined,
           result: {
             root: rootB,
             status: "error",

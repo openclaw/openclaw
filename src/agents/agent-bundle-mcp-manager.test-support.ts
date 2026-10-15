@@ -3,9 +3,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   acquireSessionMcpRuntime,
+  disposeAllSessionMcpRuntimes,
   setSessionMcpRuntimeScheduler,
 } from "./agent-bundle-mcp-manager-api.js";
 import { createSessionMcpRuntimeManager as createManager } from "./agent-bundle-mcp-manager.js";
+import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
 import type { SessionMcpRuntimeManager as RuntimeManager } from "./agent-bundle-mcp-types.js";
 
 type RuntimeParams = Parameters<typeof acquireSessionMcpRuntime>[0];
@@ -15,10 +17,23 @@ export const unopenedMcpConfig = {
   mcp: { servers: { fixture: { command: process.execPath } } },
 } satisfies OpenClawConfig;
 
+// Module-local, so shared (non-isolated) workers reset it with each test file's graph.
+let currentGraphManager: unknown;
+
 export async function bindSessionMcpRuntimeTestScheduler(): Promise<void> {
+  // The manager lives on globalThis and lazily loads the runtime from the graph
+  // that created it. A manager left by an earlier file would bypass this file's
+  // mocks and spies, so retire it before binding.
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalStore[SESSION_MCP_RUNTIME_MANAGER_KEY];
+  if (existing !== undefined && existing !== currentGraphManager) {
+    await disposeAllSessionMcpRuntimes();
+    Reflect.deleteProperty(globalStore, SESSION_MCP_RUNTIME_MANAGER_KEY);
+  }
   const scheduler = createTestGatewayScheduler();
   onTestFinished(() => scheduler.stop());
   await setSessionMcpRuntimeScheduler(scheduler);
+  currentGraphManager = globalStore[SESSION_MCP_RUNTIME_MANAGER_KEY];
 }
 
 export function makeRequesterParams(

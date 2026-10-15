@@ -1,11 +1,8 @@
 import { html } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { ref } from "lit/directives/ref.js";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
-import type { MarkdownJson } from "../../../components/markdown-json.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
-import { toSanitizedJsonHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
@@ -17,27 +14,7 @@ import {
   type MessageTextOptions,
 } from "./chat-message-text-preparation.ts";
 
-export type { AssistantMessageDisclosure } from "./chat-message-text-preparation.ts";
-export {
-  MessageMarkdown,
-  MarkdownContent,
-  MarkdownText,
-  renderSolidMessageJson,
-  renderSolidMessageMarkdown,
-} from "./chat-message-text-view.tsx";
-
 registerChatMessageMetadataEnglish();
-
-export function renderMessageJson(
-  json: MarkdownJson,
-  messageKey: string,
-  opts: MessageTextOptions,
-  options: MarkdownRenderOptions,
-) {
-  const parts = [toSanitizedJsonHtml(json, options)];
-  const text = html`<div class="chat-text">${unsafeHTML(parts[0])}</div>`;
-  return renderMessageDisclosure(json.text, messageKey, opts, text, parts);
-}
 
 export function renderMessageMarkdown(
   markdown: string,

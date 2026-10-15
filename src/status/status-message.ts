@@ -49,7 +49,7 @@ import {
   hasUserPinnedModelSelection,
 } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-usage.js";
+import type { SessionTranscriptUsageSnapshot } from "../gateway/session-transcript-derived-readers.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import type {
@@ -62,7 +62,6 @@ import {
   summarizeDecisionReason,
 } from "../media-understanding/runner.entries.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
@@ -77,6 +76,7 @@ import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 import { formatModelEndpointUrl } from "./status-model-endpoint.js";
+import { formatTokensPairValue, formatCacheHitValue } from "./status-usage-format.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type AgentConfig = Partial<AgentDefaults> & {
@@ -105,13 +105,14 @@ type StatusArgs = {
   runtimeContextProvider?: string;
   runtimeContextTokens?: number;
   sessionEntry?: SessionEntry;
+  preparedSandboxRuntime?: ReturnType<typeof resolveSandboxRuntimeStatus>;
   sessionKey?: string;
   parentSessionKey?: string;
   sessionScope?: SessionScope;
-  sessionStorePath?: string;
   sessionStartedAt?: number;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
+  requestedThink?: ThinkLevel;
   resolvedFast?: FastMode;
   resolvedHarness?: string;
   resolvedVerbose?: VerboseLevel;
@@ -129,7 +130,7 @@ type StatusArgs = {
   subagentsLine?: string;
   pluginHealthLine?: string;
   channelFeatureLine?: string;
-  includeTranscriptUsage?: boolean;
+  transcriptUsage?: SessionTranscriptUsageSnapshot | null;
   now?: number;
 };
 
@@ -171,15 +172,24 @@ function resolveConfiguredTextVerbosity(params: {
 }
 
 function resolveExecutionLabel(
-  args: Pick<StatusArgs, "config" | "agent" | "agentId" | "sessionKey">,
+  args: Pick<
+    StatusArgs,
+    "config" | "agent" | "agentId" | "sessionKey" | "sessionEntry" | "preparedSandboxRuntime"
+  >,
 ): string {
   const sessionKey = args.sessionKey?.trim();
   if (sessionKey) {
-    const runtimeStatus = resolveSandboxRuntimeStatus({
-      cfg: args.config,
-      sessionKey,
-      agentId: args.agentId,
-    });
+    if (args.preparedSandboxRuntime === undefined && args.sessionEntry === undefined) {
+      return "unknown";
+    }
+    const runtimeStatus =
+      args.preparedSandboxRuntime ??
+      resolveSandboxRuntimeStatus({
+        cfg: args.config,
+        sessionKey,
+        agentId: args.agentId,
+        preparedSessionEntry: args.sessionEntry,
+      });
     const sandboxMode = runtimeStatus.mode ?? "off";
     if (sandboxMode === "off") {
       return "direct";
@@ -253,97 +263,33 @@ const formatQueueDetails = (queue?: QueueStatus) => {
   return detailParts.length ? ` (${detailParts.join(" · ")})` : "";
 };
 
-const readUsageFromSessionLog = (
-  sessionId?: string,
-  sessionEntry?: SessionEntry,
-  agentId?: string,
-  sessionKey?: string,
-  storePath?: string,
-) => {
-  if (!sessionId) {
+const formatTranscriptUsage = (snapshot: SessionTranscriptUsageSnapshot) => {
+  const input = snapshot.inputTokens ?? 0;
+  const output = snapshot.outputTokens ?? 0;
+  const cacheRead = snapshot.cacheRead;
+  const cacheWrite = snapshot.cacheWrite;
+  const promptTokens = snapshot.totalTokens ?? input + (cacheRead ?? 0) + (cacheWrite ?? 0);
+  const total = promptTokens + output;
+  if (promptTokens === 0 && total === 0 && !snapshot.usageReport) {
     return undefined;
   }
-  try {
-    const resolvedAgentId =
-      agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
-    const snapshot = readRecentSessionUsageFromTranscript(
-      {
-        agentId: resolvedAgentId,
-        sessionEntry,
-        sessionId,
-        sessionKey,
-        storePath,
-      },
-      256 * 1024,
-    );
-    if (!snapshot) {
-      return undefined;
-    }
+  const model = snapshot.modelProvider
+    ? snapshot.model
+      ? `${snapshot.modelProvider}/${snapshot.model}`
+      : snapshot.modelProvider
+    : snapshot.model;
 
-    const input = snapshot.inputTokens ?? 0;
-    const output = snapshot.outputTokens ?? 0;
-    const cacheRead = snapshot.cacheRead;
-    const cacheWrite = snapshot.cacheWrite;
-    const promptTokens = snapshot.totalTokens ?? input + (cacheRead ?? 0) + (cacheWrite ?? 0);
-    const total = promptTokens + output;
-    if (promptTokens === 0 && total === 0) {
-      return undefined;
-    }
-    const model = snapshot.modelProvider
-      ? snapshot.model
-        ? `${snapshot.modelProvider}/${snapshot.model}`
-        : snapshot.modelProvider
-      : snapshot.model;
-
-    return {
-      input,
-      output,
-      cacheRead,
-      cacheWrite,
-      promptTokens,
-      total,
-      totalTokensFresh: snapshot.totalTokensFresh === true,
-      model,
-    };
-  } catch {
-    return undefined;
-  }
-};
-
-const formatTokensPairValue = (input?: number | null, output?: number | null) => {
-  if (input == null && output == null) {
-    return null;
-  }
-  const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
-  const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
-  return `${inputLabel} in / ${outputLabel} out`;
-};
-
-const formatCacheHitValue = (
-  input?: number | null,
-  cacheRead?: number | null,
-  cacheWrite?: number | null,
-) => {
-  if (
-    (typeof cacheRead !== "number" || cacheRead < 0) &&
-    (typeof cacheWrite !== "number" || cacheWrite < 0)
-  ) {
-    return null;
-  }
-
-  const cachedLabel = typeof cacheRead === "number" ? formatTokenCount(cacheRead) : "0";
-  const newLabel = typeof cacheWrite === "number" ? formatTokenCount(cacheWrite) : "0";
-
-  const totalInput =
-    (typeof cacheRead === "number" ? cacheRead : 0) +
-    (typeof cacheWrite === "number" ? cacheWrite : 0) +
-    (typeof input === "number" ? input : 0);
-  const hitRate =
-    totalInput > 0 && typeof cacheRead === "number"
-      ? Math.round((cacheRead / totalInput) * 100)
-      : 0;
-
-  return `${hitRate}% hit · ${cachedLabel} cached, ${newLabel} new`;
+  return {
+    usageReport: snapshot.usageReport,
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    promptTokens,
+    total,
+    totalTokensFresh: snapshot.totalTokensFresh === true,
+    model,
+  };
 };
 
 const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandingDecision>) => {
@@ -561,6 +507,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
   let outputTokens = entry?.outputTokens;
   let cacheRead = entry?.cacheRead;
   let cacheWrite = entry?.cacheWrite;
+  let usageReport = entry?.usageReport;
   const freshTotalTokens = resolveFreshSessionTotalTokens(entry);
   const allowTranscriptContextUsage =
     entry?.totalTokensFresh !== false && freshTotalTokens === undefined;
@@ -568,22 +515,18 @@ export function buildStatusMessageParts(args: StatusArgs) {
 
   // Explicitly stale session/cache usage can still hydrate Tokens/Cache lines
   // but must not become Context.
-  if (args.includeTranscriptUsage) {
-    const logUsage = readUsageFromSessionLog(
-      entry?.sessionId,
-      entry,
-      args.agentId,
-      args.sessionKey,
-      args.sessionStorePath,
-    );
+  if (args.transcriptUsage) {
+    const logUsage = formatTranscriptUsage(args.transcriptUsage);
     if (logUsage) {
-      const candidate = logUsage.totalTokensFresh
-        ? logUsage.promptTokens || logUsage.total
-        : undefined;
+      usageReport ??= logUsage.usageReport;
+      const candidate =
+        logUsage.totalTokensFresh && logUsage.usageReport?.state !== "unavailable"
+          ? logUsage.promptTokens || logUsage.total
+          : undefined;
       if (
         allowTranscriptContextUsage &&
         candidate !== undefined &&
-        candidate > 0 &&
+        candidate >= 0 &&
         (!totalTokens || candidate > totalTokens)
       ) {
         totalTokens = candidate;
@@ -611,19 +554,25 @@ export function buildStatusMessageParts(args: StatusArgs) {
           contextLookupModel = logUsage.model;
         }
       }
-      if (!inputTokens) {
-        inputTokens = logUsage.input;
-      }
-      if (!outputTokens) {
-        outputTokens = logUsage.output;
-      }
-      if (typeof cacheRead !== "number" || cacheRead <= 0) {
-        cacheRead = logUsage.cacheRead ?? cacheRead;
-      }
-      if (typeof cacheWrite !== "number" || cacheWrite <= 0) {
-        cacheWrite = logUsage.cacheWrite ?? cacheWrite;
+      if (entry?.usageReport?.state !== "available") {
+        if (!inputTokens) {
+          inputTokens = logUsage.input;
+        }
+        if (!outputTokens) {
+          outputTokens = logUsage.output;
+        }
+        if (typeof cacheRead !== "number" || cacheRead <= 0) {
+          cacheRead = logUsage.cacheRead ?? cacheRead;
+        }
+        if (typeof cacheWrite !== "number" || cacheWrite <= 0) {
+          cacheWrite = logUsage.cacheWrite ?? cacheWrite;
+        }
       }
     }
+  }
+
+  if (usageReport?.state === "unavailable") {
+    inputTokens = outputTokens = cacheRead = cacheWrite = undefined;
   }
 
   const activeModelLabel = buildModelCatalogRef(activeProvider, activeModel) || "unknown";
@@ -769,7 +718,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
       })
     : entry?.contextBudgetStatus;
   const contextUsageLabel =
-    totalTokens == null || totalTokens === 0
+    totalTokens == null || (totalTokens === 0 && usageReport?.state !== "available")
       ? (formatEstimatedContextBudgetTokens(contextBudgetStatus, contextTokens) ??
         formatTokens(totalTokens, contextTokens ?? null))
       : formatTokens(totalTokens, contextTokens ?? null);
@@ -783,10 +732,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const pluginStatusLines = verboseLevel !== "off" ? resolveSessionPluginStatusLines(entry) : [];
   const pluginTraceLines =
     traceLevel === "on" || traceLevel === "raw" ? resolveSessionPluginTraceLines(entry) : [];
-  const pluginStatusLine =
-    pluginStatusLines.length > 0 || pluginTraceLines.length > 0
-      ? [...pluginStatusLines, ...pluginTraceLines].join(" · ")
-      : null;
+  const pluginStatusLine = [...pluginStatusLines, ...pluginTraceLines].join(" · ") || null;
   const elevatedLabel =
     elevatedLevel && elevatedLevel !== "off"
       ? elevatedLevel === "on"
@@ -807,7 +753,9 @@ export function buildStatusMessageParts(args: StatusArgs) {
   // Mode switches are individually tiny; one shared line keeps them scannable
   // in both the plain body and the presentation table.
   const modesValue = [
-    `think ${thinkLevel}`,
+    args.requestedThink && args.requestedThink !== thinkLevel
+      ? `think ${thinkLevel} (requested ${args.requestedThink}; clamped)`
+      : `think ${thinkLevel}`,
     `fast ${fastModeValue}`,
     textVerbosity ? `text ${textVerbosity}` : null,
     reasoningLevel !== "off" ? `reasoning ${reasoningLevel}` : null,
@@ -856,18 +804,20 @@ export function buildStatusMessageParts(args: StatusArgs) {
       })
     : undefined;
   const cost =
-    asNonNegativeFiniteNumber(entry?.estimatedCostUsd) ??
-    (hasUsage
-      ? estimateAggregateUsageCost({
-          usage: {
-            input: inputTokens ?? undefined,
-            output: outputTokens ?? undefined,
-            cacheRead: cacheRead ?? undefined,
-            cacheWrite: cacheWrite ?? undefined,
-          },
-          cost: costConfig,
-        })
-      : undefined);
+    usageReport?.state === "unavailable"
+      ? undefined
+      : (asNonNegativeFiniteNumber(entry?.estimatedCostUsd) ??
+        (hasUsage
+          ? estimateAggregateUsageCost({
+              usage: {
+                input: inputTokens ?? undefined,
+                output: outputTokens ?? undefined,
+                cacheRead: cacheRead ?? undefined,
+                cacheWrite: cacheWrite ?? undefined,
+              },
+              cost: costConfig,
+            })
+          : undefined));
   const costLabel = formatUsd(cost);
 
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
@@ -914,7 +864,10 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const fallbackLine = fallbackValue ? `↪️ Fallback: ${fallbackValue}` : null;
   const commit = resolveRuntimeServiceCommit();
   const versionLine = `🦞 OpenClaw ${VERSION}${commit ? ` (${commit})` : ""}`;
-  const tokensValue = formatTokensPairValue(inputTokens, outputTokens);
+  const tokensValue =
+    usageReport?.state === "unavailable"
+      ? "unavailable (incomplete response)"
+      : formatTokensPairValue(inputTokens, outputTokens);
   const usagePair = tokensValue ? `🧮 Tokens: ${tokensValue}` : null;
   const cacheValue = formatCacheHitValue(inputTokens, cacheRead, cacheWrite);
   const cacheLine = cacheValue ? `🗄️ Cache: ${cacheValue}` : null;

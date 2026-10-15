@@ -2,6 +2,7 @@ import { StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -12,6 +13,7 @@ import {
   getSessionWorkAdmissionRelease,
   interruptSessionWorkAdmissions,
 } from "../../sessions/session-lifecycle-admission.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -29,7 +31,70 @@ vi.mock("../../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback: generate,
 }));
 
-const settledTurn = () => ({ released: Promise.resolve(false), settled: Promise.resolve() });
+it.each(["persisted", "failed"])("publishes pending and %s title settlement", async (outcome) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } } };
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:title-notification",
+      sessionId: "title-notification",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const started = createDeferredCore();
+    const naming = createDeferredCore<string>();
+    generate.mockReset().mockImplementation(async () => {
+      started.resolve();
+      return await naming.promise;
+    });
+    const states: boolean[] = [];
+    const stop = sessionChanges.subscribe((change) => {
+      if (
+        "sessionKey" in change &&
+        change.sessionKey === scope.sessionKey &&
+        change.scope === "runtime"
+      ) {
+        states.push(sessionTitleRequests.get(scope) !== undefined);
+      }
+    });
+    const warned = createDeferredCore();
+    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+    context.logGateway.warn = () => warned.resolve();
+    const write =
+      outcome === "failed"
+        ? vi
+            .spyOn(sessionAccessor, "patchSessionEntryCore")
+            .mockRejectedValueOnce(new Error("title write failed"))
+        : undefined;
+    try {
+      scheduleChatDashboardSessionTitle({
+        ...scope,
+        admittedSessionId: scope.sessionId,
+        cfg,
+        context,
+        request: { rawMessage: "Plan the release", normalizedAttachments: [] },
+      });
+      await started.promise;
+      const request = sessionTitleRequests.get(scope)!;
+      const settled = request.catch(() => false);
+      expect(states).toEqual([true]);
+      naming.resolve("Release planning");
+      await settled;
+      if (outcome === "failed") {
+        await warned.promise;
+      }
+      expect(states).toEqual([true, false]);
+      expect(sessionTitleRequests.get(scope)).toBeUndefined();
+      expect(loadSessionEntry(scope)?.displayName).toBe(
+        outcome === "persisted" ? "Release planning" : undefined,
+      );
+    } finally {
+      naming.resolve("Release planning");
+      write?.mockRestore();
+      stop();
+    }
+  });
+});
 
 it.each([
   { titleSource: undefined, expectedSource: "Original release plan" },
@@ -69,16 +134,13 @@ it.each([
       const reads = observeSqliteReadSql(StatementSync.prototype);
       let title: Promise<boolean> | undefined;
       try {
-        scheduleChatDashboardSessionTitle(
-          {
-            ...scope,
-            admittedSessionId: scope.sessionId,
-            cfg,
-            context,
-            request: { rawMessage: "A later follow-up", normalizedAttachments: [] },
-          },
-          settledTurn(),
-        );
+        scheduleChatDashboardSessionTitle({
+          ...scope,
+          admittedSessionId: scope.sessionId,
+          cfg,
+          context,
+          request: { rawMessage: "A later follow-up", normalizedAttachments: [] },
+        });
         await Promise.race([started.promise, failed.promise]);
         title = sessionTitleRequests.get(scope);
         expect(title).toBeDefined();
@@ -97,7 +159,7 @@ it.each([
   },
 );
 
-it("falls back after one label attempt when naming starts after its turn settled", async () => {
+it("falls back after one label attempt without an overlapping turn", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = {
       agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
@@ -115,16 +177,13 @@ it("falls back after one label attempt when naming starts after its turn settled
       started.resolve();
       return await label.promise;
     });
-    scheduleChatDashboardSessionTitle(
-      {
-        ...scope,
-        admittedSessionId: scope.sessionId,
-        cfg,
-        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-        request: { rawMessage: "Plan the release", normalizedAttachments: [] },
-      },
-      settledTurn(),
-    );
+    scheduleChatDashboardSessionTitle({
+      ...scope,
+      admittedSessionId: scope.sessionId,
+      cfg,
+      context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+      request: { rawMessage: "Plan the release", normalizedAttachments: [] },
+    });
     await started.promise;
     const title = sessionTitleRequests.get(scope);
     expect(title).toBeDefined();
@@ -186,7 +245,7 @@ it("compacts after the reply releases its admission while its title is still gen
           context,
           request: { rawMessage: "First question", normalizedAttachments: [] },
         },
-        { released: Promise.resolve(true), settled: admission.released },
+        admission.released,
       );
       await titleStarted.promise;
       title = sessionTitleRequests.get(scope);
@@ -210,7 +269,7 @@ it("compacts after the reply releases its admission while its title is still gen
   });
 });
 
-it("does not hold session admission across an unresolved dashboard title gate", async () => {
+it("does not hold session admission while a dashboard title is generating", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = {
       agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
@@ -230,7 +289,6 @@ it("does not hold session admission across an unresolved dashboard title gate", 
       cwd: state.workspaceDir,
       message: { role: "user", content: "Original release plan", timestamp: 1 },
     });
-    const ready = createDeferredCore<boolean>();
     const started = createDeferredCore();
     const generation = createDeferredCore<string>();
     const failed = createDeferredCore<never>();
@@ -256,10 +314,12 @@ it("does not hold session admission across an unresolved dashboard title gate", 
           context,
           request: { rawMessage: "A later follow-up", normalizedAttachments: [] },
         },
-        { released: ready.promise, settled: Promise.resolve() },
+        Promise.resolve(),
       );
-      await vi.advanceTimersByTimeAsync(0);
-      expect(generate).not.toHaveBeenCalled();
+      await Promise.race([started.promise, failed.promise]);
+      title = sessionTitleRequests.get(scope);
+      expect(title).toBeDefined();
+      expect(generate).toHaveBeenCalledOnce();
       expect(getSessionWorkAdmissionRelease(admissionQuery)).toBeUndefined();
       const titleDrain = interruptSessionWorkAdmissions({ ...admissionQuery, timeoutMs: 0 });
       await vi.advanceTimersByTimeAsync(0);
@@ -277,17 +337,8 @@ it("does not hold session admission across an unresolved dashboard title gate", 
       });
       await vi.advanceTimersByTimeAsync(0);
       await expect(competingDrain).resolves.toBe(false);
-
-      ready.resolve(true);
-      await vi.advanceTimersByTimeAsync(0);
-      await Promise.race([started.promise, failed.promise]);
-      expect(getSessionWorkAdmissionRelease(admissionQuery)).toBeUndefined();
-      title = sessionTitleRequests.get(scope);
-      expect(title).toBeDefined();
-      expect(generate).toHaveBeenCalledOnce();
     } finally {
       competing?.release();
-      ready.resolve(true);
       generation.resolve("Original release plan");
       await title;
       vi.useRealTimers();

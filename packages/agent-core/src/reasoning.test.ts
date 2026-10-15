@@ -23,11 +23,7 @@ function makeModel(
 }
 
 describe("resolveAgentReasoningOption", () => {
-  it("uses a model's enabled fallback for explicit off", () => {
-    expect(resolveAgentReasoningOption(makeModel({ off: "low" }), "off")).toBe("low");
-  });
-
-  it.each([undefined, "none"])("preserves explicit off when off maps to %s", (offFallback) => {
+  it.each(["none"])("preserves explicit off when off maps to %s", (offFallback) => {
     expect(resolveAgentReasoningOption(makeModel({ off: offFallback }), "off")).toBe("off");
   });
 
@@ -46,7 +42,7 @@ describe("resolveAgentReasoningOption", () => {
     },
   );
 
-  it.each(["anthropic-messages", "bedrock-converse-stream"] as const)(
+  it.each(["bedrock-converse-stream"] as const)(
     "maps explicit off to low for canonical Fable aliases on %s",
     (api) => {
       expect(

@@ -10,7 +10,8 @@ const lazyMocks = vi.hoisted(() => ({
   retryDocument: vi.fn(async () => true),
 }));
 
-vi.mock("./components/chat-sidebar-region.runtime.ts", () => {
+// mock-isolation: the failed lazy-import fixture must throw before registering or exporting the real region.
+vi.mock("./components/chat-sidebar-region.runtime.tsx", () => {
   lazyMocks.importAttempts += 1;
   throw new Error("Failed to fetch dynamically imported module: sidebar-region.js");
 });

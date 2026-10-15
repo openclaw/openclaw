@@ -196,13 +196,17 @@ execute plugin code or require the Custom plugin UI Labs setting.
           "title": "a crab, allegedly",
           "crossMs": 12000
         }
+      },
+      "backgrounds": {
+        "light": "assets/theme-art/hull-light.webp",
+        "dark": "assets/theme-art/hull-dark.webp"
       }
     }
   ]
 }
 ```
 
-The catalog ID is `starship/xenovessel`. It preserves the plugin's canonical ID,
+The catalog ID is `starship/xenovessel`. It preserves the plugin's primary ID,
 including case, scoped IDs such as `@scope/starship`, and multi-entry IDs such as
 `pack/one`; their theme IDs are `@scope/starship/xenovessel` and
 `pack/one/xenovessel`. The complete catalog ID is limited to 256 characters.
@@ -236,9 +240,21 @@ the element limit. Stylesheets, filters, and embedded images are unsupported.
 Hats overlay the avatar's full square; place the hat near the top of the SVG
 viewBox and leave the lower area transparent.
 
-Include the definition JSON and every declared SVG in the published package's
-`files` list. OpenClaw's bundled metadata copier and runtime package builder
-include these declared paths automatically. An unreadable or invalid SVG omits
+`backgrounds` maps `light` and/or `dark` to a relative PNG, JPEG, or WebP path
+with the same containment rules. Each file must be at most 512 KiB; OpenClaw
+checks its image signature when it captures the theme. When the theme is
+selected and **Appearance → Background** uses theme artwork, the Control UI
+paints the image for the matching color mode instead of the neutral plugin
+artwork. A mode without a declared image keeps the neutral artwork. Background
+placement, presentation, visibility, and the accessibility fallbacks that hide
+artwork stay under the viewer's control. Like a custom upload, the image is
+dimmed under a theme-colored overlay sized from the palette's text contrast, so
+busy or bright images stay readable but faint; quiet, low-contrast artwork keeps
+the most detail. The built-in images are lossless WebP files of about 20–35 KiB.
+
+Include the definition JSON and every declared SVG and background in the published
+package's `files` list. OpenClaw's bundled metadata copier and runtime package builder
+include these declared paths automatically. An unreadable or invalid artwork file omits
 the whole theme from the catalog with a plugin warning diagnostic; other plugin
 capabilities remain available.
 
@@ -329,13 +345,13 @@ when its required SQLite capabilities are unavailable. Declare every hardlink
 alias within these resources so backup can identify its journal owner.
 
 Other plugin SQLite files remain opaque byte copies, including their sidecars,
-unless they alias a canonical OpenClaw database. Backup reports each opaque
+unless they alias a primary OpenClaw database. Backup reports each opaque
 SQLite file and sidecar in `warnings`; verification and restore preserve its bytes
 without applying SQLite validation or compaction. Merely placing a database
 under the state or agent directory does not opt it into managed snapshots.
 Undeclared SQLite symbolic links that exceed the link-resolution limit (`ELOOP`),
 including loops, are skipped with filename warnings. Declared database links still
-fail closed if they cannot be captured safely.
+reject the backup if they cannot be captured safely.
 
 ```json
 {
@@ -368,7 +384,7 @@ or absolute and must not contain backslashes, NULs, empty path segments, `.`,
 `..`, Windows drive or UNC prefixes, URI-like values, or any path that escapes
 its selected anchor. Invalid entries are rejected rather than normalized.
 
-The planner deduplicates resources deterministically. A narrower `regenerable`
+The planner uses fixed rules to remove duplicate resources. A narrower `regenerable`
 declaration wins over a broad configured state or agent root. Among plugin
 resource declarations, only an explicit nested `include` protects a descendant
 and keeps its excluded ancestors traversable. Explicit config, credentials,
@@ -448,7 +464,9 @@ revision even when browser code is unchanged.
 the Control UI. Paths are relative to the plugin root and must name compiled
 JavaScript and CSS. Assets follow the Gateway's authentication policy, are
 captured as immutable revisions, and refresh only through the explicit UI reload
-flow.
+flow. Bundled plugins and Nix-store plugins in Nix mode can load hardlinked
+assets and reload hardlinked manifests under the shared plugin-file policy.
+Mutable external plugin roots and CLI packing still reject hardlinks.
 
 User-installed native UI requires **Settings → Labs → Custom plugin UI**
 (`gateway.controlUi.experimental.customPlugins`, default `false`). Native UI
@@ -540,7 +558,7 @@ Declare every plugin-owned root command in `cliCommands` so root help and comman
 }
 ```
 
-The manifest row is the canonical help text. Register the same command at runtime with `api.registerCli(..., { descriptors: [...] })`; runtime descriptors may additionally provide `machineOutput`. Nested commands such as `openclaw nodes <feature>` are not root commands and do not belong in `cliCommands`.
+The manifest row is the source of help text. Register the same command at runtime with `api.registerCli(..., { descriptors: [...] })`; runtime descriptors may additionally provide `machineOutput`. Nested commands such as `openclaw nodes <feature>` are not root commands and do not belong in `cliCommands`.
 
 ## commandAliases reference
 

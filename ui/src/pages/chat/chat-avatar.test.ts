@@ -6,6 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { resolveAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
+import { solidContent } from "../../lit/solid-content.tsx";
 import {
   invalidateChatAvatarCache,
   refreshChatAvatar,
@@ -17,7 +18,7 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAvatarUrl } from "./chat-state-route.ts";
 import { renderChatAuthorAvatar } from "./components/chat-author-avatar.ts";
-import { renderWelcomeState } from "./components/chat-welcome.ts";
+import { ChatWelcome } from "./components/chat-welcome.tsx";
 
 function imageResponse() {
   return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } });
@@ -39,6 +40,110 @@ function renderAvatar(params: Parameters<typeof renderChatAvatar>) {
   render(renderChatAvatar(...params), container);
   return container.querySelector<HTMLElement>(".chat-avatar");
 }
+
+it.each([["/console", "sample-bot", "1000000001", true]] as const)(
+  "binds footer portraits at %s to account %s and sender %s",
+  (basePath, accountId, id, matches) => {
+    setAvatarGatewayOrigin(window.location.origin, [], basePath);
+    const sender = {
+      name: "Riley Adams",
+      identity: {
+        type: "observation" as const,
+        pluginId: "telegram",
+        accountId,
+        id,
+        senderKind: "human" as const,
+      },
+    };
+    const identity = { ...sender.identity };
+    const container = document.createElement("div");
+    render(
+      renderChatAuthorAvatar(sender, "chat-author-avatar", undefined, {
+        key: "agent:main:main",
+        channelAvatarUrl:
+          basePath + "/__openclaw__/channel-avatar/agent%3Amain%3Amain?v=portrait-1",
+        origin: {
+          provider: "telegram",
+          accountId: "sample-bot",
+          chatType: "direct",
+          from: "telegram:1000000001",
+        },
+      }),
+      container,
+    );
+    expect(Boolean(container.querySelector("openclaw-channel-avatar"))).toBe(matches);
+    expect(container.querySelector("[role=img]")?.getAttribute("aria-label")).toBe("Riley Adams");
+    expect(sender.identity).toEqual(identity);
+    render(nothing, container);
+  },
+);
+
+it("renders a source-bound native portrait without borrowing the viewer's profile", () => {
+  const sender = {
+    name: "Riley Adams",
+    identity: {
+      type: "observation" as const,
+      pluginId: "telegram",
+      accountId: "sample-bot",
+      id: "1000000001",
+      senderKind: "human" as const,
+    },
+  };
+  const identity = { ...sender.identity };
+  const avatar = renderAvatar([
+    "user",
+    undefined,
+    { name: "Viewer", avatar: "/api/users/gateway-owner/avatar" },
+    sender,
+    {
+      key: "agent:main:main",
+      origin: {
+        provider: "telegram",
+        accountId: "sample-bot",
+        from: "telegram:1000000001",
+        chatType: "direct",
+      },
+      channelAvatarUrl: "/__openclaw__/channel-avatar/agent%3Amain%3Amain?v=portrait-1",
+    },
+  ]);
+  const image = avatar?.querySelector<HTMLElement & { routeUrl: string }>(
+    "openclaw-channel-avatar",
+  );
+  expect(image?.routeUrl).toContain("provider=telegram&account=sample-bot&sender=1000000001");
+  expect(avatar?.getAttribute("aria-label")).toBe("Riley Adams");
+  expect(sender.identity).toEqual(identity);
+});
+
+it("keeps sender initials when a channel portrait belongs to another account", () => {
+  const avatar = renderAvatar([
+    "user",
+    undefined,
+    { name: "Viewer", avatar: "/api/users/gateway-owner/avatar" },
+    {
+      name: "Riley Adams",
+      identity: {
+        type: "observation",
+        pluginId: "telegram",
+        accountId: "another-bot",
+        id: "1000000001",
+        senderKind: "human",
+      },
+    },
+    {
+      key: "agent:main:main",
+      origin: {
+        provider: "telegram",
+        accountId: "sample-bot",
+        from: "telegram:1000000001",
+        chatType: "direct",
+      },
+      channelAvatarUrl: "/__openclaw__/channel-avatar/agent%3Amain%3Amain?v=portrait-1",
+    },
+  ]);
+  expect(avatar?.querySelector("openclaw-channel-avatar")).toBeNull();
+  expect(avatar?.querySelector("img")).toBeNull();
+  expect(avatar?.textContent?.trim()).toBe("RA");
+});
 
 function pendingUntilAbort<T>(signal: AbortSignal | null | undefined): Promise<T> {
   if (!signal) {
@@ -86,7 +191,7 @@ describe("renderChatAvatar", () => {
     } as const;
     render(
       html`
-        ${renderWelcomeState({ currentAgentId: "scout", assistantName: "Scout", assistantAvatar: null, onDraftChange: () => undefined, onSend: () => undefined })}
+        ${solidContent(ChatWelcome, { currentAgentId: "scout", assistantName: "Scout", assistantAvatar: null, onDraftChange: () => undefined, onSend: () => undefined })}
         ${renderChatAvatar("assistant", { agentId: "scout", name: "Scout", avatar: null })}
         ${renderForwardedAvatar("scout", { agentId: "main", agents: [{ id: "scout" }] })}
         ${renderChatAuthorAvatar(sender)} ${renderChatAvatar("user", undefined, undefined, sender)}
@@ -149,7 +254,7 @@ describe("renderChatAvatar", () => {
     const container = document.createElement("div");
     const avatar = "/avatar/main?v=1";
     const welcome = (assistantAvatar: string | null, assistantAvatarUrl?: string) =>
-      renderWelcomeState({
+      solidContent(ChatWelcome, {
         assistantName: "Main",
         assistantAvatar,
         assistantAvatarUrl,
@@ -680,21 +785,6 @@ describe("attributed sender avatars", () => {
     );
   });
 
-  it.each(["c3e32452-0467-47e5-aafa-233cd5dae29f"])(
-    "renders identity-colored initials for unqualified sender %s",
-    (id) => {
-      const avatar = renderAvatar([
-        "user",
-        undefined,
-        { name: "Viewer", avatar: null },
-        { id, name: "Alice Lovelace" },
-      ]);
-      expect(avatar?.tagName).toBe("DIV");
-      expect(avatar?.classList.contains("chat-avatar--sender-initials")).toBe(true);
-      expect(avatar?.textContent?.trim()).toBe("AL");
-    },
-  );
-
   it("keeps a missing same-origin sender avatar on initials across rerenders", async () => {
     const gatewayOrigin = globalThis.location.origin;
     setAvatarGatewayOrigin(gatewayOrigin);
@@ -706,6 +796,7 @@ describe("attributed sender avatars", () => {
       id: "dd7c98e2-f51d-4590-b588-fa0682e165b7",
       identity: { type: "profile" as const, id: "dd7c98e2-f51d-4590-b588-fa0682e165b7" },
       name: "hrudolph",
+      profileAvatarUrl: "/api/users/dd7c98e2-f51d-4590-b588-fa0682e165b7/avatar",
     };
     const renderSender = () =>
       render(renderChatAvatar("user", undefined, undefined, sender), container);

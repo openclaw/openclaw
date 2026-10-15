@@ -1,0 +1,201 @@
+import { createMemo, Match, Show, Switch } from "solid-js";
+import type { NodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
+import { Icon } from "../../../components/solid/icon.tsx";
+import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
+import type { ChatItem } from "../../../lib/chat/chat-types.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
+import { detectTextDirection } from "../../../lib/text-direction.ts";
+import "./chat-permission-card.tsx";
+import "./chat-run-failure-notice.tsx";
+import { ChatSkillLearnedNotice } from "./chat-skill-learned-notice.tsx";
+import type { ChatThreadProps } from "./chat-thread-interactions.ts";
+
+export function ChatPermissionCard(props: {
+  request: NodePermissionRequest;
+  onRetry?: (message: string) => void;
+}) {
+  return (
+    <openclaw-chat-permission-card prop:request={props.request} prop:onRetry={props.onRetry} />
+  );
+}
+
+function SystemLine(props: {
+  icon?: Extract<ChatItem, { kind: "divider" }>["icon"];
+  label: string;
+  metric?: string;
+  compaction?: "active" | "complete";
+}) {
+  return (
+    <div
+      class="chat-divider__rule"
+      role={props.compaction ? "status" : "separator"}
+      aria-live={props.compaction ? "polite" : undefined}
+      aria-label={props.metric ? `${props.label}, ${props.metric}` : props.label}
+    >
+      <span class="chat-divider__line" />
+      <span class="chat-divider__label">
+        <Show
+          when={props.compaction}
+          fallback={
+            <Show when={props.icon}>
+              {(icon) => (
+                <span class="chat-divider__icon" aria-hidden="true">
+                  <Icon name={icon()} />
+                </span>
+              )}
+            </Show>
+          }
+        >
+          <span class="chat-compaction__glyph" aria-hidden="true">
+            <span class="chat-compaction__line" />
+            <span class="chat-compaction__line" />
+            <span class="chat-compaction__line" />
+            <span class="chat-compaction__line" />
+            <span class="chat-compaction__line" />
+            <Icon name="check" />
+          </span>
+        </Show>
+        <span class="chat-divider__title">{props.label}</span>
+        <Show when={props.metric}>
+          <span class="chat-divider__separator" aria-hidden="true">
+            ·
+          </span>
+          <span class="chat-divider__metric">{props.metric}</span>
+        </Show>
+      </span>
+      <span class="chat-divider__line" />
+    </div>
+  );
+}
+
+export function ChatDivider(props: { item: Extract<ChatItem, { kind: "divider" }> }) {
+  return (
+    <div
+      class={[
+        "chat-divider",
+        props.item.compaction ? `chat-compaction chat-compaction--${props.item.compaction}` : "",
+      ]}
+      data-chat-row-key={props.item.key}
+      data-ts={String(props.item.timestamp)}
+    >
+      <SystemLine
+        icon={props.item.icon}
+        label={props.item.label}
+        metric={props.item.metric}
+        compaction={props.item.compaction}
+      />
+      <Show when={props.item.description}>
+        <div class="chat-divider__details">
+          <span class="chat-divider__description">{props.item.description}</span>
+        </div>
+      </Show>
+    </div>
+  );
+}
+
+export type ChatNoticeRecovery = Pick<
+  ChatThreadProps,
+  "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun"
+>;
+
+type ChatNoticeProps = {
+  item: Extract<ChatItem, { kind: "notice" }>;
+  onPermissionRetry?: (message: string) => void;
+  recovery?: ChatNoticeRecovery;
+};
+
+function FailureNotice(props: ChatNoticeProps) {
+  const failure = () => props.item.runError!;
+  const actions = createMemo(() => {
+    const runId = failure().runId;
+    const recovery = props.recovery;
+    if (
+      !recovery ||
+      runId !== recovery.failureActionsRunId ||
+      recovery.runActive ||
+      recovery.runWorking
+    ) {
+      return undefined;
+    }
+    return {
+      onRetry: recovery.onRetryRun ? () => recovery.onRetryRun?.(runId) : undefined,
+    };
+  });
+  return (
+    <div
+      data-chat-row-key={props.item.key}
+      data-ts={String(props.item.timestamp)}
+      data-run-failure={failure().runId}
+    >
+      <openclaw-chat-run-failure-notice
+        prop:summary={failure().summary}
+        prop:onRetry={actions()?.onRetry}
+      />
+    </div>
+  );
+}
+
+function NoticeBody(props: { text: string }) {
+  return (
+    <MarkdownHtml
+      class="chat-text chat-notice__body"
+      dir={detectTextDirection(props.text)}
+      markdown={props.text}
+      options={{ codeBlockChrome: "none" }}
+    />
+  );
+}
+
+function OrdinaryNotice(props: ChatNoticeProps) {
+  return (
+    <div
+      class={[
+        "chat-notice",
+        props.item.tone === "danger" ? "chat-notice--danger callout danger" : "",
+      ]}
+      data-chat-row-key={props.item.key}
+      data-ts={String(props.item.timestamp)}
+      role={props.item.tone === "danger" ? "alert" : undefined}
+    >
+      <Show when={props.item.label}>
+        <SystemLine icon={props.item.icon} label={props.item.label!} />
+      </Show>
+      <Show
+        when={props.item.collapsedBody && props.item.text}
+        fallback={
+          <Show when={props.item.text}>
+            <NoticeBody text={props.item.text} />
+          </Show>
+        }
+      >
+        <details class="chat-notice__collapse">
+          <summary class="chat-notice__toggle">{t("chat.systemNotice.showContent")}</summary>
+          <NoticeBody text={props.item.text} />
+        </details>
+      </Show>
+    </div>
+  );
+}
+
+export function ChatNotice(props: ChatNoticeProps) {
+  return (
+    <Switch fallback={<OrdinaryNotice item={props.item} />}>
+      <Match when={props.item.runError}>
+        <FailureNotice item={props.item} recovery={props.recovery} />
+      </Match>
+      <Match when={props.item.permissionMissing}>
+        <div data-chat-row-key={props.item.key} data-ts={String(props.item.timestamp)}>
+          <ChatPermissionCard
+            request={props.item.permissionMissing!}
+            onRetry={props.onPermissionRetry}
+          />
+        </div>
+      </Match>
+      <Match when={props.item.skillChanges}>
+        <div data-chat-row-key={props.item.key} data-ts={String(props.item.timestamp)}>
+          <ChatSkillLearnedNotice notice={props.item.skillChanges} />
+        </div>
+      </Match>
+    </Switch>
+  );
+}

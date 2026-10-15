@@ -4,11 +4,40 @@ import type {
   SessionActorOutcome,
   SessionActorPhase,
   SessionActorPhaseResults,
+  SessionActorReceipt,
   SessionActorReducerOutcome,
 } from "./session-actor-contract.js";
 import type { PendingInputMutationReceipt } from "./session-pending-input-operations.types.js";
 
-/** Project the exact phase result and complete postimage into one backend-independent receipt. */
+function collectAppendedEvents(
+  before: SessionActorHotState,
+  after: SessionActorHotState,
+  payloads: ReadonlyMap<number, { event: unknown; serializedBytes: number }> | undefined,
+): SessionActorReceipt["transcript"]["appendedEvents"] {
+  if (!payloads || before.transcript.version.generation !== after.transcript.version.generation) {
+    return undefined;
+  }
+  const beforeSeq = before.transcript.version.rawSeq ?? -1;
+  const afterSeq = after.transcript.version.rawSeq ?? -1;
+  if (afterSeq < beforeSeq) {
+    return undefined;
+  }
+  const events: NonNullable<SessionActorReceipt["transcript"]["appendedEvents"]> = [];
+  for (let rawSeq = beforeSeq + 1; rawSeq <= afterSeq; rawSeq += 1) {
+    const payload = payloads.get(rawSeq);
+    if (!payload) {
+      return undefined;
+    }
+    events.push({
+      rawSeq,
+      event: structuredClone(payload.event),
+      serializedBytes: payload.serializedBytes,
+    });
+  }
+  return events;
+}
+
+/** Assemble a receipt; the backend owns capturing its postimage before publication. */
 export function createSessionActorCommittedOutcome<
   Value extends SessionActorPhaseResults[SessionActorPhase],
 >(params: {
@@ -16,6 +45,8 @@ export function createSessionActorCommittedOutcome<
   command: Pick<SessionActorCommandContext, "commandId" | "phaseId">;
   before: SessionActorHotState;
   after: SessionActorHotState;
+  payloads?: ReadonlyMap<number, { event: unknown; serializedBytes: number }>;
+  transcriptAuthority?: SessionActorReceipt["transcript"]["authorityReceipts"];
   applied: {
     value: Value;
     pendingInputMutationReceipt?: PendingInputMutationReceipt;
@@ -52,6 +83,8 @@ export function createSessionActorCommittedOutcome<
         after: after.transcript.version,
         appendedMessages:
           turn?.result.appendedMessages ?? (appended && "messageId" in appended ? [appended] : []),
+        appendedEvents: collectAppendedEvents(before, after, params.payloads),
+        authorityReceipts: params.transcriptAuthority,
         append,
         projectionNeedsReconcile:
           Boolean(turn?.projectionNeedsReconcile) ||
@@ -63,7 +96,7 @@ export function createSessionActorCommittedOutcome<
       pendingInputMutationReceipt: applied.pendingInputMutationReceipt,
       pendingFinalDelivery: structuredClone(after.entry?.pendingFinalDelivery),
       reducers: applied.reducers,
-      postimage: structuredClone(after),
+      postimage: after,
     },
   };
 }

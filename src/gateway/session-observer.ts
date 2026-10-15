@@ -10,6 +10,7 @@ import {
   terminalHealthFor,
 } from "../agents/session-activity-notes.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
+import { resolveSessionObserverDigestForLifecycle } from "../config/sessions/observer-digest.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -34,7 +35,6 @@ import {
   rememberSessionObserverDisabledRun,
   rememberSessionObserverDormantRun,
   rememberSessionObserverRevisionFloor,
-  resolveSessionObserverDigestForLifecycle,
   snapshotSessionObserverRevisionFloor,
 } from "./session-observer-model.js";
 import type {
@@ -75,7 +75,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     resolveSessionStorePathCore(deps.getConfig().session?.store, { agentId });
   const readSession: NonNullable<SessionObserverDeps["readSession"]> =
     deps.readSession ??
-    ((sessionKey, agentId) => defaultReadSession(sessionKey, agentId, resolveStorePath(agentId)));
+    ((sessionKey, agentId) =>
+      deps.getSessionRowProjection?.()?.sharingTarget({ key: sessionKey, agentId })?.entry);
   const persistDigest: NonNullable<SessionObserverDeps["persistDigest"]> = (params) =>
     params.reader
       ? params.reader.persist(params)
@@ -105,7 +106,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       if (state.timer) {
         clearTimeoutFn(state.timer);
       }
-      modelSlots.invalidateRequest(state);
+      state.activeController?.abort();
     },
   });
   const { states, dormantRuns, revisionFloors, supersededRuns, disabledRuns } = lifecycle;
@@ -128,10 +129,11 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       audienceLifecycle.unsubscribe();
       for (const state of states.values()) {
         clearTimeoutFn(state.timer);
-        modelSlots.invalidateRequest(state);
+        state.activeController?.abort();
       }
     },
     finishClose: () => {
+      pendingTerminalErrors.forEach((_timer, runId) => clearPendingTerminalError(runId));
       lifecycle.dispose();
       terminalRuns.clear();
       contextlessTerminalRuns.clear();
@@ -195,7 +197,9 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
 
   const synthesizeTerminalDigest = createSessionObserverTerminalPublisher({
     dormantRuns,
-    readSession,
+    readSession:
+      deps.readSession ??
+      ((sessionKey, agentId) => defaultReadSession(sessionKey, agentId, resolveStorePath(agentId))),
     persistDigest,
     now,
     work,
@@ -235,7 +239,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       clearTimeoutFn(state.timer);
       state.timer = undefined;
     }
-    modelSlots.invalidateRequest(state);
+    state.activeController?.abort();
     state.preparedPromise = undefined;
     state.utilityModelRef = undefined;
     state.consecutiveFailures = 0;
@@ -348,11 +352,8 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       // Run rollover replaces state; inFlight keeps its note retirement monotonic.
       state.lastDigestNoteSequence = Math.max(state.lastDigestNoteSequence, lastSelectedSequence);
     };
-    const requestGeneration = modelSlots.beginRequest(state);
     const digestIsStale = () =>
-      !modelStateIsCurrent(state) ||
-      !modelSlots.requestIsCurrent(state, requestGeneration) ||
-      (!final && state.terminalHealth !== undefined);
+      !modelStateIsCurrent(state) || (!final && state.terminalHealth !== undefined);
     const acceptDigestPublication = (session: ReturnType<typeof readSession>) => {
       if (digestIsStale()) {
         retireSelectedNotes();
@@ -665,7 +666,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
         ? undefined
         : modelSlots.claim(state.agentId, state);
     if (state.utilityModelRef !== utilityModelRef) {
-      modelSlots.invalidateRequest(state);
+      state.activeController?.abort();
       state.preparedPromise = undefined;
       state.utilityModelRef = utilityModelRef;
       state.consecutiveFailures = 0;
@@ -682,7 +683,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     }
     if (terminal) {
       if (!state.terminalHealth) {
-        modelSlots.invalidateRequest(state);
+        state.activeController?.abort();
       }
       const flush = preamblePublisher.flush(state);
       if (flush) {

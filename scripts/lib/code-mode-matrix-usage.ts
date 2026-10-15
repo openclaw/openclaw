@@ -28,7 +28,7 @@ type ReportedUsage = Pick<
   "input" | "output" | "cacheRead" | "cacheWrite" | "total"
 > & { costUsd?: number };
 
-export type MatrixLedgerRow = {
+type MatrixLedgerRow = {
   storeId: string;
   sessionId: string;
   sessionKey: string;

@@ -104,6 +104,7 @@ describe("runMessageAction core send routing", () => {
       canUseInternalRuntimeHandoff: true,
       expectedExistingSessionId: "session-1",
       resolvedSessionId: "session-1",
+      resolvedSessionKey: "agent:main:dashboard:recovery",
       runId: "recovery-run",
       sessionEntry: {
         sessionId: "session-1",

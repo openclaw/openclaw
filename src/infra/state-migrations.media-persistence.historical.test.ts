@@ -31,6 +31,7 @@ import {
 import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
+import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "./startup-maintenance-required.js";
 import { historicalV14AgentSchemaSql } from "./state-migrations.media-persistence.historical-schema.test-support.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
@@ -40,7 +41,8 @@ import { repairDoctorSessionWindowsBeforeMigration } from "./state-migrations.se
 const tempDirs: string[] = [];
 
 function seedOrphanSessionWindows(pathname: string, schemaVersion: number) {
-  using database = new NativeDatabaseSync(pathname);
+  using database = nodeSqlite.openNodeSqliteDatabase(pathname);
+  admitSqliteSchema(database);
   database.exec("PRAGMA foreign_keys = OFF;");
   const insertNode = database.prepare(`INSERT INTO session_nodes
     (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)`);
@@ -184,9 +186,18 @@ it.each([
         );
         const retained = readRows(repaired);
         for (const key of ["windows", "events", "search"] as const) {
-          expect(retained[key]).toEqual(
-            original[key].filter((row) => row.session_id === "retained"),
-          );
+          const expected = [];
+          for (const row of original[key]) {
+            if (row.session_id !== "retained") {
+              continue;
+            }
+            expected.push(
+              key === "windows" && schemaVersion === 24
+                ? { ...row, row_transcript_json: null, row_transcript_updated_at: null }
+                : row,
+            );
+          }
+          expect(retained[key]).toEqual(expected);
         }
         expect(() => openOpenClawAgentDatabase(options)).not.toThrow();
       } else {
@@ -450,7 +461,11 @@ describe("legacy media persistence Doctor migration from historical schemas", ()
     try {
       const result = await scope.run(() => migrateLegacyMediaPersistence({ env }));
       expect(rejected).toBe(true);
-      expect(result.changes).toEqual([]);
+      expect(result.changes).toEqual([
+        expect.stringContaining(
+          `Saved pre-repair SQLite backup: ${path.join(path.dirname(databasePath), "openclaw-media-persistence-recovery-")}`,
+        ),
+      ]);
       expect(result.warnings).toEqual([
         expect.stringContaining("Recovery backup coverage is no longer current"),
       ]);
@@ -598,7 +613,7 @@ describe("media persistence gateway lifecycle recovery", () => {
     const nowMs = 1_000_000;
     for (let index = 0; index < 3; index += 1) {
       const bootId = recordGatewayBootStart(env, nowMs + index);
-      completeGatewayBootLifecycle(
+      await completeGatewayBootLifecycle(
         bootId,
         {
           outcome: "startup_failed",

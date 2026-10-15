@@ -47,6 +47,7 @@ export function LazyViewError(props: {
   onClose?: (event: Event) => void;
   onRetry: (event: Event) => void;
   render?: () => SolidJSX.Element;
+  inline?: boolean;
   stale?: boolean;
   subtitle?: string;
 }) {
@@ -72,7 +73,7 @@ export function LazyViewError(props: {
           </>
         }
         detail={formatUiError(props.error)}
-        inline={Boolean(props.render)}
+        inline={props.inline ?? Boolean(props.render)}
         stale={props.stale}
       />
     </>
@@ -81,7 +82,7 @@ export function LazyViewError(props: {
 
 export function PanelErrorState(props: {
   actions?: SolidJSX.Element;
-  className?: string;
+  class?: string;
   detail?: string;
   inline?: boolean;
   role?: "alert" | "status";
@@ -93,7 +94,7 @@ export function PanelErrorState(props: {
     <div
       class={[
         "lazy-view-error",
-        props.className,
+        props.class,
         { "lazy-view-error--inline": props.inline, "lazy-view-error--stale": props.stale },
       ]}
       role={props.role ?? "alert"}
@@ -103,12 +104,16 @@ export function PanelErrorState(props: {
       </div>
       <div class="lazy-view-error__title">{props.title}</div>
       <div class="lazy-view-error__subtitle">{props.subtitle}</div>
-      {props.actions ? <div class="lazy-view-error__actions">{props.actions}</div> : undefined}
       {props.detail ? (
         <details class="lazy-view-error__details">
           <summary>{t("chat.details")}</summary>
           <code class="lazy-view-error__detail">{props.detail}</code>
         </details>
+      ) : undefined}
+      {props.actions ? (
+        <openclaw-modal-actions class="lazy-view-error__actions">
+          {props.actions}
+        </openclaw-modal-actions>
       ) : undefined}
     </div>
   );

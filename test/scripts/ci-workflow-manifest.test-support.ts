@@ -359,12 +359,12 @@ export function runCiManifestFixture(options: {
       }
       writeFileSync(
         path.join(root, "scripts/check-changed.mts"),
-        `export const createChangedCiLintPlan = () => (${JSON.stringify(options.ciLintPlan ?? null)});\n`,
+        `export const createChangedCiLintPlan = () => (${JSON.stringify(options.ciLintPlan ?? null)});\nexport { createChangedCheckPlan } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/check-changed.mts")).href)};\n`,
       );
       if (!options.changedCoreTestSupport) {
         writeFileSync(
           path.join(root, "scripts/changed-lanes.mts"),
-          "export const detectChangedLanes = (paths) => ({ paths });\n",
+          `export { detectChangedLanes } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/changed-lanes.mts")).href)};\n`,
         );
       }
       // Substitute the native compiler inventory, retaining canonical graph selection
@@ -434,7 +434,8 @@ export function runCiManifestFixture(options: {
         path.join(scriptsDir, "ci-changed-node-test-plan.mts"),
         options.changedPlannerSource ??
           `
-          export { hasQaSmokeAffectingChange } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-changed-node-test-plan.mts")).href)};
+          export { hasQaSmokeAffectingChange } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-qa-smoke-scope.mts")).href)};
+          export { isCiDocumentationPath } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/ci-changed-scope.mjs")).href)};
           export const createChangedNodeTestShards = (changedPaths, options = {}) => {
             console.log("changed-node-plan-options:" + JSON.stringify(options));
             if (options.releaseFastLane && changedPaths.includes("scripts/lib/ci-node-test-plan.mts")) {

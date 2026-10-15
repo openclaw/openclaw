@@ -27,6 +27,7 @@ import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
 import {
   normalizeAccountId,
   normalizeAgentId,
+  parseAgentSessionKey,
   parseSessionDeliveryRoute,
 } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -39,7 +40,8 @@ export type MessageToolDiscoveryParams = {
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
-  currentPromptReaction?: boolean;
+  /** Stable source capability, independent of the current turn's authority. */
+  supportsPromptReactions?: boolean;
   currentAccountId?: string;
   sessionKey?: string;
   sessionId?: string;
@@ -97,13 +99,13 @@ type MessageToolDeliveryRequest = {
   preparedMessageToolCatalog?: PreparedMessageToolCatalog;
 };
 
-function recoverSessionCanonicalPeerId(params: {
+async function recoverSessionCanonicalPeerId(params: {
   channel: string;
   peerId: string;
   sessionKey?: string;
   sessionId?: string;
   request?: MessageToolDeliveryRequest;
-}): string {
+}): Promise<string> {
   const { request } = params;
   if (
     !request ||
@@ -123,7 +125,7 @@ function recoverSessionCanonicalPeerId(params: {
   if (plugin?.messaging?.targetIdComparison !== "case-sensitive") {
     return params.peerId;
   }
-  const delivery = readExactSessionDeliveryContext({
+  const delivery = await readExactSessionDeliveryContext({
     cfg: request.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
@@ -151,8 +153,7 @@ function recoverSessionCanonicalPeerId(params: {
 
 function inferDeliveryFromSessionKey(
   sessionKey: string | undefined,
-  request?: MessageToolDeliveryRequest,
-  sessionId?: string,
+  canonicalPeerId?: string,
 ): InferredSessionDelivery | null {
   const route = parseSessionDeliveryRoute(sessionKey);
   if (!route) {
@@ -163,13 +164,7 @@ function inferDeliveryFromSessionKey(
     return null;
   }
   const accountId = route.accountId ? resolveAgentAccountId(route.accountId) : undefined;
-  const peerId = recoverSessionCanonicalPeerId({
-    request,
-    channel,
-    peerId: route.peerId,
-    sessionKey,
-    sessionId,
-  });
+  const peerId = canonicalPeerId ?? route.peerId;
   return {
     accountId,
     channel,
@@ -179,9 +174,52 @@ function inferDeliveryFromSessionKey(
   };
 }
 
-export function resolveEffectiveCurrentChannelContext(
-  options?: MessageToolCurrentContextOptions,
+/** Dashboard ingress stays local even when delivery resolves to an external conversation. */
+export function supportsMessageToolPromptReactions(options?: MessageToolCurrentContextOptions) {
+  return (
+    parseAgentSessionKey(options?.agentSessionKey)?.rest.startsWith("dashboard:") ||
+    normalizeMessageChannel(options?.currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL
+  );
+}
+
+export function resolveEffectiveCurrentChannelContext(options?: MessageToolCurrentContextOptions) {
+  return projectCurrentChannelContext(
+    options,
+    inferDeliveryFromSessionKey(options?.agentSessionKey),
+  );
+}
+
+/** Recover opaque peer casing through the session owner only when executing an inferred send. */
+export async function resolveEffectiveCurrentChannelContextForRequest(
+  options: MessageToolCurrentContextOptions | undefined,
   request?: MessageToolDeliveryRequest,
+) {
+  if (!request) {
+    return resolveEffectiveCurrentChannelContext(options);
+  }
+  const route = parseSessionDeliveryRoute(options?.agentSessionKey);
+  const channel = route && normalizeMessageChannel(route.channel);
+  const peerId =
+    route &&
+    channel &&
+    normalizeMessageChannel(options?.currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL
+      ? await recoverSessionCanonicalPeerId({
+          request,
+          channel,
+          peerId: route.peerId,
+          sessionKey: options?.agentSessionKey,
+          sessionId: options?.sessionId,
+        })
+      : undefined;
+  return projectCurrentChannelContext(
+    options,
+    inferDeliveryFromSessionKey(options?.agentSessionKey, peerId),
+  );
+}
+
+function projectCurrentChannelContext(
+  options: MessageToolCurrentContextOptions | undefined,
+  inferred: InferredSessionDelivery | null,
 ): {
   accountId?: string;
   currentChannelId?: string;
@@ -193,9 +231,7 @@ export function resolveEffectiveCurrentChannelContext(
   const currentChannelProvider = options?.currentChannelProvider;
   const currentChannelId = options?.currentChannelId;
   const sessionDelivery =
-    normalizeMessageChannel(currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL
-      ? inferDeliveryFromSessionKey(options?.agentSessionKey, request, options?.sessionId)
-      : null;
+    normalizeMessageChannel(currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL ? inferred : null;
 
   if (!sessionDelivery?.to) {
     return {
@@ -313,7 +349,7 @@ function* resolveMessageToolActionSchemaActionsSteps(
   params: MessageToolDiscoveryParams,
 ): MessageActionDiscoverySteps<string[]> {
   const discoveredActions = yield* resolveMessageToolSchemaActionsSteps(params);
-  if (params.currentPromptReaction && !discoveredActions.includes("react")) {
+  if (params.supportsPromptReactions && !discoveredActions.includes("react")) {
     discoveredActions.push("react");
   }
   const allowedActions = resolveAllowedMessageActions({
@@ -411,7 +447,7 @@ function* buildMessageToolSchemaSteps(
     includeDeliveryPin,
     includeBestEffort,
     extraProperties:
-      params.currentPromptReaction && actions.includes("react")
+      params.supportsPromptReactions && actions.includes("react")
         ? {
             ...extraProperties,
             emoji: Type.Optional(

@@ -25,7 +25,6 @@ import {
 import { registerPluginStateSequencedJournalEntryInDatabase } from "./plugin-state-store.journal.js";
 import {
   countLivePluginStateNamespaceEntries,
-  deleteExpiredPluginStateEntries,
   deletePluginStateEntry,
   lookupPluginStateEntry,
 } from "./plugin-state-store.kernel.js";
@@ -319,8 +318,6 @@ export function executePluginStateCommand(
                 return clearPluginStateNamespace(store.db, command.input);
               case "pluginState.clearRuntimeHealth":
                 return clearRuntimeHealthEntries(store, command.input);
-              case "pluginState.sweep":
-                return deleteExpiredPluginStateEntries(store.db, Date.now());
               default:
                 throw new Error("Plugin-state read command entered its write path");
             }

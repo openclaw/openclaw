@@ -4,7 +4,6 @@ import type {
   ReclamationDatabaseOptions,
   SessionMaintenanceMetadataCommand,
   SessionMaintenanceLiveProtection,
-  SessionMaintenanceReadCommand,
 } from "../config/sessions/session-accessor.sqlite-lifecycle-types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
@@ -27,7 +26,6 @@ type MetadataInput =
 export function createAgentDatabaseMaintenanceOwner(context: {
   databaseOptions: ReclamationDatabaseOptions;
   openWriter(): OpenClawAgentDatabase;
-  readPreparedDatabase(): OpenClawAgentDatabase;
   admit(stage: "transaction" | "commit", publication?: unknown): void;
 }) {
   const preparations = new Map<
@@ -53,17 +51,6 @@ export function createAgentDatabaseMaintenanceOwner(context: {
     }
   };
   const operations = {
-    "session.maintenance.read": (plan: SessionMaintenanceReadCommand) => {
-      const kernel = expectDefined(maintenance, "Session maintenance kernel");
-      return {
-        kind: "session-maintenance-read" as const,
-        result: kernel.readSessionMaintenanceInWorker(
-          { ...plan, databaseOptions: context.databaseOptions },
-          context.readPreparedDatabase(),
-        ),
-        workerThreadId: threadId,
-      };
-    },
     "session.maintenance.release": ({ id }: { id: string }) => releasePreparation(id),
     "session.maintenance.prepare": (input: PreparationInput) => {
       const kernel = expectDefined(maintenance, "Session maintenance kernel");
@@ -119,7 +106,7 @@ export function createAgentDatabaseMaintenanceOwner(context: {
             previous.set(sessionKey, before);
             current.set(sessionKey, after);
           },
-          beforeCommit(database) {
+          beforeCommit(database, maintenancePlan) {
             publication = preparePublication(
               {
                 pendingArchiveRecovery: false,
@@ -130,14 +117,16 @@ export function createAgentDatabaseMaintenanceOwner(context: {
               },
               database,
             );
+            if (maintenancePlan) {
+              publication.maintenancePlans = [maintenancePlan];
+            }
             deferSqliteWorkerCommitReceipt(database.db, publication);
             context.admit("commit", publication);
           },
         },
         preparation?.prepared,
       );
-      return value.kind === "maintenance-preservation-required" ||
-        value.kind === "maintenance-plan-stale"
+      return value.kind === "maintenance-plan-stale"
         ? { kind: "not-committed" as const, workerThreadId: threadId, value }
         : {
             kind: "committed" as const,

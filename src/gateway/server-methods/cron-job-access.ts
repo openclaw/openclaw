@@ -15,11 +15,7 @@ import {
   readCronCallerScope,
   type CronCallerScope,
 } from "./cron-caller-scope.js";
-import {
-  createCronSessionVisibility,
-  cronJobIsVisible,
-  cronJobVisibilityTarget,
-} from "./cron-visibility.js";
+import { createCronSessionVisibility, cronJobIsVisible } from "./cron-visibility.js";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
@@ -134,40 +130,33 @@ export function scopedCronJobHandler<P extends CronJobIdParams>(
       respondMissingCronJobId(respond, method);
       return;
     }
-    const visibilityRead = createCronSessionVisibility(client, () => context.getRuntimeConfig());
-    try {
-      const loaded = await context.cron.readJob(jobId);
-      const prepareVisibility = scope.checkVisibility && visibilityRead.resolve() !== undefined;
-      if (scope.checkVisibility) {
-        assertCronReadCurrent(options);
-      }
-      if (prepareVisibility) {
-        await visibilityRead.prepare([
-          cronJobVisibilityTarget(loaded, context.cron.getDefaultAgentId()),
-        ]);
-        assertCronReadCurrent(options);
-      }
-      const callerScope = readCronCallerScope(client);
-      const job = prepareVisibility ? context.cron.getJob(jobId) : loaded;
-      const visibility = scope.checkVisibility ? visibilityRead.resolve() : undefined;
-      if (
-        !job ||
-        (scope.checkVisibility &&
-          !cronJobIsVisible(job, visibility, context.cron.getDefaultAgentId())) ||
-        !cronJobMatchesCallerScope({
-          job,
-          callerScope,
-          defaultAgentId: context.cron.getDefaultAgentId(),
-          allowCurrentJob: scope.allowCurrentJob,
-        })
-      ) {
-        respondCronJobNotFound(respond, jobId, scope);
-        return;
-      }
-      // Consume authorized reads in this frame; mutations retain their lock-time commit guards.
-      return await run(options, { jobId, callerScope, job });
-    } finally {
-      visibilityRead.release();
+    const visibilityRead = createCronSessionVisibility(client, context);
+    const loaded = await context.cron.readJob(jobId);
+    const prepareVisibility = scope.checkVisibility && visibilityRead.resolve() !== undefined;
+    if (prepareVisibility) {
+      await visibilityRead.prepare();
     }
+    if (scope.checkVisibility) {
+      assertCronReadCurrent(options);
+    }
+    const callerScope = readCronCallerScope(client);
+    const job = prepareVisibility ? context.cron.getJob(jobId) : loaded;
+    const visibility = scope.checkVisibility ? visibilityRead.resolve() : undefined;
+    if (
+      !job ||
+      (scope.checkVisibility &&
+        !cronJobIsVisible(job, visibility, context.cron.getDefaultAgentId())) ||
+      !cronJobMatchesCallerScope({
+        job,
+        callerScope,
+        defaultAgentId: context.cron.getDefaultAgentId(),
+        allowCurrentJob: scope.allowCurrentJob,
+      })
+    ) {
+      respondCronJobNotFound(respond, jobId, scope);
+      return;
+    }
+    // Consume authorized reads in this frame; mutations retain their lock-time commit guards.
+    return await run(options, { jobId, callerScope, job });
   });
 }

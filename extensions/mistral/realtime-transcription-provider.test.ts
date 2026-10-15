@@ -95,7 +95,7 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       rawConfig: {
         providers: {
           mistral: {
-            apiKey: "mistral-key",
+            apiKey: "  sk-\r\nmistral│  ",
             model: "voxtral-mini-transcribe-realtime-2602",
             encoding: "g711_ulaw",
             sample_rate: "8000",
@@ -106,28 +106,13 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     });
 
     expect(resolved).toEqual({
-      apiKey: "mistral-key",
+      apiKey: "sk-mistral",
       baseUrl: undefined,
       model: "voxtral-mini-transcribe-realtime-2602",
       encoding: "pcm_mulaw",
       sampleRate: 8000,
       targetStreamingDelayMs: 240,
     });
-  });
-
-  it("normalizes pasted API key artifacts for realtime auth headers", () => {
-    const resolved = provider.resolveConfig?.({
-      cfg: {} as OpenClawConfig,
-      rawConfig: {
-        providers: {
-          mistral: {
-            apiKey: "  sk-\r\nmistral│  ",
-          },
-        },
-      },
-    });
-
-    expect(resolved?.apiKey).toBe("sk-mistral");
   });
 
   it("requires an API key when creating sessions", () => {
@@ -420,9 +405,7 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       { type: "transcription.segment", text: "late segment", start: 0, end: 1 },
       { type: "transcription.done", text: "late done" },
     ]);
-    const onError = vi.fn(() => {
-      throw new Error("observer failed");
-    });
+    const onError = vi.fn();
     const onPartial = vi.fn();
     const onTranscript = vi.fn();
     const session = createSession(baseUrl, { onError, onPartial, onTranscript });

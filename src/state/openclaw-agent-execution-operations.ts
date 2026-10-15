@@ -1,5 +1,8 @@
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
-import type { SessionEntryReplacementCommit } from "../config/sessions/session-accessor.sqlite-replacement-types.js";
+import type {
+  SessionEntryReplacementCandidate,
+  SessionEntryReplacementCommit,
+} from "../config/sessions/session-accessor.sqlite-replacement-types.js";
 import type { ResolvedTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import type {
   SessionEntryCohortRequest,
@@ -21,6 +24,7 @@ import {
   type loadAgentTranscriptOperations,
   type TranscriptInitialization,
 } from "./openclaw-agent-execution-transcript.worker.js";
+import type { loadUsageCacheOperations } from "./openclaw-agent-execution-usage.worker.js";
 import type { loadAgentVoiceSessionOperations } from "./openclaw-agent-execution-voice-operations.js";
 import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
 import type { WorkerOperationHandlers, WorkerOperations } from "./worker-operation-registry.js";
@@ -201,22 +205,40 @@ export async function loadAgentTranscriptReadOperations() {
 }
 
 export async function loadAgentReplacementOperations() {
-  const [kernel, { sealSessionEntryPublicationSource }] = await Promise.all([
-    import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
-    import("../config/sessions/session-entry-publication-source.js"),
-  ]);
+  const [kernel, { sealSessionEntryPublicationSource }, nativeBindings, transfers, predicates] =
+    await Promise.all([
+      import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
+      import("../config/sessions/session-entry-publication-source.js"),
+      import("../config/sessions/session-native-binding.worker.js"),
+      import("../config/sessions/session-entry-patch.worker.js"),
+      import("../config/sessions/session-source-predicate.worker.js"),
+    ]);
   return {
     "session.entries.replace": (
       input: SessionEntryReplacementCommit & { initializeTranscript?: TranscriptInitialization },
       context,
-    ) =>
-      context.writeTransaction("session.entry-replacements", "Session replacement", (current) => {
+    ) => {
+      const replace = (current: ReturnType<AgentWorkerOperationContext["open"]>) => {
         const postimages: SessionEntryWritePostimages = new Map();
         const result = kernel.commitSessionEntryReplacementsInDatabase(
           current,
           input,
-          () =>
-            initializeReplacementTranscript(current, context.options, input.initializeTranscript),
+          () => {
+            if (input.sources?.length) {
+              const sourceValidation = predicates.readSessionSourceValidation(
+                current,
+                input.sources,
+              );
+              context.admit("transaction", {
+                kind: "session-entry-replacements-validated",
+                sourceValidation,
+              });
+              if (sourceValidation.refusedSource) {
+                throw new Error("Session source refusal was not rejected");
+              }
+            }
+            initializeReplacementTranscript(current, context.options, input.initializeTranscript);
+          },
           undefined,
           undefined,
           postimages,
@@ -230,10 +252,42 @@ export async function loadAgentReplacementOperations() {
           sealSessionEntryPublicationSource(publication.source);
         }
         kernel.boundSessionEntryReplacementPublication(publication, candidate);
-        deferSqliteWorkerCommitReceipt(current.db, publication);
-        context.admit("commit", publication);
         return candidate;
-      }),
+      };
+      if (input.nativeBindings) {
+        return nativeBindings.runSessionNativeBindingTransaction(
+          input.nativeBindings,
+          context,
+          "session.entry-replacements",
+          "Session replacement",
+          (current, wrapReceipt) => {
+            const result = replace(current);
+            const candidate: SessionEntryReplacementCandidate = {
+              kind: "session-entry-replacements",
+              result,
+              publication: result.publication,
+            };
+            return transfers.transferSessionEntryWorkerCandidate(
+              current,
+              context.admit,
+              candidate,
+              wrapReceipt,
+            );
+          },
+        );
+      }
+      return context.writeTransaction(
+        "session.entry-replacements",
+        "Session replacement",
+        (current) => {
+          const candidate = replace(current);
+          const publication = candidate.publication;
+          deferSqliteWorkerCommitReceipt(current.db, publication);
+          context.admit("commit", publication);
+          return candidate;
+        },
+      );
+    },
   } satisfies Handlers;
 }
 
@@ -347,14 +401,14 @@ export async function loadAgentTrajectoryOperations() {
       input: Parameters<typeof kernel.appendSqliteTrajectoryRuntimeEventsWithWriter>[0],
       { writeTransaction, admit },
     ) => {
-      kernel.appendSqliteTrajectoryRuntimeEventsWithWriter(input, (label, write) =>
+      return kernel.appendSqliteTrajectoryRuntimeEventsWithWriter(input, (label, write) =>
         writeTransaction(label, "Trajectory append", (current) => {
           const result = write(current);
-          deferSqliteWorkerCommitReceipt(current.db, { kind: "trajectory-runtime-append" });
+          deferSqliteWorkerCommitReceipt(current.db, result.receipt);
           admit("commit");
           return result;
         }),
-      );
+      ).receipt.windowFacts;
     },
     "trajectory.retention.begin": (_input: undefined, { open }) => {
       return retention.beginTrajectoryRuntimeRetention(
@@ -590,45 +644,31 @@ export async function loadConversationRegistryOperations() {
   } satisfies Handlers;
 }
 
-export async function loadUsageCacheOperations() {
-  const kernel = await import("../infra/session-cost-usage-cache.kernel.js");
+export async function loadSessionRowBackfillOperations() {
+  const [{ backfillSessionRowTranscriptFieldsInDatabase }, { withSqliteDatabaseWriteScope }] =
+    await Promise.all([
+      import("../gateway/session-row-transcript-backfill.worker.js"),
+      import("../infra/sqlite-database-admission.js"),
+    ]);
   return {
-    "usageCache.writeRollup": (
-      input: Parameters<typeof kernel.writeSessionCostUsageRollupInDatabase>[1],
+    "session.rowTranscript.backfill": (
+      input: Parameters<typeof backfillSessionRowTranscriptFieldsInDatabase>[1],
       { writeTransaction, admit },
     ) =>
-      writeTransaction("session-cost-usage.rollup.write", "Usage cache", ({ db }) => {
-        const result = kernel.writeSessionCostUsageRollupInDatabase(db, input);
+      writeTransaction("session.rowTranscript.backfill", "Session row backfill", (database) => {
+        // Derived cache bytes do not invalidate transcript snapshots or session metadata.
+        const fields = withSqliteDatabaseWriteScope(database.db, [], () =>
+          backfillSessionRowTranscriptFieldsInDatabase(database, input),
+        );
         admit("commit");
-        return result;
-      }),
-    "usageCache.prune": (
-      input: Parameters<typeof kernel.pruneSessionCostUsageRollupsInDatabase>[1],
-      { writeTransaction, admit },
-    ) =>
-      writeTransaction("session-cost-usage.rollup.prune", "Usage cache", ({ db }) => {
-        kernel.pruneSessionCostUsageRollupsInDatabase(db, input);
-        admit("commit");
-      }),
-    "usageCache.acquireLock": (
-      input: Parameters<typeof kernel.acquireSessionCostUsageRefreshLockInDatabase>[1],
-      { writeTransaction, admit },
-    ) =>
-      writeTransaction("session-cost-usage.refresh-lock.acquire", "Usage cache", ({ db }) => {
-        const result = kernel.acquireSessionCostUsageRefreshLockInDatabase(db, input);
-        admit("commit");
-        return result;
-      }),
-    "usageCache.releaseLock": (input: string, { writeTransaction, admit }) =>
-      writeTransaction("session-cost-usage.refresh-lock.delete", "Usage cache", ({ db }) => {
-        kernel.deleteSessionCostUsageRefreshLockInDatabase(db, input);
-        admit("commit");
+        return fields;
       }),
   } satisfies Handlers;
 }
 
 export type RegisteredAgentWorkerOperations = WorkerOperations<
-  Awaited<ReturnType<typeof loadUsageCacheOperations>> &
+  Awaited<ReturnType<typeof loadSessionRowBackfillOperations>> &
+    Awaited<ReturnType<typeof loadUsageCacheOperations>> &
     Awaited<ReturnType<typeof loadAgentVoiceSessionOperations>> &
     Awaited<ReturnType<typeof loadAgentTranscriptOperations>> &
     Awaited<ReturnType<typeof loadAgentTranscriptReadOperations>> &

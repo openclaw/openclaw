@@ -14,6 +14,7 @@ import type {
   SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { projectSessionActor } from "../session-identity-projection.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
@@ -52,6 +53,25 @@ const planningEntriesByRevision = new WeakMap<
   WeakMap<OpenClawConfig, Map<string, PlanningEntries>>
 >();
 
+// Retain neutral displays within the row owner's lifetime; visibility is applied afterward.
+const projectedHosts = new WeakMap<
+  SessionRowProjection,
+  Map<
+    string,
+    {
+      revision: object | undefined;
+      identityRevision: object | undefined;
+      cfg: OpenClawConfig;
+      fallbackAgentId: string;
+      adoptionRevision: object | undefined;
+      audience: SessionCatalogProvider["audience"];
+      source: string;
+      host: SessionCatalogHost;
+    }
+  >
+>();
+const adoptionRevisions = new WeakMap<SessionCatalogInstances, object>();
+
 export function createSessionCatalogRequestEntrySnapshot(params: {
   cfg: OpenClawConfig;
   fallbackAgentId: string;
@@ -59,9 +79,10 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   /** Bound one delivery's lookups; provider planning retains the full snapshot. */
   sessionKeys?: readonly string[];
 }): SessionCatalogRequestEntrySnapshot {
-  if (params.projection.needsSelectionPreparation()) {
+  if (params.projection.needsSelectionPreparation({ metadataOnly: true })) {
     throw new Error("Prepare current session metadata before capturing catalog entries");
   }
+  const selectionRevision = params.projection.state.revision;
   const cachedPlanning =
     params.sessionKeys === undefined
       ? planningEntriesByRevision
@@ -85,16 +106,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       sessionKey,
       tryResolveSessionCompatibilityOwnerAgentId(params.cfg, sessionKey) ?? params.fallbackAgentId,
     );
-  const selectedKeysByAgentId = params.sessionKeys ? new Map<string, Set<string>>() : undefined;
-  if (selectedKeysByAgentId) {
-    for (const sessionKey of new Set(params.sessionKeys)) {
-      const agentId = entryAgentId(sessionKey);
-      const keys = selectedKeysByAgentId.get(agentId) ?? new Set<string>();
-      keys.add(sessionKey);
-      keys.add(resolveStoredSessionKeyForAgentStore({ cfg: params.cfg, agentId, sessionKey }));
-      selectedKeysByAgentId.set(agentId, keys);
-    }
-  }
+  let selectedKeysByAgentId: Map<string, Set<string>> | undefined;
 
   const entriesForAgent = (rawAgentId: string): readonly SessionEntrySummary[] => {
     const agentId = normalizeAgentId(rawAgentId);
@@ -102,22 +114,35 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       if (frozen) {
         return [];
       }
-      const entries = selectedKeysByAgentId
-        ? [...(selectedKeysByAgentId.get(agentId) ?? [])].flatMap((key) =>
-            // An empty canonical alias must not become an unscoped projection query.
-            key
-              ? prepareSessionRowSelection(
-                  params.projection,
-                  { agentId },
-                  { key, metadataPrepared: true },
-                ).entries
-              : [],
-          )
-        : prepareSessionRowSelection(params.projection, { agentId }, { metadataPrepared: true })
-            .entries;
+      if (params.sessionKeys && !selectedKeysByAgentId) {
+        selectedKeysByAgentId = new Map();
+        for (const sessionKey of params.sessionKeys) {
+          const owner = entryAgentId(sessionKey);
+          let keys = selectedKeysByAgentId.get(owner);
+          if (!keys) {
+            keys = new Set();
+            selectedKeysByAgentId.set(owner, keys);
+          }
+          keys.add(sessionKey);
+          keys.add(
+            resolveStoredSessionKeyForAgentStore({ cfg: params.cfg, agentId: owner, sessionKey }),
+          );
+        }
+      }
+      const entries = prepareSessionRowSelection(
+        params.projection,
+        { agentId },
+        {
+          metadataPrepared: true,
+          // An empty canonical alias must not become an unscoped projection query.
+          candidateKeys: selectedKeysByAgentId
+            ? new Set([...(selectedKeysByAgentId.get(agentId) ?? [])].filter(Boolean))
+            : undefined,
+        },
+      ).entries("all");
       entriesByAgentId.set(
         agentId,
-        entries.map(([sessionKey, entry]) => ({ sessionKey, entry })),
+        Object.freeze(entries.map(([sessionKey, entry]) => Object.freeze({ sessionKey, entry }))),
       );
     }
     return entriesByAgentId.get(agentId) ?? [];
@@ -132,8 +157,9 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       ...listAgentIds(params.cfg).filter((agentId) => agentId !== params.fallbackAgentId),
     ];
     catalogEntries = agentIds.flatMap((agentId) =>
-      entriesForAgent(agentId).map((entry) => Object.assign({}, entry, { agentId })),
+      entriesForAgent(agentId).map((entry) => Object.freeze({ ...entry, agentId })),
     );
+    Object.freeze(catalogEntries);
     return catalogEntries;
   };
 
@@ -212,6 +238,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       frozen = true;
     },
     captureHostInstances: (host, instances) => {
+      adoptionRevisions.set(instances, selectionRevision);
       for (const session of host.sessions) {
         if (!session.sessionKey) {
           continue;
@@ -224,45 +251,80 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       }
     },
     entryForSession,
-    projectHostSessions: (host, instances, audience) => ({
-      ...host,
-      sessions: host.sessions.map(
-        ({ createdActor: providerCreatedActor, sessionKey, color: rawColor, ...session }) => {
-          // Provider-supplied colors are display metadata independent of adoption identity.
-          const color = typeof rawColor === "string" ? normalizeSessionColorValue(rawColor) : null;
-          const colorProjection = color ? { color } : {};
-          if (audience === "session-viewers") {
-            // Publication attribution belongs to the provider. A source's session key is never
-            // a local adoption claim, even when it happens to match a Gateway session.
-            return {
-              ...session,
-              ...colorProjection,
-              ...(providerCreatedActor ? { createdActor: providerCreatedActor } : {}),
-            };
-          }
-          const original = sessionKey ? instances.get(sessionKey) : undefined;
-          const current = sessionKey ? entryForSession(sessionKey) : undefined;
-          // Native rows remain native if their adoption was replaced or detached. Never project
-          // a reusable key's new creator onto the previous instance's provider metadata.
-          if (
-            !original ||
-            !current ||
-            original.sessionId !== current.sessionId ||
-            original.pluginOwnerId !== current.pluginOwnerId ||
-            current.initializationPending === true ||
-            !isDeepStrictEqual(original.createdActor, current.createdActor)
-          ) {
-            return { ...session, ...colorProjection };
-          }
-          const createdActor = sessionKey ? createdActorForSession(sessionKey) : undefined;
-          return {
-            ...session,
-            sessionKey,
-            ...(createdActor ? { createdActor } : {}),
-            ...colorProjection,
-          };
-        },
-      ),
-    }),
+    projectHostSessions: (host, instances, audience) => {
+      const source = JSON.stringify(host);
+      const revision = params.projection.sharingRevision;
+      const identityRevision = params.projection.state.rowContext.identityProjection?.revision;
+      const adoptionRevision = adoptionRevisions.get(instances);
+      let hosts = projectedHosts.get(params.projection);
+      const cached = hosts?.get(host.hostId);
+      if (
+        revision &&
+        adoptionRevision &&
+        cached?.revision === revision &&
+        cached.identityRevision === identityRevision &&
+        cached.cfg === params.cfg &&
+        cached.fallbackAgentId === params.fallbackAgentId &&
+        cached.adoptionRevision === adoptionRevision &&
+        cached.audience === audience &&
+        cached.source === source
+      ) {
+        return cached.host;
+      }
+      // Providers can update returned objects in place; detach only changed publications.
+      const snapshot: SessionCatalogHost = JSON.parse(source);
+      for (const session of snapshot.sessions) {
+        const { sessionKey, color: rawColor } = session;
+        delete session.sessionKey;
+        delete session.color;
+        const color = typeof rawColor === "string" ? normalizeSessionColorValue(rawColor) : null;
+        if (color) {
+          session.color = color;
+        }
+        if (audience === "session-viewers") {
+          // Publication attribution belongs to the provider, not a local adoption claim.
+          continue;
+        }
+        delete session.createdActor;
+        const original = sessionKey ? instances.get(sessionKey) : undefined;
+        const current = sessionKey ? entryForSession(sessionKey) : undefined;
+        // Never attach a reusable key's new creator to the previous provider instance.
+        if (
+          !original ||
+          !current ||
+          original.sessionId !== current.sessionId ||
+          original.pluginOwnerId !== current.pluginOwnerId ||
+          current.initializationPending === true ||
+          !isDeepStrictEqual(original.createdActor, current.createdActor)
+        ) {
+          continue;
+        }
+        session.sessionKey = sessionKey;
+        const createdActor = sessionKey ? createdActorForSession(sessionKey) : undefined;
+        if (createdActor) {
+          session.createdActor = createdActor;
+        }
+      }
+      const projected = freezeJsonSnapshot(snapshot);
+      if (!hosts) {
+        hosts = new Map();
+        projectedHosts.set(params.projection, hosts);
+      }
+      hosts.delete(host.hostId);
+      hosts.set(host.hostId, {
+        revision,
+        identityRevision,
+        cfg: params.cfg,
+        fallbackAgentId: params.fallbackAgentId,
+        adoptionRevision,
+        audience,
+        source,
+        host: projected,
+      });
+      if (hosts.size > 128) {
+        hosts.delete(hosts.keys().next().value!);
+      }
+      return projected;
+    },
   };
 }

@@ -147,14 +147,14 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       this.state &&
       this.isCurrentSessionArchived(this.state) &&
       this.currentSessionArchived === false &&
-      isThreadPresentationFocused(this.presentationId, this),
+      isThreadPresentationFocused(this.presentationId, this.element),
     );
   }
 
   protected retireArchivedPresentation(): void {
     const archived = this.state ? this.isCurrentSessionArchived(this.state) : false;
     if (archived && this.currentSessionArchived === false) {
-      dismissThreadPortals(this.presentationId, this);
+      dismissThreadPortals(this.presentationId, this.element);
       if (this.archiveFocusOwned) {
         this.querySelector<HTMLElement>(".chat-thread")?.focus({ preventScroll: true });
       }
@@ -192,7 +192,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       agentId: edit.agentId,
       exactKey: true,
     });
-    runSessionNavigationIntent(this, {
+    runSessionNavigationIntent(this.element, {
       agentId: edit.agentId,
       face: "chat",
       sessionKey: edit.sessionKey,
@@ -454,7 +454,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
               <div class="exec-approval-sub">${description}</div>
             </div>
           </div>
-          <div class="exec-approval-actions">
+          <openclaw-modal-actions class="exec-approval-actions">
             <button
               class="btn primary"
               type="button"
@@ -470,7 +470,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
             >
               ${t("common.cancel")}
             </button>
-          </div>
+          </openclaw-modal-actions>
         </div>
       </openclaw-modal-dialog>
     `;
@@ -559,8 +559,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     this.clearComposerPrefillAttention();
     this.settleResetConfirmation(false);
     this.cancelHeaderRename();
-    dismissConfirmedActionPopovers(this);
-    resetTranscriptSession(this.presentationId, this);
+    dismissConfirmedActionPopovers(this.element);
+    resetTranscriptSession(this.presentationId, this.element);
     const state = this.state;
     if (state) {
       stopChatRealtimeTalk(state);

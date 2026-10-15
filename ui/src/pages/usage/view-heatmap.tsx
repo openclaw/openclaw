@@ -37,27 +37,21 @@ function renderHeatmapSvg(heatmap: UsageHeatmap) {
       <For each={heatmap.monthLabels}>
         {(label, index) =>
           label ? (
-            <>
-              {" "}
-              <text class="usage-heatmap__month" x={HEATMAP_LEFT + index() * HEATMAP_PITCH} y="10">
-                {label}
-              </text>{" "}
-            </>
+            <text class="usage-heatmap__month" x={HEATMAP_LEFT + index() * HEATMAP_PITCH} y="10">
+              {label}
+            </text>
           ) : undefined
         }
       </For>
       <For each={WEEKDAY_LABEL_ROWS}>
         {({ row, utcDay }) => (
-          <>
-            {" "}
-            <text
-              class="usage-heatmap__weekday"
-              x={HEATMAP_LEFT - 6}
-              y={HEATMAP_TOP + row * HEATMAP_PITCH + HEATMAP_CELL - 2}
-            >
-              {weekdayFormat.format(new Date(utcDay))}
-            </text>{" "}
-          </>
+          <text
+            class="usage-heatmap__weekday"
+            x={HEATMAP_LEFT - 6}
+            y={HEATMAP_TOP + row * HEATMAP_PITCH + HEATMAP_CELL - 2}
+          >
+            {weekdayFormat.format(new Date(utcDay))}
+          </text>
         )}
       </For>
       <For each={heatmap.weeks}>

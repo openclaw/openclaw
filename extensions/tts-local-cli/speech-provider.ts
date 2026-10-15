@@ -5,7 +5,6 @@ import type {
   SpeechProviderPlugin,
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/speech-provider";
 import { asOptionalRecord, filterStringRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const VALID_OUTPUT_FORMATS = ["mp3", "opus", "wav"] as const;
@@ -296,9 +295,7 @@ async function synthesizeCli(
     throw new Error("CLI TTS not configured");
   }
   const telephony = target === "telephony";
-  log.debug(
-    `${telephony ? "synthesizeTelephony" : "synthesize"}: text=${truncateUtf16Safe(req.text, 50)}...`,
-  );
+  log.debug(`synthesize: target=${target}`);
 
   return await withTempWorkspace(
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-cli-tts-" },
@@ -328,6 +325,8 @@ async function synthesizeCli(
 }
 
 export function buildCliSpeechProvider(): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = (ctx) =>
+    getConfig(ctx.providerConfig) !== null;
   return {
     id: "tts-local-cli",
     aliases: ["cli"],
@@ -339,9 +338,9 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
       return resolveCliProviderConfig(ctx.rawConfig);
     },
 
-    isConfigured(ctx): boolean {
-      return getConfig(ctx.providerConfig) !== null;
-    },
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
 
     async synthesize(req) {
       const result = await synthesizeCli(

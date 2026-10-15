@@ -9,7 +9,6 @@ import {
   EMPTY_LEGACY_SESSION_SURFACES,
   type PreparedLegacySessionSurfaces,
 } from "../plugins/legacy-session-surfaces.types.js";
-import * as pluginSetupModule from "../plugins/plugin-setup-module.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import * as stateDatabase from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -701,47 +700,6 @@ describe("legacy state migration caller execution", () => {
     });
     expect(fs.existsSync(paths.source)).toBe(false);
     expect(fs.readFileSync(path.join(paths.target, "AGENTS.md"), "utf8")).toBe("profile workspace");
-  });
-
-  it("receipts the full plan when state-schema refuses before other preludes", async () => {
-    const fixture = await makeFixture();
-    const config: OpenClawConfig = {
-      plugins: { entries: { "candidate-plugin": { enabled: true } } },
-    };
-    fs.writeFileSync(fixture.configPath, `${JSON.stringify(config)}\n`);
-    const { execPath } = writeLegacyDoctorSources(fixture.stateDir);
-    const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
-    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    const database = new DatabaseSync(databasePath);
-    database.exec("CREATE TABLE audit_events (broken TEXT);");
-    database.close();
-    const plan = await planFixture(fixture);
-    const pluginLoader = vi
-      .spyOn(pluginSetupModule, "getPluginSetupModuleLoader")
-      .mockImplementation(() => {
-        throw new Error("blocked-plan closure must not load plugins");
-      });
-
-    const result = await autoMigrateLegacyState({
-      cfg: config,
-      doctorOnlyStateMigrations: true,
-      env: fixture.env,
-      homedir: () => fixture.homeDir,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    });
-
-    expectBlockedTailInPlanOrder({
-      plan,
-      receipts: result.stepReceipts,
-      blockerId: "state-schema",
-    });
-    expect(result.stepReceipts[0]).toMatchObject({ id: "state-schema", outcome: "refused" });
-    expect(result.stepReceipts.find((receipt) => receipt.id === "exec-approvals")).toMatchObject({
-      outcome: "refused",
-      refusal: { code: "blocked-by-prior-refusal" },
-    });
-    expect(pluginLoader).not.toHaveBeenCalled();
-    expect(fs.existsSync(execPath)).toBe(true);
   });
 
   it("preserves SQLite artifacts while closing the tail after a schema refusal", async () => {

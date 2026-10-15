@@ -68,6 +68,23 @@ export const reasoningTagTextPolicy = {
   },
 };
 
+const PREPARED_REQUEST_SUFFIX = Symbol("preparedRequestSuffix");
+
+/** The caller supplies a captured wire prefix; transport repair must retain its late tool results. */
+export const preparedRequestSuffix = {
+  mark(context: object, toolCallIds: ReadonlySet<string>): void {
+    Reflect.set(context, PREPARED_REQUEST_SUFFIX, toolCallIds);
+  },
+  has(context: object): boolean {
+    return Reflect.has(context, PREPARED_REQUEST_SUFFIX);
+  },
+  toolCallId(context: object, id: string, normalized: string): string {
+    // SAFETY: Only mark() writes this private carrier, with the captured prefix's wire IDs.
+    const ids = Reflect.get(context, PREPARED_REQUEST_SUFFIX) as ReadonlySet<string> | undefined;
+    return ids && !ids.has(id) && ids.has(normalized) ? normalized : id;
+  },
+};
+
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type AnthropicThinkingDisplay = "summarized" | "omitted";

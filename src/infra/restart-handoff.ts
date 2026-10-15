@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Selectable } from "kysely";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -21,14 +23,13 @@ import type {
   GatewayRestartHandoffSource,
   GatewayRestartHandoffSupervisorMode,
 } from "./restart-lifecycle.types.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
-import type { SqliteWorkerRuntimePreparation } from "./sqlite-worker-runtime-preparation.types.js";
 
 export type { GatewayRestartHandoff } from "./restart-lifecycle.types.js";
-export { prepareOpenClawStateWorkerRuntime as prepareGatewayRestartHandoffRuntime } from "../state/openclaw-state-worker-store.js";
 
 // Restart handoff rows let a supervisor explain a recent gateway restart after
 // the old process exits. The row is short-lived, bounded, and replaced on write.
@@ -226,8 +227,8 @@ function normalizeGatewayRestartHandoffRow(
   };
 }
 
-function selectGatewayRestartHandoffRowSync(
-  db: DatabaseSync,
+export function selectGatewayRestartHandoffRowSync(
+  db: EngineConnection,
 ): GatewayRestartHandoffRow | undefined {
   const stateDb = getNodeSqliteKysely<GatewayRestartHandoffDatabase>(db);
   return executeSqliteQueryTakeFirstSync(
@@ -278,7 +279,6 @@ export async function writeGatewayRestartHandoff(
     restartTrace?: GatewayRestartHandoff["restartTrace"];
     ttlMs?: number;
     createdAt?: number;
-    runtimePreparation?: SqliteWorkerRuntimePreparation;
   },
   assertCurrent?: () => void,
 ): Promise<GatewayRestartHandoff | null> {
@@ -320,7 +320,6 @@ export async function writeGatewayRestartHandoff(
       context,
       (scope) => scope.execute({ type: "restartLifecycle.writeHandoff", input: payload }),
       {
-        runtimePreparation: opts.runtimePreparation,
         assertCurrent: check,
         createAdmission: () => {
           admission = createSqliteWorkerOperationAdmission((_request, grant) => {
@@ -343,17 +342,40 @@ export async function writeGatewayRestartHandoff(
   }
 }
 
-/** Read the current unexpired restart handoff without consuming it. */
-export function readGatewayRestartHandoffSync(
-  env: NodeJS.ProcessEnv = process.env,
-  now = Date.now(),
+function normalizeUnexpiredGatewayRestartHandoff(
+  row: GatewayRestartHandoffRow | null | undefined,
+  now: number,
 ): GatewayRestartHandoff | null {
-  const row = readGatewayRestartHandoffRowSync(env);
   const payload = row ? normalizeGatewayRestartHandoffRow(row) : null;
   if (!payload || now < payload.createdAt || now >= payload.expiresAt) {
     return null;
   }
   return payload;
+}
+
+/** Read the current unexpired restart handoff without consuming it. */
+export async function readGatewayRestartHandoff(
+  env: NodeJS.ProcessEnv = process.env,
+  now = Date.now(),
+): Promise<GatewayRestartHandoff | null> {
+  try {
+    const result = await executeExistingOpenClawStateRead(
+      { env },
+      { type: "restartLifecycle.readHandoff", input: undefined },
+      { snapshotPreparation: "awaited" },
+    );
+    return normalizeUnexpiredGatewayRestartHandoff(result?.row, now);
+  } catch {
+    return null;
+  }
+}
+
+/** CLI and Doctor one-shots retain their synchronous diagnostic reader. */
+export function readGatewayRestartHandoffSync(
+  env: NodeJS.ProcessEnv = process.env,
+  now = Date.now(),
+): GatewayRestartHandoff | null {
+  return normalizeUnexpiredGatewayRestartHandoff(readGatewayRestartHandoffRowSync(env), now);
 }
 
 /**

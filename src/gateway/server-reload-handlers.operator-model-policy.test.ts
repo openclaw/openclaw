@@ -27,6 +27,7 @@ import {
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   createGatewaySchedulerClock,
@@ -34,6 +35,7 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
+import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createChannelManager } from "./server-channels.js";
 import { createContext as createGatewayTestContext } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -56,6 +58,7 @@ import { disconnectDisallowedGatewayPolicyClients } from "./server/ws-origin-pol
 let registrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 const registry = createEmptyPluginRegistry();
 beforeEach(() => {
+  installWatcherMock();
   registrySnapshot = captureActivePluginRegistrySnapshot();
   setActivePluginRegistry(registry);
   resetGatewayRestartStateForInProcessRestart();
@@ -84,9 +87,11 @@ function makePreparedSecretsSnapshot(config: OpenClawConfig) {
 }
 
 it("commits model-only role changes without retiring permitted models or original source work", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
+  await withOpenClawTestState(profileState, async () => {
     const clock = createGatewaySchedulerClock(Date.now());
     const profile = ensureProfileForEmail("reload-model-reader@example.test");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const roleName = "reader.modelPolicy.allow";
     const initialConfig: OpenClawConfig = {
       agents: {

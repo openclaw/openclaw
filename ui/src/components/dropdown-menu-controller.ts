@@ -1,4 +1,3 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { consumeTooltipEscape } from "./tooltip.ts";
 import { trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
@@ -58,21 +57,4 @@ export function connectDropdownMenu(
   return () => {
     host.ownerDocument.removeEventListener("keydown", handleDocumentKeydown, true);
   };
-}
-
-export class DropdownMenuController implements ReactiveController {
-  private disconnect?: () => void;
-  constructor(
-    private readonly host: ReactiveControllerHost & HTMLElement,
-    private readonly options: DropdownMenuOptions,
-  ) {
-    host.addController(this);
-  }
-  hostConnected() {
-    this.disconnect = connectDropdownMenu(this.host, this.options, () => this.host.updateComplete);
-  }
-  hostDisconnected() {
-    this.disconnect?.();
-    this.disconnect = undefined;
-  }
 }

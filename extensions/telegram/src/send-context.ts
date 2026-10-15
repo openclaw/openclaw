@@ -403,7 +403,7 @@ function wrapTelegramChatNotFoundError(err: unknown, params: { chatId: string; i
       [
         `Telegram send failed: bot is not a member of the chat, was blocked, or was kicked (chat_id=${params.chatId}).`,
         `Telegram API said: ${errorMsg}.`,
-        "Fix: Add the bot to the channel/group, or ensure it has not been removed/blocked/kicked by the user.",
+        "Fix: Add the bot to the channel/group, or check that it has not been removed/blocked/kicked by the user.",
         `Input was: ${JSON.stringify(params.input)}.`,
       ].join(" "),
     );

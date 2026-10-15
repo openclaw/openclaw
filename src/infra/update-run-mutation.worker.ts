@@ -5,6 +5,11 @@ import {
 } from "../state/openclaw-state-db-existing-write.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
+import {
+  retrySqliteWorkerAdmission,
+  SQLITE_WORKER_ADMISSION_DEADLINE_MS,
+} from "./sqlite-worker-admission-retry.js";
+import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import { resolveUpdateRunCodecEnv, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import { createUpdateRun } from "./update-run-ledger.js";
 import type {
@@ -29,6 +34,20 @@ export function openUpdateRunWriter(options: UpdateRunLedgerOptions): ExistingOp
     schemaSql: updateRunLedgerSchema,
     operationLabel: "update.run",
   });
+}
+
+/** Retry only a rolled-back attempt, without giving later worker commands its FIFO slot. */
+export function withUpdateRunWriteAdmission<T>(
+  operation: (assertCurrent: (stage: "transaction" | "commit") => void) => T,
+): T {
+  const assertCurrent = (stage: "transaction" | "commit") =>
+    requestSqliteWorkerOperationAdmission({
+      stage,
+      facts: undefined,
+      ...(stage === "commit" ? { deadlineMs: SQLITE_WORKER_ADMISSION_DEADLINE_MS } : {}),
+    });
+  // Required update evidence retains its retry policy; each attempt obtains fresh admission.
+  return retrySqliteWorkerAdmission(() => operation(assertCurrent), { maxAttempts: Infinity });
 }
 
 export function recordUpdateRunMutationInWorker(
@@ -64,13 +83,13 @@ export function recordUpdateRunMutationInWorker(
   }
   let entered = false;
   try {
+    assertCurrent("transaction");
     return writer().run(({ db }) => {
       entered = true;
       // The longer wait is for BEGIN only; mutation and commit keep the normal lock budget.
       if (busyTimeoutMs > OPENCLAW_SQLITE_BUSY_TIMEOUT_MS) {
         setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
       }
-      assertCurrent("transaction");
       if (input.requireNoRecovery) {
         const recovery = readRecovery(db, input.runId);
         if (recovery) {

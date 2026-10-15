@@ -56,11 +56,8 @@ const controlUiPerformanceBudgets = {
   // Main 098173f9f5d4 with facade optimization measured chat/new at 31/32 requests.
   // Allow 3 above the maximum while catching the roughly 19-request facade regression.
   routeBootJsRequests: 35,
-  // Solid transition (Peter, 2026-10-11): Lit and Solid styles coexist at boot; restore 1 after the Lit sweep.
-  startupCssRequests: 2,
-  // Solid transition allowance (Peter, 2026-10-11): Lit and Solid runtimes coexist until the Lit sweep.
-  // Restore to the pre-transition 374_285 cap (or lower) once Lit is removed; the Solid shell saves about 18 KB.
-  startupJsGzipBytes: 450_000,
+  startupCssRequests: 1,
+  startupJsGzipBytes: 374_285,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
@@ -712,6 +709,8 @@ function main(argv: string[] = process.argv.slice(2)): void {
   }
   if (!reportOnly) {
     const artifactContractMetrics = new Set([
+      "chat boot JS requests",
+      "new boot JS requests",
       "isolated Mermaid JS assets",
       "startup Mermaid JS assets",
       "locale catalog base JS assets per locale",

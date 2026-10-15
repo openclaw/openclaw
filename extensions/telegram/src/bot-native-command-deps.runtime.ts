@@ -4,7 +4,7 @@ import type {
   ModelsAuthLoginFlowOptions,
   ModelsAuthLoginFlowResult,
 } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { prepareSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
@@ -18,7 +18,7 @@ export type TelegramNativeCommandDeps = Pick<
   | "readChannelAllowFromStore"
   | "syncTelegramMenuCommands"
 > & {
-  runModelsAuthLoginFlow?: (opts: ModelsAuthLoginFlowOptions) => Promise<ModelsAuthLoginFlowResult>;
+  runModelsAuthLoginFlow: (opts: ModelsAuthLoginFlowOptions) => Promise<ModelsAuthLoginFlowResult>;
   sendMessageTelegram: typeof import("./send.js").sendMessageTelegram;
 };
 

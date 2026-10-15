@@ -127,7 +127,7 @@ export function makeContextParams(
       },
       subscribeSessionMessageEvents: vi.fn(),
       unsubscribeSessionMessageEvents: vi.fn(),
-      sessionMessageSubscribers: { unsubscribeAll: vi.fn() },
+      sessionMessageSubscribers: { get: vi.fn(() => new Set<string>()), unsubscribeAll: vi.fn() },
       toolEventRecipients: { add: vi.fn(), removeConnection: vi.fn() },
       dedupe: new Map(),
       wizardSessions: new Map(),

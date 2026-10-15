@@ -7,6 +7,12 @@ export type WorkerRetirementReason =
   | "idle_timeout"
   | "memory_pressure"
   | "closed"
+  | "eviction"
+  | "idle-expiry"
+  | "dispose"
+  | "shutdown"
+  | "crash"
+  | "gc-thrash"
   | "rotation"
   | "cancelled"
   | "failure"
@@ -36,6 +42,7 @@ export type WorkerTaskHost = {
   taskContextTransferList?(context: unknown): readonly Transferable[];
   createTaskObserver?(url: URL): (operation?: string) => WorkerTaskObservation;
   receiveMessage(worker: WorkerLifecycle, message: unknown): boolean;
+  observeResourceReply?(this: void): void;
   workerStarted(worker: WorkerLifecycle, pool: object): void;
   workerRetiring(worker: WorkerLifecycle, reason: WorkerRetirementReason): void;
   computeCapacity: WorkerComputeCapacity;

@@ -1,7 +1,6 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
-import { t } from "../../i18n/index.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
@@ -9,11 +8,12 @@ import { remainingBoardWidgetTicketTtlMs } from "../../lib/board/widget-ticket-l
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { WidgetRenderTimeoutError } from "../../lib/widget-sandbox-host.ts";
-import { installWidgetThemeObserver, postWidgetTheme } from "../../lib/widget-theme.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
+import { postWidgetTheme } from "../../lib/widget-theme.ts";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../command-palette-contract.ts";
+import { McpAppConfirmation } from "../mcp-app-confirm-solid.tsx";
 import { McpAppConfirm } from "../mcp-app-confirm.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
@@ -180,7 +180,6 @@ export class BoardWidgetFrameLifecycle {
     if (this.host.active()) {
       document.addEventListener("visibilitychange", this.handleVisibilityChange);
     }
-    installWidgetThemeObserver();
   }
 
   disconnect(): void {
@@ -294,12 +293,7 @@ export class BoardWidgetFrameLifecycle {
         }
       >
         <div class="board-widget__frame-pane">
-          <LitContent
-            render={() => {
-              revision();
-              return this.confirmation.render();
-            }}
-          />
+          <McpAppConfirmation confirmation={this.confirmation} revision={revision()} />
           <Show when={!view().visible && !view().covered}>
             <Show
               when={view().stalled}

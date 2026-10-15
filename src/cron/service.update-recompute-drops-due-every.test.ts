@@ -3,8 +3,13 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import { CronService } from "./service.js";
-import { createFinishedBarrier, setupCronServiceSuite } from "./service.test-harness.js";
+import type { CronService } from "./service.js";
+import {
+  createCronServiceWithStateForTest,
+  createFinishedBarrier,
+  setupCronServiceSuite,
+} from "./service.test-harness.js";
+import { onTimer } from "./service/timer.test-support.js";
 import type { CronJob, CronSchedule } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ fakeTimers: false });
@@ -35,7 +40,7 @@ async function withScheduledJob(
       throw new AggregateError(failures, "Cron fixture scheduler failed");
     }
   };
-  const cron = new CronService({
+  const { cron, state } = createCronServiceWithStateForTest({
     scheduler: createTestGatewayScheduler(clock.clock),
     storePath,
     cronEnabled: true,
@@ -65,6 +70,7 @@ async function withScheduledJob(
       expect(job.state.nextRunAtMs).toBe(base + schedule.everyMs);
       const firstRun = finished.waitForOk(job.id);
       await clock.advanceTo(job.state.nextRunAtMs! + 5);
+      await onTimer(state);
       await firstRun;
       // Finished precedes maintenance and timer re-arming.
       await joinTurns();

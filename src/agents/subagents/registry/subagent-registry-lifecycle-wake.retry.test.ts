@@ -35,12 +35,6 @@ vi.mock("./subagent-registry-requester-yield.js", () => ({
 vi.mock("./subagent-registry-lifecycle-delivery.js", () => ({
   refreshFrozenResultFromSession: vi.fn(),
 }));
-vi.mock("./subagent-registry-lifecycle-log.js", () => ({
-  buildSafeLifecycleErrorMeta: (error: unknown) => ({
-    message: error instanceof Error ? error.message : String(error),
-  }),
-  maskLifecycleIdentifier: () => "synthetic",
-}));
 vi.mock("../completion/subagent-completion-admission.store.js", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("../completion/subagent-completion-admission.store.js")
@@ -48,8 +42,9 @@ vi.mock("../completion/subagent-completion-admission.store.js", async (importOri
   blockSubagentCompletionDelivery: completionDeliveryMocks.blockSubagentCompletionDelivery,
   mutateRequesterCompletionBatch: completionDeliveryMocks.mutateRequesterCompletionBatch,
 }));
+// mock-isolation: Retry policy does not own a process-wide MCP runtime.
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
-  retireSessionMcpRuntimeForSessionKey: vi.fn(),
+  retireSessionMcpRuntime: vi.fn(),
 }));
 vi.mock("../../internal-session-effects.js", () => ({
   removeInternalSessionEffectsSession: vi.fn(),

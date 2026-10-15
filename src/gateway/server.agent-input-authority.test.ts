@@ -18,11 +18,13 @@ import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
+import { createSessionsCreateTool } from "../agents/tools/sessions-create-tool.js";
 import * as followupCustody from "../agents/tools/sessions-send-followup-custody.js";
 import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
 import { createReplyTurnParticipants } from "../auto-reply/reply/reply-run-registry.tool-authority.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
 import {
   resolveSqliteStoreScope,
@@ -33,17 +35,21 @@ import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import * as gatewayWork from "../process/gateway-work-admission.js";
+import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import type { PreparedAgentRunDispatch } from "./agent-turn/agent-run-admission-types.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import * as gatewayDispatch from "./server-plugin-in-process-dispatch.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
+import { runIndependentCreationInputCase } from "./server.agent-input-authority.create.test-helper.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-import { loadSessionEntry } from "./session-utils.js";
 import { withPreparedSessionResolve } from "./sessions-resolve.js";
 import {
   agentCommandMock,
+  dispatchInboundMessageMock,
   installGatewayTestHooks,
   prepareGatewayReplyRuntimeForTest,
 } from "./test-helpers.js";
@@ -71,6 +77,21 @@ describe("spawn input ownership transfer", () => {
     cleanup: async () => {
       await harness?.close();
     },
+  });
+
+  it.for([
+    "slow acceptance",
+    "slow kickoff failure",
+    "before acceptance",
+    "after acceptance",
+    "guest after acceptance",
+    "participant after creation",
+    "participant after acceptance",
+    "target abort",
+    "target replacement",
+    "operator revocation",
+  ] as const)("transfers independently created input at %s", async (boundary, { signal }) => {
+    await runIndependentCreationInputCase(kernel.gatewayRequestContext, boundary, signal);
   });
 
   it.for([
@@ -311,7 +332,7 @@ describe("spawn input ownership transfer", () => {
           await release.promise;
           return request;
         });
-      const stage = vi.spyOn(sessionAccessor, "stageSessionPendingInput");
+      const stage = vi.spyOn(pendingInputs, "stageSessionPendingInput");
       let sending: Promise<unknown> | undefined;
       try {
         const pending = withPluginRuntimeGatewayRequestScope(
@@ -346,7 +367,7 @@ describe("spawn input ownership transfer", () => {
           }),
         ]);
         const revokedKey = revoked === "requester" ? parentKey : childKey;
-        const entry = loadSessionEntry(revokedKey, { agentId: "main" }).entry;
+        const entry = (await loadSessionEntryAsync(revokedKey, { agentId: "main" })).entry;
         if (!entry) {
           throw new Error("Expected prepared session");
         }
@@ -372,7 +393,7 @@ describe("spawn input ownership transfer", () => {
               agentId: "main",
               sessionKey: childKey,
               sessionId: childKey,
-              storePath: loadSessionEntry(childKey, { agentId: "main" }).storePath,
+              storePath: (await loadSessionEntryAsync(childKey, { agentId: "main" })).storePath,
             })
           ).total,
         ).toBe(0);
@@ -454,7 +475,7 @@ describe("spawn input ownership transfer", () => {
           agentId: "worker",
           sessionKey: targetKey,
           sessionId,
-          storePath: loadSessionEntry(targetKey, { agentId: "worker" }).storePath,
+          storePath: (await loadSessionEntryAsync(targetKey, { agentId: "worker" })).storePath,
         };
         const transcript = sessionAccessor.loadTranscriptEventsSync(scope);
         admission = prepareAgentRunAdmission({
@@ -477,9 +498,9 @@ describe("spawn input ownership transfer", () => {
             return execution;
           });
         restoreExecution = () => executionSpy.mockRestore();
-        const stage = sessionAccessor.stageSessionPendingInput;
+        const stage = pendingInputs.stageSessionPendingInput;
         const stageSpy = vi
-          .spyOn(sessionAccessor, "stageSessionPendingInput")
+          .spyOn(pendingInputs, "stageSessionPendingInput")
           .mockImplementationOnce(async (...args) => {
             if (boundary === "before staging") {
               const entered = createDeferred();
@@ -601,7 +622,7 @@ describe("spawn input ownership transfer", () => {
       { agentId: "main", sessionKey: childKey },
       { sessionId, updatedAt: Date.now() },
     );
-    const loaded = loadSessionEntry(childKey, { agentId: "main" });
+    const loaded = await loadSessionEntryAsync(childKey, { agentId: "main" });
     const admission = prepareAgentRunAdmission({
       cfg,
       operationalRunInstance: createOperationalRunInstanceRef(`parent-${runId}`),
@@ -621,7 +642,7 @@ describe("spawn input ownership transfer", () => {
       () => captureAgentToolSourceExecutionGuard(),
     );
     if (boundary === "before reset" || boundary === "live reset") {
-      const before = loadSessionEntry(childKey, { agentId: "main" }).entry;
+      const before = (await loadSessionEntryAsync(childKey, { agentId: "main" })).entry;
       let hookCalls = 0;
       const onReset = (event: import("../hooks/internal-hooks.js").InternalHookEvent) => {
         if (event.sessionKey !== childKey) {
@@ -646,10 +667,12 @@ describe("spawn input ownership transfer", () => {
         );
         if (boundary === "before reset") {
           await expect(reset).rejects.toThrow("tool invocation authority is no longer active");
-          expect(loadSessionEntry(childKey, { agentId: "main" }).entry).toEqual(before);
+          expect((await loadSessionEntryAsync(childKey, { agentId: "main" })).entry).toEqual(
+            before,
+          );
         } else {
           await expect(reset).resolves.toMatchObject({ status: "ok", summary: "completed" });
-          const after = loadSessionEntry(childKey, { agentId: "main" }).entry;
+          const after = (await loadSessionEntryAsync(childKey, { agentId: "main" })).entry;
           expect(after?.sessionId).toBe(sessionId);
           expect(after?.lifecycleRevision).not.toBe(before?.lifecycleRevision);
         }
@@ -684,9 +707,9 @@ describe("spawn input ownership transfer", () => {
         execution = releaseExecution.promise.then(() => execute(params));
         return execution;
       });
-    const stage = sessionAccessor.stageSessionPendingInput;
+    const stage = pendingInputs.stageSessionPendingInput;
     const stageSpy = vi
-      .spyOn(sessionAccessor, "stageSessionPendingInput")
+      .spyOn(pendingInputs, "stageSessionPendingInput")
       .mockImplementationOnce(async (...args) => {
         if (boundary === "before staging") {
           const entered = createDeferred();
@@ -808,7 +831,9 @@ describe("accepted input Gateway instance retirement", () => {
     },
   });
 
-  it("rejects retained host dispatch after acceptance", async ({ signal }) => {
+  it("rejects retained agent and independent-creation input after acceptance", async ({
+    signal,
+  }) => {
     await prepareGatewayReplyRuntimeForTest();
     const context = kernel.gatewayRequestContext;
     const runId = randomUUID();
@@ -824,9 +849,14 @@ describe("accepted input Gateway instance retirement", () => {
       agentId: "main",
       sessionKey: childKey,
       sessionId,
-      storePath: loadSessionEntry(childKey, { agentId: "main" }).storePath,
+      storePath: (await loadSessionEntryAsync(childKey, { agentId: "main" })).storePath,
     };
     const transcript = sessionAccessor.loadTranscriptEventsSync(scope);
+    const client = createOperatorClient({ profileName: randomUUID(), scopes: ["operator.admin"] });
+    const operator = expectDefined(
+      await captureGatewayOperatorRunAuthority({ client, context }),
+      "creation operator",
+    );
     const admission = prepareAgentRunAdmission({
       cfg: context.getRuntimeConfig(),
       operationalRunInstance: createOperationalRunInstanceRef(`parent-${runId}`),
@@ -834,6 +864,16 @@ describe("accepted input Gateway instance retirement", () => {
         runId: `parent-${runId}`,
         agentId: "main",
         ingress: { kind: "system", boundary: "spawn-input-proof", state: "present" },
+      },
+    });
+    const creationAdmission = prepareAgentRunAdmission({
+      cfg: context.getRuntimeConfig(),
+      operationalRunInstance: createOperationalRunInstanceRef(`creation-parent-${runId}`),
+      operatorAuthority: operator.authority,
+      facts: {
+        runId: `creation-parent-${runId}`,
+        agentId: "main",
+        ingress: { kind: "gateway-client", boundary: "agent", state: "present" },
       },
     });
     const releaseExecution = createDeferred();
@@ -844,6 +884,7 @@ describe("accepted input Gateway instance retirement", () => {
     let execution: Promise<void> | undefined;
     let restoreExecution: (() => void) | undefined;
     let restoreRuntimeRelease: (() => void) | undefined;
+    let createdWorkReleased: Promise<void> | undefined;
     try {
       const admitted = await admission.admit("embedded");
       const guard = await withGatewayToolCallerIdentity(
@@ -901,15 +942,84 @@ describe("accepted input Gateway instance retirement", () => {
       );
       restoreRuntimeRelease = () => runtimeRelease.mockRestore();
 
-      // Retire only the instance owner: parent authority and the child controller
-      // remain live, so neither full shutdown nor cancellation can explain refusal.
+      const creationAdmitted = await creationAdmission.admit("embedded");
+      const creationCaller = createAdmittedGatewayToolCallerIdentity({
+        admittedRunContext: creationAdmitted,
+        agentId: "main",
+        sessionKey: parentKey,
+      });
+      const creationGuard = await withGatewayToolCallerIdentity(creationCaller, () =>
+        captureAgentToolSourceExecutionGuard(),
+      );
+      const createdInputEntered = createDeferred<UserTurnTranscriptRecorder>();
+      dispatchInboundMessageMock.mockReset().mockImplementation((args) => {
+        createdInputEntered.resolve(
+          expectDefined(args.replyOptions?.userTurnTranscriptRecorder, "created input recorder"),
+        );
+        return releaseExecution.promise.then(() => ({
+          queuedFinal: false,
+          counts: { tool: 0, block: 0, final: 0 },
+        }));
+      });
+      const created = await withPluginRuntimeGatewayRequestScope(
+        { client, context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
+        () =>
+          withGatewayToolCallerIdentity(creationCaller, () =>
+            expectDefined(createSessionsCreateTool(), "creation tool").execute(
+              "create-retirement",
+              { message: "Continue independently" },
+            ),
+          ),
+      );
+      expect(created.details).toMatchObject({
+        runStarted: true,
+        sessionKey: expect.any(String),
+        sessionId: expect.any(String),
+      });
+      const createdReceipt = created.details as { sessionKey: string; sessionId: string };
+      const createdScope = {
+        agentId: "main",
+        ...createdReceipt,
+        storePath: (await loadSessionEntryAsync(createdReceipt.sessionKey, { agentId: "main" }))
+          .storePath,
+      };
+      const createdRecorder = await withinTest(createdInputEntered.promise, signal);
+      createdWorkReleased = getSessionWorkAdmissionRelease({
+        scope: createdScope.storePath,
+        identities: [createdReceipt.sessionKey, createdReceipt.sessionId],
+      });
+      const createdPending = await listSessionPendingInputs(createdScope);
+      expect(createdPending).toMatchObject({ total: 1, items: [{ state: "queued" }] });
+      const createdRunId = expectDefined(createdPending.items[0], "created pending input").runId;
+      const createdAbortEntry = expectDefined(
+        context.chatAbortControllers.get(createdRunId),
+        "created input target",
+      );
+      const createdTranscript = sessionAccessor.loadTranscriptEventsSync(createdScope);
+      expect(createdAbortEntry.controller.signal.aborted).toBe(false);
+      expect(() => creationGuard()).not.toThrow();
+
+      // The synthetic agent source stays live as the control. Creation's real
+      // operator source retires with its Gateway; neither target is cancelled.
       expect(kernel.gatewayInstanceRuntime.isAvailable()).toBe(true);
       kernel.gatewayInstanceRuntime.close();
       expect(kernel.gatewayInstanceRuntime.isAvailable()).toBe(false);
       expect(() => guard()).not.toThrow();
+      expect(() => creationGuard()).toThrow("tool invocation authority is no longer active");
       expect(prepared.activeRunAbort.controller.signal.aborted).toBe(false);
+      expect(context.chatAbortControllers.get(createdRunId)).toBe(createdAbortEntry);
+      expect(createdAbortEntry.controller.signal.aborted).toBe(false);
+      await expect(
+        Promise.resolve().then(() =>
+          expectDefined(
+            createdRecorder.withPendingInput,
+            "accepted creation input",
+          )(() => createdRecorder.persistApproved()),
+        ),
+      ).rejects.toThrow();
+      expect(createdRecorder.getAdmissionReceipt?.()).toBeUndefined();
       release();
-      await execution;
+      await Promise.all([execution, createdWorkReleased]);
 
       expect(accepted).toEqual(originalAck);
       expect(context.dedupe.get(`agent:${runId}`)).toMatchObject({
@@ -930,6 +1040,12 @@ describe("accepted input Gateway instance retirement", () => {
       });
       expect(sessionAccessor.loadTranscriptEventsSync(scope)).toEqual(transcript);
       expect(prepared.userTurn.recorder?.getAdmissionReceipt()).toBeUndefined();
+      expect(await listSessionPendingInputs(createdScope)).toEqual({
+        total: 1,
+        items: [{ ...createdPending.items[0], state: "interrupted" }],
+      });
+      expect(sessionAccessor.loadTranscriptEventsSync(createdScope)).toEqual(createdTranscript);
+      expect(createdAbortEntry.controller.signal.aborted).toBe(false);
       expect(agentCommandMock).not.toHaveBeenCalled();
       expect(prepared.activeRunAbort.controller.signal.aborted).toBe(false);
       expect(context.chatAbortControllers.size).toBe(0);
@@ -940,10 +1056,13 @@ describe("accepted input Gateway instance retirement", () => {
       expect(() => guard()).not.toThrow();
     } finally {
       release();
-      await Promise.allSettled([dispatch, execution]);
+      await Promise.allSettled([dispatch, execution, createdWorkReleased]);
+      dispatchInboundMessageMock.mockReset();
       restoreRuntimeRelease?.();
       restoreExecution?.();
       admission.close();
+      creationAdmission.close();
+      operator.release();
       signal.removeEventListener("abort", release);
     }
   });

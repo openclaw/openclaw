@@ -4,10 +4,7 @@ import {
   runChannelInboundEvent,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  createChannelMessageReplyPipeline,
-  resolveChannelStreamingPreviewToolProgress,
-} from "openclaw/plugin-sdk/channel-outbound";
+import { resolveChannelStreamingPreviewToolProgress } from "openclaw/plugin-sdk/channel-outbound";
 import { PLUGIN_COMMAND_DISPATCH } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { isFastModeAutoProgressPayload } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -50,6 +47,7 @@ const TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES = 5;
 
 export async function runTelegramDispatchTurn(turn: Turn) {
   const { context } = turn;
+  const hasRepliedRef = { value: false };
   const isRoomEvent = context.ctxPayload.InboundEventKind === "room_event";
   // Quiet drafts do not disable explicit /verbose diagnostics; only configured opt-outs do.
   const toolProgressEnabled =
@@ -70,30 +68,29 @@ export async function runTelegramDispatchTurn(turn: Turn) {
     enqueueDraftEvent(turn, task).then(() => false);
 
   try {
-    const { onModelSelected, ...replyPipeline } = (
-      turn.telegramDeps.createChannelMessageReplyPipeline ?? createChannelMessageReplyPipeline
-    )({
-      cfg: turn.cfg,
-      agentId: context.route.agentId,
-      channel: "telegram",
-      accountId: context.route.accountId,
-      typing: {
-        start: context.sendTyping,
-        keepaliveIntervalMs: TELEGRAM_CHAT_ACTION_INTERVAL_MS,
-        // ReplyOperation owns terminal cleanup; a per-inbound TTL would kill
-        // feedback while the same long-running task is still active.
-        maxDurationMs: 0,
-        maxConsecutiveFailures: TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES,
-        onStartError: (err) => {
-          logTypingFailure({
-            log: logVerbose,
-            channel: "telegram",
-            target: String(context.chatId),
-            error: err,
-          });
+    const { onModelSelected, ...replyPipeline } =
+      turn.telegramDeps.createChannelMessageReplyPipeline({
+        cfg: turn.cfg,
+        agentId: context.route.agentId,
+        channel: "telegram",
+        accountId: context.route.accountId,
+        typing: {
+          start: context.sendTyping,
+          keepaliveIntervalMs: TELEGRAM_CHAT_ACTION_INTERVAL_MS,
+          // ReplyOperation owns terminal cleanup; a per-inbound TTL would kill
+          // feedback while the same long-running task is still active.
+          maxDurationMs: 0,
+          maxConsecutiveFailures: TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES,
+          onStartError: (err) => {
+            logTypingFailure({
+              log: logVerbose,
+              channel: "telegram",
+              target: String(context.chatId),
+              error: err,
+            });
+          },
         },
-      },
-    });
+      });
     const turnResult = await runChannelInboundEvent({
       channel: "telegram",
       accountId: context.route.accountId,
@@ -152,7 +149,8 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             onSkip: (payload, info) => handleReplySkip(turn, payload, info),
           },
           replyOptions: {
-            onAgentRunStart: (runId) => {
+            hasRepliedRef,
+            onPreparedAgentRunStart: ({ runId }) => {
               turn.transcriptMirrorRunId = runId;
             },
             ...(context.ctxPayload.CommandSource === "native"
@@ -260,6 +258,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                   })
               : () => false,
             onQueuedFollowupAdmitted: () => {
+              hasRepliedRef.value = false;
               beginDraftQueuedFollowup(turn);
               turn.previewLifecycle.reset();
               turn.finalDispatchClaimed = false;

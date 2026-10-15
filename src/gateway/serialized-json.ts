@@ -8,7 +8,8 @@ export class SerializedJsonPayload {
 
   constructor(payload: unknown) {
     const frame = serializeGatewayFrame({ type: "res", payload });
-    this.bytes = Buffer.from(frame).subarray('{"type":"res"'.length, -1);
+    const bytes = typeof frame === "string" ? Buffer.from(frame) : frame;
+    this.bytes = bytes.subarray('{"type":"res"'.length, -1);
   }
 
   toJSON(): unknown {

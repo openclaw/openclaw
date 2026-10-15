@@ -1,4 +1,12 @@
-import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  getOwner,
+  onCleanup,
+  runWithOwner,
+  untrack,
+} from "solid-js";
 import type {
   ChannelsPairingListResult,
   ChannelsPairingRequest,
@@ -22,7 +30,6 @@ import { projectChannels, projectRuntimeConfig } from "../../lib/reactive/domain
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectTheme } from "../../lib/reactive/theme.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { importNostrProfile, parseValidationErrors, putNostrProfile } from "./nostr-profile-ops.ts";
 import { ChannelPluginPresentationController } from "./plugin-presentation-controller.ts";
 import { createNostrProfileFormState } from "./view.nostr-profile-form.tsx";
@@ -659,7 +666,8 @@ class ChannelsPageController {
   }
 }
 
-export function ChannelsPage(props: { host: HTMLElement; context?: ApplicationContext }) {
+function ChannelsPageContent(props: { host: HTMLElement; context?: ApplicationContext }) {
+  const owner = getOwner();
   const application = untrack(() => props.context) ? undefined : useApplication();
   const host = untrack(() => props.host);
   const context = () => props.context ?? application!;
@@ -669,7 +677,7 @@ export function ChannelsPage(props: { host: HTMLElement; context?: ApplicationCo
     host,
     () => setRevision((value) => value + 1),
   );
-  createEffect(context, (value) => controller.bindContext(value));
+  createEffect(context, (value) => runWithOwner(owner, () => controller.bindContext(value)));
   onCleanup(() => controller.dispose());
   createEffect(revision, () => controller.afterRender());
   const viewProps = createMemo(() => {
@@ -693,9 +701,11 @@ export function ChannelsPage(props: { host: HTMLElement; context?: ApplicationCo
   );
 }
 
-// Module re-evaluation can retain the shared custom-element registry.
-if (!customElements.get("openclaw-channels-page")) {
-  defineSolidBridge("openclaw-channels-page", (_props, host) => <ChannelsPage host={host} />, {
-    properties: {},
-  });
+export function ChannelsPage(props: { context?: ApplicationContext }) {
+  let host!: HTMLElement;
+  return (
+    <openclaw-channels-page ref={(element) => (host = element)}>
+      <ChannelsPageContent host={host} context={props.context} />
+    </openclaw-channels-page>
+  );
 }

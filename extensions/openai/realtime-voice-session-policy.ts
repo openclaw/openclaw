@@ -28,7 +28,10 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-auth.js";
+import {
+  OPENAI_CHATGPT_SUBSCRIPTION_PROFILE_TYPES,
+  resolveOpenAIChatGptSubscriptionAuth,
+} from "./realtime-auth.js";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   readRealtimeErrorDetail,
@@ -490,6 +493,7 @@ export async function resolveOpenAIQuicksilverBridgeAuth(
   );
 }
 
+// Retained for public synchronous SDK calls through 2026-12-31.
 export function hasOpenAIRealtimePlatformAuthInput(
   params: Parameters<typeof resolveOpenAIRealtimePlatformAuth>[0],
   {
@@ -532,7 +536,7 @@ export function hasOpenAIChatGptSubscriptionAuthInput(
     cfg: params.cfg,
     agentDir:
       params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
-    profileTypes: ["oauth"],
+    profileTypes: OPENAI_CHATGPT_SUBSCRIPTION_PROFILE_TYPES,
     includeExternalCliAuth: false,
   });
 }
@@ -585,7 +589,7 @@ export async function hasOpenAIChatGptSubscriptionAuthInputAsync(
     cfg: params.cfg,
     agentDir:
       params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
-    profileTypes: ["oauth"],
+    profileTypes: OPENAI_CHATGPT_SUBSCRIPTION_PROFILE_TYPES,
     includeExternalCliAuth: false,
   });
 }

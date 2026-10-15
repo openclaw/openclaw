@@ -10,10 +10,11 @@ import {
 } from "../../../components/markdown-file-links.ts";
 import { SessionLinkTitler } from "../../../components/session-link-titling.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { coalesceAgentRunFrames } from "../chat-agent-run-grouping.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
-import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { createAssistantMessage, createMessageGroup } from "./chat-message.test-support.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
@@ -130,8 +131,8 @@ describe("forwarded message attribution", () => {
         isToolExpanded: () => true,
       };
       const content = frame
-        ? renderAgentRunFrame(
-            {
+        ? solidContent(AgentRunFrame, {
+            frame: {
               kind: "agent-run-frame",
               key: "forwarded-frame",
               runId: "forwarded-tools",
@@ -139,13 +140,13 @@ describe("forwarded message attribution", () => {
               outcome: { kind: "completed", actionOwner: null },
               parts: [group],
             },
-            {
+            options: {
               streamOptions: {},
               renderGroupOptions: () => options,
               isWorkExpanded: () => true,
               onToggleWork: () => {},
             },
-          )
+          })
         : renderTestMessageGroup(group, options);
       render(content, container);
       await settleToolBridges(container);
@@ -200,11 +201,14 @@ describe("forwarded message attribution", () => {
       throw new Error("Expected the narrated tool to join its completed run frame");
     }
     render(
-      renderAgentRunFrame(frame, {
-        streamOptions: {},
-        renderGroupOptions: () => ({ showReasoning: true }),
-        isWorkExpanded: () => true,
-        onToggleWork: () => {},
+      solidContent(AgentRunFrame, {
+        frame,
+        options: {
+          streamOptions: {},
+          renderGroupOptions: () => ({ showReasoning: true }),
+          isWorkExpanded: () => true,
+          onToggleWork: () => {},
+        },
       }),
       container,
     );
@@ -241,14 +245,21 @@ describe("forwarded message attribution", () => {
       expect(forwardedGroup).not.toBeNull();
       expect(forwardedGroup?.classList.contains("chat-group--sender-tint")).toBe(true);
       expect(forwardedGroup?.style.getPropertyValue("--chat-sender-hue")).not.toBe("");
-      const attribution = container.querySelector(".chat-group--forwarded .chat-reply-attribution");
+      const attribution = expectDefined(
+        forwardedGroup?.querySelector(".chat-group-messages > .chat-reply-attribution"),
+        "direct forwarded attribution",
+      );
       const link = attribution?.querySelector<HTMLAnchorElement>(
         'a.markdown-session-link[data-session-key="agent:main:main"]',
       );
       expect(attribution?.textContent).toContain("From");
       expect(link?.textContent).toBe("agent:main:main");
       expect(link?.tabIndex).toBe(0);
-      expect(attribution?.nextElementSibling?.classList.contains("chat-bubble")).toBe(true);
+      const bubble = expectDefined(
+        forwardedGroup?.querySelector(".chat-bubble"),
+        "forwarded message bubble",
+      );
+      expect(attribution.nextElementSibling).toBe(bubble);
       expect(container.querySelector(".chat-avatar, .chat-avatar-slot")).toBeNull();
       expect(container.querySelector(".chat-group-footer .chat-sender-name")).toBeNull();
       expect(container.querySelector(".chat-group-footer .chat-group-timestamp")).not.toBeNull();
@@ -271,7 +282,7 @@ describe("forwarded message attribution", () => {
         ".chat-group--forwarded .chat-reply-attribution a",
       );
       expect(retained?.textContent).toBe("Main session");
-      expect(retained?.title).toBe("agent:main:main");
+      expect(retained?.hasAttribute("title")).toBe(false);
     },
   );
 

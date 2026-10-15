@@ -1,7 +1,7 @@
 // Host-owned SQLite leases serialize trusted work across processes.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
@@ -48,6 +48,7 @@ import {
   acquireLease,
   createOpenClawStateLeaseWorkerStorage,
 } from "./openclaw-state-lease-worker-storage.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 export type {
@@ -59,7 +60,7 @@ export { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 /** Run one trusted operation under a host-owned SQLite lease. */
 export async function withOpenClawStateLease<T>(
   options: OpenClawStateLeaseOptions,
-  run: (lease: OpenClawStateLeaseContext) => Promise<T>,
+  run: (lease: OpenClawStateLeaseContext, identity: OpenClawStateLeaseIdentity) => Promise<T>,
 ): Promise<T> {
   return runStateLeaseOwner({ kind: "native", options, run });
 }
@@ -72,7 +73,7 @@ export async function withOpenClawStateLease<T>(
 export async function withOpenClawStateLeaseAsync<T>(
   options: Omit<OpenClawStateLeaseOptions, "database" | "prepareDatabase">,
   context: OpenClawStateWorkerContext,
-  run: (lease: OpenClawStateAsyncLeaseContext) => Promise<T>,
+  run: (lease: OpenClawStateAsyncLeaseContext, identity: OpenClawStateLeaseIdentity) => Promise<T>,
 ): Promise<T> {
   return runStateLeaseOwner({
     kind: "worker",
@@ -402,7 +403,7 @@ async function runStateLeaseOwnerInScope<T>(
       }
     };
 
-    const assertOperationOwned = (transaction?: DatabaseSync) => {
+    const assertOperationOwned = (transaction?: EngineConnection) => {
       assertActive();
       const params = { ...identity, database: validated.database, transaction };
       const expiresAt = verifyLeaseOwnership(params);
@@ -561,7 +562,7 @@ async function runStateLeaseOwnerInScope<T>(
           renew: async () => execution.run(() => verify(true)),
         };
         execution.bind(lease);
-        result = await invocation.run(lease);
+        result = await invocation.run(lease, identity);
       } else {
         assertOperationOwned();
         const lease: OpenClawStateLeaseContext = {
@@ -622,7 +623,7 @@ async function runStateLeaseOwnerInScope<T>(
             }
           },
         });
-        result = await invocation.run(lease);
+        result = await invocation.run(lease, identity);
       }
       await drain();
     } catch (error) {

@@ -4,12 +4,12 @@ import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
 import { resolveRuntimeSkillsPrompt } from "../../agents/embedded-agent-runner/skills-prompt.js";
-import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
+import { resolveNodeExecEligibilityAsync } from "../../agents/exec-defaults.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../agents/prompt-surface.js";
 import { resolveAgentRuntimePrompt } from "../../agents/runtime-prompt.js";
 import {
   ensureSandboxWorkspaceForSession,
-  resolveSandboxRuntimeStatus,
+  resolveSandboxRuntimeStatusAsync,
 } from "../../agents/sandbox.js";
 import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-config.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -109,16 +109,19 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     ctx: params.ctx,
     sessionKey: params.sessionKey,
   });
-  const sandboxRuntime = resolveSandboxRuntimeStatus({
+  const sandboxRuntime = await resolveSandboxRuntimeStatusAsync({
     cfg: params.cfg,
     agentId: sessionAgentId,
     sessionKey: params.sessionKey,
     classificationSessionKey: toolPolicySessionKey,
+    ...(toolPolicySessionKey === params.sessionKey
+      ? { preparedSessionEntry: targetSessionEntry ?? null }
+      : {}),
   });
-  const nodeSkills = resolveNodeExecEligibility({
+  const nodeSkills = await resolveNodeExecEligibilityAsync({
     agentId: sessionAgentId,
     cfg: params.cfg,
-    sessionEntry: targetSessionEntry,
+    sessionEntry: targetSessionEntry ?? null,
     sessionKey: params.sessionKey,
   });
   const skillsPrompt = await resolveCommandSkillsPrompt({
@@ -169,6 +172,7 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     model: `${params.provider}/${params.model}`,
     channel: params.command.channel,
     accountId,
+    requester: { agentTo: params.ctx.To, agentThreadId: params.ctx.MessageThreadId },
     chatType: normalizeChatType(params.ctx.ChatType ?? targetSessionEntry?.chatType),
   });
   const fullAccessState = resolveEmbeddedFullAccessState({

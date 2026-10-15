@@ -17,7 +17,7 @@ started.
 - **Keyword search** via FTS5 full-text indexing (BM25 scoring).
 - **Vector search** via embeddings from any supported provider.
 - **Hybrid search** that combines both for best results.
-- **Deterministic ranking** by relevance, recency, and write-time importance.
+- **Ranking** by relevance, recency, and write-time importance, using fixed rules.
 - **Diversity-aware ordering** with MMR enabled on hybrid results by default.
 - **Trusted trigger recall** for bounded pre-reply context without a recall model.
 - **CJK support** via trigram tokenization for Chinese, Japanese, and Korean.
@@ -63,7 +63,7 @@ The builtin engine is the right choice for most users:
 The builtin engine can index directories outside the workspace with
 `memory.search.extraPaths`. It uses bounded lexical query expansion to improve
 conversational recall, but it does not provide a learned or model-based relevance
-reranking stage. Its MMR pass is deterministic and local.
+reranking stage. Its MMR pass uses fixed rules and runs locally.
 
 Consider [Honcho](/concepts/memory-honcho) if you want cross-session memory
 with automatic user modeling.
@@ -178,8 +178,27 @@ When the index identity reports an OpenClaw chunking-implementation change,
 a normal or CLI search rebuilds it before returning results. The rebuild uses
 the agent's current embedding settings; status inspection remains read-only.
 
-Search-triggered maintenance applies pending memory and session changes
-incrementally while searches remain available. A failed full rebuild retains
+Search-triggered maintenance applies pending memory-file changes incrementally
+while searches remain available. Session transcript indexing waits until the
+agent has had no transcript changes or running turns for 30 seconds. While the
+agent is active, pending changes keep their original age. After about five minutes,
+indexing starts in the next gap between turns without waiting for another quiet
+period. It never starts during a running turn. One pass covers the agent's pending
+sessions, sharing transcript preparation, embedding-cache reads, and bounded
+publication transactions. If a turn starts during a pass, indexing finishes its
+current bounded group and resumes after the next quiet period.
+
+Failed session passes, including handled embedding-provider fallback failures,
+retain their pending work and retry after 1, 5, and 15 minutes, subject to the same
+idle gate. The last automatic retry also waits for any full-rebuild cooldown to
+end. After those automatic retries, another transcript change or turn activity
+can start a new retry series. A running turn can extend either delay.
+
+New session content becomes searchable after that delay. The current turn already
+has its own content in context; `memory_search` does not force a transcript flush.
+Graceful shutdown does not flush queued indexing. On the next startup, incremental
+catch-up resumes from each source's indexed sequence, including rewrites and
+compaction. A failed full rebuild retains
 its full-retry state; ordinary dirty content does not itself force a rebuild.
 Growing session transcripts retain unchanged indexed chunks and embed only new
 or changed chunks, even when the embedding cache is disabled. An explicit full
@@ -193,6 +212,11 @@ failures double that delay up to 30 minutes; a successful rebuild resets it.
 Searches keep reading the published index, and targeted session updates can
 still publish when its identity is valid. Explicit CLI repair bypasses the
 process-local cooldown.
+
+Optional embedding-provider failures also share their 30-second recovery cooldown
+with search-triggered maintenance. Searches retain keyword recall, and existing
+semantic indexes remain intact. An already keyword-only index can still accept
+file updates during the cooldown; semantic indexing resumes after recovery.
 
 When native file watching is unavailable, Memory Core uses background polling
 with a 30-second default interval, including when polling is explicitly enabled
@@ -282,9 +306,9 @@ startup. After backing them up, you can remove old indexes, model downloads,
 collection metadata, and session exports manually if you have confirmed that
 no standalone QMD installation uses them.
 
-Canonical memory remains in `MEMORY.md`, `USER.md`, `memory/*.md`, and the
+The original memory remains in `MEMORY.md`, `USER.md`, `memory/*.md`, and the
 migrated extra paths. Builtin indexes those same Markdown sources on its next
-sync. The cutover is lossless by construction: no canonical memory content is
+sync. The cutover is lossless by construction: no original memory content is
 copied or deleted; only derived state is rebuilt.
 
 Builtin now covers most QMD use cases with:
@@ -341,7 +365,7 @@ openclaw memory status --agent <agent-id> --deep
 ```
 
 <Warning>
-The index shares `openclaw-agent.sqlite` with canonical sessions, transcripts,
+The index shares `openclaw-agent.sqlite` with stored sessions, transcripts,
 and other durable agent state. Never delete that database or its `-wal`, `-shm`,
 or `-journal` sidecars to reset memory. Memory indexing cannot reconstruct
 conversation history lost this way.
@@ -395,7 +419,7 @@ before/after database and WAL sizes. Compaction needs temporary disk space; on a
 full volume, free space or move a verified backup to a volume with sufficient
 capacity before attempting it. Rebuilding can call the embedding provider and
 incur cost. Restart the Gateway through its deployment owner after verification.
-Neither reset nor compaction removes canonical sessions or changes retention.
+Neither reset nor compaction removes stored sessions or changes retention.
 
 ## Configuration
 

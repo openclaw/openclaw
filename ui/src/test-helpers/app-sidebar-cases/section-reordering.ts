@@ -10,7 +10,7 @@ import {
 import { createDataTransferStub } from "../drag-data.ts";
 import { gatewayHelloForMethods } from "../gateway-methods.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 function dispatchDragEvent(
   target: Element,

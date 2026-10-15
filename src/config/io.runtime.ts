@@ -1,9 +1,6 @@
 import fs from "node:fs";
-import {
-  readDeferredPluginMigrations,
-  readDeferredPluginMigrationsAsync,
-  type DeferredPluginMigration,
-} from "../infra/deferred-plugin-migrations.js";
+import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.contract.js";
+import { withLeasePinnedDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { loadDotEnvAsync } from "../infra/dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
@@ -15,6 +12,7 @@ import {
 } from "./config-env-vars.js";
 import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
+import { getDeferredPluginMigrationConfigFacts } from "./deferred-plugin-migration-config.js";
 import { resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import { createConfigIO } from "./io.factory.js";
@@ -100,6 +98,7 @@ export function registerConfigWriteListener(
   };
 }
 
+/** @deprecated Use the prepared runtime snapshot or await captureRuntimeConfigAsyncReader()(). */
 export function loadConfig(options?: {
   skipPluginValidation?: boolean;
   pin?: boolean;
@@ -113,9 +112,7 @@ export function loadConfig(options?: {
   return options?.pin === false ? loadFresh() : loadPinnedRuntimeConfig(loadFresh);
 }
 
-export function getRuntimeConfig(options?: Parameters<typeof loadConfig>[0]): OpenClawConfig {
-  return loadConfig(options);
-}
+export { readRuntimeConfig as getRuntimeConfig } from "./runtime-snapshot.js";
 
 type RuntimeConfigAsyncReader<T> = (() => Promise<T>) & { assertCurrent: () => void };
 
@@ -123,13 +120,15 @@ type RuntimeConfigAsyncReader<T> = (() => Promise<T>) & { assertCurrent: () => v
 export function captureRuntimeConfigAsyncReader(options: {
   assertCurrent?: () => void;
   capture: true;
+  skipPluginValidation?: boolean;
 }): RuntimeConfigAsyncReader<CapturedRuntimeConfigRead>;
 export function captureRuntimeConfigAsyncReader(options?: {
   assertCurrent?: () => void;
   capture?: false;
+  skipPluginValidation?: boolean;
 }): RuntimeConfigAsyncReader<OpenClawConfig>;
 export function captureRuntimeConfigAsyncReader(
-  options: { assertCurrent?: () => void; capture?: boolean } = {},
+  options: { assertCurrent?: () => void; capture?: boolean; skipPluginValidation?: boolean } = {},
 ): RuntimeConfigAsyncReader<OpenClawConfig | CapturedRuntimeConfigRead> {
   const sourceEnv = process.env;
   const cwd = tryProcessCwd();
@@ -138,7 +137,10 @@ export function captureRuntimeConfigAsyncReader(
   let selectors = readSelectors();
   const stage = prepareConfigRuntimeEnvLoad({ previousConfig: {} });
   // Legacy cold IO chooses the root config path before dotenv changes the environment.
-  const io = createConfigIO({ env: stage.env });
+  const io = createConfigIO({
+    env: stage.env,
+    ...(options.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
+  });
   const assertCurrent = () => {
     options.assertCurrent?.();
     if (
@@ -257,34 +259,42 @@ export function readCurrentConfigForResolution(
 export function readCurrentConfigForPolicyCheck(params: {
   configPath: string;
   env: NodeJS.ProcessEnv;
-}): OpenClawConfig {
-  return readCurrentConfigForPolicyCheckWithMigrations({
-    ...params,
-    deferredPluginMigrations: readDeferredPluginMigrations({ env: params.env }),
-  });
-}
-
-/** Reread current disk policy without querying migration state; the caller owns row freshness. */
-export function readCurrentConfigForPolicyCheckWithMigrations(params: {
-  configPath: string;
-  env: NodeJS.ProcessEnv;
-  deferredPluginMigrations: readonly DeferredPluginMigration[];
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
 }): OpenClawConfig {
   return createCurrentConfigReader(params).loadConfig({ skipSuspiciousRecovery: true });
 }
 
-/** Await fresh migration facts for this read; retained synchronous guards use their own boundary. */
+/** Keep the Claw Add policy reader bound to its admitted plugin-state lease. */
+export async function withCurrentConfigPolicyReader<T>(
+  params: {
+    configPath: string;
+    env: NodeJS.ProcessEnv;
+    lease: { databasePath: string; assertOwned: () => void };
+  },
+  run: (getCurrentConfig: () => OpenClawConfig) => Promise<T>,
+): Promise<T> {
+  return await withLeasePinnedDeferredPluginMigrations(
+    params,
+    async (deferredPluginMigrations, assertCurrent) =>
+      run(() => {
+        assertCurrent();
+        const config = readCurrentConfigForPolicyCheck({ ...params, deferredPluginMigrations });
+        assertCurrent();
+        return config;
+      }),
+  );
+}
+
+/** Read canonical disk policy asynchronously without inspecting migration state. */
 export async function readCurrentConfigForPolicyCheckAsync(params: {
   configPath: string;
   env: NodeJS.ProcessEnv;
 }): Promise<OpenClawConfig> {
   const configPath = params.configPath;
   const env = cloneEnvWithPlatformSemantics(params.env);
-  const deferredPluginMigrations = await readDeferredPluginMigrationsAsync({ env });
   return await createCurrentConfigReader({
     configPath,
     env,
-    deferredPluginMigrations,
   }).loadConfigAsync({ skipSuspiciousRecovery: true });
 }
 
@@ -339,6 +349,7 @@ export async function readConfigFileSnapshotWithPluginMetadata(
   options?: Pick<
     ConfigSnapshotMetadataReadOptions,
     | "allowCurrentPluginMetadata"
+    | "completePluginMetadata"
     | "deferredPluginMigrations"
     | "allowSuspiciousRecovery"
     | "isolateEnv"
@@ -358,6 +369,7 @@ export async function readConfigFileSnapshotWithPluginMetadata(
     lowerPrecedenceEnv: options?.lowerPrecedenceEnv,
     pluginValidation: options?.skipPluginValidation ? "skip" : undefined,
   }).readConfigFileSnapshotWithPluginMetadata({
+    completePluginMetadata: options?.completePluginMetadata,
     prepareValidation: options?.prepareValidation,
     allowCurrentPluginMetadata: options?.allowCurrentPluginMetadata,
     recoverSuspicious: options?.recoverSuspicious === true,
@@ -402,10 +414,18 @@ export async function readConfigFileSnapshotForRuntimeTransaction(
 export async function readConfigFileSnapshotForWrite(options?: {
   skipPluginValidation?: boolean;
   observe?: boolean;
+  deferredPluginMigrations?: ConfigWriteOptions["deferredPluginMigrations"];
+  preservedLegacyRootKeys?: readonly string[];
 }): Promise<ReadConfigFileSnapshotForWriteResult> {
   const readOptions = {
     ...(options?.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
     ...(options?.observe === false ? { observe: false } : {}),
+    ...(options?.deferredPluginMigrations !== undefined
+      ? { deferredPluginMigrations: options.deferredPluginMigrations }
+      : {}),
+    ...(options?.preservedLegacyRootKeys
+      ? { preservedLegacyRootKeys: options.preservedLegacyRootKeys }
+      : {}),
   };
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
@@ -434,7 +454,11 @@ export async function writeConfigFile(
   options: ConfigWriteOptions = {},
 ): Promise<ConfigWriteResult> {
   options.assertConfigPathForWrite?.();
+  const deferredPluginMigrations =
+    options.deferredPluginMigrations ??
+    getDeferredPluginMigrationConfigFacts(options.baseSnapshot?.sourceConfig);
   const ioOptions = {
+    ...(deferredPluginMigrations !== undefined ? { deferredPluginMigrations } : {}),
     ...(options.ownedConfigPathForWrite ? { configPath: options.ownedConfigPathForWrite } : {}),
     ...(options.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
     ...(options.observe === false ? { observe: false } : {}),

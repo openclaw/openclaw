@@ -1,6 +1,5 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
@@ -10,7 +9,9 @@ import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runti
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { SessionDetailsController } from "../../components/session-details-controller.ts";
+import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
+import { moveSessionFromMenu } from "../../components/session-placement-action.ts";
 import "../../components/session-menu.ts";
 import {
   formatBatchSessionRemovalError,
@@ -21,6 +22,7 @@ import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-sessio
 import { watchAgentScope } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccessRequest,
@@ -45,23 +47,21 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import {
-  areUiSessionKeysEquivalent,
-  buildAgentMainSessionKey,
-  parseAgentSessionKey,
   isPinnableUiSessionRow,
   isSubagentSessionKey,
   resolveUiConfiguredMainKey,
+  resolveUiSessionRowAgentId,
   scopedSessionArtifactKey,
 } from "../../lib/sessions/session-key.ts";
 import { requestSessionInvolvement } from "../../lib/sessions/session-requests.ts";
 import { searchVisibleSessionTranscripts } from "../../lib/sessions/transcript-search.ts";
 import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
-import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { ControllerHost, SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { ensureSessionAgentIdentities, sessionAgentIdentityById } from "./agent-scope.ts";
 import { SessionsPageArchive } from "./archive-actions.ts";
 import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-groups.ts";
+import { resolveSessionDeleteOutcome } from "./delete-outcome.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
 import { SessionsPageDialog } from "./page-dialog.ts";
 import { loadStoredGroupBy, saveStoredGroupBy } from "./page-state.ts";
@@ -69,6 +69,7 @@ import type { SessionsPageRequestScope } from "./request-scope.ts";
 import type { SessionsRouteData } from "./route.ts";
 import {
   reconcileSelectedSessions,
+  settleSelectedSession,
   updateSelectedSessions,
   type SessionDeleteRow,
 } from "./selection.ts";
@@ -117,67 +118,42 @@ type SessionsPageState = Pick<
   sessionMenuWork: SessionsPageMenuProps["work"];
 };
 
-export class SessionsPageController implements ReactiveControllerHost {
-  private readonly controllers = new Set<ReactiveController>();
-  private readonly listeners = new Set<() => void>();
-  private pendingUpdate: Promise<boolean> | null = null;
-  private connected = false;
+export class SessionsPageController extends ControllerHost {
   context?: ApplicationContext;
   routeData?: SessionsRouteData;
 
-  addController(controller: ReactiveController) {
-    this.controllers.add(controller);
-  }
-  removeController(controller: ReactiveController) {
-    this.controllers.delete(controller);
-  }
-  get isConnected() {
-    return this.connected;
-  }
-  get updateComplete() {
-    return this.pendingUpdate ?? Promise.resolve(true);
-  }
-  subscribe = (listener: () => void) => {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  };
-  // Existing controllers invalidate this owner through their host contract.
-  requestUpdate = this.invalidate.bind(this);
-
-  private invalidate() {
-    if (this.pendingUpdate || !this.connected) {
-      return;
-    }
-    this.pendingUpdate = Promise.resolve().then(() => {
-      this.pendingUpdate = null;
-      if (!this.connected) {
-        return false;
-      }
-      for (const controller of this.controllers) {
-        controller.hostUpdate?.();
-      }
-      this.synchronize();
-      for (const listener of this.listeners) {
-        listener();
-      }
-      return true;
+  constructor() {
+    super();
+    new SubscriptionsController(this)
+      .watchStore(() => this.context?.agentIdentity)
+      .watchStore(() => this.context?.navigation)
+      .watchStore(() => this.context?.runtimeConfig)
+      .watchStore(() => this.context?.plugins)
+      .watch(
+        () => this.context?.agentSelection,
+        (selection) => this.observeAgentScope(selection),
+      );
+    this.addController({
+      hostUpdate: () => {
+        this.gatewayLifecycle.refresh();
+        this.synchronize();
+      },
     });
   }
-  connect(context: ApplicationContext) {
-    this.context = context;
-    if (!this.connected) {
-      this.connected = true;
-      for (const controller of this.controllers) {
-        controller.hostConnected?.();
-      }
+
+  override connect(context?: ApplicationContext) {
+    this.context = context ?? this.context;
+    if (!this.isConnected) {
+      super.connect();
+      this.gatewayLifecycle.connect();
     }
     this.applyRouteData();
-    this.invalidate();
+    this.requestUpdate();
   }
   setContext(context: ApplicationContext) {
     this.context = context;
     this.applyRouteData();
-    this.invalidate();
+    this.requestUpdate();
   }
   setRouteData(routeData?: SessionsRouteData) {
     if (this.routeData === routeData) {
@@ -185,7 +161,7 @@ export class SessionsPageController implements ReactiveControllerHost {
     }
     this.routeData = routeData;
     this.applyRouteData();
-    this.invalidate();
+    this.requestUpdate();
   }
 
   // Presentation writes stay synchronous; Solid observes published revisions.
@@ -218,7 +194,7 @@ export class SessionsPageController implements ReactiveControllerHost {
         const changed = !Object.is(Reflect.get(target, key), value);
         Reflect.set(target, key, value);
         if (changed) {
-          this.invalidate();
+          this.requestUpdate();
         }
         return true;
       },
@@ -241,7 +217,7 @@ export class SessionsPageController implements ReactiveControllerHost {
   private listRequest?: Promise<void>;
   private searchTimer?: ReturnType<typeof setTimeout>;
   private appliedListResult: SessionsListResult | null | undefined;
-  private readonly details = new SessionDetailsController(this, {
+  private readonly details = new SessionDetailsController(() => this.requestUpdate(), {
     captureScope: () => this.captureRequestScope(),
     isCurrent: (scope) => this.isRequestScopeCurrent(scope),
     row: () => this.state.result?.sessions.find((row) => row.key === this.state.expandedSessionKey),
@@ -261,18 +237,10 @@ export class SessionsPageController implements ReactiveControllerHost {
       this.clearSearchTimer();
       this.bindSessionList();
     }
-    this.invalidate();
+    this.requestUpdate();
   });
-  private readonly subscriptions = new SubscriptionsController(this)
-    .watchStore(() => this.context?.agentIdentity)
-    .watchStore(() => this.context?.navigation)
-    .effect(
-      () => this.context?.agentSelection,
-      (agentSelection) => this.observeAgentScope(agentSelection),
-    )
-    .watchStore(() => this.context?.runtimeConfig)
-    .watchStore(() => this.context?.plugins);
-  private readonly gatewayLifecycle = new GatewayPageController(this, {
+
+  private readonly gatewayLifecycle = new GatewayPageBinding(() => this.requestUpdate(), {
     getGateway: () => this.context?.gateway,
     onIdentityChange: () => {
       const retiredResult = this.listBinding?.sessions.listSnapshot(this.listBinding.query).result;
@@ -336,20 +304,17 @@ export class SessionsPageController implements ReactiveControllerHost {
     this.details.synchronize();
   }
 
-  disconnect() {
-    this.connected = false;
+  override disconnect() {
+    super.disconnect();
     this.unsubscribeList?.();
     this.unsubscribeList = undefined;
     this.listBinding = undefined;
-    this.subscriptions.clear();
     this.invalidatePageWork();
     // Dialogs mount on document.body, so navigating away would otherwise leave
     // one over the destination, still submitting against this detached page.
     this.inputDialog.abort();
-    for (const controller of this.controllers) {
-      controller.hostDisconnected?.();
-    }
-    this.listeners.clear();
+    this.details.reset();
+    this.gatewayLifecycle.dispose();
   }
 
   private retirePageOperations() {
@@ -821,37 +786,19 @@ export class SessionsPageController implements ReactiveControllerHost {
         window.alert(formatPreservedWorktreesNotice(result.preservedWorktrees));
       }
       if (result.deleted.length > 0) {
-        const deleted = new Set(result.deleted);
-        const selected = new Map(this.state.selectedSessions);
-        for (const key of result.deleted) {
-          selected.delete(key);
-        }
-        this.state.selectedSessions = selected;
-        if (this.state.expandedSessionKey && deleted.has(this.state.expandedSessionKey)) {
-          this.state.expandedSessionKey = null;
-        }
-        if (this.deepLinkSessionKey && deleted.has(this.deepLinkSessionKey)) {
-          this.deepLinkSessionKey = null;
-        }
-        const deletedCurrent = result.deleted.find((key) =>
-          areUiSessionKeysEquivalent(key, scope.gateway.snapshot.sessionKey),
-        );
-        if (deletedCurrent) {
-          const agentId =
-            parseAgentSessionKey(deletedCurrent)?.agentId ??
-            scope.context.agentSelection.state.selectedId ??
-            "main";
+        const outcome = resolveSessionDeleteOutcome(scope.context, requests, result.deleted, {
+          selectedSessions: this.state.selectedSessions,
+          expandedSessionKey: this.state.expandedSessionKey,
+          deepLinkSessionKey: this.deepLinkSessionKey,
+        });
+        this.state.selectedSessions = outcome.selectedSessions;
+        this.state.expandedSessionKey = outcome.expandedSessionKey;
+        this.deepLinkSessionKey = outcome.deepLinkSessionKey;
+        if (outcome.selection) {
           selectApplicationSession({
             selection: scope.context.agentSelection,
             gateway: scope.gateway,
-            agentId,
-            sessionKey: buildAgentMainSessionKey({
-              agentId,
-              mainKey: resolveUiConfiguredMainKey({
-                agentsList: scope.context.agents.state.agentsList,
-                hello: scope.gateway.snapshot.hello,
-              }),
-            }),
+            ...outcome.selection,
           });
         }
       }
@@ -947,7 +894,10 @@ export class SessionsPageController implements ReactiveControllerHost {
       return;
     }
     await this.runSessionMutation(scope, async () => {
-      const agentId = parseAgentSessionKey(row.key)?.agentId;
+      const agentId = resolveUiSessionRowAgentId(
+        row,
+        this.sessionPathAgentId(row.key, scope.context),
+      );
       await requestCloudWorkerStop(
         scope.client,
         {
@@ -1188,9 +1138,8 @@ export class SessionsPageController implements ReactiveControllerHost {
       if (!this.isRequestScopeCurrent(scope)) {
         return "stale";
       }
-      const selected = new Map(this.state.selectedSessions);
-      selected.delete(key);
-      this.state.selectedSessions = selected;
+      const selected = this.state.selectedSessions;
+      this.state.selectedSessions = settleSelectedSession(selected, key, patched.entry.sessionId);
       return "completed";
     } catch (error) {
       return this.publishRequestError(scope, error);
@@ -1374,6 +1323,27 @@ export class SessionsPageController implements ReactiveControllerHost {
           case "reset-appearance":
             void this.patchSession(row.key, { icon: null, color: null });
             break;
+          case "move-session": {
+            const scope = this.captureRequestScope();
+            if (!scope) {
+              this.state.error = t("sessionsView.actionRequiresConnection");
+              break;
+            }
+            void moveSessionFromMenu({
+              context: scope.context,
+              row,
+              fallbackAgentId: this.sessionPathAgentId(row.key, scope.context),
+              isCurrent: () => this.isRequestScopeCurrent(scope),
+              currentRow: () =>
+                this.state.result?.sessions.find(
+                  (candidate) => candidate.key === row.key && candidate.sessionId === row.sessionId,
+                ),
+              publishError: (error) => {
+                this.publishRequestError(scope, error);
+              },
+            });
+            break;
+          }
           case "fork":
             void this.forkSession(row.key, row.hasActiveRun === true);
             break;
@@ -1384,9 +1354,6 @@ export class SessionsPageController implements ReactiveControllerHost {
             void this.patchSession(row.key, { sidebarRoot: true }, undefined, row.sessionId, {
               sessionScope: true,
             });
-            break;
-          case "archive-tree":
-            void this.archiveActions.archiveTree(row);
             break;
           case "move-to-group":
             this.assignCategory(row.key, action.category);
@@ -1400,7 +1367,8 @@ export class SessionsPageController implements ReactiveControllerHost {
                 sessionScope: true,
               });
             } else {
-              void this.archiveActions.archive(row);
+              const rows = this.state.result?.sessions ?? [];
+              void this.archiveActions.archive(row, hasSessionArchiveDescendants(row, rows));
             }
             break;
           case "assign-owner": {

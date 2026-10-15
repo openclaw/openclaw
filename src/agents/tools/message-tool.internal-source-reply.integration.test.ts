@@ -3,10 +3,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
 import { mirrorDeliveredReplyToTranscript } from "../../auto-reply/reply/dispatch-from-config.transcript.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -15,8 +19,10 @@ import {
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../../config/sessions/session-accessor.sqlite-read.js";
+import * as transcriptMessageAppend from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import * as sessionTranscript from "../../config/sessions/transcript.js";
+import { resolveAgentRestartRecoveryContext } from "../../gateway/agent-turn/agent-restart-recovery-context.js";
 import { persistInternalSourceReply } from "../../gateway/internal-source-reply-persistence.js";
 import {
   cleanupManagedOutgoingMediaRecords,
@@ -24,18 +30,14 @@ import {
   resolveManagedOutgoingMediaArtifactDownload,
 } from "../../gateway/managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
-import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
-import {
-  createSqliteWorkerTransferReceiver,
-  type SqliteWorkerTransferFrame,
-  type SqliteWorkerTransferHandle,
-} from "../../infra/sqlite-worker-transfer.js";
+import { buildRestartSafeChatTranscriptState } from "../../gateway/server-methods/chat-restart-recovery.js";
 import {
   onSessionTranscriptUpdate,
   type SessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
 import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-messaging-extraction.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
@@ -55,7 +57,7 @@ const INTERNAL_SOURCE_CATALOG = {
 function createCurrentSourceMessageTool(
   params: NonNullable<Parameters<typeof createMessageTool>[0]> = {},
 ) {
-  return createMessageTool({
+  const options: NonNullable<Parameters<typeof createMessageTool>[0]> = {
     config: { agents: { entries: { main: {} } } },
     preparedMessageToolCatalog: INTERNAL_SOURCE_CATALOG,
     currentChannelProvider: "webchat",
@@ -71,28 +73,115 @@ function createCurrentSourceMessageTool(
       hadUnresolvedTargets: false,
     }),
     ...params,
-  });
+  };
+  setRuntimeConfigSnapshot(options.config ?? {});
+  return createMessageTool(options);
 }
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
 
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
+
 describe("WebChat message tool internal source reply", () => {
+  it.each([
+    { sessionKey: "agent:main:dashboard:recovered-cli", delivers: true },
+    { sessionKey: "agent:main:webchat:dm:recovered-cli", delivers: true },
+    { sessionKey: "agent:main:telegram:direct:123", delivers: false },
+  ])(
+    "keeps targetless recovered CLI progress internal for $sessionKey",
+    async ({ sessionKey, delivers }) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "recovered-cli-source-" },
+        async (state) => {
+          const sessionId = "recovered-cli-session";
+          const runId = "recovery-run";
+          const storePath = path.join(
+            state.stateDir,
+            "agents",
+            "main",
+            "sessions",
+            "sessions.json",
+          );
+          const scope = { agentId: "main", sessionKey, sessionId, storePath };
+          const { sessionLifecyclePatch } = buildRestartSafeChatTranscriptState({
+            admission: { requestFingerprint: "cli-chat-request" },
+            clientRunId: "interrupted-cli-run",
+            startedAt: 1,
+            sourceIngress: "internal",
+          });
+          const entry = {
+            ...sessionLifecyclePatch,
+            sessionId,
+            updatedAt: 2,
+            restartRecoveryDeliveryRunId: runId,
+          };
+          await replaceSessionEntry(scope, entry);
+          const recovery = resolveAgentRestartRecoveryContext({
+            isRestartRecoveryResumeRun: true,
+            canUseInternalRuntimeHandoff: true,
+            expectedExistingSessionId: sessionId,
+            resolvedSessionId: sessionId,
+            resolvedSessionKey: sessionKey,
+            runId,
+            sessionEntry: entry,
+          });
+          expect(recovery?.pinnedWidgetAuthoring).toBeUndefined();
+          const tool = createCurrentSourceMessageTool({
+            agentSessionKey: sessionKey,
+            runSessionKey: sessionKey,
+            sessionId,
+            agentId: "main",
+            runId,
+            currentChannelProvider: recovery?.messageChannel,
+          });
+          const send = tool.execute("recovered-progress", {
+            action: "send",
+            message: "Still working after restart.",
+            final: false,
+          });
+          if (!delivers) {
+            await expect(send).rejects.toThrow("Action send requires a target.");
+            expect(await loadTranscriptEvents(scope)).toEqual([]);
+            return;
+          }
+          const result = await send;
+          expect(result.details).toMatchObject({
+            sourceReplySink: "internal-ui",
+            sourceReplyTranscriptOwner: true,
+          });
+          const assistants = (await loadTranscriptEvents(scope))
+            .map(readTranscriptEventMessage)
+            .filter((message) => message?.role === "assistant");
+          expect(assistants).toHaveLength(1);
+          expect(assistants[0]?.content).toEqual([
+            { type: "text", text: "Still working after restart." },
+          ]);
+        },
+      );
+    },
+  );
+
   it("refuses an internal-source transcript commit after its real cron admission closes", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "cron-source-commit-" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         const sessionKey = "agent:main:webchat:dm:cron-source-commit";
         const sessionId = "cron-source-commit-session";
         const storePath = path.join(state.stateDir, "agents", "main", "sessions", "sessions.json");
         const scope = { agentId: "main", sessionKey, sessionId, storePath };
+        const cfg = {
+          agents: { entries: { main: {} }, defaults: { workspace: state.workspaceDir } },
+          tools: { allow: ["message"] },
+        };
+        setRuntimeConfigSnapshot(cfg);
         await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
         await withCronMessageRun(
           {
-            cfg: {
-              agents: { entries: { main: {} }, defaults: { workspace: state.workspaceDir } },
-              tools: { allow: ["message"] },
-            },
+            cfg,
             storePath: state.statePath("cron", "internal-source.json"),
             sessionKey,
             sessionId,
@@ -100,65 +189,23 @@ describe("WebChat message tool internal source reply", () => {
           async (owner) => {
             const message = "must never become a committed assistant message";
             let commitRequests = 0;
-            let granted = 0;
-            const create = workerAdmission.createSqliteWorkerOperationAdmission;
+            const append = transcriptMessageAppend.appendTranscriptMessageInTransaction;
             const admission = vi
-              .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-              .mockImplementation((admit, attachment) => {
-                let receiver: ReturnType<typeof createSqliteWorkerTransferReceiver> | undefined;
-                let transferId: number | undefined;
-                let assistantTurn = false;
-                return create((request, grant) => {
-                  const facts =
-                    isRecord(request.facts) && request.facts.kind === "session-entry-current"
-                      ? request.facts.domainFacts
-                      : request.facts;
-                  const publication = isRecord(facts) ? facts.publication : undefined;
-                  if (isRecord(publication)) {
-                    if (publication.kind === "session-entry-patch-transfer") {
-                      // SAFETY: The real session-entry worker emits this typed transfer handle.
-                      const handle = publication.handle as SqliteWorkerTransferHandle;
-                      transferId = handle.id;
-                      assistantTurn = false;
-                      receiver = createSqliteWorkerTransferReceiver(handle, (record) => {
-                        if (
-                          record.kind === "patch" &&
-                          isRecord(record.value) &&
-                          record.value.kind === "session-turn" &&
-                          isRecord(record.value.result) &&
-                          Array.isArray(record.value.result.appendedMessages)
-                        ) {
-                          assistantTurn = record.value.result.appendedMessages.some(
-                            (appended: unknown) =>
-                              isRecord(appended) &&
-                              isRecord(appended.message) &&
-                              appended.message.role === "assistant" &&
-                              readAssistantDisplayContent(appended.message).some(
-                                (block) => block.type === "text" && block.text === message,
-                              ),
-                          );
-                        }
-                      });
-                    } else if (publication.kind === "session-entry-patch-frame") {
-                      // SAFETY: This frame belongs to the intercepted worker transfer above.
-                      receiver?.accept(publication.frame as SqliteWorkerTransferFrame);
-                    } else if (
-                      request.stage === "commit" &&
-                      publication.kind === "session-entry-patch-committed" &&
-                      publication.transferId === transferId &&
-                      assistantTurn
-                    ) {
-                      commitRequests += 1;
-                      owner.closeAdmission();
-                      return admit(request, () => {
-                        const accepted = grant();
-                        granted += Number(accepted);
-                        return accepted;
-                      });
-                    }
-                  }
-                  return admit(request, grant);
-                }, attachment);
+              .spyOn(transcriptMessageAppend, "appendTranscriptMessageInTransaction")
+              .mockImplementation((database, resolved, options, preparedMessage, projection) => {
+                if (
+                  resolved.sessionKey === sessionKey &&
+                  resolved.sessionId === sessionId &&
+                  isRecord(options.message) &&
+                  options.message.role === "assistant" &&
+                  readAssistantDisplayContent(options.message).some(
+                    (block) => block.type === "text" && block.text === message,
+                  )
+                ) {
+                  commitRequests += 1;
+                  owner.closeAdmission();
+                }
+                return append(database, resolved, options, preparedMessage, projection);
               });
             try {
               const tool = owner.createTool({
@@ -175,9 +222,8 @@ describe("WebChat message tool internal source reply", () => {
               const assistants = (await loadTranscriptEvents(scope)).filter(
                 (event) => readTranscriptEventMessage(event)?.role === "assistant",
               );
-              expect({ commitRequests, granted, assistants }).toEqual({
+              expect({ commitRequests, assistants }).toEqual({
                 commitRequests: 1,
-                granted: 0,
                 assistants: [],
               });
               expect(outcome).toHaveProperty("error");
@@ -194,18 +240,21 @@ describe("WebChat message tool internal source reply", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "cron-source-remote-media-" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         const sessionKey = "agent:main:webchat:dm:cron-source-media";
         const sessionId = "cron-source-media-session";
         const storePath = path.join(state.stateDir, "agents", "main", "sessions", "sessions.json");
         const scope = { agentId: "main", sessionKey, sessionId, storePath };
+        const cfg = {
+          agents: { entries: { main: {} }, defaults: { workspace: state.workspaceDir } },
+          tools: { allow: ["message"] },
+        };
+        setRuntimeConfigSnapshot(cfg);
         await fs.mkdir(state.workspaceDir, { recursive: true });
         await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
         await withCronMessageRun(
           {
-            cfg: {
-              agents: { entries: { main: {} }, defaults: { workspace: state.workspaceDir } },
-              tools: { allow: ["message"] },
-            },
+            cfg,
             storePath: state.statePath("cron", "internal-source-media.json"),
             sessionKey,
             sessionId,
@@ -273,68 +322,80 @@ describe("WebChat message tool internal source reply", () => {
     );
   });
 
-  it("projects a real targetless send and preserves the automatic final reply", async () => {
-    const tool = createCurrentSourceMessageTool();
+  it.each([true, false])(
+    "projects a targetless send and preserves automatic final text only for progress (final=%s)",
+    async (final) => {
+      const tool = createCurrentSourceMessageTool();
 
-    const toolResult = await tool.execute("message-call", {
-      action: "send",
-      message: "Visible progress from the message tool.",
-    });
-    expect(toolResult.details).toMatchObject({
-      channel: "webchat",
-      target: "current-run",
-      sourceReplyDeliveryMode: "message_tool_only",
-      sourceReplySink: "internal-ui",
-      sourceReply: { text: "Visible progress from the message tool." },
-    });
-    expect(toolResult.content).toEqual([
-      {
-        type: "text",
-        text: "Sent visible reply to the current source conversation via internal-ui.",
-      },
-    ]);
+      const toolResult = await tool.execute("message-call", {
+        action: "send",
+        message: "Visible progress from the message tool.",
+        final,
+      });
+      expect(toolResult.details).toMatchObject({
+        channel: "webchat",
+        target: "current-run",
+        sourceReplyDeliveryMode: "message_tool_only",
+        sourceReplySink: "internal-ui",
+        sourceReply: { text: "Visible progress from the message tool." },
+      });
+      expect(toolResult.content).toEqual([
+        {
+          type: "text",
+          text: "Sent visible reply to the current source conversation via internal-ui.",
+        },
+      ]);
 
-    const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
-    expect(sourceReply).toMatchObject({ text: "Visible progress from the message tool." });
+      const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
+      expect(sourceReply).toMatchObject({ text: "Visible progress from the message tool." });
+      const delivery = readEmbeddedMessageDeliveryFact(
+        asOptionalRecord(toolResult.details)?.messageDelivery,
+      );
+      expect(delivery?.sourceReplyDelivered === true).toBe(final);
 
-    const embeddedPayloads = buildEmbeddedRunPayloads({
-      assistantTexts: ["Visible automatic final reply."],
-      lastAssistant: undefined,
-      currentAssistant: undefined,
-      sessionKey: "agent:main:webchat:dm:dashboard",
-      sourceReplyDeliveryMode: "automatic",
-      messagingToolSourceReplyPayloads: sourceReply ? [sourceReply] : [],
-      runId: "webchat-run",
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      toolResultFormat: "plain",
-    });
-    const { replyPayloads: payloads } = await buildReplyPayloads({
-      payloads: embeddedPayloads,
-      isHeartbeat: false,
-      didLogHeartbeatStrip: false,
-      blockStreamingEnabled: false,
-      blockReplyPipeline: null,
-      replyToMode: "off",
-      messagingToolSentTexts: ["Visible progress from the message tool."],
-    });
-
-    expect(payloads.map((payload) => payload.text)).toEqual([
-      "Visible progress from the message tool.",
-      "Visible automatic final reply.",
-    ]);
-    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
-      deliverDespiteSourceReplySuppression: true,
-      sourceReplyTranscriptMirror: {
+      const embeddedPayloads = buildEmbeddedRunPayloads({
+        assistantTexts: ["Visible automatic final reply."],
+        lastAssistant: undefined,
+        currentAssistant: undefined,
         sessionKey: "agent:main:webchat:dm:dashboard",
-        text: "Visible progress from the message tool.",
-        idempotencyKey: "webchat-run:internal-source-reply:0",
-      },
-    });
-    expect(getReplyPayloadMetadata(payloads[1] as object)?.sourceReplyTranscriptMirror).toBe(
-      undefined,
-    );
-  });
+        sourceReplyDeliveryMode: "automatic",
+        didDeliverSourceReplyViaMessageTool: delivery?.sourceReplyDelivered,
+        messagingToolSourceReplyPayloads: sourceReply ? [sourceReply] : [],
+        runId: "webchat-run",
+        verboseLevel: "off",
+        reasoningLevel: "off",
+        toolResultFormat: "plain",
+      });
+      const { replyPayloads: payloads } = await buildReplyPayloads({
+        payloads: embeddedPayloads,
+        isHeartbeat: false,
+        didLogHeartbeatStrip: false,
+        blockStreamingEnabled: false,
+        blockReplyPipeline: null,
+        replyToMode: "off",
+        messagingToolSentTexts: ["Visible progress from the message tool."],
+      });
+
+      expect(payloads.map((payload) => payload.text)).toEqual(
+        final
+          ? ["Visible progress from the message tool."]
+          : ["Visible progress from the message tool.", "Visible automatic final reply."],
+      );
+      expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+        deliverDespiteSourceReplySuppression: true,
+        sourceReplyTranscriptMirror: {
+          sessionKey: "agent:main:webchat:dm:dashboard",
+          text: "Visible progress from the message tool.",
+          idempotencyKey: "webchat-run:internal-source-reply:0",
+        },
+      });
+      if (!final) {
+        expect(getReplyPayloadMetadata(payloads[1] as object)?.sourceReplyTranscriptMirror).toBe(
+          undefined,
+        );
+      }
+    },
+  );
 
   it("reports a route-less inter-session send as a transcript record, not a channel delivery", async () => {
     const tool = createCurrentSourceMessageTool({
@@ -368,6 +429,7 @@ describe("WebChat message tool internal source reply", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "message-tool-source-buffer-" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         await fs.mkdir(state.workspaceDir, { recursive: true });
         const tool = createCurrentSourceMessageTool({ workspaceDir: state.workspaceDir });
         const attachment = Buffer.from("<!doctype html><h1>Proof</h1>");
@@ -401,6 +463,7 @@ describe("WebChat message tool internal source reply", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "message-tool-source-error-" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         await fs.mkdir(state.workspaceDir, { recursive: true });
         const media = path.join(state.workspaceDir, "missing.txt");
         const tool = createCurrentSourceMessageTool({ workspaceDir: state.workspaceDir });
@@ -425,6 +488,7 @@ describe("WebChat message tool internal source reply", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "message-tool-source-remote-media-" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         await fs.mkdir(state.workspaceDir, { recursive: true });
         const remoteWorkspaceDir = state.path("remote-workspace");
         await fs.mkdir(remoteWorkspaceDir, { recursive: true });
@@ -488,6 +552,7 @@ describe("WebChat message tool internal source reply", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-internal-source-reply-" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         const { stateDir, workspaceDir } = state;
         const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
         const sessionKey = "agent:main:webchat:dm:restart-proof";
@@ -672,6 +737,7 @@ describe("WebChat message tool internal source reply", () => {
       await withOpenClawTestState(
         { layout: "state-only", prefix: "source-reply-append-outcome-" },
         async (state) => {
+          setRuntimeConfigSnapshot({});
           const sessionKey = "agent:main:webchat:dm:append-outcome";
           const sessionId = "append-outcome-session";
           const storePath = path.join(
@@ -682,6 +748,10 @@ describe("WebChat message tool internal source reply", () => {
             "sessions.json",
           );
           const scope = { agentId: "main", sessionKey, sessionId, storePath };
+          const cfg = {
+            agents: { entries: { main: { workspace: state.workspaceDir } } },
+          };
+          setRuntimeConfigSnapshot(cfg);
           const imagePath = path.join(state.workspaceDir, "proof.png");
           await fs.mkdir(state.workspaceDir, { recursive: true });
           await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
@@ -718,9 +788,7 @@ describe("WebChat message tool internal source reply", () => {
           try {
             const persist = () =>
               persistInternalSourceReply({
-                cfg: {
-                  agents: { entries: { main: { workspace: state.workspaceDir } } },
-                },
+                cfg,
                 sessionKey,
                 expectedSessionId: sessionId,
                 agentId: "main",

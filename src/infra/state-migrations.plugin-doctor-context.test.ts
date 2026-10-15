@@ -1,9 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
@@ -19,6 +22,7 @@ import {
   recordDeferredPluginMigrations,
 } from "./deferred-plugin-migrations.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import type { EngineConnection } from "./sql-connection.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import * as mutationAdmission from "./sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
@@ -27,6 +31,10 @@ import {
   runPluginDoctorStateMigrationPlans,
   runPostSessionPluginDoctorStateRepairs,
 } from "./state-migrations.plugin-doctor.js";
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
 
 describe("plugin doctor ingress authority", () => {
   it("rolls back a queued claim when the repair owner expires before native commit", async () => {
@@ -85,6 +93,8 @@ describe("plugin doctor session identity evidence", () => {
     await withOpenClawTestState(
       { label: "plugin-doctor-shared-id", applyEnv: false },
       async ({ env }) => {
+        const config: OpenClawConfig = {};
+        setRuntimeConfigSnapshot(config);
         for (const sessionKey of ["agent:main:main", "agent:main:other"]) {
           await replaceSessionEntry(
             { agentId: "main", env, sessionKey },
@@ -94,7 +104,7 @@ describe("plugin doctor session identity evidence", () => {
         const context = createPluginDoctorStateMigrationContext({
           pluginId: "codex",
           env,
-          config: {},
+          config,
         });
 
         await expect(
@@ -385,14 +395,14 @@ describe("Telegram registered SQLite offset repair", () => {
       expiresAt: 8_000_000_000_000,
     },
   ];
-  function seed(db: DatabaseSync) {
+  function seed(db: EngineConnection) {
     for (const row of originals) {
       db.prepare(
         "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
       ).run("telegram", namespace, row.key, row.raw, row.createdAt, row.expiresAt);
     }
   }
-  function rows(db: DatabaseSync) {
+  function rows(db: EngineConnection) {
     return db
       .prepare(
         "SELECT entry_key, value_json, created_at, expires_at FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? ORDER BY entry_key",

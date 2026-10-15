@@ -1,6 +1,7 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
+import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { parseSidebarEntry, serializeSidebarEntry, SIDEBAR_NAV_ROUTES } from "../app-navigation.ts";
@@ -8,6 +9,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import { resolveSessionChannelPresentation } from "../lib/session-channel.ts";
 import {
+  isSessionTitlePending,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
   resolveSessionWorkContext,
@@ -37,7 +39,7 @@ import {
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
 import { pluginTabKey } from "../pages/plugin/route.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
-import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
+import { sidebarPluginTabs } from "./app-sidebar-nav-menus.tsx";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
   type SidebarRecentSession,
@@ -187,7 +189,8 @@ export function buildSidebarSessionNavigationState(input: {
       agentId: resolveUiSessionRowAgentId(row, defaultAgentId),
       sessionId: row.sessionId,
       displayName: row.displayName,
-      incognito: row.incognito === true,
+      titlePending: isSessionTitlePending(row.key, row),
+      incognito: row.incognito === true || isIncognitoSessionKey(row.key),
       createdActor: row.createdActor,
       owner: row.owner,
       participants: row.participants,
@@ -203,6 +206,9 @@ export function buildSidebarSessionNavigationState(input: {
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
       hasActiveRun: row.archived !== true && isSessionRunActive(row),
+      isRunVisuallyActive:
+        row.archived !== true &&
+        (context ? context.sessions.isRunVisuallyActive(row) : isSessionRunActive(row)),
       gatewayHasActiveRun: row.hasActiveRun,
       hasActiveSubagentRun: row.hasActiveSubagentRun,
       activeRunIds: row.archived === true ? undefined : row.activeRunIds,
@@ -423,22 +429,13 @@ export function resolveActiveSidebarAgent(input: {
 
 export function resolveLatestSidebarAgentSession(input: {
   agentId: string;
-  sessionData: {
-    sessionsAgentId: string | null;
-    sessionsResult: SessionsListResult | null;
-    sessionResultsByAgent: Readonly<Record<string, SessionsListResult>>;
-  };
+  result: SessionsListResult | null;
   context: ApplicationContext | undefined;
 }): SessionRow | null {
-  const { sessionData } = input;
   const normalized = normalizeAgentId(input.agentId);
-  const rows =
-    normalized === normalizeAgentId(sessionData.sessionsAgentId ?? "")
-      ? (sessionData.sessionsResult?.sessions ?? [])
-      : (sessionData.sessionResultsByAgent[normalized]?.sessions ?? []);
   // Unprefixed keys belong to the system default agent. Keeping them for
   // another agent would resume the wrong conversation with the raw key.
-  const visible = filterVisibleSessionRows(rows, {
+  const visible = filterVisibleSessionRows(input.result?.sessions ?? [], {
     agentId: normalized,
     defaultAgentId: resolveUiDefaultAgentId({
       agentsList: input.context?.agents.state.agentsList,

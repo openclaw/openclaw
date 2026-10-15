@@ -42,6 +42,22 @@ function configWithPath(path: string, leaf: unknown = 1): Record<string, unknown
 }
 
 describe("retired runtime config migrations", () => {
+  it.each<[string, unknown]>([
+    ["channels.discord", { voice: { realtime: { voice: null } } }],
+    [
+      "channels.discord",
+      { accounts: { work: { voice: { realtime: { voice: false } } }, malformed: 42 } },
+    ],
+    ["tools.media", { models: [null, { deepgram: false }] }],
+    ["tools.media", { audio: { deepgram: null } }],
+    ["tools.media", { video: { models: [42, { deepgram: null }] } }],
+  ])("reports malformed-but-present legacy media settings in %s: %j", (path, value) => {
+    const raw = configWithPath(path, value);
+    const original = structuredClone(raw);
+    expect(findLegacyConfigIssues(raw)).toContainEqual(expect.objectContaining({ path }));
+    expect(raw).toEqual(original);
+  });
+
   it("detects and removes an explicitly false tool-error preference", () => {
     const raw = { messages: { suppressToolErrors: false, ackReaction: "👀" } };
     expect(findLegacyConfigIssues(raw)).toContainEqual(
@@ -208,24 +224,6 @@ describe("retired runtime config migrations", () => {
       });
     },
   );
-
-  it("removes iMessage coalescing at root and account scopes", () => {
-    const result = applyAll({
-      channels: {
-        imessage: {
-          coalesceSameSenderDms: true,
-          accounts: {
-            z: { coalesceSameSenderDms: true },
-            malformed: false,
-            a: { coalesceSameSenderDms: true },
-          },
-        },
-      },
-    });
-    expect(result.raw).toEqual({
-      channels: { imessage: { accounts: { z: {}, malformed: false, a: {} } } },
-    });
-  });
 
   it("migrates presentation, agent limits and the selected WhatsApp debounce", () => {
     const result = applyAll({
@@ -470,7 +468,6 @@ it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
   ["tools", { experimental: { planTool: false } }, { updatePlan: false }],
   ["tools", { updatePlan: true, experimental: { planTool: false } }, { updatePlan: true }],
   ["tools.exec", { mode: "deny", security: "full", ask: "off" }, { mode: "deny" }],
-  ["session", { idleMinutes: 45 }, { reset: { mode: "idle", idleMinutes: 45 } }],
   ["session.maintenance", { pruneDays: 7, pruneAfter: false }, { pruneAfter: false }],
   [
     "channels.discord",

@@ -11,7 +11,6 @@ import {
   identitiesOverlap,
 } from "../../identity.js";
 import { resolveWhatsAppInboundPolicy } from "../../inbound-policy.js";
-import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
@@ -115,7 +114,7 @@ function skipGroupMessageAndStoreHistory(
 export async function applyGroupGating(params: ApplyGroupGatingParams) {
   const sender = getSenderIdentity(params.msg);
   const self = getSelfIdentity(params.msg, params.authDir);
-  const admission = requireWhatsAppInboundAdmission(params.msg);
+  const admission = params.msg.admission;
   const conversationId = admission.conversation.id;
   const inboundPolicy = resolveWhatsAppInboundPolicy({
     cfg: params.cfg,
@@ -247,7 +246,7 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
         : formatAudioTranscriptForAgent(params.mentionText);
     return skipGroupMessageAndStoreHistory(
       params,
-      `Group message stored for context (no mention detected) in ${conversationId}: ${mentionMsg.payload.body}`,
+      `Group message stored for context (no mention detected) in ${conversationId}`,
       pendingHistoryBody,
     );
   }

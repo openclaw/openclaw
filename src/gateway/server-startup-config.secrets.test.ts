@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createInfoWarnErrorLogger as mockLogSecretsForTest } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles.js";
 import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
@@ -351,10 +352,8 @@ async function activateImportedStartupConfig(config: OpenClawConfig, env?: NodeJ
 }
 
 describe("gateway startup config secret preflight", () => {
-  const channelEnv = captureEnv(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"]);
   afterEach(() => {
     clearSecretsRuntimeSnapshotState();
-    channelEnv.restore();
   });
 
   it.each([true, false])(
@@ -1247,34 +1246,6 @@ describe("gateway startup config secret preflight", () => {
     expect(activateRuntimeSecretsSnapshot).not.toHaveBeenCalled();
   });
 
-  it("prunes channel refs from startup secret preflight when channels are skipped", async () => {
-    process.env.OPENCLAW_SKIP_CHANNELS = "1";
-    const prepareRuntimeSecretsSnapshot = vi.fn<PrepareRuntimeSecretsSnapshotForTest>(
-      async ({ config }) => preparedSnapshot(config),
-    );
-    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
-      prepareRuntimeSecretsSnapshot,
-    });
-    const config = gatewayTokenConfig(
-      asConfig({
-        channels: {
-          telegram: {
-            botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
-          },
-        },
-      }),
-    );
-
-    const result = await activateRuntimeSecrets(config, {
-      reason: "startup",
-      activate: false,
-    });
-    expect(typeof result.config.gateway).toBe("object");
-    const preflightInput = prepareRuntimeSecretsSnapshot.mock.calls[0]![0];
-    expect(preflightInput.config?.channels).toBeUndefined();
-    expect(preflightInput.loadAuthStore).toBe(loadAuthProfileStoreWithoutExternalProfilesAsync);
-  });
-
   it("honors startup auth overrides before secret preflight gating", async () => {
     const prepareRuntimeSecretsSnapshot = vi.fn<PrepareRuntimeSecretsSnapshotForTest>(
       async ({ config }) => preparedSnapshot(config),
@@ -1328,7 +1299,7 @@ describe("gateway startup config secret preflight", () => {
     );
   });
 
-  it("activates no-SecretRef startup config without importing the full secrets runtime", async () => {
+  it("activates no-SecretRef startup config without caller-thread SQL or the full secrets runtime", async () => {
     vi.resetModules();
     const agentDir = autoCleanupTempDirs.make("openclaw-startup-fast-path-");
     const isolatedEnv = installIsolatedStartupFastPathEnv();
@@ -1347,6 +1318,8 @@ describe("gateway startup config secret preflight", () => {
       activateRuntimeSecretsSnapshot,
       loadAuthStore: loadAuthProfileStoreWithoutExternalProfilesAsyncMock,
     });
+    let sql: ReturnType<typeof observeHostDataSql> | undefined;
+    let closeStateDatabase: (() => Promise<void>) | undefined;
 
     try {
       const {
@@ -1355,8 +1328,14 @@ describe("gateway startup config secret preflight", () => {
       } = await import("../secrets/runtime-state.js");
       const { getRuntimeConfigSnapshotRefreshHandler } =
         await import("../config/runtime-snapshot.js");
+      const { writeConfigMachineState } = await import("../state/config-machine-state-write.js");
+      closeStateDatabase = (await import("../state/openclaw-state-db.js"))
+        .closeOpenClawStateDatabaseAsync;
+      writeConfigMachineState("auth.sharedStore", { location: "legacy-main" });
+      sql = observeHostDataSql();
       const result = await activateImportedStartupConfig(startupConfig);
 
+      expect(sql.queries).toEqual([]);
       expect(runtimeImport).not.toHaveBeenCalled();
       expect(prepareRuntimeSecretsSnapshot).not.toHaveBeenCalled();
       expect(activateRuntimeSecretsSnapshot).not.toHaveBeenCalled();
@@ -1376,6 +1355,8 @@ describe("gateway startup config secret preflight", () => {
       expect(refreshInput.loadAuthStore).toBeUndefined();
       clearImportedSecretsRuntimeSnapshot();
     } finally {
+      sql?.restore();
+      await closeStateDatabase?.();
       isolatedEnv.cleanup();
       cleanupGatewayStartupSecretsRuntimeMock();
       vi.resetModules();

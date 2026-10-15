@@ -48,11 +48,20 @@ export type CliOutput = {
   /** Completed result boundaries, retained for independent delivery and retry. */
   textParts?: string[];
   rawText?: string;
+  /**
+   * Raw text of the model's final message when it differs from the cumulative
+   * `text` (earlier results or pre-tool narration); empty when the final message
+   * had no text. Never plugin-transformed.
+   */
+  rawFinalText?: string;
   sessionId?: string;
   /** Backend-owned assistant boundary that can safely anchor a later resumed fork. */
   resumeCheckpointId?: string;
   usage?: CliUsage;
-  /** Terminal cumulative turn usage for diagnostics; reply accounting keeps using `usage`. */
+  /**
+   * Terminal cumulative turn usage for persisted transcript accounting and turn diagnostics;
+   * live reply and context accounting keep using `usage`.
+   */
   diagnosticUsage?: CliUsage;
   toolSummary?: ToolSummaryTrace;
   errorText?: string;

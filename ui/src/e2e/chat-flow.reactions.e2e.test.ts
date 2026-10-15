@@ -83,7 +83,7 @@ suite.define(() => {
         .getByRole("button", { name: "More…", exact: true })
         .click();
       // A complete emoji applies on input, so the OS picker needs no extra keystroke.
-      await rowPicker.getByRole("textbox", { name: "Emoji", exact: true }).fill("🦞");
+      await rowPicker.getByRole("searchbox", { name: "Search emoji…", exact: true }).fill("🦞");
       expect(
         (await gateway.waitForRequest("session.reactions.set", { after: 1 })).params,
       ).toMatchObject({

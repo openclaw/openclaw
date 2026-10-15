@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, render } from "lit";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
@@ -30,7 +31,9 @@ import {
 } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { makeUiSettings } from "../../test-helpers/settings-node.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
@@ -52,6 +55,7 @@ import * as chatProgress from "./chat-progress.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import * as chatThread from "./chat-thread.ts";
+import { renderChat } from "./chat-view-render.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import {
   appendChatBubble,
@@ -79,10 +83,9 @@ import {
   getThinkingSliderValues,
   itemAt,
 } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.ts";
 import * as chatMessageConfirmation from "./components/chat-message-confirmation.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
-import { renderChatModelControls } from "./components/chat-model-controls.ts";
+import { renderChatModelControls } from "./components/chat-model-controls.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import {
   resetThreadPresentation,
@@ -93,7 +96,7 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import { renderWelcomeState } from "./components/chat-welcome.ts";
+import { ChatWelcome } from "./components/chat-welcome.tsx";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 import {
   workspaceConflictPathForDisplay,
@@ -496,7 +499,6 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
   );
   return {
     activeRunId: state.chatRunId,
-    activeRunSessionKey: state.chatRunId ? state.sessionKey : undefined,
     connected: state.connected,
     gatewayAvailable: Boolean(state.client),
     loading: state.chatLoading,
@@ -956,16 +958,18 @@ describe("chat history pagination", () => {
     expect(container.querySelector(".chat-history-sentinel")).toBeNull();
   });
 
-  it("loads older history from upward wheel and keyboard intent without a button", () => {
+  it("loads older history from upward wheel and keyboard intent across transcript updates", () => {
     const onHistoryIntent = vi.fn();
-    const container = renderChatView({
+    const props = {
+      messages: [{ role: "assistant", content: "Current history" }],
       historyPagination: {
         hasMore: true,
         loading: false,
         onShowEarlier: vi.fn(),
       },
       onHistoryIntent,
-    });
+    };
+    const container = renderChatView(props);
     const thread = requireElement(container, ".chat-thread", "chat thread");
     const sentinel = requireElement(container, ".chat-history-sentinel", "history sentinel");
 
@@ -973,6 +977,19 @@ describe("chat history pagination", () => {
     thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
     thread.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
     expect(onHistoryIntent).toHaveBeenCalledTimes(2);
+
+    renderChatInto(container, {
+      ...props,
+      messages: [...props.messages, { role: "assistant", content: "Updated history" }],
+    });
+    expect(container.querySelector(".chat-history-sentinel")).toBe(sentinel);
+    expect(thread.contains(sentinel)).toBe(true);
+    thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
+    expect(onHistoryIntent).toHaveBeenCalledTimes(3);
+
+    renderChatInto(container, { messages: props.messages, onHistoryIntent });
+    expect(container.querySelector(".chat-history-sentinel")).toBeNull();
+    expect(thread.contains(sentinel)).toBe(false);
   });
 });
 
@@ -3183,20 +3200,23 @@ describe("chat attachment picker", () => {
     }
   });
 
-  it("opens the scoped file input from the attachment menu", () => {
+  it("opens the scoped file input from the attachment menu", async () => {
     const container = renderChatView();
     const input = requireAttachmentInput(
       container,
       ".agent-chat__file-input",
       "attachment file input",
     );
-    const attachButton = getAttachmentMenuOption(container, t("chat.composer.attachFileOption"));
+    const attachButton = await getAttachmentMenuOption(
+      container,
+      t("chat.composer.attachFileOption"),
+    );
     const clickInput = vi.spyOn(input, "click").mockImplementation(() => undefined);
 
     expect(attachButton).toBeInstanceOf(HTMLElement);
     selectAttachmentMenuOption(attachButton);
 
-    expect(clickInput).toHaveBeenCalledTimes(1);
+    await waitForSolid(() => expect(clickInput).toHaveBeenCalledTimes(1));
   });
 
   it("opens the scoped camera dialog instead of a file picker and attaches its photo", async () => {
@@ -3206,12 +3226,12 @@ describe("chat attachment picker", () => {
     if (!camera) {
       throw new Error("Missing camera capture dialog");
     }
-    const cameraButton = getAttachmentMenuOption(container, t("chat.composer.takePhoto"));
+    const cameraButton = await getAttachmentMenuOption(container, t("chat.composer.takePhoto"));
     const show = vi.spyOn(camera, "show").mockImplementation(() => undefined);
     const fileClick = vi.spyOn(HTMLInputElement.prototype, "click");
     expect(container.querySelector(".agent-chat__camera-input")).not.toBeNull();
     selectAttachmentMenuOption(cameraButton);
-    expect(show).toHaveBeenCalledOnce();
+    await waitForSolid(() => expect(show).toHaveBeenCalledOnce());
     expect(fileClick).not.toHaveBeenCalled();
 
     const photo = new File(["photo"], "camera.jpg", { type: "image/jpeg" });
@@ -3269,14 +3289,15 @@ describe("chat welcome", () => {
     onModelSetup?: () => void;
   }) {
     const container = document.createElement("div");
-    render(
-      renderWelcomeState({
-        assistantName: "Val",
-        onDraftChange: () => undefined,
-        onSend: () => undefined,
-        ...params,
-      }),
-      container,
+    mountSolid(
+      () =>
+        createComponent(ChatWelcome, {
+          assistantName: "Val",
+          onDraftChange: () => undefined,
+          onSend: () => undefined,
+          ...params,
+        }),
+      { container },
     );
     return container;
   }
@@ -3393,6 +3414,39 @@ describe("chat welcome", () => {
 
     itemAt(rows, 0, "recent session row").click();
     expect(opened).toEqual(["agent:main:dashboard:newer"]);
+  });
+
+  it("retains the draft composer when secondary welcome content fades", () => {
+    const composer = document.createElement("textarea");
+    composer.value = "Unsubmitted draft";
+    let fade!: () => void;
+    const view = mountSolid(() => {
+      const [faded, setFaded] = createSignal(false);
+      fade = () => setFaded(true);
+      return createComponent(ChatWelcome, {
+        assistantName: "Val",
+        assistantAvatar: "🦉",
+        composer,
+        get fadeSecondaryContent() {
+          return faded();
+        },
+        onDraftChange: () => undefined,
+        onSend: () => undefined,
+      });
+    });
+    composer.focus();
+    composer.setSelectionRange(4, 8);
+
+    fade();
+    flush();
+
+    expect(view.container.querySelector("textarea")).toBe(composer);
+    expect(composer.value).toBe("Unsubmitted draft");
+    expect(document.activeElement).toBe(composer);
+    expect([composer.selectionStart, composer.selectionEnd]).toEqual([4, 8]);
+    expect(
+      view.container.querySelector(".agent-chat__welcome-secondary")?.getAttribute("aria-hidden"),
+    ).toBe("true");
   });
 
   it("renders welcome text from the active locale", async () => {
@@ -4088,7 +4142,9 @@ describe("chat model controls", () => {
     expect(onModelSelect).not.toHaveBeenCalled();
     expect(search!.value).toBe("claude");
 
-    const nestedPicker = document.createElement("wa-dropdown");
+    const nestedPicker = document.createElement("div");
+    nestedPicker.setAttribute("role", "menu");
+    nestedPicker.setAttribute("popover", "manual");
     const nestedTrigger = document.createElement("button");
     nestedPicker.append(nestedTrigger);
     details!.append(nestedPicker);

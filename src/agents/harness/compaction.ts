@@ -35,7 +35,7 @@ import {
   resolvePreparedRuntimeModelAuth,
 } from "../runtime-plan/resolve-auth.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
-import { resolveAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
+import { prepareAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import {
   assertCompactionSource,
@@ -509,7 +509,7 @@ async function maybeCompactAgentHarnessSessionInGeneration(
     });
     assertSourceCurrent();
     harness = resolved.harness;
-    const nativeToolPolicyRestricted = resolveAgentHarnessNativeToolPolicyRestricted(
+    const nativeToolPolicyRestricted = await prepareAgentHarnessNativeToolPolicyRestricted(
       {
         ...params,
         agentId: compactIdentity.agentId,
@@ -620,6 +620,10 @@ async function maybeCompactAgentHarnessSessionInGeneration(
         retainSourceAuthority,
       }),
     };
+    if (sourceAuthority.prepareDispatch) {
+      await sourceAuthority.prepareDispatch();
+    }
+    assertSourceCurrent();
     if (options.nativeCompactionRequest) {
       if (nativeCompaction) {
         // Registry ownership, not a public harness property or result, grants

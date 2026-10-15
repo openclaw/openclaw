@@ -4,6 +4,7 @@ import { createAssistantMessageEventStream, type Message } from "openclaw/plugin
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   loadTranscriptEventsSync,
   replaceSessionEntrySync,
@@ -32,6 +33,7 @@ import {
 import type { AgentSessionEvent } from "../../sessions/agent-session-types.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeZeroUsageSnapshot } from "../../usage.js";
+import { log } from "../logger.js";
 import { resolveEmbeddedAgentStream } from "../stream-resolution.js";
 
 // Register the shared module mocks before importing any runtime dependency.
@@ -53,6 +55,63 @@ beforeEach(() => {
 
 describe("runEmbeddedAttemptExecutionPhase", () => {
   it.each([
+    { changedSystem: false, level: "debug", cause: "unattributed:provider-prompt-unavailable" },
+    { changedSystem: true, level: "warn", cause: "tracked-input-change" },
+  ] as const)(
+    "logs cache-read drops at $level ($cause)",
+    async ({ changedSystem, level, cause }) => {
+      const fixture = await createFixture({ exerciseTerminalMerges: false });
+      const runtime = fixture.input.prepared.sessionRuntime;
+      Object.assign(fixture.input.attempt, {
+        model: testModel,
+        modelId: testModel.id,
+        provider: testModel.provider,
+        sessionId: randomUUID(),
+      });
+      Object.assign(runtime, {
+        anthropicPayloadLogger: undefined,
+        isOpenAIResponsesApi: false,
+        cacheTrace: undefined,
+      });
+      runtime.agentSession.activeSession.agent.streamFn = vi.fn(() =>
+        createAssistantResultStream(createAssistant(testModel, [{ type: "text", text: "Done." }])),
+      );
+      const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+      const debug = vi.spyOn(log, "debug").mockImplementation(() => {});
+      const { installEmbeddedAttemptStreamGuards } =
+        await vi.importActual<typeof import("./attempt-stream.js")>("./attempt-stream.js");
+      const guards = installEmbeddedAttemptStreamGuards(fixture.input, {
+        onRejectedProviderReplayRepaired: vi.fn(),
+        onIdleTimeout: vi.fn(),
+        diagnosticOwner: createDiagnosticEmbeddedRunOwner({
+          runId: fixture.input.attempt.runId,
+          sessionId: fixture.input.attempt.sessionId,
+        }),
+      });
+      for (const [index, cacheRead] of [8_000, 0].entries()) {
+        const context = {
+          systemPrompt:
+            changedSystem && index === 1 ? "changed instructions" : "stable instructions",
+          messages: [],
+        };
+        guards.onModelRequest(testModel, context);
+        const stream = await runtime.agentSession.activeSession.agent.streamFn(testModel, context);
+        await stream.result();
+        guards.onModelUsage({ input: 8_000, cacheRead });
+      }
+      expect(guards.getPromptCacheObservation()).toMatchObject({ broke: true, dropCause: cause });
+      expect(level === "debug" ? debug : warn).toHaveBeenCalledWith(
+        expect.stringContaining("[prompt-cache] cache read dropped 8000 -> 0 "),
+      );
+      expect(
+        (level === "debug" ? warn : debug).mock.calls.filter(([message]) =>
+          message.startsWith("[prompt-cache]"),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it.each([
     { kind: "cron root", key: "agent:main:cron:provider-fence", change: "current", guarded: true },
     { kind: "cron root", key: "agent:main:cron:provider-fence", change: "rotated", guarded: true },
     { kind: "cron root", key: "agent:main:cron:provider-fence", change: "reset", guarded: true },
@@ -66,6 +125,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     "scopes the provider generation guard after writer admission ($kind, $change)",
     async ({ key, change, guarded }) => {
       await withOpenClawTestState({ label: "cron-root-provider-fence" }, async (testState) => {
+        setRuntimeConfigSnapshot({});
         const fixture = await createFixture({ exerciseTerminalMerges: false });
         const target = {
           agentId: "main",

@@ -4,7 +4,7 @@ import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
 } from "./app/native-device-settings.ts";
-import type { IconName } from "./components/icons.ts";
+import type { IconName } from "./components/icon-data.ts";
 import { t } from "./i18n/index.ts";
 
 export type NavigationRouteId = RouteId;
@@ -363,23 +363,17 @@ export function titleForRoute(routeId: NavigationRouteId, translate = t): string
   return translate(titleKey);
 }
 
-/** Window/tab title, markers leftmost because tabs truncate from the right.
- * A disconnected Gateway replaces the approval count (a stale queue is not
- * actionable); titles already ending in the brand
- * ("Ask OpenClaw") skip the suffix so it never reads "… OpenClaw — OpenClaw". */
+/** Window/tab title, attention leftmost because tabs truncate from the right.
+ * Titles already ending in the brand skip the suffix to avoid duplication. */
 export function formatDocumentTitle(options: {
   context: string;
   attentionCount?: number;
   brandName?: string;
-  gatewayDisconnected?: boolean;
 }): string {
   const brandName = options.brandName ?? "OpenClaw";
   const base = options.context.endsWith(brandName)
     ? options.context
     : `${options.context} — ${brandName}`;
-  if (options.gatewayDisconnected) {
-    return `(${t("connection.disconnectedTitle")}) ${base}`;
-  }
   if (options.attentionCount && options.attentionCount > 0) {
     return `(${options.attentionCount}) ${base}`;
   }

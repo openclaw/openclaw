@@ -1,8 +1,5 @@
 import type { CallbackQuery, Message } from "grammy/types";
-import {
-  resolveApprovalOverGateway,
-  type ApprovalResolveResult,
-} from "openclaw/plugin-sdk/approval-gateway-runtime";
+import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -31,6 +28,7 @@ import {
   createTelegramSpooledReplayDeferredParticipant,
   getTelegramSpooledReplayDeferredParticipant,
   isTelegramSpooledReplayUpdate,
+  resolveTelegramUpdateReceivedAtSeconds,
 } from "./bot-processing-outcome.js";
 import { withResolvedTelegramForumFlag } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
@@ -145,7 +143,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
     receipt: Parameters<typeof buildTelegramLegacyApprovalTerminalText>[0],
   ) => await terminalizeApprovalMessage(buildTelegramLegacyApprovalTerminalText(receipt));
 
-  const resolveApproval = telegramDeps.resolveApproval ?? resolveApprovalOverGateway;
+  const resolveApproval = telegramDeps.resolveApproval;
 
   const resolveCanonicalApproval = async (
     approvalCallback: TelegramApprovalCallback,
@@ -263,7 +261,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
               throw new TelegramRetryableCallbackError(canonicalError);
             }
             logVerbose(
-              `telegram: canonical approval lookup failed after stale legacy callback ` +
+              `telegram: recorded approval lookup failed after stale legacy callback ` +
                 `${approvalCallback.approvalId}: ${String(canonicalError)}`,
             );
             await terminalizeLegacyApproval({
@@ -344,7 +342,7 @@ const isMultiToggleButton = (button: TelegramCallbackButton): boolean =>
 export async function handleTelegramInteractiveCallback(params: {
   accountId: RegisterTelegramHandlerParams["accountId"];
   callback: CallbackQuery;
-  ctx: Pick<TelegramContext, "me" | "getFile">;
+  ctx: Pick<TelegramContext, "me" | "getFile" | "update">;
   callbackMessage: Message;
   data: string;
   pluginCallbackData: string;
@@ -390,6 +388,7 @@ export async function handleTelegramInteractiveCallback(params: {
       base: withResolvedTelegramForumFlag(callbackMessage, isForum),
       from: callback.from,
       text,
+      date: resolveTelegramUpdateReceivedAtSeconds(ctx.update),
     });
     return { ctx: buildSyntheticContext(ctx, message), message };
   };

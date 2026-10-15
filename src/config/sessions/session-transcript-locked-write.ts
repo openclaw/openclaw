@@ -17,7 +17,7 @@ import {
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import { prepareTranscriptMessageAppendForWorker } from "./session-accessor.sqlite-transcript-message-append.js";
-import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
+import { sanitizeTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import type {
   LockedTranscriptMessageAppendOptions,
   SessionTranscriptWriteLockAccessorContext,
@@ -93,7 +93,7 @@ export async function withWorkerTranscriptWriteLock<T>(
   try {
     const owned = await prepareSessionSourceAuthority(assertOwned);
     if (owned.nativeSource) {
-      // Released synchronous authority callbacks reread the database; revisit at the next SDK major.
+      // Released synchronous callbacks remain through 2026-12-31, then retire in January 2027 stable.
       try {
         execution.assertCurrent();
         releaseExecution = false;
@@ -353,7 +353,7 @@ export async function withWorkerTranscriptWriteLock<T>(
               ),
             );
             if (freshGuard?.nativeSource || authority.nativeSource || (legacyPrepare && !prepare)) {
-              // Released synchronous authority callbacks reread the database; revisit at the next SDK major.
+              // Released synchronous callbacks remain through 2026-12-31, then retire in January 2027 stable.
               try {
                 return await native(
                   fenced,
@@ -385,7 +385,7 @@ export async function withWorkerTranscriptWriteLock<T>(
                   ? undefined
                   : isRecord(message)
                     ? prepareTranscriptMessageAppendForWorker({ message, config }).messageJson
-                    : JSON.stringify(redactTranscriptMessageForStorage(message, { config }));
+                    : JSON.stringify(sanitizeTranscriptMessageForStorage(message));
               const receipt = await mutate({
                 ...input,
                 kind: "message",

@@ -1,11 +1,11 @@
-import { For, Show, createEffect, onCleanup } from "solid-js";
+import { For, Show, createEffect, createMemo, onCleanup } from "solid-js";
 import { icons } from "../../../components/icons.ts";
 import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import {
   notifyPanelHostedTabsChanged,
   type PanelHostedTab,
 } from "../../../components/panel-hosted-tabs.ts";
-import { renderPanelTabStrip } from "../../../components/panel-tab-strip.ts";
+import { PanelTabStrip } from "../../../components/panel-tab-strip-solid.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -14,8 +14,9 @@ import {
   LitContent,
   type SolidBridgeElement,
 } from "../../../lit/solid-bridge.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { createSolidRenderLifecycle } from "../solid-render-lifecycle.ts";
-import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
+import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import type { SessionWorkspacePreview } from "./chat-session-workspace-types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
@@ -89,7 +90,7 @@ defineSolidBridge<Props, Methods>(
         icon:
           content.kind === "mcp-app"
             ? icons.puzzle
-            : renderAttachmentFileIcon({ filename: label, mode: "preview-with-favicon" }),
+            : solidContent(AttachmentFileIcon, { filename: label, mode: "preview-with-favicon" }),
         className: content.kind === "loading" ? "is-connecting" : undefined,
       }));
       return props.activeId === null && tabs.length
@@ -97,6 +98,17 @@ defineSolidBridge<Props, Methods>(
         : tabs;
     };
     const activeHostedTabId = () => props.activeId ?? (props.previews.length ? "browse" : null);
+    const tabStripTabs = createMemo(() =>
+      hostedTabs().map((tab) => ({
+        id: tab.id,
+        label: tab.label,
+        title: tab.title,
+        icon: <LitContent render={() => tab.icon} />,
+        className: tab.className,
+        domId: `${contentId}-tab-${tab.id}`,
+        closeLabel: `${t("browser.closeTab")}: ${tab.label}`,
+      })),
+    );
     let browseAction!: HTMLButtonElement;
     const showBrowser = () => props.onSelect(null);
     <button
@@ -140,28 +152,18 @@ defineSolidBridge<Props, Methods>(
         <Show when={!rendered().tabsInHeader}>
           <header class="rail-header side-panel__header">
             <div class="side-panel__header-tabs">
-              <LitContent
-                render={() =>
-                  renderPanelTabStrip({
-                    tabs: hostedTabs().map((tab) => ({
-                      id: tab.id,
-                      label: tab.label,
-                      title: tab.title,
-                      icon: tab.icon,
-                      className: tab.className,
-                      domId: `${contentId}-tab-${tab.id}`,
-                      closeLabel: `${t("browser.closeTab")}: ${tab.label}`,
-                    })),
-                    activeId: activeHostedTabId(),
-                    ariaControls: contentId,
-                    onSelect: (id) => host.selectHostedTab(id),
-                    onClose: (id) => host.closeHostedTab(id),
-                    onNew: () => props.onSelect(null),
-                    newLabel: t("chat.sidePanel.files"),
-                    newControl: hostedActions(),
-                  })
-                }
-              />
+              <openclaw-panel-tab-strip style={{ display: "contents" }}>
+                <PanelTabStrip
+                  tabs={tabStripTabs()}
+                  activeId={activeHostedTabId()}
+                  ariaControls={contentId}
+                  onSelect={(id) => host.selectHostedTab(id)}
+                  onClose={(id) => host.closeHostedTab(id)}
+                  onNew={() => props.onSelect(null)}
+                  newLabel={t("chat.sidePanel.files")}
+                  newControl={hostedActions()}
+                />
+              </openclaw-panel-tab-strip>
             </div>
           </header>
         </Show>

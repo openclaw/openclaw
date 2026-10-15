@@ -12,12 +12,24 @@ import {
 } from "../../test-helpers/modal-dialog.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
-  activePlacementSession,
+  activePlacementSession as placementSession,
   offlineDeviceSession,
   createTestChatPane,
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
 } from "./chat-pane.test-support.ts";
+
+function activePlacementSession() {
+  return { ...placementSession(), sessionId: "placement-session" };
+}
+
+function startMove(pane: ReturnType<typeof createTestChatPane>["pane"], row: GatewaySessionRow) {
+  const selected = { ...row, sessionId: row.sessionId ?? "placement-session" };
+  pane.state!.sessionKey = selected.key;
+  pane.state!.currentSessionId = selected.sessionId;
+  pane.state!.sessionsResult = { ...createSessionsListResult(), sessions: [selected] };
+  return pane.changeHeaderPlacement(selected, "move");
+}
 
 let dialogs: ReturnType<typeof createModalDialogTestFixture>;
 
@@ -116,7 +128,6 @@ function answerWorkerPicker(label: "Continue on worker" | "Cancel") {
 describe("chat pane placement", () => {
   it.each([
     { placement: "local", outcome: "success" },
-    { placement: "local", outcome: "cancel" },
     { placement: "local", outcome: "refresh failure" },
   ] as const)(
     "recovers a repository session with $placement placement: $outcome",
@@ -131,21 +142,16 @@ describe("chat pane placement", () => {
       }
       const dispatching = dialogs.track(pane.changeHeaderPlacement(session, "recover"));
       await selectRepositoryWorker();
-      answerWorkerPicker(outcome === "cancel" ? "Cancel" : "Continue on worker");
+      answerWorkerPicker("Continue on worker");
       await dispatching;
 
       expect(request).toHaveBeenCalledWith("environments.list", { runtimeId: "openclaw" });
-      if (outcome === "cancel") {
-        expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
-        expect(reconcileMutation).not.toHaveBeenCalled();
-      } else {
-        expect(request).toHaveBeenCalledWith("sessions.dispatch", {
-          key: session.key,
-          agentId: "main",
-          deviceId: "runner",
-        });
-        expect(reconcileMutation).toHaveBeenCalledWith("main");
-      }
+      expect(request).toHaveBeenCalledWith("sessions.dispatch", {
+        key: session.key,
+        agentId: "main",
+        deviceId: "runner",
+      });
+      expect(reconcileMutation).toHaveBeenCalledWith("main");
       expect(state.lastError).toBe(
         outcome === "refresh failure" ? "Worker session refresh unavailable" : null,
       );
@@ -153,18 +159,22 @@ describe("chat pane placement", () => {
     },
   );
 
-  it("does not dispatch a replacement session after the worker picker opens", async () => {
-    const { pane, state, session, request } = repositoryRecoveryFixture("local");
-    const dispatching = dialogs.track(pane.changeHeaderPlacement(session, "recover"));
+  it("does not redirect a Move that appears while the recovery picker is open", async () => {
+    const { pane, session, request } = repositoryRecoveryFixture("local");
+    const operation = dialogs.track(pane.changeHeaderPlacement(session, "recover"));
     await selectRepositoryWorker();
-    const replacement = { ...session, sessionId: "repository-session-2" };
-    state.currentSessionId = replacement.sessionId;
-    state.sessionsResult = { ...createSessionsListResult(), sessions: [replacement] };
+    session.placementMove = {
+      target: { kind: "gateway" },
+      updatedAtMs: 2,
+      error: "Move needs recovery",
+      retry: {
+        expected: { generation: 1, environmentId: "worker:source", ownerEpoch: 1 },
+        target: { kind: "gateway" },
+      },
+    };
     answerWorkerPicker("Continue on worker");
-    await dispatching;
-
+    await operation;
     expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
-    expect(state.lastError).toBe("This Gateway does not support this session action.");
   });
 
   it("does not open worker dispatch for an archived repository session", async () => {
@@ -227,7 +237,7 @@ describe("chat pane placement", () => {
     );
     const session = { ...activePlacementSession(), hasActiveRun: true };
 
-    const moving = dialogs.track(pane.changeHeaderPlacement(session, "move"));
+    const moving = dialogs.track(startMove(pane, session));
     await dialogs.waitFor(() => {
       expect(document.body.querySelector('[data-value="device:runner"]')).not.toBeNull();
     });
@@ -333,7 +343,7 @@ describe("chat pane placement", () => {
         },
       } satisfies GatewaySessionRow;
 
-      const moving = dialogs.track(pane.changeHeaderPlacement(session, "move"));
+      const moving = dialogs.track(startMove(pane, session));
       await dialogs.waitFor(() => {
         expect(document.body.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
       });
@@ -386,7 +396,7 @@ describe("chat pane placement", () => {
       ["operator.read", "operator.write"],
     );
 
-    const moving = dialogs.track(pane.changeHeaderPlacement(offlineDeviceSession(), "move"));
+    const moving = dialogs.track(startMove(pane, offlineDeviceSession()));
     const actions = await waitForConfirmDialogActions();
     expect(document.body.textContent).toContain(
       "Unsynced device files and in-flight work may be lost",
@@ -411,7 +421,7 @@ describe("chat pane placement", () => {
     );
     const session = offlineDeviceSession();
 
-    const moving = dialogs.track(pane.changeHeaderPlacement(session, "move"));
+    const moving = dialogs.track(startMove(pane, session));
     answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
     await moving;
 
@@ -446,7 +456,7 @@ describe("chat pane placement", () => {
     );
     const session = offlineDeviceSession();
 
-    const moving = dialogs.track(pane.changeHeaderPlacement(session, "move"));
+    const moving = dialogs.track(startMove(pane, session));
     answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
     await moving;
 
@@ -494,7 +504,7 @@ describe("chat pane placement", () => {
       },
     } satisfies GatewaySessionRow;
 
-    const moving = dialogs.track(pane.changeHeaderPlacement(session, "move"));
+    const moving = dialogs.track(startMove(pane, session));
     await dialogs.waitFor(() => {
       expect(document.body.querySelector('[data-value="device:build-mac"]')).not.toBeNull();
     });
@@ -570,7 +580,7 @@ describe("chat pane placement", () => {
         },
       } satisfies GatewaySessionRow;
 
-      const moving = dialogs.track(pane.changeHeaderPlacement(session, "move"));
+      const moving = dialogs.track(startMove(pane, session));
       await dialogs.waitFor(() => {
         expect(document.body.querySelector('[data-value="device:build-mac"]')).not.toBeNull();
       });
@@ -666,7 +676,7 @@ describe("chat pane placement", () => {
       },
     } satisfies GatewaySessionRow;
 
-    const moving = dialogs.track(pane.changeHeaderPlacement(session, "move"));
+    const moving = dialogs.track(startMove(pane, session));
     await dialogs.waitFor(() =>
       expect(request).toHaveBeenCalledWith("environments.list", {
         runtimeId: scenario.runtimeId,
@@ -692,5 +702,101 @@ describe("chat pane placement", () => {
     await moving;
 
     expect(request).not.toHaveBeenCalledWith("sessions.move", expect.anything());
+  });
+});
+
+// The ordinary local-session menu uses dispatch, never active-source move or abort.
+describe("local session placement actions", () => {
+  function localFixture() {
+    const fixture = repositoryRecoveryFixture(undefined);
+    fixture.session.repositoryWorkspaceId = undefined;
+    fixture.session.worktree = { id: "workspace-1", branch: "work", repoRoot: "/example/project" };
+    return fixture;
+  }
+
+  it.each(["replacement", "busy", "read-only", "reconnect", "required-profile"] as const)(
+    "does not dispatch after the picker becomes stale: %s",
+    async (change) => {
+      const { pane, session, state, request } = localFixture();
+      const moving = dialogs.track(
+        pane.handleHeaderSessionAction({ kind: "move-session" }, session),
+      );
+      await selectRepositoryWorker();
+      const current = { ...session };
+      if (change === "replacement") {
+        current.sessionId = "replacement";
+      }
+      if (change === "busy") {
+        current.hasActiveRun = true;
+      }
+      if (change === "read-only") {
+        pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+          ["sessions.dispatch"],
+          ["operator.read"],
+        );
+      }
+      if (change === "reconnect") {
+        pane.context.gateway.snapshot.client = createGatewayBrowserClientFixture({ request });
+      }
+      if (change === "required-profile") {
+        pane.context.agents.state.agentsList = {
+          ...pane.context.agents.state.agentsList!,
+          sessionPlacement: { requiredProfile: { id: "required", providerId: "device" } },
+        };
+      }
+      state.sessionsResult = { ...createSessionsListResult(), sessions: [current] };
+      answerWorkerPicker("Continue on worker");
+      await moving;
+      expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
+    },
+  );
+
+  it.each(["in-place"] as const)("does not move a superseded active source (%s)", async () => {
+    const { pane, request } = localFixture();
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["sessions.move"],
+      ["operator.write"],
+    );
+    const session = activePlacementSession();
+    const moving = dialogs.track(startMove(pane, session));
+    await dialogs.waitFor(() =>
+      expect(document.body.querySelector('[data-value="gateway"]')).not.toBeNull(),
+    );
+    session.placement.generation = 2;
+    [...document.body.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Move session")
+      ?.click();
+    await moving;
+    expect(request).not.toHaveBeenCalledWith("sessions.move", expect.anything());
+  });
+  it("does not dispatch a profile after administrator access is revoked", async () => {
+    const { pane, session, request } = localFixture();
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["sessions.dispatch"],
+      ["operator.admin", "operator.write"],
+    );
+    // The catalog's profile explicitly supports the selected runtime.
+    const original = request.getMockImplementation()!;
+    request.mockImplementation(async (method, ...args) =>
+      method === "environments.list"
+        ? {
+            profiles: [{ id: "cloud", providerId: "crabbox", executionModes: ["worker-turn"] }],
+            environments: [],
+          }
+        : original(method, ...args),
+    );
+    const moving = dialogs.track(pane.handleHeaderSessionAction({ kind: "move-session" }, session));
+    await dialogs.waitFor(() =>
+      expect(document.body.querySelector('[data-value="cloud:cloud"]')).not.toBeNull(),
+    );
+    document.body.querySelector<HTMLButtonElement>('[data-value="cloud:cloud"]')!.click();
+    flush();
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["sessions.dispatch"],
+      ["operator.write"],
+    );
+    answerWorkerPicker("Continue on worker");
+    await moving;
+    expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
   });
 });

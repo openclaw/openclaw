@@ -149,6 +149,38 @@ it("delivers an ordinary terminal failure", async () => {
   expect(payloads[0]?.isError).toBe(true);
 });
 
+it("captures a message-tool sentinel before the empty-payload return", async () => {
+  const context = createContext();
+  const onRawLlmResponse = vi.fn();
+  context.opts = { onRawLlmResponse };
+  context.followupRun.run.terminalReplyExpectation = "optional";
+  context.execution.result.acceptedSessionSpawns = undefined;
+  context.execution.result.meta = { durationMs: 0, finalAssistantRawText: "NO_REPLY" };
+  context.execution.result.payloads = [];
+  context.execution.result.messagingToolSourceReplyPayloads = [
+    { text: "delivered by message tool", sourceReplyFinal: true },
+  ];
+
+  expect(await prepare("ordinary", context)).toEqual([]);
+  expect(onRawLlmResponse).toHaveBeenCalledWith("NO_REPLY");
+});
+
+it("does not capture hook-block rejection text as a model response", async () => {
+  const context = createContext();
+  const onRawLlmResponse = vi.fn();
+  context.opts = { onRawLlmResponse };
+  context.execution.result.meta = {
+    durationMs: 0,
+    livenessState: "blocked",
+    finalAssistantRawText: "Blocked by before_agent_run policy",
+    error: { kind: "hook_block", message: "Blocked by before_agent_run policy" },
+  };
+  context.execution.result.payloads = [];
+
+  await prepare("ordinary", context);
+  expect(onRawLlmResponse).not.toHaveBeenCalled();
+});
+
 describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (lane) => {
   it.each(["explicit acknowledgment", "visible final", "optional turn", "delivered message"])(
     "selects waiting status for %s",

@@ -5,10 +5,7 @@ import { diffConfigPaths } from "./config-diff.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import { doesReloadAffectProviderAuth } from "./config-reload-recovery.js";
 import { createHotTailPlan } from "./server-reload-handlers.config.test-support.js";
-import {
-  createGatewayModelRuntimeReload,
-  resolveReloadAgentIds,
-} from "./server-reload-model-runtime-scope.js";
+import { createGatewayModelRuntimeReload } from "./server-reload-model-runtime-scope.js";
 
 describe("prepared model runtime reload scope", () => {
   it.each<[paths: string[], agentIds: string[] | undefined]>([
@@ -19,7 +16,11 @@ describe("prepared model runtime reload scope", () => {
     [["agents.entries"], undefined],
     [["agents.entries.alpha.model", "models.providers.openai.api"], undefined],
   ])("resolves the bounded agent scope for %j", (paths, agentIds) => {
-    const result = resolveReloadAgentIds(paths);
+    const result = createGatewayModelRuntimeReload().prepare(
+      createHotTailPlan({ changedPaths: paths }),
+      {},
+      {},
+    ).agentIds;
     if (agentIds) {
       expect(result).toEqual(new Set(agentIds));
     } else {

@@ -95,6 +95,16 @@ describe("ChatHistoryCursorResultSchema", () => {
 });
 
 describe("ChatStatusEventSchema", () => {
+  it("accepts optional local model wait reasons and rejects unsupported claims", () => {
+    const event = { ...statusEvent, phase: "waiting_for_model" };
+    for (const waitReason of [undefined, "response", "slot"]) {
+      expect(
+        Value.Check(ChatEventSchema, { ...event, ...(waitReason ? { waitReason } : {}) }),
+      ).toBe(true);
+    }
+    expect(Value.Check(ChatEventSchema, { ...event, waitReason: "busy" })).toBe(false);
+  });
+
   it("accepts closed startup phases through the chat event union", () => {
     expect(Value.Check(ChatStatusEventSchema, statusEvent)).toBe(true);
     expect(Value.Check(ChatEventSchema, statusEvent)).toBe(true);
@@ -109,6 +119,14 @@ describe("ChatStatusEventSchema", () => {
       phase: "starting_model",
     };
     const retry = { attempt: 2, maxAttempts: 10, reason: "rate_limit" };
+    for (const reason of ["rate_limit", "overloaded", "server_error", "timeout", "output_limit"]) {
+      expect(
+        Value.Check(ChatEventSchema, {
+          ...event,
+          retry: { ...retry, reason, retryAt: 1_800_000_000_000 },
+        }),
+      ).toBe(true);
+    }
     for (const maxAttempts of [2, 10]) {
       expect(Value.Check(ChatEventSchema, { ...event, retry: { ...retry, maxAttempts } })).toBe(
         true,
@@ -122,6 +140,8 @@ describe("ChatStatusEventSchema", () => {
       { maxAttempts: 2.5 },
       { maxAttempts: 11 },
       { reason: "unknown" },
+      { retryAt: -1 },
+      { retryAt: Infinity },
       { errorBody: "provider data" },
     ]) {
       expect(Value.Check(ChatEventSchema, { ...event, retry: { ...retry, ...invalid } })).toBe(

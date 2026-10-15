@@ -47,6 +47,7 @@ import {
   resolveCodexAppServerLocalHomeDir,
   withClearedEnvironmentVariables,
   withEphemeralCodexAuthStore,
+  withManagedCodexThreadUnloading,
 } from "./auth-start-options.js";
 import type {
   CodexAppServerAuthRequirement,
@@ -118,7 +119,10 @@ export async function bridgeCodexAppServerStartOptions(
     return params.startOptions;
   }
   const scopeStartOptions = () =>
-    withCodexHomeEnvironment(withEphemeralCodexAuthStore(params), params.agentDir);
+    withCodexHomeEnvironment(
+      withManagedCodexThreadUnloading(withEphemeralCodexAuthStore(params)),
+      params.agentDir,
+    );
 
   if (params.preparedAuth) {
     const scopedStartOptions = await scopeStartOptions();
@@ -637,13 +641,20 @@ export async function applyCodexAppServerAuthProfile(params: {
   startOptions?: CodexAppServerStartOptions;
   config?: AuthProfileOrderConfig;
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
 }): Promise<CodexAppServerAuthHandoff | undefined> {
+  const withCurrent = async (write: () => void) => {
+    await params.assertCurrentAsync?.();
+    params.assertCurrent?.();
+    write();
+  };
   params.assertCurrent?.();
   if (!params.preparedAuth && params.authProfileId === null) {
     await assertNativeCodexAccountMatchesRoute(
       params.client,
       params.authRequirement,
       params.assertCurrent,
+      withCurrent,
     );
     return undefined;
   }
@@ -679,6 +690,7 @@ export async function applyCodexAppServerAuthProfile(params: {
       env,
       ...(params.authRequirement === "api-key" ? { codexCliAuthEnv: process.env } : {}),
       assertCurrent: params.assertCurrent,
+      withCurrent,
     });
   }
   if (loginParams) {
@@ -686,6 +698,7 @@ export async function applyCodexAppServerAuthProfile(params: {
     try {
       await params.client.request("account/login/start", loginParams, {
         assertCurrent: params.assertCurrent,
+        withCurrent,
       });
     } catch (error) {
       throw codexPrewriteRejectionCause(error);
@@ -712,6 +725,7 @@ async function assertNativeCodexAccountMatchesRoute(
   client: CodexAppServerClient,
   authRequirement: CodexAppServerAuthRequirement | undefined,
   assertCurrent?: () => void,
+  withCurrent?: (write: () => void) => Promise<void>,
 ): Promise<void> {
   if (!authRequirement) {
     return;
@@ -719,7 +733,7 @@ async function assertNativeCodexAccountMatchesRoute(
   const response = await client.request<CodexGetAccountResponse>(
     "account/read",
     { refreshToken: false },
-    { assertCurrent },
+    { assertCurrent, withCurrent },
   );
   const accountType = response.account?.type;
   if (authRequirement === "subscription") {
@@ -810,7 +824,7 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(
   }
   if (!isCodexAppServerAuthProvider(credential.provider)) {
     throw new CodexAppServerAuthProfileUnavailableError(
-      `Codex app-server auth profile "${profileId}" must use the canonical OpenAI auth provider; run "openclaw doctor --fix" to migrate legacy provider IDs.`,
+      `Codex app-server auth profile "${profileId}" must use the OpenAI auth provider; run "openclaw doctor --fix" to migrate legacy provider IDs.`,
     );
   }
   const preferStoreCredential = Boolean(params.authProfileStore?.profiles[profileId]);
@@ -857,6 +871,7 @@ async function resolveCodexAppServerFallbackApiKeyLoginParams(params: {
   env: NodeJS.ProcessEnv;
   codexCliAuthEnv?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
+  withCurrent?: (write: () => void) => Promise<void>;
 }): Promise<CodexLoginAccountParams | undefined> {
   const apiKey =
     readFirstNonEmptyEnv(params.env, CODEX_APP_SERVER_API_KEY_ENV_VARS) ??
@@ -867,7 +882,7 @@ async function resolveCodexAppServerFallbackApiKeyLoginParams(params: {
   const response = await params.client.request<CodexGetAccountResponse>(
     "account/read",
     { refreshToken: false },
-    { assertCurrent: params.assertCurrent },
+    { assertCurrent: params.assertCurrent, withCurrent: params.withCurrent },
   );
   if (response.account) {
     return undefined;

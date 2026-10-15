@@ -1,10 +1,11 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { formatErrorMessage } from "../infra/errors.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import {
   truncateSanitizedExternalContent,
   wrapExternalContent,
 } from "../security/external-content.js";
+import { attachInternalToolResultContentSource } from "./runtime/internal-hooks.js";
 import { isTrustedToolInputError } from "./tool-input-error.js";
 
 export {
@@ -151,7 +152,7 @@ export function isTrustedToolExecutionPreflightError(error: unknown): boolean {
   return isTrustedSecretSurfaceUnavailableError(error) || isTrustedToolInputError(error);
 }
 
-/** Format a redacted tool error without allowing hostile getters to escape observability. */
+/** Format a tool error without allowing hostile getters to escape observability. */
 export function formatToolExecutionErrorMessage(error: unknown, fallback: string): string {
   try {
     return formatErrorMessage(error) || fallback;
@@ -205,6 +206,8 @@ export function protectNetworkToolExecutionError(
     // Hostile reflection must never replace the already-protected network error.
   }
   protectedNetworkToolErrors.add(protectedError);
+  // Dispatchers rethrow this error under their own tool; keep its network origin for turn taint.
+  attachInternalToolResultContentSource(protectedError, "network");
   if (timedOut) {
     protectedNetworkToolTimeoutErrors.add(protectedError);
   }

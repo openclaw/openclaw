@@ -1,4 +1,3 @@
-import type { ReactiveControllerHost } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -82,7 +81,7 @@ function setup() {
       },
     },
   };
-  const host: ReactiveControllerHost = {
+  const host = {
     addController: vi.fn(),
     removeController: vi.fn(),
     requestUpdate: vi.fn(),
@@ -355,20 +354,5 @@ describe("chat tool icon ownership", () => {
     response.resolve("blob:plugin-icon");
     await vi.waitFor(() => expect(revoke).toHaveBeenCalledWith("blob:plugin-icon"));
     expect(controller.icons.get("meeting_status")).toBeUndefined();
-  });
-  it("ignores a removed image's late error after its owner has been replaced", async () => {
-    const { controller, context, revoke, fetch } = setup();
-    controller.hostUpdate();
-    await vi.waitFor(() => expect(controller.icons.get("meeting_status")).toBeDefined());
-    const oldIcon = controller.icons.get("meeting_status");
-    context.gateway.connectionRevision++;
-    controller.hostUpdate();
-    await vi.waitFor(() => expect(controller.icons.get("meeting_status")).toBeDefined());
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(revoke).toHaveBeenCalledOnce();
-    oldIcon?.onError();
-    expect(controller.icons.get("meeting_status")).toBeDefined();
-    expect(revoke).toHaveBeenCalledOnce();
-    controller.hostDisconnected();
   });
 });

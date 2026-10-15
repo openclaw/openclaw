@@ -127,6 +127,15 @@ describe("openclaw.setup provider resolution", () => {
     ],
     ["openclaw.setup.auth.start", { sessionId: "retained-session", authChoice: "github-copilot" }],
     ["openclaw.setup.prepare.start", { sessionId: "retained-session", authChoice: "ollama" }],
+    [
+      "openclaw.setup.runtime.start",
+      {
+        sessionId: "retained-session",
+        agentId: "main",
+        runtimeId: "fixture-runtime",
+        configPatch: { plugins: { entries: { fixture: { config: { enabled: true } } } } },
+      },
+    ],
   ] as const)("does not replace a retained wizard session through %s", async (method, params) => {
     const { wizardSessions, context } = makeContext();
     const retained = new WizardSession(async () => {});

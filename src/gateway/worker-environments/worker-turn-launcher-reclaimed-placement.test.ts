@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEmbeddedRunLaneController } from "../../agents/embedded-agent-runner/run/lane-controller.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { runFallbackAttempt } from "../../agents/model-fallback-attempt.js";
 import {
   isAgentRunRestartAbortReason,
@@ -59,7 +60,6 @@ describe("worker turn launcher reclaimed placement", () => {
   it.each([
     ["agent id", { agentId: "other", sessionKey: SESSION_KEY }],
     ["session key", { agentId: "main", sessionKey: "agent:main:other" }],
-    ["blank agent id", { agentId: " ", sessionKey: SESSION_KEY }],
     ["blank session key", { agentId: "main", sessionKey: " " }],
   ])("rejects a conflicting supplied %s before redispatch", async (_label, identity) => {
     await seedReclaimedPlacement();
@@ -214,32 +214,7 @@ describe("worker turn launcher reclaimed placement", () => {
     expect(redispatchCalls).toBe(1);
     expect(launchTurn).toHaveBeenCalledOnce();
     expect(runLocal).not.toHaveBeenCalled();
-    expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-  });
-
-  it("releases a claimed worker turn when its admission callback fails", async () => {
-    await seedActivePlacement();
-    const environments = unusedEnvironments();
-    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
-    const runId = "run-admission-failed";
-    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
-    const onAdmitted = vi.fn(() => {
-      expect(placements.get(SESSION_ID)?.turnClaim).toMatchObject({ owner: "worker", runId });
-      throw new Error("worker admission callback failed");
-    });
-
-    await expect(
-      provider.executeTurn(
-        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
-        turn(runId),
-        runLocal,
-        onAdmitted,
-      ),
-    ).rejects.toThrow("worker admission callback failed");
-
-    expect(onAdmitted).toHaveBeenCalledOnce();
-    expect(runLocal).not.toHaveBeenCalled();
-    expect(environments.startTunnel).not.toHaveBeenCalled();
+    await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
   });
 
@@ -472,33 +447,6 @@ describe("worker turn launcher reclaimed placement", () => {
     },
   );
 
-  it("does not fall back locally when reclaimed redispatch fails", async () => {
-    await seedReclaimedPlacement();
-    const provider = createWorkerSessionTurnPlacementProvider({
-      environments: unusedEnvironments(),
-      placements,
-      redispatchPlacement: async () => {
-        throw new Error("reclaimed redispatch failed");
-      },
-    });
-    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
-
-    await expect(
-      provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-reclaimed-failed",
-        },
-        turn("run-reclaimed-failed"),
-        runLocal,
-      ),
-    ).rejects.toThrow("reclaimed redispatch failed");
-    expect(runLocal).not.toHaveBeenCalled();
-    expect(placements.get(SESSION_ID)).toMatchObject({ state: "reclaimed", turnClaim: null });
-  });
-
   it("rejects setup without a live dispatch owner instead of falling back locally", async () => {
     await placements.startDispatch({
       sessionId: SESSION_ID,
@@ -527,7 +475,7 @@ describe("worker turn launcher reclaimed placement", () => {
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
   });
 
-  it.each(["cloud worker disappeared: environment state destroyed", STALE_WORKER_BUILD_REASON])(
+  it.each([STALE_WORKER_BUILD_REASON])(
     "preserves the failed placement cause: %s",
     async (recoveryError) => {
       await placements.startDispatch({

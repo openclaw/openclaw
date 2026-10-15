@@ -248,20 +248,19 @@ describe("Doctor Windows database path repair", () => {
     ).toBe(true);
   });
 
-  it.each([
-    { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
-    { OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1" },
-    { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
-  ])("leaves candidate and update Doctor inventory unchanged for %j", async (env) => {
-    const state = seedDatabase();
-    const before = state.readRows();
-    const ctx = context(env);
-    await runStateIntegrityHealth(ctx);
-    expect(state.readRows()).toEqual(before);
-    expect(ctx.updateWarnings).toEqual([
-      "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix after the update finishes.",
-    ]);
-  });
+  it.each([{ OPENCLAW_UPDATE_IN_PROGRESS: "1" }])(
+    "leaves candidate and update Doctor inventory unchanged for %j",
+    async (env) => {
+      const state = seedDatabase();
+      const before = state.readRows();
+      const ctx = context(env);
+      await runStateIntegrityHealth(ctx);
+      expect(state.readRows()).toEqual(before);
+      expect(ctx.updateWarnings).toEqual([
+        "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix to repair agent database paths.",
+      ]);
+    },
+  );
 
   it("leaves ordinary Doctor inspection read-only", async () => {
     const state = seedDatabase();

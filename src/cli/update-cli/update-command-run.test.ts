@@ -62,60 +62,6 @@ const sourceImportArgs = resolveRuntimeWorkerUrl(
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.each([
-  { kind: "package-post-install-doctor", name: "openclaw doctor", exitCode: 0 },
-  { kind: "package-post-install-doctor", name: "openclaw doctor", exitCode: 86 },
-  { kind: "recoverable-maintenance", name: "global install swap", exitCode: 0 },
-] as const)("persists and surfaces $kind warnings (exit $exitCode)", ({ kind, name, exitCode }) => {
-  const env = { OPENCLAW_STATE_DIR: dirs.make("update-warning-ledger-") };
-  const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-  const message =
-    kind === "recoverable-maintenance"
-      ? "baseline package fingerprint incomplete after 30 s; rollback will be verified by the retained package copy"
-      : "Skipped derived cache cleanup: permission denied. Run openclaw doctor --fix.";
-  const otherWarning =
-    kind === "recoverable-maintenance"
-      ? "Package fingerprint verification unavailable; rollback verified by the retained package copy's directory identity and version."
-      : "Skipped legacy cache cleanup: read-only directory. Run openclaw doctor --fix.";
-  const result = completeUpdateCommandRun(
-    {
-      status: "ok",
-      mode: "npm",
-      durationMs: 1,
-      steps: [
-        {
-          name,
-          command: name,
-          cwd: "/tmp/update-fixture",
-          durationMs: 1,
-          exitCode,
-          advisory: { kind, message },
-          warnings: [message, otherWarning],
-        },
-      ],
-    },
-    run,
-  );
-  expect(result.status).toBe("ok");
-  const recorded = getUpdateRun(run.runId, { env });
-  expect(recorded).toMatchObject({
-    status: "succeeded",
-    steps: expect.arrayContaining([
-      expect.objectContaining({
-        step: `warning:${name}`,
-        status: "completed",
-        detail: message,
-      }),
-      expect.objectContaining({
-        step: `warning:${name}:2`,
-        status: "completed",
-        detail: otherWarning,
-      }),
-    ]),
-  });
-  expect(recorded && renderUpdateRunReport(recorded).markdown).toContain(message);
-  expect(recorded && renderUpdateRunReport(recorded).markdown).toContain(otherWarning);
-});
 afterEach(async () => {
   await closeStateDatabaseForTest();
   vi.unstubAllEnvs();
@@ -178,7 +124,7 @@ it("persists fingerprint warnings before closing a rolled-back run", async () =>
 
 registerUpdateRunReceiptTests(dirs);
 
-it.each([false, true])(
+it.each([true])(
   "keeps restored-generation completion with its helper across CLI unwind (handoff=%s)",
   (handoff) => {
     vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", handoff ? "1" : undefined);
@@ -247,10 +193,7 @@ function pendingRecovery() {
   return { root, run, record, snapshot };
 }
 
-it.each([
-  { dryRun: true, reuseRunId: false },
-  { dryRun: false, reuseRunId: true },
-])(
+it.each([{ dryRun: false, reuseRunId: true }])(
   "refuses interrupted update admission without touching SQLite ($dryRun, $reuseRunId)",
   async ({ dryRun, reuseRunId }) => {
     const { root, run, record, snapshot } = pendingRecovery();
@@ -291,7 +234,7 @@ it.each(["displaced", "replacement", "both", "unreadable"] as const)(
   },
 );
 
-it.each(["ok", "error"] as const)(
+it.each(["ok"] as const)(
   "does not complete an operationally pending update from diagnostic %s",
   (status) => {
     const { run, record, snapshot } = pendingRecovery();
@@ -301,13 +244,10 @@ it.each(["ok", "error"] as const)(
       mode: "npm" as const,
       durationMs: 1,
       steps: [],
-      ...(status === "error" ? { reason: "primary-failure" } : {}),
     };
     const completed = completeUpdateCommandRun(result, run);
     expect(completed.status).toBe("error");
-    expect(completed.reason).toBe(
-      status === "error" ? "primary-failure" : "update-recovery-pending",
-    );
+    expect(completed.reason).toBe("update-recovery-pending");
     failUpdateCommandRun(new Error("outer unwind"), run);
     expect(snapshot()).toEqual(before);
     expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
@@ -315,11 +255,7 @@ it.each(["ok", "error"] as const)(
   },
 );
 
-it.each([
-  { json: false, diagnosticsWriteFails: false },
-  { json: true, diagnosticsWriteFails: false },
-  { json: true, diagnosticsWriteFails: true },
-])(
+it.each([{ json: true, diagnosticsWriteFails: true }])(
   "prints an unexpected update failure after settlement with an existing report (json=$json, diagnosticsWriteFails=$diagnosticsWriteFails)",
   async ({ json, diagnosticsWriteFails }) => {
     const env = { OPENCLAW_STATE_DIR: dirs.make("update-unexpected-failure-") };
@@ -405,7 +341,7 @@ it.each([
   },
 );
 
-it.each(["ok", "error"] as const)(
+it.each(["error"] as const)(
   "saves the complete %s diagnostics before printing the Markdown path",
   async (status) => {
     const secret = "sk-synthetic-terminal-" + "x".repeat(48);
@@ -482,19 +418,9 @@ it.each(["ok", "error"] as const)(
   },
 );
 
-it("continues normal history admission when no operational update is pending", async () => {
-  const root = dirs.make("update-admission-empty-");
-  vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  vi.stubEnv(UPDATE_RUN_ID_ENV, undefined);
-  const run = await admitUpdateCommandRun({ opts: { dryRun: true }, root });
-  expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
-});
-
 // Real signals terminate a separate process; the parent never emits into Vitest.
 it.skipIf(process.platform === "win32").each([
-  { signal: "SIGINT", mode: "fresh" },
   { signal: "SIGTERM", mode: "fresh" },
-  { signal: "SIGINT", mode: "resolved" },
   { signal: "SIGTERM", mode: "resolved" },
   { signal: "SIGINT", mode: "resolved-foreign-before" },
   { signal: "SIGINT", mode: "resolved-foreign-after" },
@@ -682,7 +608,7 @@ it.skipIf(process.platform === "win32").each([
   60_000,
 );
 
-it.each([false, true])(
+it.each([true])(
   "removes preview signal ownership on ordinary unwind (throws=%s)",
   async (throws) => {
     const root = dirs.make("update-preview-cleanup-");

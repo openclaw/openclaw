@@ -7,6 +7,7 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import * as catalog from "./catalog-target.ts";
+import type { DraftPreferenceOptions } from "./draft-gateway-contract.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import {
   decodeIdentityPreferences,
@@ -44,7 +45,7 @@ type PreferenceScope = Pick<
   "source" | "client" | "connected" | "recoveryScope" | "connectionEpoch"
 > & { profileId: string | undefined };
 
-type PreferenceWriter = { selection: object; write: Promise<void> };
+type PreferenceWriter = { write: Promise<void> };
 type PreferenceWrites = {
   agents: Map<string, PreferenceWriter>;
   revision: object;
@@ -64,7 +65,10 @@ export class DraftPreferenceState {
 
   constructor(
     private readonly read: () => DraftPreferenceSnapshot,
-    private readonly callbacks: { requestUpdate: () => void; onAdoptAgentDefaults: () => void },
+    private readonly callbacks: DraftPreferenceOptions & {
+      requestUpdate: () => void;
+      onAdoptAgentDefaults: () => void;
+    },
   ) {}
 
   get loading(): boolean {
@@ -141,9 +145,29 @@ export class DraftPreferenceState {
   }
 
   readPreference(agentId: string): NewSessionPreference | null {
-    return this.preferenceModeValue === "remote"
-      ? (this.identityPreferences[normalizeAgentId(agentId)] ?? null)
-      : loadNewSessionPreference(this.read().gatewayUrl, agentId);
+    const snapshot = this.read();
+    if (
+      catalog.isTarget(snapshot.data) ||
+      snapshot.data?.group ||
+      snapshot.pendingPlacementSessionKey
+    ) {
+      return null;
+    }
+    const ordinary =
+      this.preferenceModeValue === "remote"
+        ? (this.identityPreferences[normalizeAgentId(agentId)] ?? null)
+        : loadNewSessionPreference(snapshot.gatewayUrl, agentId);
+    if (this.callbacks.preferenceScope !== "palette") {
+      return ordinary;
+    }
+    const palette = this.callbacks.readPalettePreference?.();
+    // Name is one-use input belonging to the foreground draft, not a default
+    // the lightweight launcher can silently borrow or consume.
+    return {
+      ...ordinary,
+      ...(palette?.agentId === normalizeAgentId(agentId) ? palette.selection : {}),
+      worktreeName: "",
+    };
   }
 
   private preferenceWrites(source: ApplicationContext["gateway"]): PreferenceWrites {
@@ -188,10 +212,9 @@ export class DraftPreferenceState {
     const writes = this.preferenceWrites(source);
     let writer = writes.agents.get(agentId);
     if (!writer) {
-      writer = { selection: {}, write: Promise.resolve() };
+      writer = { write: Promise.resolve() };
       writes.agents.set(agentId, writer);
     }
-    const capturedSelection = writer.selection;
     const ownsConnection = () =>
       Boolean(
         client &&
@@ -228,22 +251,14 @@ export class DraftPreferenceState {
       return (current.baseRef ?? "") === (expected.baseRef ?? "") ? "match" : "superseded";
     };
     return async (consume) => {
-      if (accepted && (!ownsConnection() || writer.selection !== capturedSelection)) {
+      if (accepted && !ownsConnection()) {
         return;
       }
-      // Model controls share persistence, but do not replace the submitted checkout intent.
-      const changesPlacement = Object.keys(patch).some(
-        (field) => !["model", "agentRuntime", "thinkingLevel", "fastMode"].includes(field),
-      );
-      const selection = changesPlacement ? {} : writer.selection;
-      writer.selection = selection;
       consume?.();
       if (!persist) {
         return;
       }
-      const isCurrent = () =>
-        ownsConnection() &&
-        (accepted ? writer.selection === selection : this.preferenceScope === scope);
+      const isCurrent = () => ownsConnection() && (accepted || this.preferenceScope === scope);
       // A disconnected controller must still fence work admitted to its Gateway queue.
       const queued = this.preferenceModeValue !== "local";
       const write = async () => {

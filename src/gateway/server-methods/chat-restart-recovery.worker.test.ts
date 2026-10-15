@@ -1,15 +1,21 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
+import { copyFile, readFile, rename } from "node:fs/promises";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
+  patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { readSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-agent-db-registry-listing.js";
 import * as writeAdmission from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -151,3 +157,100 @@ it("terminalizes the current source of the same admitted run without tombstoning
     }
   });
 });
+
+it("does not terminalize a replacement physical store containing the same claim", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:terminal",
+      storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionId: "same-session",
+      updatedAt: 1,
+      restartRecoveryDeliveryRunId: "same-run",
+    });
+    const captured = await prepareTerminalTarget(scope);
+    await closeOpenClawAgentDatabasesAsync();
+    const original = `${scope.storePath}.original`;
+    await rename(scope.storePath, original);
+    await copyFile(original, scope.storePath);
+    const replacement = await readFile(scope.storePath);
+    await expect(
+      terminalizeRestartSafeChatAdmission({
+        ...captured,
+        admittedSessionId: "same-session",
+        clientRunId: "same-run",
+        startedAt: 1,
+        status: "killed",
+        retryable: false,
+      }),
+    ).rejects.toThrow(/identity changed/u);
+    expect(await readFile(scope.storePath)).toEqual(replacement);
+  });
+});
+it.each(["claim", "lifecycle", "authority"] as const)(
+  "refuses queued terminal settlement after its %s changes",
+  async (changed) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:terminal",
+        storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "terminal-session",
+        lifecycleRevision: "terminal-lifecycle",
+        updatedAt: 1,
+        restartRecoveryDeliveryRunId: "terminal-run",
+      });
+      const captured = await prepareTerminalTarget(scope);
+      const entered = createDeferred();
+      const resume = createDeferred();
+      let current = true;
+      const writer = patchSessionEntryCore(scope, async () => {
+        entered.resolve();
+        await resume.promise;
+        return changed === "claim"
+          ? { restartRecoveryDeliveryRunId: "successor-run" }
+          : changed === "lifecycle"
+            ? { lifecycleRevision: "successor-lifecycle" }
+            : null;
+      });
+      await entered.promise;
+      const terminal = terminalizeRestartSafeChatAdmission({
+        ...captured,
+        admittedSessionId: "terminal-session",
+        clientRunId: "terminal-run",
+        startedAt: 1,
+        status: "killed",
+        retryable: false,
+        assertCurrent() {
+          if (!current) {
+            throw new Error("terminal owner released");
+          }
+        },
+      });
+      const observed = terminal.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      current = changed !== "authority";
+      resume.resolve();
+      await writer;
+      if (changed === "authority") {
+        expect(await observed).toMatchObject({
+          error: expect.objectContaining({ message: "terminal owner released" }),
+        });
+      } else {
+        expect(await observed).toEqual({ value: false });
+      }
+      expect(loadSessionEntry(scope)?.status).toBeUndefined();
+      expect(loadSessionEntry(scope)?.restartRecoveryDeliveryRunId).toBe(
+        changed === "claim" ? "successor-run" : "terminal-run",
+      );
+    });
+  },
+);

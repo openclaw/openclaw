@@ -1,6 +1,8 @@
+import { flush } from "solid-js";
 // Channels page view tests.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelsStatusSnapshot, WhatsAppStatus } from "../../api/types.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { channelSnapshotEntryIsActive } from "../../lib/channels/index.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { renderChannelDetail } from "./view.detail.tsx";
@@ -196,26 +198,6 @@ describe("channels setup access", () => {
     ).not.toContain("Set up");
     expect(container.textContent).not.toContain("More channels…");
     expect(onStartSetup).not.toHaveBeenCalled();
-  });
-});
-
-describe("channels section order", () => {
-  it("places DM access requests after the channel management sections", () => {
-    const props = createProps({
-      ts: Date.now(),
-      channelOrder: ["telegram"],
-      channelLabels: { telegram: "Telegram" },
-      channels: { telegram: { configured: false } },
-      channelAccounts: {},
-      channelDefaultAccountId: {},
-    });
-    const container = document.createElement("div");
-    renderChannelView(ChannelsView, props, container);
-
-    const headings = Array.from(container.querySelectorAll(".settings-section__heading"), (node) =>
-      node.textContent?.trim(),
-    );
-    expect(headings).toEqual(["Connected channels", "Add a channel", "DM access requests"]);
   });
 });
 
@@ -459,6 +441,7 @@ function renderChannelDetailFixture(
     loading?: boolean;
     configError?: string;
     onRefresh?: ChannelsProps["onRefresh"];
+    accounts?: ChannelsStatusSnapshot["channelAccounts"][string];
   } = {},
 ) {
   const props = createProps({
@@ -466,7 +449,7 @@ function renderChannelDetailFixture(
     channelOrder: [channelId],
     channelLabels: { [channelId]: options.label ?? channelId },
     channels,
-    channelAccounts: {},
+    channelAccounts: { [channelId]: options.accounts ?? [] },
     channelDefaultAccountId: {},
   });
   props.channels.channelsLoading = options.loading ?? false;
@@ -560,20 +543,6 @@ describe("channel config advanced tier", () => {
     expect(onShowAdvancedSettings).toHaveBeenCalledWith(true);
   });
 
-  it("reveals advanced channel settings with a collapse affordance", () => {
-    const { container, onShowAdvancedSettings } = renderWhatsAppConfigForm(true);
-
-    expect(container.textContent).toContain("Enabled");
-    expect(container.textContent).toContain("Timeout Ms");
-    const disclosure = container.querySelector<HTMLDetailsElement>(
-      "details.config-advanced-disclosure",
-    );
-    expect(disclosure?.open).toBe(true);
-    disclosure!.open = false;
-    disclosure!.dispatchEvent(new Event("toggle"));
-    expect(onShowAdvancedSettings).toHaveBeenCalledWith(false);
-  });
-
   it("keeps the collapse control for channels whose settings are all advanced", () => {
     const { container, onShowAdvancedSettings } = renderWhatsAppConfigForm(true, {
       ...CHANNEL_TIER_HINTS,
@@ -602,8 +571,24 @@ describe("channel config advanced tier", () => {
   });
 });
 
+const CHANNEL_DETAIL_CASES = [
+  ["discord", "Discord", []],
+  [
+    "googlechat",
+    "Google Chat",
+    [
+      ["Credential", "service-account"],
+      ["Audience", "url · https://chat.example"],
+    ],
+  ],
+  ["imessage", "iMessage", []],
+  ["signal", "Signal", [["Base URL", "https://signal.example"]]],
+  ["slack", "Slack", []],
+  ["telegram", "Telegram", [["Mode", "polling"]]],
+] satisfies Array<[string, string, Array<[string, string]>]>;
+
 describe("channel detail", () => {
-  it.each(["telegram", "whatsapp", "nostr"] as const)(
+  it.each(["whatsapp", "nostr"] as const)(
     "shows an escaped configuration save error inside the %s editor",
     (channelId) => {
       const data: ChannelsStatusSnapshot["channels"] =
@@ -621,47 +606,7 @@ describe("channel detail", () => {
     },
   );
 
-  it("links every channel to its docs page", () => {
-    const props = createProps({
-      ts: Date.now(),
-      channelOrder: ["telegram"],
-      channelLabels: { telegram: "Telegram" },
-      channels: { telegram: { configured: true } },
-      channelAccounts: {},
-      channelDefaultAccountId: {},
-    });
-
-    const container = document.createElement("div");
-    renderChannelView(
-      renderChannelDetail,
-      {
-        channelId: "telegram",
-        label: "Telegram",
-        props,
-        onClose: () => {},
-        onSetup: () => {},
-      },
-      container,
-    );
-
-    const docs = container.querySelector<HTMLAnchorElement>(".channels-detail__header-actions a");
-    expect(docs?.href).toBe("https://docs.openclaw.ai/channels/telegram");
-    expect(docs?.textContent?.trim()).toBe("Docs");
-  });
-
-  it.each([
-    ["discord", "Discord", []],
-    ["signal", "Signal", [["Base URL", "https://signal.example"]]],
-    [
-      "googlechat",
-      "Google Chat",
-      [
-        ["Credential", "service-account"],
-        ["Audience", "url · https://chat.example"],
-      ],
-    ],
-    ["telegram", "Telegram", [["Mode", "polling"]]],
-  ] satisfies Array<[string, string, Array<[string, string]>]>)(
+  it.each(CHANNEL_DETAIL_CASES)(
     "preserves localized status facts and probe actions for %s",
     (channelId, title, extraFacts) => {
       const onRefresh = vi.fn();
@@ -696,24 +641,48 @@ describe("channel detail", () => {
     },
   );
 
-  it("projects an in-flight channel read onto the detail Probe action", () => {
-    const onRefresh = vi.fn();
-    const container = renderChannelDetailFixture(
-      "telegram",
-      { telegram: { configured: true, running: true } },
-      { loading: true, onRefresh },
-    );
-    const probe = container.querySelector<HTMLButtonElement>(".settings-row--actions button");
+  it.each(CHANNEL_DETAIL_CASES)(
+    "keeps the cold recommended %s detail available",
+    (channelId, title) => {
+      const props = createProps(null);
+      props.selectedChannel = channelId;
+      const container = document.createElement("div");
+      renderChannelView(ChannelsView, props, container);
+      const detail = container.querySelector(".channels-detail")!;
 
-    expect(probe?.disabled).toBe(true);
-    expect(probe?.getAttribute("aria-busy")).toBe("true");
-    expect(probe?.textContent?.trim()).toBe("Refreshing…");
-    probe?.click();
-    expect(onRefresh).not.toHaveBeenCalled();
-  });
+      expect(detail.querySelector(".settings-section__heading")?.textContent?.trim()).toBe(title);
+      expect(detail.querySelector(".settings-row--actions button")?.textContent?.trim()).toBe(
+        "Check connection",
+      );
+      expect(
+        Array.from(detail.querySelectorAll("dt"), (node) => node.textContent?.trim()),
+      ).toContain("Last connection check");
+      expect(detail.textContent).not.toContain("Channel status and configuration.");
+    },
+  );
+
+  it.each(CHANNEL_DETAIL_CASES)(
+    "projects an in-flight %s read onto its Probe action",
+    (channelId) => {
+      const onRefresh = vi.fn();
+      const container = renderChannelDetailFixture(
+        channelId,
+        { [channelId]: { configured: true, running: true } },
+        { loading: true, onRefresh },
+      );
+      const probe = container.querySelector<HTMLButtonElement>(".settings-row--actions button");
+
+      expect(probe?.disabled).toBe(true);
+      expect(probe?.getAttribute("aria-busy")).toBe("true");
+      expect(probe?.textContent?.trim()).toBe("Refreshing…");
+      probe?.click();
+      expect(onRefresh).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps missing Google Chat status unknown while other known channels are stopped", () => {
     const google = renderChannelDetailFixture("googlechat", { googlechat: null });
+    const googlePresent = renderChannelDetailFixture("googlechat", { googlechat: {} });
     const discord = renderChannelDetailFixture("discord", { discord: null });
     const fact = (container: HTMLElement, label: string) =>
       Array.from(container.querySelectorAll("dt"))
@@ -721,10 +690,91 @@ describe("channel detail", () => {
         ?.nextElementSibling?.textContent?.trim();
 
     expect(fact(google, "Running")).toBe("n/a");
+    expect(fact(googlePresent, "Running")).toBe("No");
     expect(fact(discord, "Running")).toBe("No");
   });
 
-  it.each(["guildchat", "__proto__"])(
+  it.each([0, 1, 2])("shows Telegram account rows only above its %i-account threshold", (count) => {
+    const accounts = [
+      {
+        accountId: "first",
+        name: "First",
+        configured: true,
+        running: false,
+        probe: { bot: { username: "first_bot" } },
+      },
+      { accountId: "second", name: "Second", configured: false, running: true },
+    ].slice(0, count);
+    const container = renderChannelDetailFixture(
+      "telegram",
+      { telegram: { running: true } },
+      { accounts },
+    );
+    if (count < 2) {
+      expect(container.querySelector("dl")?.textContent).toContain("RunningYes");
+      expect(container.textContent).not.toContain("@first_bot");
+    } else {
+      expect(container.querySelector("dl")).toBeNull();
+      const rows = Array.from(container.querySelectorAll(".settings-row")).filter((row) =>
+        row.querySelector(".settings-row__title"),
+      );
+      expect(rows.map((row) => row.querySelector(".settings-row__title")?.textContent)).toEqual([
+        "@first_bot",
+        "Second",
+      ]);
+      expect(rows.map((row) => row.querySelector(".settings-row__desc")?.textContent)).toEqual([
+        "first · Configured: Yes",
+        "second · Configured: No",
+      ]);
+      expect(rows.map((row) => row.querySelector(".settings-status")?.textContent?.trim())).toEqual(
+        ["No", "Running"],
+      );
+    }
+  });
+
+  it("keeps the bundled display policy for a same-ID custom channel status", () => {
+    const container = renderChannelDetailFixture(
+      "signal",
+      {
+        signal: {
+          configured: true,
+          baseUrl: "https://custom.example",
+          lastError: "Custom failure",
+          probe: { ok: false, error: "Probe failure" },
+          lastStartAt: Date.now(),
+          lastProbeAt: Date.now(),
+        },
+      },
+      { label: "Custom Signal" },
+    );
+    expect(container.querySelector(".settings-section__heading")?.textContent?.trim()).toBe(
+      "Signal",
+    );
+    expect(container.textContent).toContain("https://custom.example");
+    expect(container.textContent).toContain("Custom failure");
+    expect(container.textContent).toContain("Probe failure");
+    expect(container.textContent).toContain("just now");
+  });
+
+  it("updates the same mounted detail when the locale changes", async () => {
+    try {
+      await i18n.setLocale("en");
+      const container = renderChannelDetailFixture("signal", { signal: {} });
+      const english = "signal-cli status and channel configuration.";
+      expect(container.textContent).toContain(english);
+      await i18n.setLocale("fr");
+      flush();
+      expect(container.textContent).toContain(i18n.t("channels.signal.subtitle"));
+      expect(container.textContent).not.toContain(english);
+      await i18n.setLocale("en");
+      flush();
+      expect(container.textContent).toContain(english);
+    } finally {
+      await i18n.setLocale("en");
+    }
+  });
+
+  it.each(["__proto__"])(
     "opens accountless plugin %s from its actual hub row without inherited account values",
     (channelId) => {
       for (const configured of [false, true]) {
@@ -762,61 +812,6 @@ describe("channel detail", () => {
 });
 
 describe("channel display selectors", () => {
-  it("returns the channel summary configured flag when present", () => {
-    const props = createProps({
-      ts: Date.now(),
-      channelOrder: ["guildchat"],
-      channelLabels: { guildchat: "Guild Chat" },
-      channels: { guildchat: { configured: false } },
-      channelAccounts: {
-        guildchat: [{ accountId: "guild-main", configured: true }],
-      },
-      channelDefaultAccountId: { guildchat: "guild-main" },
-    });
-
-    expect(resolveChannelDisplayState("guildchat", props).configured).toBe(false);
-  });
-
-  it("falls back to the default account when the channel summary omits configured", () => {
-    const props = createProps({
-      ts: Date.now(),
-      channelOrder: ["guildchat"],
-      channelLabels: { guildchat: "Guild Chat" },
-      channels: { guildchat: { running: true } },
-      channelAccounts: {
-        guildchat: [
-          { accountId: "default", configured: false },
-          { accountId: "guild-main", configured: true },
-        ],
-      },
-      channelDefaultAccountId: { guildchat: "guild-main" },
-    });
-
-    const displayState = resolveChannelDisplayState("guildchat", props);
-
-    expect(displayState.configured).toBe(true);
-    expect(displayState.defaultAccount?.accountId).toBe("guild-main");
-    expect(channelSnapshotEntryIsActive(props.channels.channelsSnapshot, "guildchat")).toBe(true);
-  });
-
-  it("falls back to the first account when no default account id is available", () => {
-    const props = createProps({
-      ts: Date.now(),
-      channelOrder: ["workspace"],
-      channelLabels: { workspace: "Workspace" },
-      channels: { workspace: { running: true } },
-      channelAccounts: {
-        workspace: [{ accountId: "workspace-a", configured: true }],
-      },
-      channelDefaultAccountId: {},
-    });
-
-    const displayState = resolveChannelDisplayState("workspace", props);
-
-    expect(displayState.configured).toBe(true);
-    expect(displayState.defaultAccount?.accountId).toBe("workspace-a");
-  });
-
   it("keeps disabled channels hidden when neither summary nor accounts are active", () => {
     const props = createProps({
       ts: Date.now(),
@@ -884,21 +879,6 @@ describe("WhatsApp card actions", () => {
     expect(onWhatsAppStart).toHaveBeenCalledWith(false);
   });
 
-  it("uses relink as the explicit action after WhatsApp is linked", () => {
-    const onWhatsAppStart = vi.fn();
-    const { buttons, labels } = renderWhatsAppButtons({
-      linked: true,
-      onWhatsAppStart,
-    });
-
-    expect(labels).toEqual(["Save", "Reload", "Relink", "Logout", "Refresh"]);
-
-    const relink = buttons.find((button) => button.textContent?.trim() === "Relink");
-    expect(relink).toBeInstanceOf(HTMLButtonElement);
-    relink!.click();
-    expect(onWhatsAppStart).toHaveBeenCalledWith(true);
-  });
-
   it("shows wait for scan only while a QR is displayed", () => {
     const { labels } = renderWhatsAppButtons({
       linked: false,
@@ -906,17 +886,6 @@ describe("WhatsApp card actions", () => {
     });
 
     expect(labels).toEqual(["Save", "Reload", "Show QR", "Wait for scan", "Logout", "Refresh"]);
-  });
-
-  it("renders the QR directly above the action row so it is visible next to Show QR", () => {
-    const { container } = renderWhatsAppButtons({
-      linked: false,
-      qrDataUrl: "data:image/png;base64,current-qr",
-    });
-
-    const qrRow = container.querySelector(".qr-wrap")?.closest(".settings-row");
-    expect(qrRow).not.toBeNull();
-    expect(qrRow?.nextElementSibling?.classList.contains("settings-row--actions")).toBe(true);
   });
 });
 

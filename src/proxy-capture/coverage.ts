@@ -22,7 +22,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
     protocols: ["http", "https", "sse"],
     status: "captured",
     notes:
-      "Central provider fetch seam routes through explicit proxy overrides and records request/response payloads.",
+      "Central provider request path routes through explicit proxy overrides and records request/response payloads.",
   },
   {
     id: "discord-rest",
@@ -101,7 +101,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
     protocols: ["https"],
     status: "proxy-only",
     notes:
-      "Feishu SDK traffic can inherit ambient proxying, but decrypted request/response capture is not yet wired at the SDK seam.",
+      "Feishu SDK traffic can inherit ambient proxying, but decrypted request/response capture is not yet wired at the SDK integration.",
   },
   {
     id: "feishu-client-ws",

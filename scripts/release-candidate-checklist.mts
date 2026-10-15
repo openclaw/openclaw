@@ -72,6 +72,7 @@ type CandidateState = ReturnType<typeof buildReleaseCandidateState>;
 type WorkflowArtifact = Awaited<ReturnType<typeof runArtifacts>>[number];
 type GithubFetch = (url: string, init?: RequestInit) => Promise<Response>;
 type GithubApiOptions = Partial<{
+  allowAnonymousFallback: boolean;
   fetchImpl: GithubFetch;
   maxBodyBytes: number;
   timeoutMs: number;
@@ -165,7 +166,7 @@ Options:
   --tag <tag>                         Release tag. An existing tag must resolve to the target SHA.
   --target-sha <sha>                  Frozen release SHA. Defaults to the current HEAD.
   --workflow-ref <ref>                Trusted helper/publisher source (P), not the candidate harness. Default: main.
-  --workflow-sha <sha>                Trusted helper/publisher SHA (P); reuses or mints its release-publish tag. Fresh qualification runs Q=C.
+  --workflow-sha <sha>                Trusted helper/publisher SHA (P), a trusted-main commit, not the candidate; reuses or mints its release-publish tag. Fresh qualification runs Q=C.
   --publish-workflow-ref <tag>         Protected publication tooling tag matching the trusted helper checkout.
   --publication-route <normal|prepared>
                                       Intended publication route. Default: normal; not inferred from a protected ref.
@@ -647,7 +648,7 @@ export async function githubApi(path: string, options: GithubApiOptions = {}): P
       (response.status === 403 || response.status === 429) &&
       (/API rate limit exceeded/iu.test(text) ||
         response.headers.get("x-ratelimit-remaining") === "0");
-    if (primaryRateLimitExhausted) {
+    if (primaryRateLimitExhausted && options.allowAnonymousFallback !== false) {
       // Public release evidence remains readable without auth when one maintainer
       // token is exhausted. Mutating gh commands keep their authenticated path.
       response = await Promise.race([request(""), timeoutPromise]);
@@ -751,7 +752,18 @@ function runFromTrustedTooling(
       workflowSha !== trustedToolingSha &&
       !gitIsAncestor(workflowSha, "refs/remotes/origin/main", targetRoot)
     ) {
-      throw new Error(`--workflow-sha ${workflowSha} is not reachable from trusted ${workflowRef}`);
+      // P runs admission, protected-tag creation, and publication with release
+      // credentials, so it must be reviewed trusted-main code (RELEASING.md,
+      // "Frozen qualification identity"). The candidate is selected separately.
+      const candidateHead = run("git", ["rev-parse", "HEAD"], {
+        capture: true,
+        cwd: targetRoot,
+      }).trim();
+      throw new Error(
+        `--workflow-sha ${workflowSha} is not reachable from trusted ${workflowRef}.${
+          workflowSha === candidateHead ? " It is the checked-out release candidate." : ""
+        } --workflow-sha pins the release tooling that runs with release credentials, so it must be a commit on trusted ${workflowRef}; the candidate comes from the checkout or --target-sha. Pass a trusted ${workflowRef} commit (for example \`git rev-parse origin/${workflowRef}\`), or land the tooling repair on ${workflowRef} first.`,
+      );
     }
     trustedToolingSha = workflowSha;
   }
@@ -948,7 +960,7 @@ function gitIsAncestor(ancestor: string, target: string, cwd = process.cwd()) {
     return false;
   }
   throw new Error(
-    `could not validate changelog provenance ${ancestor}..${target}: ${
+    `could not check git ancestry ${ancestor}..${target}: ${
       result.stderr?.trim() || result.signal || result.status
     }`,
   );
@@ -1447,26 +1459,36 @@ type RunInfo = Awaited<ReturnType<typeof runInfo>>;
 
 async function pendingDeployments(repo: string, runId: string) {
   try {
-    return await githubApi(`repos/${repo}/actions/runs/${runId}/pending_deployments`);
+    // Approval capability belongs to this caller, unlike public release evidence.
+    return await githubApi(`repos/${repo}/actions/runs/${runId}/pending_deployments`, {
+      allowAnonymousFallback: false,
+    });
   } catch {
-    return [];
+    return null;
   }
 }
 
 function summarizePendingDeployments(repo: string, runId: string, deployments: unknown) {
-  if (!Array.isArray(deployments) || deployments.length === 0) {
+  if (!Array.isArray(deployments)) {
+    return `- environment approval status unavailable for the authenticated caller; this is not proof that no approval is pending. Inspect https://github.com/${repo}/actions/runs/${runId} with an eligible environment reviewer. Validation monitoring continues; repository or CI-bypass access does not establish approval or production deployment authority.`;
+  }
+  if (deployments.length === 0) {
     return "";
   }
-  return deployments
+  const summary = deployments
     .map((deploymentValue) => {
       const deployment = isRecord(deploymentValue) ? deploymentValue : {};
       const environment = isRecord(deployment.environment) ? deployment.environment : {};
+      const canApprove = deployment.current_user_can_approve;
       return [
-        `- pending approval: env=${formatJsonValue(environment.name ?? "<unknown>")} canApprove=${formatJsonValue(deployment.current_user_can_approve ?? "<unknown>")}`,
-        `  approve: gh api -X POST repos/${repo}/actions/runs/${runId}/pending_deployments -F 'environment_ids[]=${formatJsonValue(environment.id ?? "<id>")}' -f state=approved -f comment='Approve release gate'`,
+        `- pending approval: env=${formatJsonValue(environment.name ?? "<unknown>")} canApprove=${formatJsonValue(canApprove ?? "<unknown>")}`,
+        canApprove === true
+          ? `  approve: gh api -X POST repos/${repo}/actions/runs/${runId}/pending_deployments -F 'environment_ids[]=${formatJsonValue(environment.id ?? "<id>")}' -f state=approved -f comment='Approve release gate'`
+          : `  ${canApprove === false ? "The authenticated caller cannot approve this environment" : "Caller approval capability is unknown"}; ask an eligible environment reviewer to inspect https://github.com/${repo}/actions/runs/${runId}.`,
       ].join("\n");
     })
     .join("\n");
+  return `${summary}\nEnvironment approval is separate from repository write, organization membership, branch-policy read, CI bypass, and production deployment authority.`;
 }
 
 function summarizeFailedRun(info: RunInfo) {

@@ -62,8 +62,6 @@ export const THREAD_BINDINGS_STATE = resolveGlobalSingleton(
   THREAD_BINDINGS_STATE_KEY,
   createThreadBindingsGlobalState,
 );
-// Source-plugin reloads retain the previous generation's shared registry.
-THREAD_BINDINGS_STATE.accountOperationTails ??= new WeakMap();
 
 export const MANAGERS_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.managersByAccountId;
 export const BINDINGS_BY_THREAD_ID = THREAD_BINDINGS_STATE.bindingsByThreadId;
@@ -105,7 +103,7 @@ export function openThreadBindingsStore() {
 }
 
 export function openThreadBindingsStoreAsync() {
-  return getDiscordRuntime().state.openKeyedStore<ThreadBindingRecord>({
+  return getDiscordRuntime().state.openKeyedStoreV2<ThreadBindingRecord>({
     namespace: THREAD_BINDINGS_NAMESPACE,
     maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
   });

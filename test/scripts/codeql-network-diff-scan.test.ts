@@ -48,7 +48,7 @@ function scan(
     path.join(bin, "gh"),
     `#!/usr/bin/env bash
 set -euo pipefail
-[[ "$1" == api && "$2" == --paginate && "$3" == repos/openclaw/openclaw/pulls/123/files ]]
+[[ "$1" == api && "$2" == --paginate && "$3" == "repos/openclaw/openclaw/pulls/123/files?per_page=100" ]]
 call=$(( $(cat calls) + 1 ))
 echo "$call" > calls
 if [[ "$call" == "$FAIL_CALL" ]]; then

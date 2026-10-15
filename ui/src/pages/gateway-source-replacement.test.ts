@@ -330,9 +330,9 @@ describe("gateway source replacement across reconnect with a reused client", () 
 
     document.body.append(page.element);
     await page.updateComplete;
-    await waitForFast(() => expect(page.usageResult).toBe(freshResult));
-
-    expect(page.usageResult).not.toBe(staleResult);
+    await waitForFast(() =>
+      expect(page.usageResult?.sessions.map(({ key }) => key)).toEqual(["fresh"]),
+    );
   });
 
   it("retries a usage load interrupted by a same-client disconnect", async () => {
@@ -366,11 +366,13 @@ describe("gateway source replacement across reconnect with a reused client", () 
     await waitForFast(() =>
       expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toHaveLength(2),
     );
-    await waitForFast(() => expect(page.usageResult).toBe(freshResult));
+    await waitForFast(() =>
+      expect(page.usageResult?.sessions.map(({ key }) => key)).toEqual(["fresh"]),
+    );
     interrupted.resolve(usageResult("stale"));
     await Promise.resolve();
     await Promise.resolve();
-    expect(page.usageResult).toBe(freshResult);
+    expect(page.usageResult?.sessions.map(({ key }) => key)).toEqual(["fresh"]);
   });
 
   it("gates same-client usage reconnects by payload age and page visibility", async () => {
@@ -393,7 +395,10 @@ describe("gateway source replacement across reconnect with a reused client", () 
 
     document.body.append(page.element);
     await page.updateComplete;
-    expect(page.usageResult).toBe(result);
+    expect(page.usageResult).toMatchObject({
+      totals: result.totals,
+      sessions: result.sessions,
+    });
 
     harness.emitConnected(false);
     harness.emitConnected(true);
@@ -674,10 +679,9 @@ describe("gateway source replacement across reconnect with a reused client", () 
     document.body.append(page.element);
     await page.updateComplete;
     await page.loadUsage();
-    expect(page.usageResult).toBe(result);
-    expect(page.usageCostSummary).toMatchObject({
+    expect(page.usageResult).toMatchObject({
       totals: result.totals,
-      daily: result.aggregates.costDaily,
+      sessions: result.sessions,
     });
     expect(page.providerUsageSummary).toBe(providerUsage);
     page.usageSelectedSessions = ["old"];
@@ -685,7 +689,6 @@ describe("gateway source replacement across reconnect with a reused client", () 
     await replaceContext(page, page.element, client);
 
     expect(page.usageResult).toBeNull();
-    expect(page.usageCostSummary).toBeNull();
     expect(page.providerUsageSummary).toBeNull();
     expect(page.usageSelectedSessions).toEqual([]);
   });

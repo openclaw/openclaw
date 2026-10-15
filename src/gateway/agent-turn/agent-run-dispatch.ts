@@ -478,7 +478,7 @@ export function dispatchAgentRunFromGateway(params: {
       const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, cause);
       const renderedErr = error.message;
       const stopReason = aborted
-        ? resolveGatewayAgentAbortStopReason(params.abortController.signal)
+        ? resolveGatewayAgentAbortStopReason(params.abortController.signal, cause)
         : isAbortError(cause)
           ? "aborted"
           : undefined;

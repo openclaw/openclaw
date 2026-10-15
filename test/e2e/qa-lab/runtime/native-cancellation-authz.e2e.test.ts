@@ -4,7 +4,7 @@ import path from "node:path";
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
@@ -31,7 +31,10 @@ import { resetSubagentRegistryForTests } from "../../../../src/agents/subagents/
 import { createSubagentsTool } from "../../../../src/agents/tools/subagents-tool.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import { resolveSessionStorePathCore } from "../../../../src/config/sessions/paths.js";
-import { replaceSessionEntrySync } from "../../../../src/config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntrySync,
+} from "../../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { startGatewayServer } from "../../../../src/gateway/server.js";
 import { snapshotGatewayStartupEnv } from "../../../../src/gateway/test-helpers.env.js";
@@ -78,6 +81,8 @@ async function registerRunningSubagent(params: {
   await registerSubagentRun({
     runId: params.runId,
     childSessionKey: params.childSessionKey,
+    childAgentId: "main",
+    sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: params.childSessionKey }),
     controllerSessionKey: params.ownerKey,
     requesterSessionKey: params.ownerKey,
     requesterDisplayKey: params.ownerKey,
@@ -181,7 +186,8 @@ describe("native child cancellation authority", () => {
         const acpxServices: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
         const acpxRuntime = createPluginRuntimeMock({
           state: {
-            openKeyedStore: (options) => createPluginStateKeyedStoreForTests("acpx", options),
+            openKeyedStoreV2: (options) =>
+              createPluginStateKeyedStoreV2ForTests("acpx", options, { assertCurrent() {} }),
           },
         });
         acpxPlugin.register(

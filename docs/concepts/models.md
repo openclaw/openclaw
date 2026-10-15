@@ -39,6 +39,14 @@ OpenAI API-key and ChatGPT/Codex subscription credentials remain distinct. See
 [Agent runtimes](/concepts/agent-runtimes) and
 [GitHub Copilot agent runtime](/plugins/copilot).
 
+Creating a session with a native runtime acquires that runtime's current model
+and account observation when needed, including when the runtime comes from model
+policy. You do not need to open the model picker first. Cached observations are
+reused only while their runtime owner and account remain current. Native reads
+share session creation's catalog deadline and stop waiting if the caller disconnects
+or loses authority; an unfinished catalog returns a retryable error without creating
+the session.
+
 ## Selection order
 
 <Steps>
@@ -67,12 +75,23 @@ Related model-config surfaces:
 
 Full key reference, defaults, and JSON5 examples: [Configuration reference](/gateway/config-agents#agent-defaults).
 
-Utility tasks reserve additional output tokens for reasoning-capable models,
-within the selected model's output limit, so reasoning can finish before the
-title, observer digest, or summary. Non-reasoning models keep the smaller task
-budget. This does not change the model's thinking settings or the task's timeout.
-For native Ollama, configured per-model `params.think`/`params.thinking` and
-`params.num_ctx` still apply; see [Ollama thinking control](/providers/ollama/advanced).
+Title generation requests thinking off where supported. Custom OpenAI-compatible
+endpoints with an inferred Z.AI (`zai`) thinking format keep the provider's default
+unless an explicit thinking format, supported off effort, or reasoning-effort mapping
+declares the contract.
+This avoids rejected requests on always-thinking GLM models. Other thinking formats
+retain their existing off controls; explicit compatibility settings remain authoritative.
+Failed title attempts log a warning naming the provider/model and suggesting that
+you check its configuration or choose another `utilityModel`, at most once per
+provider/model per minute. The warning excludes source text and raw provider errors.
+
+Utility tasks request thinking off so their bounded output budgets go to the
+title, observer digest, or summary rather than hidden reasoning. This also
+overrides configured native Ollama `think`/`thinking` and OpenAI-compatible
+`enable_thinking` switches for these requests, without changing ordinary chat
+reasoning, other model parameters, or task timeouts. Providers that require
+reasoning still apply their supported minimum; see
+[Ollama thinking control](/providers/ollama/advanced).
 
 For the typed decision model class, available models, rubrics, and plugin API,
 see [Decision models](/concepts/decision-models).
@@ -136,8 +155,9 @@ to 30 minutes while it keeps failing. A selected native model can load its own
 metadata while that acquisition is still running.
 
 In chat apps, `/models` and model picker buttons reuse the newest completed provider
-list. First use of an idle native agent can take a few seconds to start its harness
-and discover models. Pending providers show `checking models…`.
+list. Gateway model pickers return prepared rows immediately while an idle native
+agent starts its harness and discovers models in the background. Pending providers
+show `checking models…`.
 Open the menu again to see newly discovered models; completing discovery does not
 edit a list that was already sent. If optional native discovery fails, ordinary
 catalog requests keep the published rows and report `refreshFailed`; selecting a
@@ -324,7 +344,7 @@ configured `agentRuntime` remains the default:
 }
 ```
 
-The Gateway keeps one canonical model and checks each additional runtime against
+The Gateway keeps one underlying model and checks each additional runtime against
 the current account, route, and enabled harness. A choice does not grant access,
 change credentials, or rename the upstream model. Each runtime supplies its own
 availability, reasoning controls, context window, and placement capabilities.
@@ -433,6 +453,7 @@ Without a scope flag, selections change only the current session. `agents.defaul
 - A user-selected `/model` ref is strict for that session: if it becomes unreachable, the reply fails visibly instead of silently falling back through `agents.defaults.model.fallbacks`. Configured defaults and cron job primaries still use fallback chains.
 - If you select another model while a live switch is queued, the newer selection stays pending for the next safe retry opportunity.
 - `/model status` is the detailed view: auth candidates per provider, and (when configured) the provider endpoint `baseUrl` plus `api` mode.
+- `/status` and `session_status` report the selected credential source, including `models.json` for configured keys and `environment` for environment credentials. Custom providers sharing an endpoint keep their own credential selection; a different saved profile does not replace the selected source in status output.
 - Model refs are parsed by splitting on the first `/`. Type `provider/model`. If the model ID itself contains `/` (OpenRouter-style), include the provider prefix, for example `/model openrouter/moonshotai/kimi-k2`. If you omit the provider, OpenClaw tries an alias match first. It then tries a unique configured-provider match for that exact unprefixed model id. It then tries the configured default provider, which is a deprecated fallback. If that provider no longer exposes the configured default model, OpenClaw uses the first configured provider and model instead. This avoids surfacing a stale removed-provider default.
 - An alias cannot redirect an explicit registered or configured provider ref to another provider, including when the ref has an auth-profile suffix. A colliding alias remains usable with its own provider prefix. Slash-form aliases whose leading segment is a model namespace still work.
 - When inferring a provider, exact model ID case takes precedence over case-insensitive matches within the same configuration scope. A case-insensitive match is used only when it identifies one provider. Per-agent model entries take precedence over global entries and configured provider catalogs.
@@ -459,7 +480,7 @@ openclaw models auth list|add|login|paste-api-key|paste-token|setup-token|order
 
 <AccordionGroup>
   <Accordion title="Scanning (OpenRouter free models)">
-    `openclaw models scan` inspects OpenRouter's public free-model catalog and can check candidates for tool and image support live. The catalog itself is public, so metadata-only scans (`--no-probe`) need no key. Live checking and `--set-default`/`--set-image` require an OpenRouter API key (auth profile or `OPENROUTER_API_KEY`). Without one they fail closed to metadata-only output.
+    `openclaw models scan` inspects OpenRouter's public free-model catalog and can check candidates for tool and image support live. The catalog itself is public, so metadata-only scans (`--no-probe`) need no key. Live checking and `--set-default`/`--set-image` require an OpenRouter API key (auth profile or `OPENROUTER_API_KEY`). Without one they are limited to metadata-only output.
 
     Results rank by: image support, then tool latency, then context size, then parameter count. In a TTY, checked results prompt an interactive fallback selection. Non-interactive mode needs `--yes` to accept defaults.
 
@@ -469,6 +490,12 @@ openclaw models auth list|add|login|paste-api-key|paste-token|setup-token|order
 </AccordionGroup>
 
 ## Models registry (`models.json`)
+
+When a saved catalog has a malformed model `cost` block, OpenClaw skips that model
+and records a warning naming it. Other valid models in the same catalog remain
+available. The saved catalog is left unchanged; correct the model's pricing to
+make it available again. Other schema errors and invalid model API or token limits
+still reject the affected catalog, even on a model with malformed pricing.
 
 ### Hosted catalog updates
 
@@ -484,9 +511,10 @@ provider model discovery, then publishes its model rows and prices together
 without restarting. Picker reads keep using the current generation during
 preparation; a failed or superseded preparation leaves it in place. A provider
 whose discovery fails publishes with the new generation's built-in rows.
-Reply, scheduled-run, and agent RPC preparation retain their captured model
-generation through admission. Publishing a newer catalog does not interrupt
-those turns before their first model request. Native model lookups can finish
+Admitted turns retain their captured model generation. If a newer catalog
+supersedes an agent RPC's runtime preparation before acceptance, the request
+returns a retryable `UNAVAILABLE` response without starting the turn. Retry the
+request to prepare against the current runtime. Native model lookups can finish
 for an admitted turn without replacing the newer shared catalog. Nested model
 calls keep the admitted config, and each usage-estimation operation uses one
 pricing context.

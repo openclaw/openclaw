@@ -130,7 +130,7 @@ export async function sendMessageNextcloudTalk(
         errorMsg = `Nextcloud Talk: bad request - ${errorBody || "invalid message format"}`;
       } else if (status === 401) {
         errorMsg =
-          "Nextcloud Talk: bot send was rejected - check the bot secret and ensure the bot was installed with --feature response";
+          "Nextcloud Talk: bot send was rejected - check the bot secret and check that the bot was installed with --feature response";
       } else if (status === 403) {
         errorMsg = "Nextcloud Talk: forbidden - bot may not have permission in this room";
       } else if (status === 404) {

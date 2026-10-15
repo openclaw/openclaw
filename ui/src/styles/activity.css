@@ -125,6 +125,7 @@ a.activity-current-work__row:hover {
 .activity-live-toolbar {
   display: flex;
   flex: 0 0 auto;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
@@ -277,11 +278,8 @@ a.activity-current-work__row:hover {
 }
 
 .activity-feed__people-popover {
-  --max-width: min(360px, calc(100vw - 32px));
-}
-
-.activity-feed__people-popover::part(body) {
-  padding: 0;
+  --oc-overlay-max-width: min(360px, calc(100vw - 32px));
+  --oc-popover-padding: 0;
 }
 
 .activity-feed__people-panel {
@@ -953,11 +951,8 @@ a.activity-current-work__row:hover {
 }
 
 .activity-live-filter-popover {
-  --max-width: min(280px, calc(100vw - 32px));
-}
-
-.activity-live-filter-popover::part(body) {
-  padding: 0;
+  --oc-overlay-max-width: min(280px, calc(100vw - 32px));
+  --oc-popover-padding: 0;
 }
 
 .activity-live-filter-popover__panel {
@@ -1135,11 +1130,6 @@ a.activity-current-work__row:hover {
   .activity-feed {
     height: auto;
     overflow: visible;
-  }
-
-  .activity-feed__toolbar,
-  .activity-live-toolbar {
-    flex-wrap: wrap;
   }
 
   .activity-feed__search,

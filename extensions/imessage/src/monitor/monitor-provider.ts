@@ -39,7 +39,7 @@ import { resolveTextChunkLimit, type GetReplyOptions } from "openclaw/plugin-sdk
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   createRuntimeConfigReader,
-  getRuntimeConfig,
+  captureRuntimeConfigAsyncReader,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   createNonExitingRuntime,
@@ -62,7 +62,6 @@ import {
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
 import type { IMessageApprovalGatewayRuntime } from "../approval-gateway-types.js";
@@ -197,7 +196,7 @@ const IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS = new Set(["from me", "no menti
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promise<void> {
   const { scheduler } = opts;
   const runtime = opts.runtime ?? createNonExitingRuntime();
-  const cfg = opts.config ?? getRuntimeConfig();
+  const cfg = opts.config ?? (await captureRuntimeConfigAsyncReader()());
   const readConfig = createRuntimeConfigReader(cfg);
   const accountInfo = resolveIMessageAccount({
     cfg,
@@ -424,11 +423,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
                 ? expectDefined(entries[0], "single iMessage dispatch entry").message
                 : combineIMessagePayloads(entries.map((entry) => entry.message));
             if (entries.length > 1 && shouldLogVerbose()) {
-              const text = combined.text ?? "";
-              const preview = sliceUtf16Safe(text, 0, 50);
-              const ellipsis = text.length > 50 ? "..." : "";
               logVerbose(
-                `[imessage] merged ${entries.length} debounced messages: "${preview}${ellipsis}"`,
+                `[imessage] merged ${entries.length} debounced messages chars=${combined.text?.length ?? 0}`,
               );
             }
             await handleMessageNow(combined, admissionLifecycle);
@@ -883,11 +879,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       normalizeEntry: normalizeIMessageHandle,
     });
     if (shouldLogVerbose()) {
-      const preview = truncateUtf16Safe(ctxPayload.Body ?? "", 200).replace(/\n/g, "\\n");
       logVerbose(
         `imessage inbound: chatId=${chatId ?? "unknown"} from=${ctxPayload.From} len=${
           (ctxPayload.Body ?? "").length
-        } preview="${preview}"`,
+        }`,
       );
     }
 

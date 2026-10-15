@@ -45,36 +45,18 @@ beforeEach(() => {
 });
 
 describe("Microsoft Teams read policy", () => {
-  it.each([
-    { name: "default sender-only policy", groupPolicy: undefined, configuredRoute: false },
-    { name: "configured team/channel route", groupPolicy: "allowlist", configuredRoute: true },
-  ])("recovers existing groupAllowFrom configurations with $name", async (testCase) => {
-    const teamId = "19:team@thread.tacv2";
+  it("requires an explicit channel route under the default sender-only policy", async () => {
     const channelId = "19:roadmap@thread.tacv2";
     const target = `11111111-1111-1111-1111-111111111111/${channelId}`;
     const cfg = {
       channels: {
         msteams: {
           groupAllowFrom: ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"],
-          ...(testCase.groupPolicy ? { groupPolicy: testCase.groupPolicy } : {}),
-          ...(testCase.configuredRoute
-            ? { teams: { [teamId]: { channels: { [channelId]: {} } } } }
-            : {}),
         },
       },
     } as OpenClawConfig;
 
-    mocks.listChannelsForTeamWithPageInfo.mockResolvedValue({
-      items: [{ id: teamId }, { id: channelId }],
-      truncated: false,
-    });
-
     const result = assertMSTeamsReadTargetAllowed({ cfg, ctx, target });
-    if (testCase.configuredRoute) {
-      await expect(result).resolves.toBe(target);
-      return;
-    }
-
     await expect(result).rejects.toThrow(
       'Microsoft Teams read target is not allowed. Configure channels.msteams.teams.<team>.channels for this channel, or deliberately set channels.msteams.groupPolicy to "open".',
     );

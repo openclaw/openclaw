@@ -48,7 +48,6 @@ import {
   timeWorktreePreparationPhase,
   withWorktreePreparationTiming,
 } from "./preparation-timing.js";
-import { provisionIncludedFiles } from "./provisioned-files.js";
 import {
   readRegistryWorktrees,
   readRegistryWorktreeForMutation,
@@ -66,6 +65,16 @@ import {
 } from "./registry.js";
 import { assertExactStateOwner } from "./removal-git.js";
 import { removeSettledManagedWorktree, type RemoveWorktreeParams } from "./removal.js";
+import {
+  resolveRepository,
+  resolveRepositoryIdentity,
+  resolveRepositoryPaths,
+  type ResolvedRepository,
+} from "./repository-paths.js";
+import {
+  completeRepositoryWorktreeSetup,
+  type MaterializedRepositoryWorktree,
+} from "./repository-setup.js";
 import { captureWorktreeRunEndContext, withWorktreeRunEnd } from "./run-end-lifecycle.js";
 import { worktreeRunLeaseScope } from "./run-lease-owner.js";
 import { reapWorktreeRunLeases } from "./run-lease-store.js";
@@ -76,14 +85,11 @@ import {
   createWithWorktreeAllocation,
   createOwnedWorktree,
   prepareWorktreeDestination,
+  readWorktreeGitInventory,
   findWorktreeByName,
-  resolveRepository,
   rebindLiveWorktreeRepository,
-  resolveRepositoryIdentity,
-  runSetupScript,
   withWorktreeSource,
   withWorktreeSources,
-  type ResolvedRepository,
   type WorktreeSourceCustody,
 } from "./service-preparation.js";
 import {
@@ -139,18 +145,14 @@ type ManagedWorktreeGcParams = WorktreeCleanupOwnerPolicy &
 
 type RepositoryCreationParams = CreateManagedWorktreeParams &
   WorktreeAllocationGuard &
-  WorktreeSourceCustody & { prepareBase?: WorktreeBasePreparation };
+  WorktreeSourceCustody & {
+    prepareBase?: WorktreeBasePreparation;
+    gitInventory: Awaited<ReturnType<typeof readWorktreeGitInventory>>;
+  };
 
 type WorktreeCreation =
   | ManagedWorktreeCreationOutcome
   | (() => Promise<ManagedWorktreeCreationOutcome>);
-type MaterializedRepositoryWorktree = {
-  worktreePath: string;
-  recordBase: string;
-  provisionedBytes: number;
-  setupBytes: number;
-  runRepositorySetup: boolean;
-};
 
 async function claimManagedRemoval(
   env: NodeJS.ProcessEnv,
@@ -181,13 +183,16 @@ export class ManagedWorktreeService {
   private readonly getConfig: ServiceOptions["getConfig"];
   private readonly capacity: ReturnType<typeof createWorktreeCapacityOwner>;
   private readonly cleanupDeferrals: WorktreeCleanupDeferrals = new Map();
+  private readonly orphanCleanupFailures: Parameters<
+    typeof collectRetiredWorktreeArtifacts
+  >[0]["orphanFailures"] = new Map();
   private readonly maintainGit: ReturnType<typeof createWorktreeGitMaintenance>;
 
   constructor(options: ServiceOptions = {}) {
     this.env = options.env ?? process.env;
     this.now = options.now ?? Date.now;
     this.getConfig = options.getConfig;
-    this.maintainGit = createWorktreeGitMaintenance(this.env);
+    this.maintainGit = createWorktreeGitMaintenance(this.env, this.now);
     this.capacity = createWorktreeCapacityOwner({
       env: this.env,
       now: this.now,
@@ -212,7 +217,11 @@ export class ManagedWorktreeService {
             async (guard, publication) =>
               await withWorktreeSources(this.env, async (retainRepository) => {
                 const retainSources = await retainRepository({ ...params, ...guard, repository });
-                const owned = { ...params, ...guard, retainSources, prepareBase };
+                const gitInventory = await readWorktreeGitInventory(
+                  repository.repoRoot,
+                  params.name,
+                );
+                const owned = { ...params, ...guard, retainSources, prepareBase, gitInventory };
                 const creation = await this.withAllocationLease(owned, (allocation) =>
                   this.reserveForOwner(owned, allocation, repository, publication),
                 );
@@ -251,12 +260,14 @@ export class ManagedWorktreeService {
                     });
                     sourceRoot = repoRoot;
                     const repository = await resolveRepository(repoRoot);
+                    const gitInventory = await readWorktreeGitInventory(repoRoot, params.name);
                     const prepared = {
                       ...params,
                       ...guard,
                       repoRoot,
                       baseRef: "main",
                       runSetupScript: false,
+                      gitInventory,
                     };
                     const retainSources = await retainRepository({ ...prepared, repository });
                     return await this.reserveForOwner(
@@ -463,6 +474,7 @@ export class ManagedWorktreeService {
       env: this.env,
       configuredRoot: this.getConfig?.().worktreeRoot,
       repository,
+      gitInventory: params.gitInventory,
       owner: params,
       suppliedName,
       suggestedName: params.suggestedName ?? inferredName,
@@ -503,13 +515,13 @@ export class ManagedWorktreeService {
           { ...current, retainSources: params.retainSources, prepareBase: params.prepareBase },
           repository,
           destination,
-          publication,
+          publication.id,
         );
         prepared = true;
         return created;
       });
       const provisionedPaths = await timeWorktreePreparationPhase("provision", () =>
-        this.completeRepositoryWorktreeSetup(params, repository, materialized),
+        completeRepositoryWorktreeSetup(params, this.env, repository, materialized),
       );
       // Pending → live preserves the slot count; retained checkout custody owns publication.
       return await timeWorktreePreparationPhase("publication", () =>
@@ -576,10 +588,10 @@ export class ManagedWorktreeService {
   }
 
   private async materializeRepositoryWorktree(
-    params: RepositoryCreationParams,
+    params: Omit<RepositoryCreationParams, "gitInventory">,
     repository: ResolvedRepository,
     destination: Awaited<ReturnType<typeof prepareWorktreeDestination>>,
-    publication: WorktreeCreationPublication,
+    worktreeId: string,
   ): Promise<MaterializedRepositoryWorktree> {
     const { root, worktreePath, branch } = destination;
     // Default-base resolution fetches remote refs; it is an effect, not just discovery.
@@ -610,6 +622,12 @@ export class ManagedWorktreeService {
             .stat(path.join(repository.sourceRoot, ".openclaw", "worktree-setup.sh"))
             .catch(() => undefined);
     const runRepositorySetup = setupStat?.isFile() === true && (setupStat.mode & 0o111) !== 0;
+    const onPromptReady =
+      params.onPromptReady &&
+      !runRepositorySetup &&
+      !(await worktreePathExists(path.join(repository.sourceRoot, ".worktreeinclude")))
+        ? params.onPromptReady
+        : undefined;
     const setupBytes = runRepositorySetup
       ? Math.max(
           WORKTREE_SETUP_HEADROOM_BYTES,
@@ -645,6 +663,18 @@ export class ManagedWorktreeService {
         branch,
         base: sourceProfile?.commit ?? gitBase,
         sourceProfile,
+        ...(onPromptReady
+          ? {
+              onPromptReady: async (commit: string) =>
+                onPromptReady({
+                  id: worktreeId,
+                  path: worktreePath,
+                  branch,
+                  repoRoot: repository.repoRoot,
+                  commit,
+                }),
+            }
+          : {}),
         prepareCommit: async (commit) => {
           const guard = { signal: params.signal, assertCurrent: params.commitGuard };
           await logWorktreeBase(repository.repoRoot, base, commit, {
@@ -669,17 +699,6 @@ export class ManagedWorktreeService {
         signal: params.signal,
         commitGuard: () => params.commitGuard?.(),
         rollbackGuard: params.rollbackGuard,
-        deferUnpreparedCleanup: (cleanup) => {
-          publication.cleanup = async (assertCurrent) => {
-            assertCurrent();
-            const live = await readRegistryWorktrees(this.env, { liveOnly: true });
-            assertCurrent();
-            if (live.some((record) => record.path === worktreePath)) {
-              throw new Error("Worktree was published before cleanup; checkout preserved.");
-            }
-            await cleanup(assertCurrent);
-          };
-        },
       });
     };
     const added = await timeWorktreePreparationPhase("checkout", addCheckout);
@@ -695,39 +714,6 @@ export class ManagedWorktreeService {
       setupBytes,
       runRepositorySetup,
     };
-  }
-
-  private async completeRepositoryWorktreeSetup(
-    params: CreateManagedWorktreeParams & WorktreeAllocationGuard,
-    repository: ResolvedRepository,
-    materialized: MaterializedRepositoryWorktree,
-  ): Promise<string[]> {
-    const { worktreePath, provisionedBytes, setupBytes, runRepositorySetup } = materialized;
-    const provisionedPaths =
-      params.provisionIgnoredFiles === false
-        ? []
-        : await withWorktreeSource(params, async (current) => {
-            current.signal?.throwIfAborted();
-            current.commitGuard?.();
-            await requireAllocationSpace(
-              current,
-              this.env,
-              worktreePath,
-              repository,
-              2 * provisionedBytes + setupBytes,
-            );
-            return provisionIncludedFiles(repository.sourceRoot, worktreePath, {
-              signal: current.signal,
-              assertCurrent: current.commitGuard,
-            });
-          });
-    if (runRepositorySetup) {
-      await requireAllocationSpace(params, this.env, worktreePath, repository, setupBytes);
-      await timeWorktreePreparationPhase("setup", () =>
-        runSetupScript(repository.sourceRoot, worktreePath, params),
-      );
-    }
-    return provisionedPaths;
   }
 
   async list(): Promise<ManagedWorktreeRecord[]> {
@@ -755,9 +741,9 @@ export class ManagedWorktreeService {
     canonicalRoot: string;
     sourceRoot: string;
   }> {
-    const resolved = await resolveRepository(repoRoot);
+    const resolved = await resolveRepositoryPaths(repoRoot);
     return {
-      canonicalRoot: resolved.repoRoot,
+      canonicalRoot: resolved.canonicalRoot,
       sourceRoot: resolved.sourceRoot,
     };
   }
@@ -1078,8 +1064,9 @@ export class ManagedWorktreeService {
       assertCurrent();
       if (params.retryDeferred) {
         // Repair before cleanup can defer the repository for those same missing objects.
-        await this.maintainGit(params);
+        await this.maintainGit({ ...params, progress });
         assertCurrent();
+        this.orphanCleanupFailures.clear();
       }
       const { records, leases } = await readWorktreeCleanupState(this.env);
       const classification = { ...params, ...(await params.prepareOwners?.(records)) };
@@ -1109,7 +1096,7 @@ export class ManagedWorktreeService {
           },
           classification,
         );
-      const { collect, repositoryProtection } = createWorktreeGcRemoval({
+      const { collect } = createWorktreeGcRemoval({
         env: this.env,
         records,
         now,
@@ -1149,6 +1136,7 @@ export class ManagedWorktreeService {
         records,
         expiresBefore: now - SNAPSHOT_RETENTION_MS,
         progress,
+        orphanFailures: this.orphanCleanupFailures,
         withAllocationLease: (run) => this.withAllocationLease(params, run),
       });
       try {
@@ -1161,7 +1149,7 @@ export class ManagedWorktreeService {
       assertCurrent();
       if (!params.retryDeferred) {
         // Cleanup has released allocation ownership and retired its refs before maintenance.
-        await this.maintainGit({ ...params, shouldDeferRepository: repositoryProtection });
+        await this.maintainGit({ ...params, progress });
       }
       assertCurrent();
       return progress.result;

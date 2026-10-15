@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
-import type { SessionCapability } from "../lib/sessions/session-capability.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
@@ -41,12 +41,7 @@ export async function waitForMobileSidebarDrawerOpen(page: Page): Promise<void> 
 
 /** Foreground chat startup admits the canonical roster after document load. */
 export async function waitForSessionRosterHydration(page: Page): Promise<void> {
-  await page.evaluate(async () => {
-    await customElements.whenDefined("openclaw-app");
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime: { context: { sessions: SessionCapability } };
-    };
-    const sessions = app.runtime.context.sessions;
+  await evaluateControlUiContext(page, async ({ sessions }) => {
     const ready = () =>
       sessions.canonicalListRevision > 0 &&
       sessions.presentation.result !== null &&
@@ -117,33 +112,9 @@ export async function waitForPatch(
   throw new Error(`No matching sessions.patch request found: ${JSON.stringify(requests)}`);
 }
 
-/** Dispatches before a successful action can remove its own control from the DOM. */
+/** Playwright reacquires replaced controls before dispatching the single click. */
 export async function activateSelfRemovingControl(control: Locator): Promise<void> {
-  await control.evaluate((element) => {
-    const target = element as HTMLElement & { disabled?: boolean };
-    const style = getComputedStyle(target);
-    const bounds = target.getBoundingClientRect();
-    const root = target.getRootNode();
-    const hitTestRoot = root instanceof ShadowRoot ? root : document;
-    const hitTarget = hitTestRoot.elementFromPoint(
-      bounds.left + bounds.width / 2,
-      bounds.top + bounds.height / 2,
-    );
-    if (
-      !target.isConnected ||
-      style.display === "none" ||
-      style.visibility === "hidden" ||
-      bounds.width <= 0 ||
-      bounds.height <= 0 ||
-      target.disabled === true ||
-      target.getAttribute("aria-disabled") === "true" ||
-      !hitTarget ||
-      (hitTarget !== target && !target.contains(hitTarget))
-    ) {
-      throw new Error("Self-removing control must be visible and enabled before activation");
-    }
-    target.click();
-  });
+  await control.click();
 }
 
 export function trimmedTextContents(locator: Locator): Promise<string[]> {
@@ -160,32 +131,44 @@ export function actionPointerEvents(button: Locator): Promise<string> {
   return button.evaluate((element) => globalThis.getComputedStyle(element).pointerEvents);
 }
 
-/**
- * Opens a session-menu submenu through the keyboard path. Submenu ARIA is ready
- * before Web Awesome finishes opening the dropdown, so hovering alone races the
- * menu; waiting on its focus contract first keeps navigation keys in order.
- */
-export async function openSessionMenuSubmenu(page: Page, name: string): Promise<void> {
+/** The owned native menu renders each submenu beside its trigger. */
+export function sessionMenuSubmenu(trigger: Locator): Locator {
+  return trigger.locator("..").locator(':scope > [role="menu"]');
+}
+
+export function sessionMenuLabels(panel: Locator): Promise<string[]> {
+  return panel.evaluate((element) =>
+    [...element.querySelectorAll('[role^="menuitem"]')]
+      .filter((item) => item.closest('[role="menu"]') === element)
+      .map((item) => item.getAttribute("aria-label") ?? ""),
+  );
+}
+
+/** Moves to an owned menu row through its roving-focus keyboard path. */
+export async function focusSessionMenuItem(page: Page, name: string): Promise<Locator> {
   const parent = page.getByRole("menuitem", { name, exact: true });
-  await expect.poll(() => parent.getAttribute("aria-haspopup")).toBe("menu");
-  const index = await parent.evaluate((element) =>
-    [...(element.parentElement?.children ?? [])]
+  const index = await parent.evaluate((element) => {
+    const panel = element.closest('[role="menu"]');
+    return [...(panel?.querySelectorAll('[role^="menuitem"]') ?? [])]
       .filter(
         (item) =>
-          item.localName === "wa-dropdown-item" &&
-          item.getAttribute("slot") === element.getAttribute("slot") &&
-          !(item as HTMLElement & { disabled?: boolean }).disabled,
+          item.closest('[role="menu"]') === panel &&
+          !item.matches(":disabled") &&
+          item.getAttribute("aria-disabled") !== "true",
       )
-      .indexOf(element),
-  );
+      .indexOf(element);
+  });
   expect(index).toBeGreaterThanOrEqual(0);
+  await parent.focus();
   await expect
     .poll(() =>
-      parent.evaluate((element) =>
-        [...(element.parentElement?.children ?? [])].some(
-          (item) => item.localName === "wa-dropdown-item" && item === document.activeElement,
-        ),
-      ),
+      parent.evaluate((element) => {
+        const active = document.activeElement;
+        return Boolean(
+          active?.matches('[role^="menuitem"]') &&
+          active.closest('[role="menu"]') === element.closest('[role="menu"]'),
+        );
+      }),
     )
     .toBe(true);
   await page.keyboard.press("Home");
@@ -195,8 +178,16 @@ export async function openSessionMenuSubmenu(page: Page, name: string): Promise<
   await expect
     .poll(() => parent.evaluate((element) => element === document.activeElement))
     .toBe(true);
+  return parent;
+}
+
+/** Opens a native submenu through its roving-focus keyboard path. */
+export async function openSessionMenuSubmenu(page: Page, name: string): Promise<void> {
+  const parent = await focusSessionMenuItem(page, name);
+  await expect.poll(() => parent.getAttribute("aria-haspopup")).toBe("menu");
   await page.keyboard.press("ArrowRight");
   await expect.poll(() => parent.getAttribute("aria-expanded")).toBe("true");
+  await sessionMenuSubmenu(parent).waitFor({ state: "visible" });
 }
 
 /** Fills the owned input dialog and submits it the way Enter does. */

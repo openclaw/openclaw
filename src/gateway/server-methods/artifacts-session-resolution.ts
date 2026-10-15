@@ -3,8 +3,6 @@ import {
   errorShape,
   type ArtifactsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { withSessionStoreReaderInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionForRun } from "../server-session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -153,34 +151,8 @@ export async function prepareArtifactSessionResolution(
         projection,
       });
       access.retain(facts.release);
-      const { target: initialTarget } = facts.readCurrent(cfg);
-      const original = initialTarget && structuredClone(initialTarget.entry);
-      const source = initialTarget?.readSource;
-      // Resident facts select the physical store; its admitted reader still refreshes foreign writes.
-      const fresh =
-        source && initialTarget
-          ? await withSessionStoreReaderInWorker(
-              { agentId: source.agentId, storePath: source.path },
-              ({ reader, database, continuation }) =>
-                reader.readEntryResult({
-                  scope: {
-                    agentId: resolved.agentId,
-                    databaseAgentId: database.agentId,
-                    storePath: database.path,
-                    sessionKey: initialTarget.storeKey,
-                    projection: "list",
-                  },
-                  continuation,
-                }),
-              { backing: true, dataOnly: true, lane: projectionLane },
-            ).catch((error: unknown) => {
-              throw new SessionMutationFactsUnavailableError({ cause: error });
-            })
-          : undefined;
-      if (fresh && !fresh.ok) {
-        throw new SessionMutationFactsUnavailableError({ cause: fresh.error });
-      }
-      const freshEntry = fresh?.value;
+      const initialTarget = facts.readCurrent(cfg).target;
+      const original = initialTarget?.readSource && structuredClone(initialTarget.entry);
       const readCurrent = () => {
         try {
           const currentConfig = access.getRuntimeConfig();
@@ -191,18 +163,12 @@ export async function prepareArtifactSessionResolution(
           ) {
             throw new SessionMutationFactsUnavailableError();
           }
-          let current = facts.readCurrent(currentConfig);
-          if (fresh) {
-            if (
-              !current.target ||
-              !freshEntry ||
-              freshEntry.sessionId !== original?.sessionId ||
-              freshEntry.lifecycleRevision !== original?.lifecycleRevision ||
-              hasSessionReadAccessChanged(original, current.target.entry)
-            ) {
-              throw new SessionMutationFactsUnavailableError();
-            }
-            current = { ...current, target: { ...current.target, entry: freshEntry } };
+          const current = facts.readCurrent(currentConfig);
+          if (
+            original &&
+            (!current.target || hasSessionReadAccessChanged(original, current.target.entry))
+          ) {
+            throw new SessionMutationFactsUnavailableError();
           }
           const { target } = current;
           const error = authorizeIncognitoSessionTarget({

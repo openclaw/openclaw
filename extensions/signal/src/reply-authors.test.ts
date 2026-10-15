@@ -125,13 +125,17 @@ it("persists and reloads merged reply context with zero parent-thread SQL", asyn
   });
   await registerSignalReplyContext({ ...input, body: "memory fallback", sourceTimestamp: 50 });
   await Promise.all([
-    registerSignalReplyContext(input),
+    registerSignalReplyContext({
+      ...input,
+      media: [{ kind: "unknown" }, { contentType: " image/png " }, {}],
+    }),
     registerSignalReplyContext({ ...input, body: "older", sourceTimestamp: 100 }),
   ]);
   resetSignalReplyAuthorsForTests();
   await expect(resolveSignalReplyContextWithPersistence(reply)).resolves.toEqual({
     author: input.author,
     body: "new",
+    media: [{ kind: "unknown" }, { contentType: "image/png" }, {}],
   });
   await registerSignalReplyContext({ ...input, author: "+15555550999" });
   await registerSignalReplyContext({ ...input, sourceTimestamp: 400 });

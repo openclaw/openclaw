@@ -61,13 +61,13 @@ export function mockBuzzRelay() {
             handlers.onevent(event);
           }
           if (!relayMocks.stallThreadRootQueryEose) {
-            handlers.oneose?.();
+            queueMicrotask(() => handlers.oneose?.());
           }
         } else if (filter.kinds?.includes(39002)) {
           for (const event of relayMocks.membershipEvents) {
             handlers.onevent(event);
           }
-          handlers.oneose?.();
+          queueMicrotask(() => handlers.oneose?.());
         } else if (filter.kinds?.includes(40099) || filter.kinds?.includes(9002)) {
           const roomId = filter["#h"]?.[0];
           for (const currentFilter of filters) {
@@ -83,7 +83,7 @@ export function mockBuzzRelay() {
             }
           }
           if (roomId !== relayMocks.stallRoomEoseChannelId) {
-            handlers.oneose?.();
+            queueMicrotask(() => handlers.oneose?.());
           }
         } else if (filter.kinds?.includes(39000)) {
           for (const event of relayMocks.roomMetadataEvents) {
@@ -92,7 +92,7 @@ export function mockBuzzRelay() {
               handlers.onevent(event);
             }
           }
-          handlers.oneose?.();
+          queueMicrotask(() => handlers.oneose?.());
         } else if (filter.kinds?.includes(0)) {
           for (const event of relayMocks.profileEvents) {
             if (!filter.authors || filter.authors.includes(event.pubkey)) {
@@ -101,7 +101,7 @@ export function mockBuzzRelay() {
           }
           const isProfileSyncQuery = filters.some((entry) => entry.kinds?.includes(10_100));
           if (!isProfileSyncQuery || !relayMocks.stallProfileQueryEose) {
-            handlers.oneose?.();
+            queueMicrotask(() => handlers.oneose?.());
           }
         }
         return {

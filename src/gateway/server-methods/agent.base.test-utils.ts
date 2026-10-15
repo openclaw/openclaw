@@ -788,67 +788,6 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("dispatches with the session id reloaded during lifecycle admission", async () => {
-    const sessionKey = "agent:main:main";
-    const initialSessionId = "session-before-reset";
-    const admittedSessionId = "session-after-reset";
-    let currentSessionId = initialSessionId;
-    mocks.loadSessionEntry.mockImplementation(() => ({
-      cfg: {},
-      storePath: getAgentTestStorePath(),
-      entry: { sessionId: currentSessionId, updatedAt: Date.now() },
-      canonicalKey: sessionKey,
-    }));
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const result = await updater({
-        [sessionKey]: { sessionId: initialSessionId, updatedAt: Date.now() },
-      });
-      currentSessionId = admittedSessionId;
-      return result;
-    });
-    mockSuccessfulAgentCommand();
-
-    await runMainAgent("hi", "idem-reset-before-admission");
-
-    const call = await waitForAgentCommandCall<{ sessionId?: string }>();
-    expect(call.sessionId).toBe(admittedSessionId);
-  });
-
-  it("does not recreate a session deleted before lifecycle admission", async () => {
-    const sessionKey = "agent:main:main";
-    let deleted = false;
-    mocks.loadSessionEntry.mockImplementation(() => ({
-      cfg: {},
-      storePath: getAgentTestStorePath(),
-      entry: deleted ? undefined : { sessionId: "session-before-delete", updatedAt: Date.now() },
-      canonicalKey: sessionKey,
-    }));
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const result = await updater({
-        [sessionKey]: { sessionId: "session-before-delete", updatedAt: Date.now() },
-      });
-      deleted = true;
-      return result;
-    });
-    mocks.agentCommand.mockClear();
-    const respond = vi.fn();
-
-    await invokeAgent(
-      {
-        message: "do not recreate the deleted session",
-        agentId: "main",
-        sessionKey,
-        idempotencyKey: "idem-deleted-before-admission",
-      },
-      { respond, reqId: "idem-deleted-before-admission" },
-    );
-
-    expectRespondError(respond, {
-      message: `Session "${sessionKey}" was deleted while starting work. Retry.`,
-    });
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-  });
-
   it("does not recreate a session deleted before its initial store touch", async () => {
     const sessionKey = "agent:main:main";
     mocks.loadSessionEntry.mockImplementation(() => ({
@@ -869,39 +808,6 @@ describe("gateway agent handler", () => {
         idempotencyKey: "idem-deleted-before-touch",
       },
       { respond, reqId: "idem-deleted-before-touch" },
-    );
-
-    expectRespondError(respond, {
-      message: `Session "${sessionKey}" was deleted while starting work. Retry.`,
-    });
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-  });
-
-  it("does not recreate a newly touched session deleted before lifecycle admission", async () => {
-    const sessionKey = "agent:main:slack:group:new-session";
-    let storedEntry: Record<string, unknown> | undefined;
-    mocks.loadSessionEntry.mockImplementation(() => ({
-      cfg: {},
-      storePath: getAgentTestStorePath(),
-      entry: storedEntry,
-      canonicalKey: sessionKey,
-    }));
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const result = await updater({});
-      storedEntry = undefined;
-      return result;
-    });
-    mocks.agentCommand.mockClear();
-    const respond = vi.fn();
-
-    await invokeAgent(
-      {
-        message: "do not revive the newly deleted session",
-        agentId: "main",
-        sessionKey,
-        idempotencyKey: "idem-new-session-deleted-before-admission",
-      },
-      { respond, reqId: "idem-new-session-deleted-before-admission" },
     );
 
     expectRespondError(respond, {

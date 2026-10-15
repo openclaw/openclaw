@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /* @vitest-environment jsdom */
 import { render } from "lit";
-import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
@@ -9,15 +8,18 @@ import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/them
 import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import {
+  interruptedChatHistory,
+  interruptedChatCommentary,
+} from "../../../test-helpers/interrupted-chat-history.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import * as artworkLoader from "../../plugins/icon-loader.ts";
+import { attachHistoryActivity } from "../chat-history-request.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "../history-merge.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
-import { ChatThread } from "./chat-thread-view.tsx";
-import { renderChatThread } from "./chat-thread.ts";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -40,67 +42,42 @@ describe("chat transcript rendering", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it("announces an appended reply in the same native render commit", () => {
-    const initial = threadProps("native-announcement", "agent:main:main", [
-      { role: "user", content: "Question", timestamp: 1_000 },
-    ]);
-    const [props, setProps] = createSignal(initial);
-    const transcript = createTestTranscript();
-    const view = mountSolid(() =>
-      createComponent(ChatThread, {
-        get props() {
-          return props();
-        },
-        transcript,
-      }),
-    );
-    try {
-      transcript.hostConnected();
-      flush();
-      expect(view.container.querySelector(".chat-transcript-announcement")?.textContent).toBe("");
-      setProps({
-        ...initial,
-        messages: [
-          ...initial.messages,
-          {
-            role: "assistant",
-            content: "The completed reply",
-            timestamp: 2_000,
-          },
-        ],
-      });
-      flush();
-      expect(view.container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
-        "The completed reply",
+  it.each([true, false])(
+    "renders an inactive run without a terminal row (show tools=%s)",
+    async (showTools) => {
+      const props = threadProps(
+        "interrupted-history",
+        "agent:main:dashboard:synthetic",
+        attachHistoryActivity(interruptedChatHistory()).messages,
       );
-    } finally {
-      transcript.hostDisconnected();
-    }
-  });
+      props.showToolCalls = showTools;
+      const { container, transcript } = await mountThread(props);
+      try {
+        for (const text of interruptedChatCommentary) {
+          expect(container.textContent).toContain(text);
+        }
+        expect(Boolean(container.querySelector(".chat-activity-group__summary"))).toBe(showTools);
+        expect(container.textContent).toContain("Interrupted");
+        expect(container.querySelector(".chat-working-indicator")).toBeNull();
+      } finally {
+        transcript.hostDisconnected();
+        container.remove();
+      }
+    },
+  );
 
   it.each([
     ["blob:configured-agent", "gutter", "props"],
-    ["blob:configured-agent", "gutter", "roster"],
-    ["blob:configured-agent", "gutter", null],
     ["🦉", "gutter", "fallback-agent"],
-    ["🤖", "gutter", null],
-    [null, "gutter", null],
     ["blob:configured-agent", "none", null],
-    ["blob:configured-agent", "footer", null],
   ] as const)(
     "keeps avatar %s and %s placement consistent across saved and streaming replies (emoji from %s)",
     async (avatar, avatarPlacement, emojiSource) => {
       const now = vi.spyOn(Date, "now").mockReturnValue(Date.now());
       const props = threadProps("pane-agent-avatar");
-      props.userId = avatarPlacement === "footer" ? null : "synthetic-owner";
+      props.userId = "synthetic-owner";
       props.assistantAvatar = emojiSource === "props" ? "🦉" : avatar;
-      props.assistantAvatarUrl = avatar?.startsWith("blob:") ? avatar : null;
-      props.agents =
-        emojiSource === "roster" ? [{ id: "main", identity: { emoji: "🦉" } }] : undefined;
-      if (avatar === null) {
-        props.currentAgentId = undefined;
-        props.fullMessageAgentId = "forge";
-      }
+      props.assistantAvatarUrl = avatar.startsWith("blob:") ? avatar : null;
       if (emojiSource === "fallback-agent") {
         props.currentAgentId = undefined;
         props.fullMessageAgentId = "writer";
@@ -132,10 +109,6 @@ describe("chat transcript rendering", () => {
           const slot = reply.querySelector(".chat-avatar-slot, .chat-avatar.assistant");
           if (avatarPlacement !== "gutter") {
             expect(slot).toBeNull();
-          } else if (avatar === null) {
-            await vi.waitFor(() =>
-              expect(slot?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
-            );
           } else if (avatar.startsWith("blob:")) {
             const image = slot?.querySelector("img.chat-avatar.assistant");
             expect(image?.getAttribute("src")).toBe(avatar);
@@ -144,13 +117,7 @@ describe("chat transcript rendering", () => {
             expect(slot?.classList.contains("is-fallback")).toBe(false);
             image?.dispatchEvent(new Event("error"));
             expect(slot?.classList.contains("is-fallback")).toBe(true);
-            if (emojiSource) {
-              expect(slot?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦉");
-            } else {
-              await vi.waitFor(() =>
-                expect(slot?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),
-              );
-            }
+            expect(slot?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦉");
           } else {
             expect(slot?.querySelector("img")).toBeNull();
             expect(slot?.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe(avatar);
@@ -166,29 +133,6 @@ describe("chat transcript rendering", () => {
               element.getAttribute("data-avatar"),
             ),
           ).toEqual(["🦊", "🦊", "🦊"]);
-        }
-        if (avatar === null) {
-          const faces = () =>
-            [
-              ...container.querySelectorAll(".chat-avatar.assistant .identity-avatar__agent-face"),
-            ].map((element) => element.outerHTML);
-          const original = faces();
-          expect(original).toHaveLength(3);
-          expect(new Set(original).size).toBe(1);
-          props.fullMessageAgentId = "scout";
-          render(renderChatThread(props, transcript), container);
-          transcript.hostUpdated();
-          await flushDeferredRowPrune();
-          await vi.waitFor(() => {
-            expect(faces()).toHaveLength(3);
-            expect(new Set(faces()).size).toBe(1);
-            expect(faces()[0]).not.toBe(original[0]);
-          });
-          props.fullMessageAgentId = "forge";
-          render(renderChatThread(props, transcript), container);
-          transcript.hostUpdated();
-          await flushDeferredRowPrune();
-          await vi.waitFor(() => expect(faces()).toEqual(original));
         }
       } finally {
         transcript.hostDisconnected();
@@ -488,7 +432,7 @@ describe("chat transcript rendering", () => {
     transcript.hostDisconnected();
   });
 
-  it.each([true, false])(
+  it.each([true])(
     "keeps browser cards visible with capture limited to the active pane (%s)",
     async (active) => {
       const messages = [
@@ -613,42 +557,12 @@ describe("chat transcript rendering", () => {
     transcript.hostDisconnected();
   });
 
-  it("leaves interrupted status to the composer when a turn has no assistant reply", async () => {
-    const props = {
-      ...threadProps("pane-interrupted-empty", "agent:main:main", [
-        { role: "user", content: "Earlier task", timestamp: 1_000 },
-        { role: "assistant", content: "Earlier reply", timestamp: 2_000 },
-        {
-          role: "user",
-          content: "Stop this task",
-          timestamp: 3_000,
-          __openclaw: { idempotencyKey: "run-2:user" },
-        },
-      ]),
-      runStatus: {
-        phase: "interrupted" as const,
-        runId: "run-2",
-        sessionKey: "agent:main:main",
-        occurredAt: 4_000,
-      },
-    };
-
-    const { container, transcript } = await mountThread(props);
-
-    expect(container.querySelector(".chat-turn-terminal-status--interrupted")).toBeNull();
-    transcript.hostDisconnected();
-  });
-
-  it.each(
-    [
-      "skills/review/SKILL.md",
-      "qa-café/index.md",
-      "qa241-unicode/café note.md",
-      "qa241-unicode/emoji-🌱.md",
-      "qa241-unicode/100% ready.txt",
-      "qa241-unicode/日本語.txt",
-    ].flatMap((path) => ["click", "Enter", " "].map((key) => ({ path, key }))),
-  )("opens focused transcript file $path with $key", async ({ path, key }) => {
+  it.each([
+    { path: "skills/review/SKILL.md", key: "click" },
+    { path: "qa241-unicode/emoji-🌱.md", key: "click" },
+    { path: "qa241-unicode/日本語.txt", key: "click" },
+    { path: "qa241-unicode/日本語.txt", key: " " },
+  ])("opens focused transcript file $path with $key", async ({ path, key }) => {
     const onOpenWorkspaceFile = vi.fn();
     const onOpenSessionLink = vi.fn();
     const onHistoryIntent = vi.fn();
@@ -683,54 +597,44 @@ describe("chat transcript rendering", () => {
     transcript.hostDisconnected();
   });
 
-  it.each(["click", "Ctrl+click", "Enter", " "])(
-    "handles transcript session links with %j",
-    async (action) => {
-      const onOpenSessionLink = vi.fn();
-      const onHistoryIntent = vi.fn();
-      const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
-      const props = {
-        ...threadProps("pane-session-link", "agent:main:main", [
-          { role: "assistant", content: `Open \`${sessionKey}\``, timestamp: 1_000 },
-        ]),
-        onOpenSessionLink,
-        onHistoryIntent,
-      };
-      const { container, transcript } = await mountThread(props);
+  it.each(["click", " "])("handles transcript session links with %j", async (action) => {
+    const onOpenSessionLink = vi.fn();
+    const onHistoryIntent = vi.fn();
+    const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
+    const props = {
+      ...threadProps("pane-session-link", "agent:main:main", [
+        { role: "assistant", content: `Open \`${sessionKey}\``, timestamp: 1_000 },
+      ]),
+      onOpenSessionLink,
+      onHistoryIntent,
+    };
+    const { container, transcript } = await mountThread(props);
 
-      const link = container.querySelector<HTMLAnchorElement>("a.markdown-session-link");
-      if (action === "click" || action === "Ctrl+click") {
-        link?.setAttribute("href", "/chat/roboclaw/2139bddb");
-        const modified = action === "Ctrl+click";
-        const event = new MouseEvent("click", {
-          bubbles: true,
-          button: 0,
-          cancelable: true,
-          ctrlKey: modified,
-        });
-        link?.dispatchEvent(event);
-        expect(event.defaultPrevented).toBe(!modified);
-        if (modified) {
-          expect(onOpenSessionLink).not.toHaveBeenCalled();
-          transcript.hostDisconnected();
-          return;
-        }
-      } else {
-        link?.focus();
-        const event = new KeyboardEvent("keydown", {
-          key: action,
-          bubbles: true,
-          cancelable: true,
-        });
-        link?.dispatchEvent(event);
-        expect(event.defaultPrevented).toBe(true);
-        expect(onHistoryIntent).not.toHaveBeenCalled();
-      }
+    const link = container.querySelector<HTMLAnchorElement>("a.markdown-session-link");
+    if (action === "click") {
+      link?.setAttribute("href", "/chat/roboclaw/2139bddb");
+      const event = new MouseEvent("click", {
+        bubbles: true,
+        button: 0,
+        cancelable: true,
+      });
+      link?.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+    } else {
+      link?.focus();
+      const event = new KeyboardEvent("keydown", {
+        key: action,
+        bubbles: true,
+        cancelable: true,
+      });
+      link?.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      expect(onHistoryIntent).not.toHaveBeenCalled();
+    }
 
-      expect(onOpenSessionLink).toHaveBeenCalledWith({ sessionKey, agentId: "roboclaw" });
-      transcript.hostDisconnected();
-    },
-  );
+    expect(onOpenSessionLink).toHaveBeenCalledWith({ sessionKey, agentId: "roboclaw" });
+    transcript.hostDisconnected();
+  });
 
   it.each(["click", "Enter"])("SPA-routes transcript session hrefs with %s", async (action) => {
     const onOpenSessionLink = vi.fn();

@@ -6,7 +6,7 @@ import {
   hashCliImageTurnEntryId,
 } from "../agents/cli-image-turn-correlation.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
-import { redactTranscriptMessage } from "../agents/transcript-redact.js";
+import { sanitizeTranscriptMessage } from "../agents/transcript-sanitize.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import { mergeCliHistoryWithLookupStats } from "./cli-session-history-lookup.test-support.js";
@@ -158,9 +158,11 @@ describe("cli session history", () => {
 
   it.each(
     ["", `${CLAUDE_RESUME_DRIFT_NOTES[0]}\n\n`].flatMap((driftContext) =>
-      ["messages occurred outside this Claude session", "earlier messages in this chat"].map(
-        (description) => ({ driftContext, description }),
-      ),
+      [
+        "messages occurred outside this Claude session",
+        "messages recorded in this chat since your last reply here (possibly already in this session)",
+        "earlier messages in this chat",
+      ].map((description) => ({ driftContext, description })),
     ),
   )(
     "dedupes $description context before optional drift context: $driftContext",
@@ -463,7 +465,7 @@ describe("cli session history", () => {
   it("deduplicates a local redacted copy against an imported full copy", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const secretText = "key is sk-abcdef1234567890xyz";
-      const localMessage = redactTranscriptMessage({
+      const localMessage = sanitizeTranscriptMessage({
         role: "user",
         content: secretText,
       } as AgentMessage);
@@ -585,7 +587,7 @@ describe("cli session history", () => {
     ]);
   });
 
-  it("does not surface a secret present only in imported history after merge", async () => {
+  it("preserves source text present only in imported history after merge", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const importedSecret = "sk-abcdef1234567890xyz";
       await fs.writeFile(
@@ -605,7 +607,7 @@ describe("cli session history", () => {
       ]);
 
       expect(messages).toHaveLength(2);
-      expect(JSON.stringify(messages)).not.toContain(importedSecret);
+      expect(JSON.stringify(messages)).toContain(importedSecret);
     });
   });
 

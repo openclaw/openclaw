@@ -76,7 +76,9 @@ it("reserves supported GitHub titles through cold loading, failures, recovery an
     document.querySelector<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip");
   const titleIsOpen = () =>
     Boolean(
-      tooltip()?.shadowRoot?.querySelector<HTMLElement & { open: boolean }>("wa-tooltip")?.open,
+      tooltip()
+        ?.shadowRoot?.querySelector<HTMLElement>(".tooltip-surface")
+        ?.matches(":popover-open"),
     );
   const noPopupAria = () => {
     expect(anchor.hasAttribute("aria-haspopup")).toBe(false);
@@ -254,7 +256,7 @@ it("keeps rendered GitHub links free of native titles across preview closure and
   await vi.advanceTimersByTimeAsync(300);
   expect(document.querySelector(".link-reader-hovercard")).not.toBeNull();
   noNativeTitles();
-  expect(links[0]?.textContent).toBe("#99815");
+  expect(links[0]?.textContent).toBe("openclaw/openclaw#99815");
   expect(anchor.textContent).toBe("the related issue");
   expect(links[2]?.querySelector("img")?.alt).toBe("Issue icon");
   expect(links[3]?.getAttribute("aria-label")).toBe("Issue details");
@@ -283,7 +285,7 @@ it("keeps rendered GitHub links free of native titles across preview closure and
   await settleTooltip(tooltip!);
   expect(tooltip?.content).toBe("Read the documentation");
   expect(
-    tooltip?.shadowRoot?.querySelector<HTMLElement & { open: boolean }>("wa-tooltip")?.open,
+    tooltip?.shadowRoot?.querySelector<HTMLElement>(".tooltip-surface")?.matches(":popover-open"),
   ).toBe(true);
   ordinary.blur();
   expect(ordinary.title).toBe("Read the documentation");

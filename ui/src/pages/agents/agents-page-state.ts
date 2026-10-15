@@ -638,15 +638,19 @@ export class AgentsPageState
           this.chatModelCatalogSubscription === subscription &&
           this.context?.gateway === gateway &&
           this.isCurrentRequest(client, generation, agentId, { agents }),
-        unsubscribe: subscribeModelCatalogChanges(this.context.gateway, () => {
-          if (!subscription.isCurrent()) {
-            return;
-          }
-          this.chatModelCatalogRequest?.abort();
-          this.chatModelCatalogRequest = null;
-          this.chatModelCatalogPending = null;
-          this.ensureModelCatalog({ refresh: true });
-        }),
+        unsubscribe: subscribeModelCatalogChanges(
+          this.context.gateway,
+          () => {
+            if (!subscription.isCurrent()) {
+              return;
+            }
+            this.chatModelCatalogRequest?.abort();
+            this.chatModelCatalogRequest = null;
+            this.chatModelCatalogPending = null;
+            this.ensureModelCatalog({ refresh: true });
+          },
+          { agentId },
+        ),
       };
       this.chatModelCatalogSubscription = subscription;
     }
@@ -724,7 +728,12 @@ export class AgentsPageState
 
   private async refreshCron() {
     const cronState = this.cron;
-    if (!cronState.connected || !cronState.client || cronState.cronLoading) {
+    if (
+      !cronState.connected ||
+      !cronState.client ||
+      cronState.cronLoading ||
+      !this.canCall("cron.list", "operator.read")
+    ) {
       return;
     }
     await Promise.all([

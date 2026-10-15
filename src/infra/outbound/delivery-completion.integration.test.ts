@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { persistPendingFinalDeliveryMarker } from "../../agents/pending-final-delivery-marker.js";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
@@ -190,7 +191,7 @@ describe("pending-final durable delivery completion", () => {
       deliveryContext: { channel: "matrix", to: "!room:example" },
       runOwnedSessionId: entry.sessionId,
     });
-    const custody = createDirectPendingFinalCustody(payload, scope.storePath);
+    const custody = await createDirectPendingFinalCustody(payload, scope.storePath);
     const completion = resolvePendingFinalDeliveryCompletion([payload]);
     if (!custody || !completion) {
       throw new Error("Expected direct custody and its durable pending final");
@@ -224,6 +225,59 @@ describe("pending-final durable delivery completion", () => {
       { id: completion.deliveryId, state: "delivered" },
     ]);
     expect(await loadPendingDeliveries(tmpDir)).toEqual([]);
+    custody.release();
+  });
+
+  it("revokes prepared direct delivery after a writer commit without host SQL", async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:matrix:direct:replaced-writer",
+      storePath: path.join(tmpDir, "sessions.json"),
+    };
+    const entry = {
+      sessionId: "session",
+      lifecycleRevision: "revision",
+      activeWriterRunId: "writer",
+      updatedAt: 1,
+    };
+    await replaceSessionEntry(scope, entry);
+    const sql = observeHostDataSql();
+    const custody = await createDirectPendingFinalCustody(
+      setReplyPayloadMetadata(
+        { text: "final" },
+        {
+          sessionWriterDeliveryAuthority: {
+            ...scope,
+            expectedSessionId: entry.sessionId,
+            expectedLifecycleRevision: entry.lifecycleRevision,
+            expectedWriterRunId: entry.activeWriterRunId,
+          },
+        },
+      ),
+    );
+    try {
+      expect(sql.queries).toEqual([]);
+      expect(custody).toBeDefined();
+      expect(() => custody!.assertPlatformSendAuthorized()).not.toThrow();
+      sql.restore();
+      await replaceSessionEntry(scope, {
+        ...entry,
+        activeWriterRunId: "replacement",
+        updatedAt: 2,
+      });
+      const afterCommit = observeHostDataSql();
+      try {
+        expect(() => custody!.assertPlatformSendAuthorized()).toThrow(
+          "Session writer changed before final reply delivery",
+        );
+        expect(afterCommit.queries).toEqual([]);
+      } finally {
+        afterCommit.restore();
+      }
+    } finally {
+      sql.restore();
+      custody?.release();
+    }
   });
 
   it("recovers an older serialized completion with its original locator semantics", async () => {

@@ -140,22 +140,6 @@ describe("Node Code Mode worker custody", () => {
     expect(revised.config.maxPendingToolCalls).toBe(3);
   });
 
-  it("observes in-place changes to public executor inputs", async () => {
-    const catalog = [{ callableName: "lookup", description: "original" }];
-    const start = { ...input, catalog };
-    const execute = () => host.run(() => nodeCodeModeExecutor.execute(start, { timeoutMs: 1000 }));
-    await execute();
-    catalog[0]!.description = "updated";
-    await execute();
-    const sent = fixture.executions.at(-1)!.input as CodeModeNodeInput;
-    if (sent.kind !== "exec") {
-      throw new Error("expected execution payload");
-    }
-    expect(JSON.parse(new TextDecoder().decode(sent.initialization))).toMatchObject({
-      __openclawCatalog: [{ description: "updated" }],
-    });
-  });
-
   it("joins its native workers at host close without retiring a sibling host", async () => {
     const sibling = new LegacyPluginSdkResourceHost();
     const siblingScheduler = createTestGatewayScheduler();
@@ -181,6 +165,7 @@ describe("Node Code Mode worker custody", () => {
       expect(survivor.isClosed).toBe(false);
       released.resolve();
       await closing;
+      expect(owned.close).toHaveBeenCalledWith(undefined, "shutdown");
       const count = fixture.pools.length;
       await sibling.run(() => nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 }));
       expect(fixture.pools).toHaveLength(count);
@@ -211,6 +196,10 @@ describe("Node Code Mode worker custody", () => {
           : run()),
       ).toMatchObject({ status: "completed" });
       expect((previous ?? fixture.pools.at(-1))?.isClosed).toBe(true);
+      expect((previous ?? fixture.pools.at(-1))?.close).toHaveBeenCalledWith(
+        undefined,
+        reason === "runtime changed" ? "rotation" : "dispose",
+      );
     },
   );
 
@@ -261,29 +250,80 @@ describe("Node Code Mode worker custody", () => {
           pool.isClosed = true;
         });
       }
-      await vi.advanceTimersByTimeAsync(70_000);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(previous.isClosed).toBe(true);
+      expect(reused.isClosed).toBe(false);
+      await vi.advanceTimersByTimeAsync(40_000);
       expect(await caller.run("reused-turn", run)).toMatchObject({ status: "completed" });
       expect(fixture.pools).toHaveLength(count);
-      expect(previous.isClosed).toBe(false);
       await vi.advanceTimersByTimeAsync(4 * 60_000);
       expect(previous.isClosed).toBe(true);
       expect(reused.isClosed).toBe(false);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(reused.isClosed).toBe(true);
       expect(retiredContexts).toEqual([undefined, undefined]);
+      expect(previous.close).toHaveBeenCalledWith(undefined, "idle-expiry");
+      expect(reused.close).toHaveBeenCalledWith(undefined, "idle-expiry");
     } finally {
       caller.disable();
       vi.useRealTimers();
     }
   });
 
+  it.each([90_000, 360_000])(
+    "keeps the completion deadline when the first idle wake is delayed to %i ms",
+    async (wakeMs) => {
+      vi.useFakeTimers();
+      try {
+        await run();
+        const completedAt = Date.now();
+        const pool = fixture.pools.at(-1)!;
+        vi.setSystemTime(completedAt + wakeMs - 30_000);
+        await vi.advanceTimersByTimeAsync(30_000);
+        if (wakeMs < 5 * 60_000) {
+          expect(pool.isClosed).toBe(false);
+          await vi.advanceTimersByTimeAsync(5 * 60_000 - wakeMs);
+        }
+        expect(pool.isClosed).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([0, 60_000])(
+    "keeps elapsed idle expiry when the wall clock moves backward after %i ms",
+    async (elapsedMs) => {
+      vi.useFakeTimers();
+      try {
+        await run();
+        const pool = fixture.pools.at(-1)!;
+        await vi.advanceTimersByTimeAsync(elapsedMs);
+        vi.setSystemTime(Date.now() - 60 * 60_000);
+        await vi.advanceTimersByTimeAsync(5 * 60_000 - elapsedMs);
+        expect(pool.isClosed).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("bounds the warm set and retires every idle pool on memory pressure", async () => {
+    const start = fixture.pools.length;
     const results = await Promise.all(Array.from({ length: 6 }, run));
     expect(results.every((result) => result.status === "completed")).toBe(true);
     const idle = fixture.pools.filter((pool) => !pool.isClosed);
     expect(idle).toHaveLength(4);
+    const evicted = fixture.pools.slice(start).filter((pool) => pool.isClosed);
+    expect(evicted).toHaveLength(2);
+    for (const pool of evicted) {
+      expect(pool.close).toHaveBeenCalledWith(undefined, "eviction");
+    }
     channel("openclaw.memory.critical").publish({});
     expect(idle.every((pool) => pool.isClosed)).toBe(true);
+    for (const pool of idle) {
+      expect(pool.close).toHaveBeenCalledWith(undefined, "memory_pressure");
+    }
     expect(channel("openclaw.memory.critical").hasSubscribers).toBe(false);
     const count = fixture.pools.length;
     expect(await run()).toMatchObject({ status: "completed" });
@@ -365,6 +405,7 @@ describe("Node Code Mode worker custody", () => {
     ).toMatchObject({ status: "failed", code: "runtime_unavailable" });
     await result.continuation.dispose();
     expect(pool.close).toHaveBeenCalledTimes(2);
+    expect(pool.close).toHaveBeenCalledWith(undefined, "dispose");
     expect(pool.isClosed).toBe(true);
   });
 

@@ -230,7 +230,7 @@ describe("Doctor legacy audit skips", () => {
         "Doctor stopped",
       );
       await expect(fs.readFile(audit.system.raw, "utf8")).resolves.toBe(changed);
-      await expect(fs.access(audit.system.restore)).resolves.toBeUndefined();
+      await fs.access(audit.system.restore);
     });
   });
 });

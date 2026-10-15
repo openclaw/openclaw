@@ -199,6 +199,9 @@ export async function commitAutomaticConfigRepair(
     writeOptions: {
       expectedConfigPath: snapshot.path,
       auditOrigin: "doctor",
+      // Writes no longer read the migration ledger. Carry the admitted pending
+      // facts so a deferred plugin's legacy settings stay preserved, not rejected.
+      deferredPluginMigrations: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
       skipOutputLogs: true,
       skipRuntimeSnapshotRefresh: true,
       // Doctor retired legacy markers; persist their canonical owners in this write.

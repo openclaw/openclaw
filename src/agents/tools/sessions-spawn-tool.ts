@@ -23,6 +23,7 @@ import {
   formatAcpInheritedToolAllowError,
   formatAcpInheritedToolDenyError,
 } from "../inherited-tool-deny.js";
+import { createCachedToolSchema } from "../schema/cached-schema.js";
 import { optionalStringEnum, requesterProfileSchema } from "../schema/typebox.js";
 import { resolveSenderRestrictedSpawnError } from "../spawn-requester-policy.js";
 import { withParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
@@ -142,7 +143,13 @@ function resolveSessionsSpawnThreadAvailability(opts?: {
   };
 }
 
-function createSessionsSpawnToolSchema(params: {
+const createSessionsSpawnToolSchema = createCachedToolSchema({
+  build: buildSessionsSpawnToolSchema,
+  key: (params) =>
+    `${params.acpAvailable}:${params.threadAvailable}:${params.subagentThreadAvailable}:${params.swarmEnabled}`,
+});
+
+function buildSessionsSpawnToolSchema(params: {
   acpAvailable: boolean;
   threadAvailable: boolean;
   subagentThreadAvailable: boolean;
@@ -304,6 +311,10 @@ function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: Ope
 export function createSessionsSpawnTool(
   opts?: SessionsSpawnToolOptions & { workerPlacement?: boolean },
 ): AnyAgentTool {
+  const requesterThinkingExplicit =
+    // SAFETY: The host forwards this optional runtime bit; public callers can omit it.
+    (opts as (typeof opts & { requesterThinkingExplicit?: boolean }) | undefined)
+      ?.requesterThinkingExplicit;
   const requestOwners = captureExecRequestOwners({
     runId: opts?.requesterTurnRunId,
     sessionId: opts?.expectedParentSessionId,
@@ -331,12 +342,14 @@ export function createSessionsSpawnTool(
     requesterAgentId,
     sandboxed: opts?.sandboxed,
   });
-  const parameters = createSessionsSpawnToolSchema({
-    acpAvailable,
-    threadAvailable,
-    subagentThreadAvailable: threadAvailability.subagent,
-    swarmEnabled: swarmConfig.enabled,
-  });
+  const parameters = opts?.workerPlacement
+    ? PlacedSessionsSpawnSchema
+    : createSessionsSpawnToolSchema({
+        acpAvailable,
+        threadAvailable,
+        subagentThreadAvailable: threadAvailability.subagent,
+        swarmEnabled: swarmConfig.enabled,
+      });
   const tool: AnyAgentTool = {
     label: "Sessions",
     name: "sessions_spawn",
@@ -353,7 +366,7 @@ export function createSessionsSpawnTool(
           sessionToolsVisibility,
           spawnRestricted: restrictToSpawned,
         }),
-    parameters: opts?.workerPlacement ? PlacedSessionsSpawnSchema : parameters,
+    parameters,
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) =>
       withToolEffectBoundary(async (onSpawnEffectsStart) => {
         const operatorSelection = resolveGatewayToolOperatorSelection();
@@ -579,6 +592,8 @@ export function createSessionsSpawnTool(
           agentTo: opts?.agentTo,
           agentThreadId: opts?.agentThreadId,
           currentChannelId: opts?.currentChannelId,
+          currentThreadTs: opts?.currentThreadTs,
+          currentConversationOrigin: opts?.currentConversationOrigin,
           currentMessageId: opts?.currentMessageId,
           agentGroupSpace: opts?.agentGroupSpace,
           agentMemberRoleIds: opts?.agentMemberRoleIds,
@@ -671,6 +686,7 @@ export function createSessionsSpawnTool(
               {
                 ...inheritedSpawnContext(),
                 requesterThinkingLevel: opts?.requesterThinkingLevel,
+                requesterThinkingExplicit,
                 requesterModel: opts?.requesterModel,
                 currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,
                 agentGroupId: opts?.agentGroupId,

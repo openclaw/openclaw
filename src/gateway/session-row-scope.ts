@@ -1,8 +1,8 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
-import { resolveGatewaySessionStoreTargets } from "../config/sessions/combined-store-gateway.js";
-import type { GatewaySessionStoreDiscovery } from "../config/sessions/combined-store-paths.js";
+import { applyGatewaySessionStoreAdmission } from "../config/sessions/combined-store-gateway.js";
+import type { CombinedSessionStoreScopeTargets } from "../config/sessions/combined-store.types.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
@@ -150,7 +150,7 @@ export function createSessionRowRegistryRead(owner: {
                   ) &&
                   captured.some(
                     (store) =>
-                      `file:${String(store.identity)}` === source.identity &&
+                      `file:${store.identity}` === source.identity &&
                       store.target.agentId === source.agentId,
                   ),
               ),
@@ -248,18 +248,28 @@ export function prepareSessionRowScopes(
   cfg: OpenClawConfig,
   agentIds: Iterable<string>,
   residentPaths: ReadonlyMap<string, string>,
-  discovery?: GatewaySessionStoreDiscovery,
+  prepared: CombinedSessionStoreScopeTargets,
 ) {
+  const ownerAgentIds: ReadonlySet<string> = new Set(listAgentIds(cfg));
   const residentPath = (pathname: string) => residentPaths.get(pathname) ?? pathname;
   const filenames = new Map([...residentPaths].map(([filename, locator]) => [locator, filename]));
   const aliases = new Map<string, Map<string, string>>();
   const capture = (options: { agentId?: string; configuredAgentsOnly?: boolean }) => {
     try {
-      const resolved = resolveGatewaySessionStoreTargets(cfg, {
-        ...options,
-        discovery,
-        includeIncognito: false,
-      });
+      const key = options.agentId
+        ? `agent:${options.agentId}`
+        : options.configuredAgentsOnly
+          ? "configured"
+          : "all";
+      const captured = prepared.get(key);
+      if (captured instanceof Error) {
+        return captured;
+      }
+      const resolved = applyGatewaySessionStoreAdmission(
+        cfg,
+        { ...options, includeIncognito: false },
+        expectDefined(captured, "prepared scope topology"),
+      );
       for (const [identity, physical] of resolved.physicalTargets) {
         const separator = identity.indexOf("\0");
         const agentId = identity.slice(0, separator);
@@ -280,6 +290,7 @@ export function prepareSessionRowScopes(
         paths: new Map(paths.map((pathname, index) => [pathname, index])),
         path: paths.length === 1 ? (filenames.get(paths[0]!) ?? paths[0]!) : "(multiple)",
         configuredAgentIds: resolved.configuredAgentIds,
+        ownerAgentIds,
         agentId: resolved.requestedAgentId,
       };
     } catch (error) {
@@ -289,10 +300,7 @@ export function prepareSessionRowScopes(
   const all = capture({});
   const configured = capture({ configuredAgentsOnly: true });
   const agents = new Map(
-    [...new Set([...listAgentIds(cfg), ...agentIds])].map((agentId) => [
-      agentId,
-      capture({ agentId }),
-    ]),
+    [...new Set([...ownerAgentIds, ...agentIds])].map((agentId) => [agentId, capture({ agentId })]),
   );
   const select = (options: { agentId?: string; configuredAgentsOnly?: boolean }) => {
     const requestedAgentId = options.agentId?.trim()
@@ -304,6 +312,7 @@ export function prepareSessionRowScopes(
           path: "(multiple)",
           agentId: requestedAgentId,
           configuredAgentIds: undefined,
+          ownerAgentIds,
         })
       : options.configuredAgentsOnly
         ? configured

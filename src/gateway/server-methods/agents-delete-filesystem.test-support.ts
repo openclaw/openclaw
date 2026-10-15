@@ -1,14 +1,14 @@
-import type { Stats } from "node:fs";
+import type { BigIntStats, Stats } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { expectRespondOk } from "./agents-mutate.test-support.js";
+import { expectPendingDeletion, expectRespondOk } from "./agents-mutate.test-support.js";
 
 type AgentDeleteFilesystemHarness = {
   mocks: {
     resolveAgentWorkspaceDir: Mock<(cfg?: unknown, agentId?: string) => string>;
     fsRealpath: Mock<(pathname: string) => Promise<string>>;
-    fsLstat: Mock<(...args: unknown[]) => Promise<Stats | null>>;
+    fsLstat: Mock<(...args: unknown[]) => Promise<Stats | BigIntStats | null>>;
     fsReadlink: Mock<(pathname: string) => Promise<string>>;
     movePathToTrash: Mock<(pathname?: string) => Promise<string>>;
     fsRm: unknown;
@@ -53,7 +53,7 @@ export function registerAgentDeleteFilesystemTests(harness: AgentDeleteFilesyste
       const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
       await promise;
 
-      expectRespondOk(respond, {
+      expectPendingDeletion(respond, {
         failed: expect.arrayContaining([
           { path: "/workspace/test-agent", reason: retired.message },
         ]),
@@ -82,7 +82,7 @@ export function registerAgentDeleteFilesystemTests(harness: AgentDeleteFilesyste
         );
         mocks.fsLstat.mockImplementation(async (pathname) =>
           String(pathname).startsWith(base)
-            ? await actualFs.lstat(String(pathname))
+            ? await actualFs.lstat(String(pathname), { bigint: true })
             : makeFileStat(),
         );
         mocks.fsReadlink.mockImplementation(async (pathname) => await actualFs.readlink(pathname));
@@ -115,7 +115,7 @@ export function registerAgentDeleteFilesystemTests(harness: AgentDeleteFilesyste
       const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
       await promise;
 
-      expectRespondOk(respond, {
+      expectPendingDeletion(respond, {
         failed: [{ path: workspaceDir, reason: "trash destination missing" }],
       });
       await expect(actualFs.stat(workspaceDir)).resolves.toBeDefined();
