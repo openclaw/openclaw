@@ -21,7 +21,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import { pluginTabKey } from "../pages/plugin/route.ts";
-import { renderSidebarNavLink } from "./app-sidebar-nav-menus.tsx";
+import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { iconData, type IconName } from "./icon-data.ts";
@@ -472,19 +472,15 @@ export function renderAppSidebarPluginTab(
       ? (icon as IconName) // SAFETY: The preceding own-key guard admits only keys of iconData.
       : "plug";
   });
-  const link = renderSidebarNavLink({
-    get href() {
-      return `${location().pathname}${location().search}`;
-    },
-    icon: <Icon name={iconName()} />,
-    get label() {
-      return tab().label;
-    },
-    get active() {
-      return host.activeRouteId === "plugin" && host.activePluginTabId === key();
-    },
-    onNavigate: () => host.onNavigate?.("plugin", location()),
-  });
+  const link = (
+    <SidebarNavLink
+      href={`${location().pathname}${location().search}`}
+      icon={<Icon name={iconName()} />}
+      label={tab().label}
+      active={host.activeRouteId === "plugin" && host.activePluginTabId === key()}
+      onNavigate={() => host.onNavigate?.("plugin", location())}
+    />
+  );
   return (
     <Show when={routeId()} fallback={link}>
       {(route) => host.sidebarMenus.renderRoute(route())}

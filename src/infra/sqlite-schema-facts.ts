@@ -1,9 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import {
-  executeWithCachedStatement,
-  registerNodeSqliteDisposeCallback,
-} from "./kysely-sync-cache-state.js";
+import { registerNodeSqliteDisposeCallback } from "./kysely-sync-cache-state.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { isPostgresSqlConnection } from "./sql-connection.js";
 import {
@@ -534,17 +531,6 @@ export function runSqliteReadOperationSync<T>(database: EngineConnection, operat
   } finally {
     owner.readDepth -= 1;
   }
-}
-
-/** Explicit offline verification only; runtime caches use owning-writer receipts. */
-export function readSqliteDataVersion(database: DatabaseSync): number {
-  const row = executeWithCachedStatement(database, "PRAGMA data_version", [], (statement) =>
-    statement.get(),
-  );
-  if (typeof row?.data_version !== "number") {
-    throw new Error("SQLite did not return a numeric PRAGMA data_version");
-  }
-  return row.data_version;
 }
 
 /** Install at native open, before callers can retain statements or install an authorizer. */

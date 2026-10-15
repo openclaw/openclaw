@@ -16,7 +16,10 @@ import {
   readControlUiSourceCatalog,
 } from "./lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
-import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
+import {
+  CONTROL_UI_TEST_FILE_PATTERN,
+  syncControlUiRawCopyBaseline,
+} from "./lib/control-ui-i18n-raw-copy.ts";
 import {
   compareStringArrays,
   extractTranslationPlaceholders,
@@ -35,7 +38,6 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
 const FALLBACK_BASELINE_PATH = path.join(I18N_ASSETS_DIR, "catalog-fallbacks.json");
 const FALLBACK_BASELINE_VERSION = 1;
-const CONTROL_UI_TEST_FILE_PATTERN = /\.(?:test|browser\.test|node\.test)\.tsx?$/u;
 const AUTOMATIONS_FEATURE_KEYS =
   `sessionsView.showCronSessions sessionsView.subagentPrefix sessionsView.automationPrefix agents.cronPanel.schedulerSubtitle agents.cronPanel.agentJobsTitle configForm.sections.cron.label configView.sections.cron subtitles.automation memoryPage.dreaming.intro attention.cronFailed attention.cronOverdue palette.items.scheduled`.split(
     " ",

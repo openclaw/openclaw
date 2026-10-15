@@ -31,6 +31,7 @@ openclaw-image-lightbox {
   }
 
   .actions .action,
+  .lightbox-footer .action,
   .action.zoom-control {
     color: var(--media-foreground);
     background-color: var(--media-control-bg);
@@ -39,14 +40,25 @@ openclaw-image-lightbox {
     box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
   }
 
-  .actions .action {
+  .actions .action,
+  .lightbox-footer .action {
     border-radius: 999px;
     transition: background-color 180ms ease;
   }
 
   .actions .action:hover,
+  .lightbox-footer .action:hover,
   .zoom-control:hover:not([aria-disabled="true"]) {
     background-color: var(--media-control-bg-hover);
+  }
+
+  openclaw-modal-actions.lightbox-footer {
+    position: fixed;
+    z-index: 1;
+    right: max(16px, calc(12px + var(--safe-area-right, 0px)));
+    bottom: max(14px, calc(10px + var(--safe-area-bottom, 0px)));
+    /* Leave the centered zoom chrome unobstructed, including wrapped labels. */
+    max-width: max(44px, calc(50vw - 110px));
   }
 
   .title {
@@ -306,6 +318,7 @@ openclaw-image-lightbox {
     }
 
     .actions .action,
+    .lightbox-footer .action,
     .navigation {
       transition: none;
     }

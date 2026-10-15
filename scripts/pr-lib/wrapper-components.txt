@@ -250,6 +250,7 @@ src/agents/agent-run-terminal-reply.ts
 src/agents/agent-runtime-id.ts
 src/agents/agent-scope-config.ts
 src/agents/agent-scope.ts
+src/agents/auth-profiles/authorization-contract.ts
 src/agents/auth-profiles/sqlite-json.ts
 src/agents/auth-profiles/store-unreadable-error.ts
 src/agents/auth-profiles/store-update-commit.ts
@@ -2210,6 +2211,7 @@ packages/gateway-protocol/src/schema/wizard.ts
 packages/markdown-core/src/reasoning-tag-parser.ts
 packages/markdown-core/src/reasoning-tags.ts
 packages/media-core/src/base64.ts
+packages/media-core/src/inline-image-data-url.ts
 packages/memory-host-sdk/src/host/session-entry-projection.ts
 packages/memory-host-sdk/src/host/session-reset-recall.ts
 packages/memory-host-sdk/src/host/session-transcript-corpus-policy.ts
