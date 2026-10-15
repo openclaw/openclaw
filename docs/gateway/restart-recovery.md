@@ -63,6 +63,19 @@ and session admission. The old queue and execution authority are never reused.
 This preserves each browser outbox's order without submitting already-consumed
 messages again. Different browsers can reconnect in a different order.
 
+Requests refused before dispatch and chat sends interrupted while waiting for
+session admission return a retryable `UNAVAILABLE` error with
+`details.reason: "gateway-restarting"`. A restart does not turn an unstarted
+message into a terminal Stop result. The Control UI and native chat outboxes
+retain the original message ID and retry after the Gateway becomes available.
+Native Apple live sends with attachments restore the draft for manual retry;
+already queued attachments retain their outbox recovery.
+
+A disconnected RPC may already have performed its work. Clients reconcile
+accepted or uncertain sends through their existing receipts and history rather
+than automatically replaying every pending RPC. Already running main-session
+turns use the recovery owner described below; the drain budget is unchanged.
+
 Accepted Control UI input is committed to its admitted source session before ACP
 execution or question consumption. If the conversation routes to a bound ACP
 session, the source keeps the original request and the bound session owns the ACP

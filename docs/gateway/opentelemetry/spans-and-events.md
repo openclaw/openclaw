@@ -114,6 +114,9 @@ Event kinds and `run.execution_phase.phase` values are additive. TypeScript
 consumers should keep default branches instead of assuming either union is
 permanently exhaustive.
 
+Events with no interested subscriber or tracing exporter are discarded before
+payload enrichment and queuing; they are not buffered for future subscribers.
+
 `agent.commentary` records completed preambles, not text deltas. It carries the
 original agent-event sequence and timestamp and attaches to the active harness
 span. Recent duplicate completions are suppressed per attempt. Like other

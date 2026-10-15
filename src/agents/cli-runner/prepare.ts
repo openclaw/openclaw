@@ -1409,6 +1409,7 @@ async function prepareCliRunContextWithinReadFence(
           ? undefined
           : (params.messageChannel ?? params.messageProvider),
         accountId: params.agentAccountId,
+        requester: params,
       });
     const requesterProfileId = readRunOperatorAuthority(params)?.profileId;
     const builtSystemPrompt = isControlOperation
