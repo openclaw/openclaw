@@ -622,7 +622,7 @@ describe("sidebar attention refresh ownership", () => {
           updateAvailable: {
             currentVersion: "2026.8.1",
             latestVersion: "2026.8.2",
-            channel: "latest",
+            channel: "stable",
           },
         },
         subscribe: () => () => undefined,
@@ -869,11 +869,11 @@ describe("update attention", () => {
       updateAvailable: {
         currentVersion: "2026.8.1",
         latestVersion: "2026.8.1",
-        channel: "dev",
+        channel: "beta",
         commitsBehind: 2,
       },
       updateSchedule: {
-        channel: "dev",
+        channel: "beta",
         autoEnabled: true,
         campaign: {
           id: "campaign-1",

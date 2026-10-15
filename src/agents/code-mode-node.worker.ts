@@ -58,13 +58,11 @@ process.on("rejectionHandled", (promise) => cell?.rejections.delete(promise));
 // Pressure belongs to the isolate, including time between checkpoints and idle GC.
 let gcStartedAt = performance.now();
 let majorCollections = 0;
-let gcDurationMs = 0;
 observeGcSamples((samples) => {
   for (const sample of samples) {
     if (sample.kind === "mark_sweep_compact") {
       majorCollections++;
     }
-    gcDurationMs += sample.durationMs;
   }
   const now = performance.now();
   const elapsedMs = now - gcStartedAt;
@@ -73,7 +71,7 @@ observeGcSamples((samples) => {
   }
   // Frequent majors can thrash even with a modest GC time share. Sample heap only
   // after sustained collection; the host deadline still interrupts synchronous loops.
-  if (majorCollections >= elapsedMs / 50 && gcDurationMs >= elapsedMs / 10) {
+  if (majorCollections >= elapsedMs / 50) {
     const heap = getHeapStatistics();
     if (heap.used_heap_size >= heap.heap_size_limit * 0.85) {
       // A fatal worker error also retires a parked or warm isolate. Never let the
@@ -90,7 +88,6 @@ observeGcSamples((samples) => {
   }
   gcStartedAt = now;
   majorCollections = 0;
-  gcDurationMs = 0;
 });
 
 const bridgeMethods = new Set<string>([
@@ -399,13 +396,18 @@ function failed(
 async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeResult> {
   let output: CodeModeOutputSource = EMPTY_CODE_MODE_OUTPUT;
   let consumed = channel?.consumeInput;
+  const consume = () => {
+    const receipt = consumed;
+    consumed = undefined;
+    receipt?.();
+  };
   const config = input.config;
   const startedAt = performance.now();
   const progress = new CodeModeNodeProgress(input.progress);
   try {
     const current =
       input.kind === "exec"
-        ? createCell(input, prepareSource(input.source), startedAt, progress, consumed)
+        ? createCell(input, prepareSource(input.source), startedAt, progress, consume)
         : cell;
     if (!current) {
       throw new Error("code mode continuation is no longer available");
@@ -421,12 +423,9 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
       current.pendingRequests = input.pendingRequests ?? [];
       current.canceledRequestIds = [];
       settle(current, input.settledRequests);
-    } else {
-      consumed = undefined;
     }
     for (;;) {
-      consumed?.();
-      consumed = undefined;
+      consume();
       const admissionError = current.admissionError ?? evaluate(current, drainScript);
       if (admissionError !== undefined && typeof admissionError !== "string") {
         throw new Error("invalid code mode admission error");
@@ -466,8 +465,7 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
         // SAFETY: The task-bound host sends the shared typed continuation protocol.
         const command = response.input as CodeModeWorkerContinuation;
         if (command.kind === "checkpoint") {
-          consumed();
-          consumed = undefined;
+          consume();
           return {
             status: "waiting",
             ...boundary,
@@ -549,24 +547,30 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
       ),
       timeout ? progress.output() : output,
     );
+  } finally {
+    // Rejected source and failed settlement still release the task's input custody.
+    consume();
   }
 }
 
-serveWorkerTasks(async (input, channel): Promise<NodeResult> => {
-  if (
-    !isRecord(input) ||
-    !isRecord(input.config) ||
-    (input.kind !== "exec" && input.kind !== "resume")
-  ) {
-    return failed("invalid_input", "invalid code mode worker input");
-  }
-  // SAFETY: The executor host supplies normalized start/resume inputs to its private worker.
-  const result = await run(input as NodeInput, channel);
-  if (cell?.networkContentObserved) {
-    result.networkContentObserved = true;
-  }
-  if (result.status !== "waiting") {
-    cell = undefined;
-  }
-  return result;
-});
+serveWorkerTasks(
+  async (input, channel): Promise<NodeResult> => {
+    if (
+      !isRecord(input) ||
+      !isRecord(input.config) ||
+      (input.kind !== "exec" && input.kind !== "resume")
+    ) {
+      return failed("invalid_input", "invalid code mode worker input");
+    }
+    // SAFETY: The executor host supplies normalized start/resume inputs to its private worker.
+    const result = await run(input as NodeInput, channel);
+    if (cell?.networkContentObserved) {
+      result.networkContentObserved = true;
+    }
+    if (result.status !== "waiting") {
+      cell = undefined;
+    }
+    return result;
+  },
+  { idleGc: false },
+);

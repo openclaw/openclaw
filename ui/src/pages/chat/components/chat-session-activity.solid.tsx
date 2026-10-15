@@ -60,12 +60,13 @@ export function ChatSessionActivity(props: ChatSessionActivityProps) {
               }
             }}
           >
+            {/* One summary for both states, so only the chevron moves on toggle. The
+                source link's click is canceled by the transcript's navigation
+                handler, which also cancels the summary's toggle activation. */}
             <LitContent
               value={renderForwardedAttribution(props.group, {
                 ...props.options,
-                ...(expanded()
-                  ? { showAvatar: false }
-                  : { updateCount: count(), linkSource: false }),
+                updateCount: count(),
               })}
             />
             <Show when={!props.options.searchResult}>

@@ -27,6 +27,11 @@ const anchor = () => document.querySelector<HTMLAnchorElement>("a[data-file-path
 const card = () =>
   document.querySelector<HTMLElement>("openclaw-tooltip[open] .markdown-file-tooltip");
 const copyButton = () => page.getByRole("button", { name: "Copy path", exact: true });
+const waitForReopen = (tooltip: HTMLElementTagNameMap["openclaw-tooltip"]) =>
+  new Promise<void>((resolve) => {
+    // Closing content can still be visible; completion belongs to this owner.
+    tooltip.addEventListener("overlay-after-show", () => resolve(), { once: true });
+  });
 
 describe("file path tooltip", () => {
   it("keeps the popup reachable and copies the exact path without opening the file", async () => {
@@ -45,8 +50,12 @@ describe("file path tooltip", () => {
     expect(open).not.toHaveBeenCalled();
     expect(card()?.textContent).toContain(filePath);
     expect(document.querySelectorAll("openclaw-tooltip[open]")).toHaveLength(1);
+    const tooltip = copyButton().element().closest("openclaw-tooltip");
+    assert(tooltip, "Expected the file tooltip owner");
     await userEvent.keyboard("{Escape}");
+    const reopened = waitForReopen(tooltip);
     await page.elementLocator(anchor()).hover();
+    await reopened;
     await expect.element(copyButton()).toBeVisible();
     await expect.poll(() => card()?.textContent?.trim()).toBe(filePath);
     await page.elementLocator(anchor()).click();
@@ -113,13 +122,18 @@ describe("file path tooltip", () => {
       const fallback = vi.spyOn(document, "execCommand").mockReturnValue(true);
       anchor().focus();
       await copyButton().click();
+      const tooltip = copyButton().element().closest("openclaw-tooltip");
+      assert(tooltip, "Expected the file tooltip owner");
       if (dismissal === "outside") {
         await page.getByRole("button", { name: "Outside", exact: true }).click();
       } else {
         await userEvent.keyboard("{Escape}");
       }
+      await expect.poll(card).toBeNull();
       if (dismissal === "reopen") {
+        const reopened = waitForReopen(tooltip);
         await page.elementLocator(anchor()).hover();
+        await reopened;
         await expect.element(copyButton()).toBeVisible();
         await expect.poll(card).not.toBeNull();
       }

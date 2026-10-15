@@ -19,6 +19,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
@@ -71,6 +72,7 @@ function observeAcknowledgedUpdate(
 
 const suiteDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
+    await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
@@ -151,6 +153,27 @@ afterEach(async () => {
 });
 
 describe("local sandbox workspace reconciliation", () => {
+  it("settles stopped commands without admitting new work or a replacement session", async () => {
+    const { proveStoppedLocalWorkspaceCheckpoint } =
+      await import("./local-workspace-cancellation.test-support.js");
+    await proveStoppedLocalWorkspaceCheckpoint(owner);
+  });
+
+  it("settles a stopped command after its parent disposes the workspace", async () => {
+    const { proveStoppedLocalWorkspaceCheckpoint } =
+      await import("./local-workspace-cancellation.test-support.js");
+    await proveStoppedLocalWorkspaceCheckpoint(owner, true);
+  });
+
+  it.each(["operator", "gateway"] as const)(
+    "rejects canonical checkpoint writes after original %s authority ends",
+    async (authority) => {
+      const { proveStoppedSandboxAuthority } =
+        await import("./local-workspace-cancellation.test-support.js");
+      await proveStoppedSandboxAuthority(owner, authority);
+    },
+  );
+
   it("provisions, synchronizes, and retains reconciliation payloads without caller-thread store SQL", async () => {
     const sql = observeLocalWorkspaceStoreSql();
     try {
@@ -631,12 +654,9 @@ describe("local sandbox workspace reconciliation", () => {
     });
     sandbox.fsBridge = createSandboxFsBridge({ sandbox: { ...sandbox, backend } });
     bindLocalSandboxWorkspace(sandbox, projection);
-    const checkpoint = backend.finalizeExec!({
-      status: "completed",
-      exitCode: 0,
-      timedOut: false,
-    });
+    const checkpoint = projection.checkpoint();
     let commands: Promise<unknown>[] = [];
+    let pendingExec: ReturnType<typeof backend.buildExecSpec> | undefined;
     try {
       await awaitGateBeforeSettlement(
         paused.promise,
@@ -654,10 +674,8 @@ describe("local sandbox workspace reconciliation", () => {
       });
       expect(runtimePaused).toBe(true);
       expect(events).toEqual(["paused"]);
-      commands = [
-        backend.runShellCommand({ script: "true" }),
-        backend.buildExecSpec({ command: "true", env: {}, usePty: false }),
-      ];
+      pendingExec = backend.buildExecSpec({ command: "true", env: {}, usePty: false });
+      commands = [backend.runShellCommand({ script: "true" }), pendingExec];
       const outcomes = Promise.allSettled(commands);
       settle.resolve();
       await checkpoint;
@@ -670,6 +688,17 @@ describe("local sandbox workspace reconciliation", () => {
     } finally {
       settle.resolve();
       await Promise.allSettled([checkpoint, ...commands]);
+      if (pendingExec) {
+        const [result] = await Promise.allSettled([pendingExec]);
+        if (result.status === "fulfilled") {
+          await backend.finalizeExec!({
+            status: "completed",
+            exitCode: 0,
+            timedOut: false,
+            token: result.value.finalizeToken,
+          });
+        }
+      }
       await registry.removeRegistryEntry(entry.containerName);
     }
   });

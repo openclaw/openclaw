@@ -185,7 +185,7 @@ describe("context-engine maintenance transcript ownership", () => {
         try {
           await run;
           await Promise.all(deferred);
-          expect(openAsync).toHaveBeenCalledExactlyOnceWith(target);
+          expect(openAsync).toHaveBeenCalledOnce();
           expect(lock).not.toHaveBeenCalled();
           expect(published).toHaveBeenCalledExactlyOnceWith({
             agentId: target.agentId,

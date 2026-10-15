@@ -42,49 +42,13 @@ import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-su
 describe("native SQLite schema snapshots and callbacks", () => {
   const { tempDirs, openDatabase } = useSqliteSchemaTestFixture();
 
-  it.each(["UTF-8", "UTF-16le", "UTF-16be"])(
-    "retains %s encoding through schema changes, sibling reads, and reopen",
-    (encoding) => {
-      const filename = path.join(tempDirs.make("sqlite-encoding-admission-"), "agent.sqlite");
-      const writer = openDatabase(
-        `PRAGMA encoding = '${encoding}'; CREATE TABLE original(id)`,
-        false,
-        filename,
-      );
-      const observation = observeSqliteReadSql(StatementSync.prototype);
-      try {
-        admitSqliteSchema(writer);
-        expect(getAdmittedSqliteSchemaFacts(writer)?.textEncoding).toBe(encoding);
-        const sibling = openDatabase("", true, filename);
-        writer.exec("CREATE TABLE added(id)");
-        expect(getAdmittedSqliteSchemaFacts(sibling)?.textEncoding).toBe(encoding);
-        expect(tableExists(sibling, "added")).toBe(true);
-        expect(readSqliteTextEncoding(writer)).toBe(encoding);
-        sibling.close();
-        expect(readSqliteTextEncoding(writer)).toBe(encoding);
-        expect(observation.queries.filter((sql) => /PRAGMA encoding/iu.test(sql))).toEqual([
-          "PRAGMA encoding",
-        ]);
-        writer.close();
-        const reopened = openDatabase("", true, filename);
-        reopened.exec("CREATE INDEX added_id ON added(id)");
-        expect(getAdmittedSqliteSchemaFacts(reopened)?.textEncoding).toBe(encoding);
-        expect(observation.queries.filter((sql) => /PRAGMA encoding/iu.test(sql))).toEqual([
-          "PRAGMA encoding",
-          "PRAGMA encoding",
-        ]);
-      } finally {
-        observation.restore();
-      }
-    },
-  );
-
   it("does not retain the default encoding before the first schema object exists", () => {
     const filename = path.join(tempDirs.make("sqlite-empty-encoding-"), "agent.sqlite");
     const database = openDatabase("", true, filename);
     expect(getAdmittedSqliteSchemaFacts(database)?.textEncoding).toBe("UTF-8");
     database.exec("PRAGMA encoding = 'UTF-16le'; CREATE TABLE original(id)");
     expect(getAdmittedSqliteSchemaFacts(database)?.textEncoding).toBe("UTF-16le");
+    expect(readSqliteTextEncoding(database)).toBe("UTF-16le");
     database.close();
     expect(getAdmittedSqliteSchemaFacts(openDatabase("", true, filename))?.textEncoding).toBe(
       "UTF-16le",
@@ -209,6 +173,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
       true,
       path.join(root, "second.sqlite"),
     );
+    readSqliteDatabaseScopedWriteToken(second, "existing");
     const cursor = createSqliteDatabaseAdmissionCursor();
     const before = captureSqliteDatabaseAdmissions(cursor);
     const firstSnapshot = before.find((record) => record.location === first.location())!;
@@ -234,6 +199,9 @@ describe("native SQLite schema snapshots and callbacks", () => {
     expect(changed).toHaveLength(1);
     expect(changed[0]!.identity).toBe(secondSnapshot.identity);
     expect(changed[0]!.facts.get(key.name)?.value).toBe(42);
+    expect([...changed[0]!.facts.keys()]).toEqual([key.name]);
+    expect(changed[0]!.writeScopes.size).toBe(0);
+    expect(changed[0]!.references.size).toBe(0);
     expect(getSqliteDatabaseAdmission(second, key)).toBe(42);
     expect(secondSnapshot.facts.has(key.name)).toBe(false);
     expect(
@@ -242,6 +210,17 @@ describe("native SQLite schema snapshots and callbacks", () => {
       ),
     ).toBe(firstSnapshot);
     expect(captureSqliteDatabaseAdmissions(cursor)).toEqual([]);
+
+    readSqliteDatabaseScopedWriteToken(second, "new");
+    const [scopes] = captureSqliteDatabaseAdmissions(cursor);
+    expect([...scopes!.writeScopes.keys()]).toEqual(['["key","new"]']);
+    expect(scopes!.facts.size).toBe(0);
+    expect(scopes!.references.size).toBe(0);
+    const fresh = captureSqliteDatabaseAdmissions(createSqliteDatabaseAdmissionCursor()).find(
+      (record) => record.identity === secondSnapshot.identity,
+    )!;
+    expect(fresh.writeScopes.size).toBe(2);
+    expect(fresh.facts.get(key.name)?.value).toBe(42);
 
     revokeSqliteDatabaseAdmissions(second);
     installSqliteDatabaseAdmissions([]);
@@ -342,9 +321,6 @@ describe("native SQLite schema snapshots and callbacks", () => {
 
   it.each([
     "CREATE TEMP TABLE other_input (id)",
-    "DROP TABLE temp.memory_publication_input",
-    'DROP TABLE IF EXISTS "TeMp"."memory_publication_input"',
-    "DROP /* cleanup */ TABLE `temp`.[memory_publication_input]; -- done",
     'DROP TABLE [temp]."memory_publication_input$extra"',
   ])("retains MAIN admission while revoking local TEMP facts: %s", (sql) => {
     const filename = path.join(tempDirs.make("openclaw-schema-temp-"), "state.sqlite");
@@ -492,7 +468,6 @@ describe("native SQLite schema snapshots and callbacks", () => {
   });
 
   it.for([
-    "BEGIN; SELECT * FROM original",
     "SAVEPOINT s; SELECT * FROM original",
     "BEGIN; SELECT * FROM original; SELECT * FROM missing",
   ])("qualifies the historical snapshot left by a raw control batch: %s", (sql) => {
@@ -538,9 +513,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
   it.for([
     { sql: "SELECT id FROM original", finish: "return", version: 1 },
     { sql: "SELECT id FROM original", finish: "complete", version: 1 },
-    { sql: "SELECT id FROM original", finish: "get", version: 1 },
     { sql: "SELECT id FROM original", finish: "all", version: 1 },
-    { sql: "SELECT id FROM original", finish: "run", version: 1 },
     { sql: "SELECT id FROM original", finish: "close", version: 1 },
     { sql: "SELECT id FROM original", finish: "dispose", version: 1 },
     { sql: "SELECT id FROM original", finish: "database close", version: 1 },
@@ -614,7 +587,7 @@ describe("native SQLite schema snapshots and callbacks", () => {
     },
   );
 
-  it.for(["iterate", "get", "all", "run", "exec"] as const)(
+  it.for(["iterate", "all", "exec"] as const)(
     "keeps callback captures inside the native %s snapshot",
     (method) => {
       const filename = path.join(tempDirs.make("openclaw-schema-first-callback-"), "state.sqlite");

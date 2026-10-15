@@ -266,10 +266,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   }
 }
 
-html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome) .sidebar-brand {
-  --sidebar-agent-avatar-size: 32px;
-}
-
 .macos-titlebar-controls {
   position: fixed;
   top: 0;
@@ -762,6 +758,14 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
   color: var(--muted);
 }
 
+.settings-sidebar__footer > openclaw-sidebar-build-chip {
+  display: contents;
+}
+
+.settings-sidebar__connection {
+  min-height: 1lh;
+}
+
 openclaw-settings-save-indicator {
   min-width: 0;
 }
@@ -1101,8 +1105,6 @@ openclaw-settings-save-indicator:empty {
   box-shadow: none;
 }
 
-/* Desktop web shares the pane centerline. Drawers and native windows keep
-   the identity row below their own chrome and retain its separate clearance. */
 :where(html:not(.openclaw-native-macos, .openclaw-native-desktop)) .shell:not(.shell--mobile-nav) {
   .sidebar-shell {
     padding-top: 0;
@@ -1175,16 +1177,6 @@ openclaw-settings-save-indicator:empty {
   margin-block-end: calc(-1 * var(--sidebar-pad-bottom));
   padding: 4px var(--sidebar-pad-x);
   border-block-start: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-}
-
-.sidebar-nav {
-  position: relative;
-  padding: 0;
-}
-
-/* Inset highlight surfaces without narrowing the header or agent roster. */
-.shell:not(.shell--mobile-nav) .sidebar-nav {
-  margin-inline: 2px;
 }
 
 /* Keep the live session tree mounted while a route owns the lower region. */
@@ -2362,7 +2354,7 @@ openclaw-settings-save-indicator:empty {
   height: 20px;
 }
 
-/* All rows are connected; a hollow ring avoids implying observed activity. */
+/* A hollow ring distinguishes connected people without observed activity. */
 .sidebar-online__avatar::after {
   position: absolute;
   right: -2px;
@@ -2383,6 +2375,10 @@ openclaw-settings-save-indicator:empty {
 .sidebar-online__person[data-presence-activity="unknown"] .sidebar-online__avatar::after {
   background: var(--bg);
   box-shadow: inset 0 0 0 1.5px var(--ok);
+}
+
+.sidebar-online__person[data-presence-activity="offline"] .sidebar-online__avatar::after {
+  background: var(--muted);
 }
 
 .sidebar-online__person-name {
@@ -2956,7 +2952,6 @@ a:is(
     .nav-item,
     .sidebar-recent-session__link,
     .sidebar-online__person,
-    .sidebar-brand__new-thread,
     .sidebar-new-session,
     .header-new-session,
     .sidebar-session-catalog-new,
@@ -3274,18 +3269,6 @@ a:is(
   min-width: 0;
   max-width: 100%;
   gap: 5px;
-}
-
-.sidebar-brand .control-ui-environment-pill {
-  /* At the 240px sidebar minimum, keep the pill boundary inside the identity
-     column and truncate its label before the fixed header actions. */
-  display: block;
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .sidebar-agent-card__menu-unread {
@@ -4091,7 +4074,7 @@ button.gateway-status:focus-visible {
   text-overflow: ellipsis;
 }
 
-.sidebar-footer-build__update {
+.sidebar-identity-menu__update-badge {
   color: var(--inbox-attention);
 }
 

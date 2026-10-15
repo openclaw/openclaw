@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
 import { parseExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { runOutsideOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
+import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -9,8 +10,9 @@ import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-work
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { clearCronJobActive } from "../active-jobs.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
-import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { CronEventClaimInvalidatedError, cronEventPayload } from "../event-source.js";
 import { captureCronMutationCommit } from "../mutation-completion.js";
+import { cronSourceIdentity, ownsCronSource } from "../source-schedule.js";
 import { noteCronJobsStoreCommit } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type {
@@ -19,7 +21,6 @@ import type {
   CronRunRequestContext,
   CronSkippedRequest,
 } from "../store/run-queue.types.js";
-import { ownsStreamSource } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { isJobEnabled } from "./jobs-scheduling.js";
@@ -32,6 +33,11 @@ import {
 import { createCronRunHandle } from "./run-history.js";
 import type { ManualRunOptions } from "./run-options.js";
 import { skipCronJobsWithoutOwners } from "./run-owner.js";
+import {
+  createCronRunRequests,
+  projectCronRunQueueRequests,
+  type CronRunOptions as RunOptions,
+} from "./run-queue-requests.js";
 import {
   listCronRunQueueOwners,
   registerCronRunQueue,
@@ -52,11 +58,6 @@ import { authorCronRunCompletion, executeJobCoreWithTimeout } from "./timer-job-
 import { maybeNotifyIsolatedAgentSetupTimeout } from "./timer-notifications.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
 
-type RunOptions = ManualRunOptions & {
-  mode?: CronRunMode;
-  source?: "scheduled" | "startup" | "manual" | "event";
-};
-
 /** Transient payloads and reply promises only; the worker owns queue order and capacity. */
 type CronLaunchContext = {
   receipt: CronQueuedRun["runReceipt"];
@@ -65,6 +66,7 @@ type CronLaunchContext = {
   generation: number;
   batch: { notified: boolean };
   started?: boolean;
+  eventTransferred?: boolean;
   removeCancellation?: () => void;
   completion: ReturnType<typeof createDeferredCore<CronRunResult>>;
   activation: ReturnType<typeof createDeferredCore<void>>;
@@ -170,37 +172,36 @@ export async function commitCronRunRequests(
   });
   source.assertCurrent();
   options.commitGuard?.();
-  const requests = candidates.map((job) => {
-    const receiptId = options.runId ?? `cron-request.${randomUUID()}`;
-    return {
-      receiptId,
-      jobId: job.id,
-      configRevision: resolveCronJobConfigRevision(job),
-      mode: options.onExit
-        ? ("on-exit" as const)
-        : options.mode === "force"
-          ? ("force" as const)
-          : ("if-enabled" as const),
-      onExitSchedule: options.onExit?.schedule,
-      preserveSchedule: isImmediateCronRunMode(options.mode),
-      scheduleOwnershipAtMs: options.scheduleOwnershipAtMs ?? nowMs,
-      requestRunId: options.runId ?? receiptId,
-    };
-  });
+  const requests = createCronRunRequests(candidates, options, nowMs);
   const markCommitted = captureCronMutationCommit("cron.run");
-  const result = await runOpenClawStateWorkerOperation(source.context, (scope) => {
-    source.assertCurrent();
+  const assertRequestCurrent = () => {
     options.commitGuard?.();
-    return scope.execute({
-      type: "cron.requestRuns",
-      input: {
-        storeKey: source.storeKey,
-        nowMs,
-        defaultAgentId: resolveCurrentDefaultAgentId(state),
-        requests,
-      },
-    });
-  });
+    source.assertCurrent();
+  };
+  const result = await runOpenClawStateWorkerOperation(
+    source.context,
+    (scope) =>
+      scope.execute({
+        type: "cron.requestRuns",
+        input: {
+          storeKey: source.storeKey,
+          nowMs,
+          defaultAgentId: resolveCurrentDefaultAgentId(state),
+          requests,
+        },
+      }),
+    {
+      assertCurrent: assertRequestCurrent,
+      createAdmission: options.event
+        ? createSqliteWorkerWriteAdmission(assertRequestCurrent, [
+            source.context.admission.databasePath,
+          ])
+        : undefined,
+    },
+  );
+  if (result.rejected.some(({ reason }) => reason === "event-invalidated")) {
+    throw new CronEventClaimInvalidatedError();
+  }
   const accepted = adoptCronRunRequests(
     state,
     result.accepted,
@@ -244,16 +245,20 @@ async function publishSkipped(state: CronServiceState, skipped: CronSkippedReque
   if (pending.options.terminalTracker) {
     pending.options.terminalTracker.emitted = true;
   }
-  pending.completion.resolve({
-    ok: true,
-    ran: false,
-    reason:
-      state.stopped ||
-      pending.generation !== state.lifecycleGeneration ||
-      pending.options.onExit?.signal.aborted
-        ? "stopped"
-        : "not-due",
-  });
+  if (skipped.eventInvalidated) {
+    pending.completion.reject(new CronEventClaimInvalidatedError());
+  } else {
+    pending.completion.resolve({
+      ok: true,
+      ran: false,
+      reason:
+        state.stopped ||
+        pending.generation !== state.lifecycleGeneration ||
+        pending.options.onExit?.signal.aborted
+          ? "stopped"
+          : "not-due",
+    });
+  }
   if (!launchState(state).contexts.size && !launchState(state).running.size) {
     releaseCronRunQueue(state);
   }
@@ -286,20 +291,11 @@ async function cancelCronRunRequests(
   }
 }
 
-export function getCronRunQueueRequests(state: CronServiceState): CronRunRequestContext[] {
-  return [...launchState(state).contexts.values()]
-    .filter((pending) => !pending.started)
-    .map(({ receipt, options }) => ({
-      receiptId: receipt.receiptId,
-      mode: options.onExit
-        ? "on-exit"
-        : options.source === "manual" || options.source === "event"
-          ? options.mode === "force"
-            ? "force"
-            : "if-enabled"
-          : "scheduled",
-      onExitSchedule: options.onExit?.schedule,
-    }));
+export function getCronRunQueueRequests(
+  state: CronServiceState,
+  selection: { includePendingEvents?: boolean } = {},
+): CronRunRequestContext[] {
+  return projectCronRunQueueRequests(launchState(state).contexts.values(), selection);
 }
 
 /** Consume committed activations. No host semaphore or reservation influences selection. */
@@ -315,24 +311,104 @@ export async function drainCronRunQueue(state: CronServiceState): Promise<void> 
     await launchState(state).drain;
     return;
   }
+  let retryAfterGuardRefusal = false;
   launchState(state).drain = locked(state, async () => {
     const context = captureOpenClawStateWorkerContext();
-    const result = await runOpenClawStateWorkerOperation(context, (scope) =>
-      scope.execute({
-        type: "cron.drainQueue",
-        input: {
-          storeKey: cronStoreKey(state.deps.storePath),
-          nowMs: state.deps.nowMs(),
-          defaultAgentId: resolveCurrentDefaultAgentId(state),
-          maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
-          schedulingPaused: state.schedulingPaused,
-          requests: getCronRunQueueRequests(state),
-        },
-      }),
+    const pendingEvents = [...launchState(state).contexts.values()].filter(
+      (pending) => pending.options.event && !pending.started && !pending.eventTransferred,
     );
+    const guardFailure: { value?: { pending: CronLaunchContext; error: unknown } } = {};
+    const assertEventSourcesCurrent = () => {
+      for (const pending of pendingEvents) {
+        try {
+          pending.options.commitGuard?.();
+        } catch (error) {
+          guardFailure.value = { pending, error };
+          throw error;
+        }
+      }
+    };
+    const result = await runOpenClawStateWorkerOperation(
+      context,
+      (scope) =>
+        scope.execute({
+          type: "cron.drainQueue",
+          input: {
+            storeKey: cronStoreKey(state.deps.storePath),
+            nowMs: state.deps.nowMs(),
+            defaultAgentId: resolveCurrentDefaultAgentId(state),
+            maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+            schedulingPaused: state.schedulingPaused,
+            requests: getCronRunQueueRequests(state, { includePendingEvents: true }),
+          },
+        }),
+      {
+        assertCurrent: assertEventSourcesCurrent,
+        createAdmission:
+          pendingEvents.length > 0
+            ? createSqliteWorkerWriteAdmission(assertEventSourcesCurrent, [
+                context.admission.databasePath,
+              ])
+            : undefined,
+      },
+    ).catch(async (error: unknown) => {
+      const refused = guardFailure.value;
+      if (refused && refused.error === error && !hasSqliteWorkerOutcomeUnknown(error)) {
+        // The whole transaction rolled back, but only this source lost authority.
+        // Its exception must never reach a sibling ingress owner and dead-letter it.
+        refused.pending.completion.reject(error);
+        refused.pending.activation.resolve();
+        try {
+          await cancelCronRunRequests(
+            state,
+            [refused.pending.receipt.receiptId],
+            normalizeCronRunErrorText(error),
+          );
+        } catch (cleanupError) {
+          state.deps.log.warn(
+            { err: String(cleanupError) },
+            "cron: refused event cleanup left for recovery",
+          );
+        } finally {
+          // A missing cleanup row is already settled; uncertain cleanup stays
+          // durable for recovery, never in the live source-admission loop.
+          refused.pending.removeCancellation?.();
+          launchState(state).contexts.delete(refused.pending.receipt.receiptId);
+        }
+        retryAfterGuardRefusal = true;
+        return undefined;
+      }
+      // Only a known rollback permits releasing queued receipts. Unknown writes stay
+      // with ordinary recovery; neither path may replay the immutable ingress here.
+      for (const pending of pendingEvents) {
+        pending.completion.reject(error);
+        pending.activation.resolve();
+      }
+      if (!hasSqliteWorkerOutcomeUnknown(error)) {
+        await cancelCronRunRequests(
+          state,
+          pendingEvents.map(({ receipt }) => receipt.receiptId),
+          normalizeCronRunErrorText(error),
+        );
+      } else {
+        for (const pending of pendingEvents) {
+          launchState(state).contexts.delete(pending.receipt.receiptId);
+        }
+        if (!launchState(state).contexts.size && !launchState(state).running.size) {
+          releaseCronRunQueue(state);
+        }
+      }
+      throw error;
+    });
+    if (!result) {
+      return;
+    }
     await launchCronRunQueueResult(state, result, context);
   }).finally(() => {
     launchState(state).drain = undefined;
+    if (retryAfterGuardRefusal) {
+      pumpCronRunQueues(state);
+    }
   });
   await launchState(state).drain;
 }
@@ -368,6 +444,12 @@ export async function launchCronRunQueueResult(
       registerCronRunQueue(state, () => drainCronRunQueue(state));
     }
     pending.receipt = entry.runReceipt;
+    if (pending.options.event) {
+      // Publish the committed transfer before any awaited launch preparation.
+      pending.eventTransferred = true;
+      pending.options.onEventTransferred?.(entry.runReceipt);
+      pending.activation.resolve();
+    }
     const launch = pending;
     // The launch owns its lifetime beyond the request acknowledgement and store lock.
     const running = runWithGatewayDetachedWorkContinuation(
@@ -422,7 +504,11 @@ async function launchCronRun(
   const { options } = pending;
   await ensureLoaded(state, { forceReload: true });
   pending.context.admission.assertCurrent();
-  options.commitGuard?.();
+  // Transfer ends the plugin's admission authority; this accepted occurrence
+  // executes under live Cron/run/tool authority, not the retired source lease.
+  if (!pending.eventTransferred) {
+    options.commitGuard?.();
+  }
   const current = state.store?.jobs.find((job) => job.id === entry.job.id);
   const force = options.mode === "force" || options.onExit !== undefined;
   const unavailable =
@@ -436,9 +522,10 @@ async function launchCronRun(
     !current ||
     unavailable ||
     current.state.runningReceiptId !== entry.runReceipt.receiptId ||
+    (options.event && cronSourceIdentity(current) !== options.event.input.sourceIdentity) ||
     (!force && (!isJobEnabled(current) || current.state.autoDisabled)) ||
     (options.streamScheduleKey !== undefined &&
-      !ownsStreamSource(current, options.streamScheduleKey, options.streamSourceIdentity ?? ""))
+      !ownsCronSource(current, options.streamScheduleKey, options.streamSourceIdentity ?? ""))
   ) {
     await cancelCronRunRequests(
       state,
@@ -458,10 +545,11 @@ async function launchCronRun(
     admittedJob.enabled = false;
   }
   const executionJob = structuredClone(admittedJob);
-  executionJob.payload =
-    options.onExit?.payload?.(structuredClone(entry.job)) ??
-    options.payload ??
-    executionJob.payload;
+  executionJob.payload = options.event
+    ? cronEventPayload(entry.job, options.event.input)
+    : (options.onExit?.payload?.(structuredClone(entry.job)) ??
+      options.payload ??
+      executionJob.payload);
   if (isImmediateCronRunMode(options.mode)) {
     executionJob.state.nextRunAtMs = options.scheduleOwnershipAtMs;
     executionJob.trigger = options.evaluateTrigger ? executionJob.trigger : undefined;

@@ -110,7 +110,10 @@ function fixtures(): GatewaySessionRow[] {
   for (const state of ["open", "draft", "merged", "closed"] as const) {
     add("pr-" + state);
   }
+  // Agent-declared attention keeps this row two-line even with previews off; pending
+  // approvals render single-line, where the trailing endcap intentionally takes title space.
   add("crowded", {
+    agentStatus: { note: "Needs a decision", attention: "key", expiresAt: Date.now() + 600000 },
     incognito: true,
     hasActiveRun: true,
     status: "running",
@@ -230,7 +233,7 @@ export async function mount(width: number) {
     harness.sessions.setPullRequestSummary(key("pr-" + state), { numbers: [123, 456], state });
   }
   harness.sessions.setPullRequestSummary(key("crowded"), { numbers: [123], state: "open" });
-  const approvals = ["approval", "crowded"].map((id) => ({
+  const approvals = ["approval"].map((id) => ({
     id: "stress-approval-" + id,
     kind: "exec" as const,
     request: { command: "echo fixture", sessionKey: key(id) },

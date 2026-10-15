@@ -26,7 +26,11 @@ a final transcript after the utterance ends. The catalog marks file transcriptio
 ready only when a configured provider or CLI command is available.
 
 Capture pauses during the agent response and speech playback, then resumes for
-the next utterance. Stop cancels the call's own chat run and playback. Split Talk
+the next utterance. Stop cancels the call's own chat run and playback. A Talk
+failure, including the two-minute answer timeout, ends capture and playback but
+leaves the accepted chat run to finish in the conversation. The timeout message
+explains that the answer will appear in chat. Leaving the chat, disconnecting, or
+switching away from Talk also detaches without cancelling accepted work. Split Talk
 does not offer realtime voice switching or camera input. Leaving the mode unset
 preserves realtime Talk.
 

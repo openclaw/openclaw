@@ -37,6 +37,7 @@ type AssistantAttachmentAvailability =
       checkedAt: number;
       recoverable: boolean;
       retryAttempted?: true;
+      requiresExplicitRetry?: true;
       unconfirmed?: true;
       canAllow?: boolean;
     };
@@ -153,7 +154,7 @@ export function resolveAssistantAttachmentAvailability(
       if (!res.ok) {
         return createUnavailableAssistantAttachment(
           t("chat.attachments.unavailable"),
-          resource.retryAttempted,
+          resource.retryAttempted || res.status === 403 || res.status === 404,
         );
       }
       const payload = (await res.json()) as {
@@ -262,6 +263,32 @@ export function retryAssistantAttachmentAvailability(
   options.onRequestUpdate?.();
 }
 
+export function reportAssistantImageFailure(
+  source: string,
+  options: ImageRenderOptions = {},
+): void {
+  if (!isLocalAssistantAttachmentSource(source)) {
+    return;
+  }
+  const resource = observeAssistantAttachment(source, options);
+  // A late image event must not replace a newer metadata denial.
+  if (resource.value?.status !== "available") {
+    return;
+  }
+  resetAssistantAttachmentAvailability(resource);
+  // Native IMG errors hide the HTTP status. Never replay a possibly denied or
+  // missing byte request automatically; explicit Retry must recheck admission.
+  resource.retryAttempted = true;
+  setAssistantAttachmentAvailability(
+    resource,
+    createUnavailableAssistantAttachment(t("chat.imageLightbox.loadFailed"), true, {
+      unconfirmed: true,
+      requiresExplicitRetry: true,
+    }),
+  );
+  notifyChatMediaResourceSubscribers(resource);
+}
+
 function resetAssistantAttachmentAvailability(
   resource: ChatMediaResource<AssistantAttachmentAvailability>,
 ): void {
@@ -277,7 +304,12 @@ function resetAssistantAttachmentAvailability(
 function createUnavailableAssistantAttachment(
   reason: string,
   retryAttempted: boolean,
-  options: { recoverable?: boolean; unconfirmed?: true; canAllow?: boolean } = {},
+  options: {
+    recoverable?: boolean;
+    unconfirmed?: true;
+    canAllow?: boolean;
+    requiresExplicitRetry?: true;
+  } = {},
 ): Extract<AssistantAttachmentAvailability, { status: "unavailable" }> {
   return {
     status: "unavailable",
@@ -286,6 +318,7 @@ function createUnavailableAssistantAttachment(
     recoverable: options.recoverable !== false,
     ...(options.unconfirmed ? { unconfirmed: true } : {}),
     ...(retryAttempted ? { retryAttempted: true } : {}),
+    ...(options.requiresExplicitRetry ? { requiresExplicitRetry: true } : {}),
     ...(options.canAllow ? { canAllow: true } : {}),
   };
 }
@@ -362,7 +395,11 @@ function observeAssistantAttachment(source: string, options: ImageRenderOptions)
   );
   if (resource.subscribers.size > 0 && !resource.releaseAuthRecovery) {
     resource.releaseAuthRecovery = subscribeBrowserAuthRestored(() => {
-      if (isChatMediaResourceCurrent(resource) && resource.value?.status === "unavailable") {
+      if (
+        isChatMediaResourceCurrent(resource) &&
+        resource.value?.status === "unavailable" &&
+        !resource.value.requiresExplicitRetry
+      ) {
         resetAssistantAttachmentAvailability(resource);
         notifyChatMediaResourceSubscribers(resource);
       }

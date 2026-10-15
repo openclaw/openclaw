@@ -69,6 +69,8 @@ const repositoryScriptEntries = [
   "scripts/perf/transcript-broadcast-measure.ts",
   "scripts/perf/post-restart-burst-measure.ts",
   "scripts/bundle-a2ui.mts!",
+  // The standalone build guide invokes this builder by path.
+  "scripts/build-bun-standalone.mjs!",
   "scripts/build-discord-activity-sdk.mts!",
   // Plugin package asset hooks invoke the browser builder by path.
   "scripts/build-plugin-control-ui.mts!",
@@ -230,6 +232,8 @@ const repositoryScriptEntries = [
   "scripts/mantis/observe-request-web-ui.mts!",
   "scripts/mantis/telegram-proof-bridge.mjs!",
   "scripts/mcp-code-mode-gateway-e2e.ts!",
+  // The MCP Events live driver and fixture README launch this developer CLI by path.
+  "scripts/mcp-events-test-server.mjs",
   // Immutable systemd installations invoke the packaged launcher by path.
   "scripts/openclaw-immutable-launcher.mjs!",
   // Existing explicit Linux proof driver imports the inactive capsule adapter.

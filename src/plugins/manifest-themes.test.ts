@@ -8,11 +8,16 @@ import { normalizeManifestThemes } from "./manifest-themes.js";
 import type { PluginDiagnostic, PluginManifestTheme } from "./manifest-types.js";
 import { loadPluginManifest } from "./manifest.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import { PLUGIN_ACTIVITY_ICON_MAX_BYTES } from "./portable-icon-paths.js";
+import {
+  PLUGIN_ACTIVITY_ICON_MAX_BYTES,
+  PLUGIN_THEME_BACKGROUND_MAX_BYTES,
+} from "./portable-icon-paths.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h24v24H0z"/></svg>';
+// 1 × 1 lossless WebP.
+const WEBP = Buffer.from("UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==", "base64");
 const definition = createThemeDefinitionFixture({
   brandIcon: "rocket",
   avatarHat: "beret",
@@ -79,6 +84,16 @@ describe("manifest theme artwork", () => {
       artwork: { icons: hats, hats, critters },
       expected: { icons: hats, hats, critters },
     },
+    {
+      name: "light and dark canvas backgrounds",
+      artwork: { backgrounds: { light: "./assets/day.png", dark: "assets/night.webp" } },
+      expected: { backgrounds: { light: "assets/day.png", dark: "assets/night.webp" } },
+    },
+    {
+      name: "a single-mode JPEG background",
+      artwork: { backgrounds: { dark: "night.JPEG" } },
+      expected: { backgrounds: { dark: "night.JPEG" } },
+    },
   ])("normalizes $name", ({ artwork, expected }) => {
     expect(normalizeManifestThemes([{ ...declaration, ...artwork }], "theme-pack")).toEqual({
       ok: true,
@@ -125,6 +140,27 @@ describe("manifest theme artwork", () => {
       ],
       error: "SVG file inside the plugin root",
     })),
+    ...[
+      {},
+      [],
+      null,
+      "night.webp",
+      { sepia: "night.webp" },
+      { dark: "night.webp", extra: "a.webp" },
+    ].map((backgrounds) => ({ artworks: [{ backgrounds }], error: "light and/or dark" })),
+    ...[
+      "../night.webp",
+      "/night.webp",
+      "assets\\night.webp",
+      "https://example.invalid/night.webp",
+      "night.svg",
+      "night.gif",
+      "night.webp?v=1",
+      7,
+    ].map((source) => ({
+      artworks: [{ backgrounds: { dark: source } }],
+      error: "PNG, JPEG, or WebP file inside the plugin root",
+    })),
     ...[4999, 90001, 12000.5, "12000"].map((crossMs) => ({
       artworks: [{ critters: { ferris: { source: "ferris.svg", crossMs } } }],
       error: "crossMs",
@@ -149,6 +185,7 @@ describe("manifest theme artwork", () => {
     '"hats":{"beret":"beret.svg","b\\u0065ret":"other.svg"}',
     '"critters":{"ferris":{"source":"ferris.svg"},"ferris":{"source":"other.svg"}}',
     "hats: {beret: 'beret.svg', beret: 'other.svg'}",
+    '"backgrounds":{"dark":"night.webp","dark":"other.webp"}',
   ])("rejects duplicate artwork keys before JSON parsing can hide them: %s", (artwork) => {
     const rootDir = tempDirs.make("openclaw-theme-duplicate-");
     const base = JSON.stringify({
@@ -215,6 +252,53 @@ describe("manifest theme artwork", () => {
         message: expect.stringContaining("artwork rocket.svg"),
       }),
     ]);
+  });
+
+  it("captures sniffed raster backgrounds and omits the theme for unusable images", () => {
+    const rootDir = tempDirs.make("openclaw-theme-background-");
+    const plain = createThemeDefinitionFixture();
+    fs.writeFileSync(path.join(rootDir, "theme.json"), JSON.stringify(plain));
+    const capture = (bytes: Buffer | string) => {
+      fs.writeFileSync(path.join(rootDir, "night.webp"), bytes);
+      const diagnostics: PluginDiagnostic[] = [];
+      const themes = withPluginCache(createPluginCache(), () =>
+        loadManifestThemeDefinitions({
+          pluginId: "theme-pack",
+          rootDir,
+          themes: [
+            {
+              id: "night",
+              name: plain.name,
+              description: plain.description,
+              source: "theme.json",
+              backgrounds: { dark: "night.webp" },
+            },
+          ],
+          rejectHardlinks: true,
+          diagnostics,
+        }),
+      );
+      return { themes, diagnostics };
+    };
+    const captured = capture(WEBP);
+    expect(captured.diagnostics).toEqual([]);
+    expect(captured.themes?.[0]?.artwork).toEqual({
+      backgrounds: { dark: { base64: WEBP.toString("base64") } },
+    });
+    for (const bytes of [
+      SVG,
+      "<html>not an image</html>",
+      Buffer.concat([WEBP, Buffer.alloc(PLUGIN_THEME_BACKGROUND_MAX_BYTES)]),
+    ]) {
+      const rejected = capture(bytes);
+      expect(rejected.themes).toEqual([]);
+      expect(rejected.diagnostics).toEqual([
+        expect.objectContaining({
+          level: "warn",
+          message: expect.stringContaining("background night.webp"),
+        }),
+      ]);
+    }
   });
 
   it.skipIf(process.platform === "win32")(

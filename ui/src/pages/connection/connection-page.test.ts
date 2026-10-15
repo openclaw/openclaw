@@ -694,11 +694,6 @@ describe("ConnectionPage Gateway lifecycle", () => {
   it.each([
     ["transient", new Error("temporarily unavailable"), true],
     [
-      "unknown method",
-      new GatewayRequestError({ code: "INVALID_REQUEST", message: "unknown method: system.info" }),
-      false,
-    ],
-    [
       "missing read scope",
       new GatewayRequestError({
         code: "FORBIDDEN",

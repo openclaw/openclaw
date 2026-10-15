@@ -30,6 +30,7 @@ import { assertStateDatabaseIntegrityOnce } from "./openclaw-state-db-integrity-
 import {
   assertOpenClawStateDatabaseForMaintenance,
   executeCanonicalStateSchema,
+  migrateBoundedStateSchema,
   openClawStateMigrationAssertions,
   runStateSchemaMigrationTransaction,
   versionedStateMigrations,
@@ -145,14 +146,21 @@ export function ensureOpenClawStateRuntimeSchema(
             : [];
         }
 
+        openClawStateMigrationAssertions.get(previousVersion)?.(db, { pathname });
+        assertStateDatabaseIntegrityOnce(db, pathname);
+        const boundedChanges = migrateBoundedStateSchema(db, previousVersion);
+        if (boundedChanges) {
+          writeCurrentStateSchemaMetadata(db, now);
+          assertCurrentStateRuntimeSchema(db, pathname);
+          runtimeReady = true;
+          return boundedChanges;
+        }
+
         const includeAgentDeletionJournal =
           tableExists(db, "agent_deletion_journal") ||
           hasPreJournalStateSchema(db) ||
           (initialization.kind === "fresh" && isUninitializedNativeStartupDatabase(db));
         // Older schemas still need atomic content transforms before retiring their columns.
-        openClawStateMigrationAssertions.get(previousVersion)?.(db, { pathname });
-        // Automatic preparation enters without the physical opener's integrity preflight.
-        assertStateDatabaseIntegrityOnce(db, pathname);
         dropLegacyStateTables(db);
         const changes = retirements.runRetiredStateTableMigrations(db, previousVersion);
         retiredTableChanges.push(...changes);
