@@ -477,7 +477,11 @@ describe("createFollowupRunner", () => {
     const typing = createTypingController();
     const controller = new AbortController();
     controller.abort();
-    const queued = createQueuedRun({ abortSignal: controller.signal });
+    const endCorrelation = vi.fn();
+    const queued = createQueuedRun({
+      abortSignal: controller.signal,
+      deliveryCorrelations: [{ begin: () => endCorrelation }],
+    });
 
     await createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(queued);
 
@@ -485,11 +489,16 @@ describe("createFollowupRunner", () => {
     expect(state.completeLifecycle).toHaveBeenCalledWith(queued);
     expect(typing.markRunComplete).toHaveBeenCalledOnce();
     expect(typing.markDispatchIdle).toHaveBeenCalledOnce();
+    expect(endCorrelation).toHaveBeenCalledExactlyOnceWith({
+      visibleReplySent: false,
+      failed: true,
+    });
   });
 
   it("turns active-lane deferral into a restorable queue error", async () => {
     const typing = createTypingController();
-    const queued = createQueuedRun();
+    const endCorrelation = vi.fn();
+    const queued = createQueuedRun({ deliveryCorrelations: [{ begin: () => endCorrelation }] });
     state.admit.mockResolvedValue({ kind: "deferred", reason: "active-run" });
 
     await expect(
@@ -499,25 +508,35 @@ describe("createFollowupRunner", () => {
     expect(state.completeLifecycle).not.toHaveBeenCalled();
     expect(typing.markRunComplete).toHaveBeenCalledOnce();
     expect(typing.markDispatchIdle).toHaveBeenCalledOnce();
+    expect(endCorrelation).toHaveBeenCalledExactlyOnceWith(undefined);
   });
 
-  it("releases an operation acquired before asynchronous admission cancellation", async () => {
-    const order: string[] = [];
-    const typing = createTypingController();
-    const turn = createTurn(order);
-    state.admit.mockResolvedValue({
-      kind: "skipped",
-      reason: "aborted",
-      operation: turn.operation,
-    });
+  it.each(["aborted", "lifecycle-invalidated", "goal-inactive"])(
+    "settles a terminal admission skip (%s) and releases its operation",
+    async (reason) => {
+      const order: string[] = [];
+      const typing = createTypingController();
+      const turn = createTurn(order);
+      const endCorrelation = vi.fn();
+      turn.queued.deliveryCorrelations = [{ begin: () => endCorrelation }];
+      state.admit.mockResolvedValue({
+        kind: "skipped",
+        reason,
+        operation: turn.operation,
+      });
 
-    await createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(
-      turn.queued,
-    );
+      await createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(
+        turn.queued,
+      );
 
-    expect(order).toEqual(["operation-complete"]);
-    expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
-  });
+      expect(order).toEqual(["operation-complete"]);
+      expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
+      expect(endCorrelation).toHaveBeenCalledExactlyOnceWith({
+        visibleReplySent: false,
+        failed: true,
+      });
+    },
+  );
 
   it("restores unexpected execution failures after releasing the admitted operation", async () => {
     const order: string[] = [];

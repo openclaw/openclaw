@@ -144,14 +144,11 @@ export function createFollowupRunner(
         onObservedReplyDelivery,
       });
     };
-    const initiallyAborted = isFollowupRunAborted(queued);
-    const endDeliveryCorrelations = initiallyAborted
-      ? []
-      : (queued.deliveryCorrelations ?? [])
-          .map((correlation) => correlation.begin())
-          .filter((end) => typeof end === "function");
+    const endDeliveryCorrelations = (queued.deliveryCorrelations ?? [])
+      .map((correlation) => correlation.begin())
+      .filter((end) => typeof end === "function");
     try {
-      if (initiallyAborted) {
+      if (isFollowupRunAborted(queued)) {
         disposition = { kind: "consumed" };
         return;
       }
@@ -354,7 +351,7 @@ export function createFollowupRunner(
         disposition = { kind: "retry", error };
       }
     } finally {
-      const sourceDisposition = admittedTurn?.queued.queuedFollowupReplyDisposition;
+      const sourceDisposition = (admittedTurn?.queued ?? queued).queuedFollowupReplyDisposition;
       if (
         disposition.kind === "consumed" &&
         admittedTurn &&
@@ -387,11 +384,8 @@ export function createFollowupRunner(
         try {
           end(
             // Source-owned batches settle through their own owner, whose void callback is not a receipt.
-            disposition.kind === "consumed" &&
-              admittedTurn &&
-              !sourceRetry &&
-              sourceDisposition?.kind !== "deliver"
-              ? { visibleReplySent, failed: completion.kind === "failed" }
+            disposition.kind === "consumed" && !sourceRetry && sourceDisposition?.kind !== "deliver"
+              ? { visibleReplySent, failed: !admittedTurn || completion.kind === "failed" }
               : undefined,
           );
         } catch (error) {
