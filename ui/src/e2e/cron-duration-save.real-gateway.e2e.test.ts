@@ -24,8 +24,8 @@ const suite = createControlUiE2eSuite({
     const owner = await createOpenClawTestInstance({
       name: "control-ui-exact-stagger",
       config: {
-        agents: { defaults: { model: "openai/gpt-4.1" } },
         gateway: { controlUi: { enabled: true } },
+        agents: { defaults: { model: "openai/gpt-4.1" } },
         cron: {
           enabled: false,
           failureAlert: {

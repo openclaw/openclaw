@@ -19,7 +19,6 @@ import { t } from "../i18n/index.ts";
 import type { StoredSidebarSessionFacts } from "../lib/chat/outbox-store-projection.ts";
 import { anchorFromNavigationEvent, shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
-import { isSessionRunActive } from "../lib/session-run-state.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -302,7 +301,7 @@ export function createNativeConversationBridge(
       conversation = {
         context: { agentId, sessionKey },
         title: resolveSessionDisplayName(sessionKey, row),
-        run: { active: paneActive || (row ? isSessionRunActive(row) : false) },
+        run: { active: paneActive || (row ? context.sessions.isRunVisuallyActive(row) : false) },
       };
     }
     // Keep the last settled owner through pending loaders so web navigation

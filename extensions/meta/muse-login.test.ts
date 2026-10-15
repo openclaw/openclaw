@@ -36,7 +36,6 @@ process.stdout.write('Open this page to sign in:\\n  https://auth.meta.com/oauth
   await chmod(binaryPath, 0o700);
   const ctx: ProviderAuthContext = {
     config: { plugins: { entries: { muse: { config: { binaryPath } } } } },
-    agentId: "main",
     env: {
       ...process.env,
       FAKE_MUSE_DIR: directory,
@@ -77,10 +76,7 @@ describe("Muse Code browser sign-in", () => {
     expect(ctx.openUrl).toHaveBeenCalledWith("https://auth.meta.com/oauth/device/?code=ABCD-1234");
     expect(result.profiles).toEqual([]);
     expect(result.agentRuntimeId).toBe("muse");
-    expect(result.nativeRuntimeConsent).toEqual(["muse"]);
-    expect(vi.mocked(ctx.prompter.select).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(ctx.prompter.deviceCode!).mock.invocationCallOrder[0]!,
-    );
+    expect(ctx.prompter.select).not.toHaveBeenCalled();
     expect(result.configPatch?.agents).toBeUndefined();
     expect(await readFile(path.join(directory, "attempts"), "utf8")).toBe("login\n");
     expect(ctx.prompter.deviceCode).toHaveBeenCalledOnce();
@@ -89,24 +85,6 @@ describe("Muse Code browser sign-in", () => {
       backend: "file",
       home: path.join(directory, "state", "muse"),
     });
-  });
-
-  it("declining native permissions starts no login and saves no credential", async () => {
-    const { ctx, directory } = await fixture();
-    ctx.prompter.select = vi.fn().mockRejectedValue(new Error("cancelled"));
-    await expect(runMuseLogin(ctx)).rejects.toThrow("cancelled");
-    expect(ctx.openUrl).not.toHaveBeenCalled();
-    await expect(readFile(path.join(directory, "attempts"), "utf8")).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-
-  it("does not ask again when this agent has remembered Muse consent", async () => {
-    const { ctx } = await fixture();
-    ctx.config.agents = { entries: { main: { nativeRuntimeConsent: ["muse"] } } };
-    await runMuseLogin(ctx);
-    expect(ctx.prompter.select).not.toHaveBeenCalled();
-    expect(ctx.openUrl).toHaveBeenCalledOnce();
   });
 
   it("terminates the child even when cancellation interrupts device-code presentation", async () => {

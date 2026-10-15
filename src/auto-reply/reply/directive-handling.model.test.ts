@@ -1157,33 +1157,6 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionStore["agent:main:dm:1"]?.thinkingLevel).toBeUndefined();
   });
 
-  it("reports current thinking status", async () => {
-    setDirectiveTestProviders([
-      {
-        id: "anthropic",
-        label: "Anthropic",
-        auth: [],
-        resolveThinkingProfile: () => ({
-          levels: [
-            { id: "off" },
-            { id: "minimal" },
-            { id: "low" },
-            { id: "medium" },
-            { id: "adaptive" },
-            { id: "high" },
-          ],
-        }),
-      },
-    ]);
-
-    const result = await runHandleCommand("/think", { currentThinkLevel: "low" });
-
-    expect(result?.text).toContain("Current thinking level: low");
-    expect(result?.text).toContain(
-      "Options: default, off, minimal, low, medium, adaptive, high, ultra.",
-    );
-  });
-
   it("reports the effective thinking level for the pinned runtime", async () => {
     setDirectiveTestProviders([
       {

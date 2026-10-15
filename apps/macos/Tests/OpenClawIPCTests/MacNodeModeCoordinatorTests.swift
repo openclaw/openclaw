@@ -945,17 +945,17 @@ extension MacNodeModeCoordinatorTests {
         ]
         #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericPluginEnable))
 
-        let numericNestedEnable: [String: Any] = [
+        let numericCatalogEnable: [String: Any] = [
             "plugins": [
                 "entries": [
                     "codex": [
                         "enabled": true,
-                        "config": ["supervision": ["enabled": NSNumber(value: 1)]],
+                        "config": ["sessionCatalog": ["enabled": NSNumber(value: 1)]],
                     ],
                 ],
             ],
         ]
-        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericNestedEnable))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericCatalogEnable))
 
         let numericGlobalEnable: [String: Any] = [
             "plugins": [

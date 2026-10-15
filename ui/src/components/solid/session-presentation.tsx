@@ -331,9 +331,10 @@ export function TeamSessionSlots(props: TeamSessionSlotsProps) {
       failed = false;
     for (const row of props.rows) {
       const children = props.includeChildren ? row : row.subagentSummary;
-      active += Number(row.hasActiveRun) + (children?.runningChildCount ?? 0);
+      const visuallyActive = row.isRunVisuallyActive ?? row.hasActiveRun;
+      active += Number(visuallyActive) + (children?.runningChildCount ?? 0);
       queued +=
-        Number(row.hasActiveRun && row.status === "queued") + (children?.queuedChildCount ?? 0);
+        Number(visuallyActive && row.status === "queued") + (children?.queuedChildCount ?? 0);
       unread += Number(row.unread) + (children?.unreadChildCount ?? 0);
       failed ||=
         row.status === "failed" ||
@@ -453,13 +454,14 @@ export function renderSessionLeadingState(props: SessionLeadingStateProps) {
   const subagentsWorking = createMemo(
     () => !props.trailingState && session().runningChildCount > 0,
   );
-  const running = createMemo(() => session().hasActiveRun || subagentsWorking());
-  const ownRunQueued = createMemo(() => session().hasActiveRun && session().status === "queued");
+  const ownRunActive = () => session().isRunVisuallyActive ?? session().hasActiveRun;
+  const running = createMemo(() => ownRunActive() || subagentsWorking());
+  const ownRunQueued = createMemo(() => ownRunActive() && session().status === "queued");
   const showRun = createMemo(
     () => running() && !props.trailingState && session().attention.kind !== "question",
   );
   const runningLabel = createMemo(() =>
-    subagentsWorking() && (!session().hasActiveRun || ownRunQueued())
+    subagentsWorking() && (!ownRunActive() || ownRunQueued())
       ? t("sessionsView.subagentsWorking")
       : undefined,
   );
