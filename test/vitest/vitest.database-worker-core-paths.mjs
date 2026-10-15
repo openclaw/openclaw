@@ -43,6 +43,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/physical-facts.test.ts",
   "src/infra/worker-task-pool.sqlite-idle.test.ts",
   "src/state/openclaw-state-db.postgres.test.ts",
+  "src/gateway/server-database-engine.postgres.test.ts",
   "src/infra/postgres-sync/locks.test.ts",
   "src/acp/runtime/session-meta-read.cache.test.ts",
   "src/state/user-profile-catalog-identity.read.test.ts",

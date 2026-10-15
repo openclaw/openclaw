@@ -71,7 +71,7 @@ async function fixture({
     log,
   });
   adapters.add(adapter);
-  adapter.start();
+  await adapter.start();
   await ready.promise;
   const reconcile = () =>
     Promise.all(
@@ -142,10 +142,15 @@ describe("config file observation", () => {
     for (const name of ["openclaw.json", "accepted.json"]) {
       await fs.writeFile(h.p(name), '{"changed":true}');
       await h.reconcile();
+      const settled = vi.fn();
+      const pending = h.adapter.whenSettled().then(settled);
       await h.settle(4);
       expect(h.onChange).not.toHaveBeenCalled();
+      expect(settled).not.toHaveBeenCalled();
       await h.settle(1);
+      await pending;
       expect(h.onChange).toHaveBeenCalledOnce();
+      expect(settled).toHaveBeenCalledOnce();
       h.onChange.mockClear();
     }
     await fs.writeFile(h.p("atomic.tmp"), '{"atomic":true}');
@@ -189,6 +194,32 @@ describe("config file observation", () => {
     expect(h.log.error).not.toHaveBeenCalled();
     await h.adapter.stop();
     expect(subscription.health().state).toBe("closed");
+  });
+
+  it.each(["stop", "read failure"])("releases a pending stability join on %s", async (reason) => {
+    const h = await fixture();
+    await fs.writeFile(h.p("openclaw.json"), '{"changed":true}');
+    await h.reconcile();
+    const settled = vi.fn();
+    const pending = h.adapter.whenSettled().then(settled);
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    if (reason === "stop") {
+      await h.adapter.stop();
+      await pending;
+    } else {
+      vi.mocked(snapshots.readObservationSnapshot).mockRejectedValueOnce(
+        new Error("file metadata unavailable"),
+      );
+      await h.settle(1);
+      await pending;
+      await h.adapter.whenSettled();
+      expect(h.log.warn).toHaveBeenCalledWith(expect.stringContaining("file metadata unavailable"));
+      adapters.delete(h.adapter);
+      await expect(h.adapter.stop()).rejects.toThrow("Config watcher shutdown failed");
+    }
+    expect(settled).toHaveBeenCalledOnce();
+    expect(h.onChange).not.toHaveBeenCalled();
   });
 
   it("observes repairable rejected includes without following unadmitted links or directory children", async () => {
