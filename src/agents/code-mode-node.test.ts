@@ -503,11 +503,13 @@ describe("Node Code Mode executor", () => {
       };
       const reply = (id: string) => ({ id, ok: true, json: "null" });
       const delivered: unknown[] = [];
+      const onFailure = vi.fn();
       let result = await nodeCodeModeExecutor.execute(input, {
         timeoutMs: 7_000,
         ...(mode === "inline"
           ? {
               inlineHost: {
+                onFailure,
                 onBoundary: async (boundary, context) => {
                   delivered.push(boundary.output);
                   return {
@@ -545,11 +547,19 @@ describe("Node Code Mode executor", () => {
       expect(result).toMatchObject({
         status: "failed",
         code: "timeout",
+        failurePhase: "guest",
         output: {
           count: 0,
           source: { kind: "complete", json: "[]" },
         },
       });
+      if (mode === "inline") {
+        expect(onFailure).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ code: "timeout" }),
+          "guest",
+          expect.stringMatching(/^code-mode-node:/),
+        );
+      }
     },
   );
 
