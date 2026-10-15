@@ -147,6 +147,29 @@ describe("resolveSessionKeyForRequest", () => {
     });
   });
 
+  it("scopes stored session-key lookup to the requested agent store", async () => {
+    const embeddedAgentStore = {
+      "agent:embedded-agent:main": { sessionId: "other-session", updatedAt: 2 },
+      "agent:embedded-agent:work": { sessionId: "resume-agent-1", updatedAt: 1 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({ "/stores/embedded-agent.json": embeddedAgentStore });
+
+    const result = await resolveStoredSessionKeyForSessionId({
+      cfg: {
+        session: {
+          store: "/stores/{agentId}.json",
+        },
+      } satisfies OpenClawConfig,
+      sessionId: "resume-agent-1",
+      agentId: "embedded-agent",
+    });
+
+    expect(result.sessionKey).toBe("agent:embedded-agent:work");
+    expect(result.sessionEntry).toEqual(embeddedAgentStore["agent:embedded-agent:work"]);
+    expect(result.storePath).toBe("/stores/embedded-agent.json");
+    expect(hoisted.listSessionEntriesMock).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the persisted fixed-store owner for direct session-id lookup", async () => {
     hoisted.listAgentIdsMock.mockReturnValue(["research", "ops"]);
     const sharedStore = {
