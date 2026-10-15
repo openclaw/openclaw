@@ -65,7 +65,11 @@ import {
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { isPersonLikePage } from "./person-page.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
-import { isMissingWikiPageError, readExistingWikiPage } from "./vault-page-write.js";
+import {
+  isMissingWikiPageError,
+  readExistingWikiPage,
+  writeManagedMarkdownFile,
+} from "./vault-page-write.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-overview.js";
 
@@ -755,42 +759,6 @@ async function refreshPageRelatedBlocks(params: {
     updatedFiles.push(page.absolutePath);
   }
   return updatedFiles;
-}
-
-async function writeManagedMarkdownFile(params: {
-  rootDir: string;
-  relativePath: string;
-  title: string;
-  startMarker: string;
-  endMarker: string;
-  body: string;
-  signal?: AbortSignal;
-}): Promise<boolean> {
-  params.signal?.throwIfAborted();
-  const root = await fsRoot(params.rootDir);
-  const original = await readExistingWikiPage(
-    () => root.readText(params.relativePath),
-    isMissingWikiPageError,
-    () => `# ${params.title}\n`,
-  );
-  params.signal?.throwIfAborted();
-  // Generated indexes bypass page discovery. Parse existing content here so
-  // managed-block updates cannot rewrite malformed frontmatter.
-  parseWikiMarkdown(original);
-  const updated = replaceManagedMarkdownBlock({
-    original,
-    heading: "## Generated",
-    startMarker: params.startMarker,
-    endMarker: params.endMarker,
-    body: params.body,
-  });
-  const rendered = withTrailingNewline(updated);
-  if (rendered === original) {
-    return false;
-  }
-  await root.write(params.relativePath, rendered);
-  params.signal?.throwIfAborted();
-  return true;
 }
 
 async function refreshDashboardPages(params: {
