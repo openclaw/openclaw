@@ -5,19 +5,17 @@ import type { ClickClackMessage } from "./types.js";
 
 type ActivityClient = Parameters<typeof createClickClackActivityPublisher>[0]["client"];
 
-function createClientMock(): {
-  client: ActivityClient;
-  createActivityMessage: ReturnType<typeof vi.fn>;
-  updateMessageBody: ReturnType<typeof vi.fn>;
-} {
+function createClientMock() {
   let counter = 0;
-  const createActivityMessage = vi.fn(async () => {
+  const createActivityMessage = vi.fn<ActivityClient["createActivityMessage"]>(async () => {
     counter += 1;
     return { id: `msg_${counter}` } as ClickClackMessage;
   });
-  const updateMessageBody = vi.fn(async () => ({}) as ClickClackMessage);
+  const updateMessageBody = vi.fn<ActivityClient["updateMessageBody"]>(
+    async () => ({}) as ClickClackMessage,
+  );
   return {
-    client: { createActivityMessage, updateMessageBody } as ActivityClient,
+    client: { createActivityMessage, updateMessageBody },
     createActivityMessage,
     updateMessageBody,
   };
@@ -163,14 +161,22 @@ describe("createClickClackActivityPublisher", () => {
       const resume = Promise.withResolvers<void>();
       let remoteBody = "";
       let blocked = false;
-      const write = async (method: string, body: string) => {
+      const write = async (method: string, body: string): Promise<ClickClackMessage> => {
         if (method === operation && !blocked) {
           blocked = true;
           entered.resolve();
           await resume.promise;
         }
         remoteBody = body;
-        return { id: "msg_1" };
+        return {
+          id: "msg_1",
+          workspace_id: "wsp_1",
+          author_id: "usr_agent",
+          thread_root_id: "msg_turn",
+          body,
+          body_format: "markdown",
+          created_at: "2026-10-15T00:00:00.000Z",
+        };
       };
       createActivityMessage.mockImplementation(async ({ body }) => write("POST", body));
       updateMessageBody.mockImplementation(async (_id, body) => write("PATCH", body));
