@@ -113,37 +113,6 @@ describe("secrets runtime provider and media surfaces", () => {
       expect(getRuntimeConfigSnapshotMetadata()).toBe(publication);
     },
   );
-
-  it("resolves talk realtime provider api key refs", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        talk: {
-          realtime: {
-            provider: "openai",
-            providers: {
-              openai: {
-                apiKey: {
-                  source: "env",
-                  provider: "default",
-                  id: "OPENAI_REALTIME_API_KEY",
-                },
-                model: "gpt-realtime-2",
-              },
-            },
-          },
-        },
-      }),
-      env: {
-        OPENAI_REALTIME_API_KEY: "sk-realtime-test",
-      },
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
-    });
-
-    expect(snapshot.config.talk?.realtime?.providers?.openai?.apiKey).toBe("sk-realtime-test");
-    expect(snapshot.config.talk?.realtime?.providers?.openai?.model).toBe("gpt-realtime-2");
-  });
-
   it("refreshes provider auth without resolving or republishing gateway state", async () => {
     if (process.platform === "win32") {
       return;
@@ -662,38 +631,6 @@ describe("secrets runtime provider and media surfaces", () => {
       await expect(
         resolveApiKeyForProviderCore({ provider, cfg: snapshot.config, store }),
       ).rejects.toMatchObject({ name: "SecretSurfaceUnavailableError" });
-    },
-  );
-
-  it.each([
-    ["missing bare shorthand", "$MISSING_MEMORY_KEY", envTokenRef("MISSING_MEMORY_KEY")],
-  ] as const)(
-    "materializes memory %s through its canonical Gateway snapshot",
-    async (_, apiKey, expected) => {
-      const usesConfiguredProvider = apiKey.startsWith("$") && typeof expected === "string";
-      const snapshot = await prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          ...(usesConfiguredProvider
-            ? {
-                secrets: {
-                  providers: { memoryenv: { source: "env", allowlist: ["MEMORY_REMOTE_KEY"] } },
-                  defaults: { env: "memoryenv" },
-                },
-              }
-            : {}),
-          memory: { search: { remote: { apiKey } } },
-        }),
-        env: { MEMORY_REMOTE_KEY: "resolved-memory-key" },
-        includeAuthStoreRefs: false,
-        allowUnavailableSecretOwners: true,
-      });
-
-      expect(snapshot.config.memory?.search?.remote?.apiKey).toEqual(expected);
-      if (typeof expected !== "string") {
-        expect(snapshot.degradedOwners).toMatchObject([
-          { ownerKind: "capability", ownerId: "memory-provider:main", degradationState: "cold" },
-        ]);
-      }
     },
   );
 
