@@ -1,3 +1,4 @@
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import {
@@ -12,8 +13,13 @@ import {
   admitSqliteSchema,
   getAdmittedSqliteSchemaFacts,
   isSqliteSchemaAdmissionCold,
-  type SqliteSchemaFacts,
 } from "../infra/sqlite-schema-facts.js";
+
+function getStateSchemaFacts(database: EngineConnection) {
+  return isPostgresSqlConnection(database)
+    ? getPostgresPhysicalFacts(database)
+    : getAdmittedSqliteSchemaFacts(database);
+}
 
 export type StateSchemaVersionFacts = { userVersion: number; contentVersion: number };
 
@@ -71,20 +77,18 @@ export function createStateSchemaAdmission<Value>(
       if (!admitted) {
         return undefined;
       }
-      const schema = getAdmittedSqliteSchemaFacts(database);
+      const schema = getStateSchemaFacts(database);
       return admitted.admissionId === schema?.admissionId ? admitted.value : undefined;
     },
     publish(database: EngineConnection, value: Value): void {
-      if (isPostgresSqlConnection(database)) {
-        return;
-      }
-      if (isSqliteSchemaAdmissionCold(database)) {
+      if (!isPostgresSqlConnection(database) && isSqliteSchemaAdmissionCold(database)) {
         admitSqliteSchema(database);
       }
-      const schema = getAdmittedSqliteSchemaFacts(database);
+      const schema = getStateSchemaFacts(database);
       if (
         !schema ||
-        getSqliteDatabaseAdmission(database, schemaAdmission)?.admissionId !== schema.admissionId
+        (!isPostgresSqlConnection(database) &&
+          getSqliteDatabaseAdmission(database, schemaAdmission)?.admissionId !== schema.admissionId)
       ) {
         return;
       }
@@ -107,7 +111,7 @@ const runtimeAdmission = createStateSchemaAdmission("state.runtime-schema", (val
     : undefined,
 );
 
-type ConnectionVersion = { schema: SqliteSchemaFacts; facts: StateSchemaVersionFacts };
+type ConnectionVersion = { schema: { admissionId: string }; facts: StateSchemaVersionFacts };
 const connectionVersions = new WeakMap<EngineConnection, ConnectionVersion>();
 
 function rememberConnectionVersion(database: EngineConnection, value?: ConnectionVersion): void {
@@ -137,7 +141,7 @@ function schemaVersionKey(
 }
 
 export function getStateSchemaVersionAdmission(database: EngineConnection) {
-  const schema = getAdmittedSqliteSchemaFacts(database);
+  const schema = getStateSchemaFacts(database);
   if (!schema) {
     return undefined;
   }
@@ -147,7 +151,11 @@ export function getStateSchemaVersionAdmission(database: EngineConnection) {
   }
   const history = getSqliteDatabaseAdmission(database, schemaVersionKey(schema.admissionId));
   const currentSchema = history ? undefined : getSqliteDatabaseAdmission(database, schemaAdmission);
-  if (!history && currentSchema?.admissionId !== schema.admissionId) {
+  if (
+    !history &&
+    !isPostgresSqlConnection(database) &&
+    currentSchema?.admissionId !== schema.admissionId
+  ) {
     // An unknown or historical snapshot cannot borrow the current catalog's marker.
     return undefined;
   }
@@ -166,13 +174,13 @@ export function rememberStateSchemaVersionAdmission(
   database: EngineConnection,
   facts: StateSchemaVersionFacts,
 ): void {
-  const schema = getAdmittedSqliteSchemaFacts(database);
+  const schema = getStateSchemaFacts(database);
   if (!schema) {
     return;
   }
   rememberConnectionVersion(database, { schema, facts });
   const current = getSqliteDatabaseAdmission(database, schemaAdmission);
-  if (current?.admissionId !== schema.admissionId) {
+  if (!isPostgresSqlConnection(database) && current?.admissionId !== schema.admissionId) {
     return;
   }
   publishSqliteDatabaseAdmission(database, schemaVersionKey(schema.admissionId), facts);
@@ -184,7 +192,7 @@ export function publishStateSchemaVersionAdmission(
   facts: StateSchemaVersionFacts,
 ): void {
   publishSqliteDatabaseAdmission(database, versionKey, facts);
-  const schema = getAdmittedSqliteSchemaFacts(database);
+  const schema = getStateSchemaFacts(database);
   if (schema) {
     rememberConnectionVersion(database, { schema, facts });
     publishSqliteDatabaseAdmission(database, schemaVersionKey(schema.admissionId), facts);

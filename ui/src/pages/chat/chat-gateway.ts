@@ -6,6 +6,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { projectAssistantDisplayContent } from "../../../../src/shared/assistant-display-content.js";
+import { resolveAssistantMessagePhase } from "../../../../src/shared/chat-message-content.js";
 import { t } from "../../i18n/index.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -19,7 +20,7 @@ import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/session
 import { materializeVisibleAssistantStreamMessages } from "./chat-history-stream.ts";
 import type { ChatEventPayload } from "./chat-history.ts";
 import { withChatReasoning } from "./chat-reasoning.ts";
-import { reconcileChatRunStartup } from "./chat-run-startup.ts";
+import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
@@ -281,7 +282,9 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       terminalStatus === "completed"
         ? ("done" as const)
         : terminalStatus === "aborted"
-          ? ("killed" as const)
+          ? payload.stopReason === "restart"
+            ? ("interrupted" as const)
+            : ("killed" as const)
           : terminalStatus === "timeout"
             ? ("timeout" as const)
             : ("failed" as const);
@@ -438,10 +441,25 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
   }
 
   if (payload.state === "delta") {
-    if (payload.runId && payload.runId === state.chatRunId) {
+    const next = payload.message == null ? null : (extractText(payload.message) ?? "");
+    if (
+      payload.runId &&
+      payload.runId === state.chatRunId &&
+      next?.trim() &&
+      resolveAssistantMessagePhase(payload.message) !== "commentary"
+    ) {
+      reconcileChatRunStartup(state, {
+        state: "status",
+        phase: "answer",
+        runId: payload.runId,
+      });
+    } else if (
+      payload.runId &&
+      payload.runId === state.chatRunId &&
+      isChatRunRecoveryStatus(state.chatRunStartup)
+    ) {
       reconcileChatRunStartup(state, { state: "activity", runId: payload.runId });
     }
-    const next = payload.message == null ? null : (extractText(payload.message) ?? "");
     if (typeof next === "string") {
       const hidden =
         isSilentReplyStream(next) || isAssistantHeartbeatAckForDisplay(payload.message);

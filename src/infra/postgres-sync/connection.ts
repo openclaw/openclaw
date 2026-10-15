@@ -26,6 +26,7 @@ import { withSqlitePostCommitPublications } from "../sqlite-post-commit.js";
 import { SqliteWorkerError } from "../sqlite-worker-contract.js";
 import { deferSqliteWorkerCommitReceipt } from "../sqlite-worker-operation-admission.js";
 import { currentSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-settlement.js";
+import { recordWorkerMessage } from "../worker-message-metrics.js";
 import {
   decodePostgresError,
   decodePostgresRows,
@@ -136,6 +137,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     }
     const deadline = performance.now() + 120_000;
     this.port.postMessage({ ...request, id }, []);
+    recordWorkerMessage("sqlite_request", "to_worker");
     // A notify for an earlier request can arrive after this request starts.
     let observed: number;
     while ((observed = Atomics.load(this.control, 0)) !== id) {
@@ -146,6 +148,9 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       Atomics.wait(this.control, 0, observed, remaining);
     }
     const reply: BridgeReply | undefined = receiveMessageOnPort(this.port)?.message;
+    if (reply) {
+      recordWorkerMessage("sqlite_reply", "from_worker");
+    }
     if (!reply || reply.id !== id) {
       throw this.loseConnection();
     }

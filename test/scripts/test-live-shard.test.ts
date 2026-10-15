@@ -44,7 +44,7 @@ describe("scripts/test-live-shard", () => {
       "src/gateway/gateway-codex-harness.live.test.ts",
       "test/gateway-subagent-restart.live.test.ts",
     ];
-    for (const version of ["2026.9.8", "2026.9.9"]) {
+    for (const version of ["2026.9.8", "2026.9.9", "2026.9.33"]) {
       expect(withoutReleaseWaivedLiveFiles(files, version)).toEqual([
         "src/gateway/gateway-codex-harness.live.test.ts",
       ]);

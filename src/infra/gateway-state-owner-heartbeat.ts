@@ -11,6 +11,7 @@ import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 import { createCpuTrackedWorker } from "./worker-cpu.js";
+import { recordWorkerMessage } from "./worker-message-metrics.js";
 
 const now = Date.now.bind(Date);
 
@@ -53,7 +54,7 @@ export function startGatewayStateOwnerHeartbeat(
     });
     worker.unref();
     // Parent expiration checks verify physical custody directly.
-    port1.on("message", () => undefined);
+    port1.on("message", () => recordWorkerMessage("lifecycle", "from_worker"));
     port1.unref();
     worker.on("error", (err) => onLost(new Error(`${coerceErrorMessage(err)}; restart Gateway.`)));
     const inspect = () => {

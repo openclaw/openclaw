@@ -261,6 +261,14 @@ Each measured window includes completion and event drain, including the one-seco
 quiet interval. The fixture inventory and request/client/run counts are recorded
 in `result.json`; the driver prints each sample as JSON and a short table.
 Raw `.heapprofile` files and numeric diagnostics remain alongside the report.
+Each profile also records `.worker-messages.json`: main-to-worker and
+worker-to-main message counts, known payload bytes, and unmeasured-message counts
+by bounded message kind for that capture window. Divide those totals by the
+validated operation count when comparing bytes or messages per RPC/turn. Buffer
+lengths are exact and string lengths approximate UTF-16 storage; envelope and
+object-graph sizes are not included. Compare the unmeasured counts too: a kind
+with no known bytes is not necessarily cheap. These are logical payload bytes,
+including transferred buffers, rather than bytes copied by structured clone.
 Use a freshly generated fixture on each revision and compare multiple rounds.
 The driver adds a small parent/child session set; those sessions are included in
 list measurements. For production-shaped database size use `--transcript-mib 1500`

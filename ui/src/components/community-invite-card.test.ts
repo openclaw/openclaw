@@ -15,11 +15,12 @@ beforeEach(() => {
   container = document.createElement("div");
   onDismiss.mockReset();
   document.body.append(container);
-  mountSolid(() => createComponent(SidebarCommunityInvite, { onDismiss, mode: "dark" }), {
-    container,
-  });
-  flush();
 });
+
+function mountCard(mode: "light" | "dark" = "dark") {
+  mountSolid(() => createComponent(SidebarCommunityInvite, { onDismiss, mode }), { container });
+  flush();
+}
 
 afterEach(() => {
   cleanupSolid();
@@ -37,7 +38,27 @@ function cardQuery(selector: string): HTMLElement {
 }
 
 describe("community invite card", () => {
+  it.each(["light", "dark"] as const)(
+    "keeps the %s artwork while opting it out of Pinterest saving and hover overlays",
+    (mode) => {
+      mountCard(mode);
+      const image = cardQuery("img.invite__art");
+      expect(image.getAttribute("src")).toBe(`/community-art/community-invite-${mode}.webp`);
+      expect(image.getAttribute("alt")).toBe("");
+      expect(image.getAttribute("width")).toBe("1024");
+      expect(image.getAttribute("height")).toBe("512");
+      expect(image.getAttribute("loading")).toBe("lazy");
+      expect(image.getAttribute("decoding")).toBe("async");
+      expect(image.isConnected).toBe(true);
+      expect(image.hidden).toBe(false);
+      expect(image.getAttribute("nopin")).toBe("nopin");
+      expect(image.getAttribute("data-pin-nopin")).toBe("true");
+      expect(container.querySelectorAll("[nopin], [data-pin-nopin]")).toHaveLength(1);
+    },
+  );
+
   it("is a non-modal complementary region, not a dialog", () => {
+    mountCard();
     const region = cardQuery("aside.invite");
     expect(region.getAttribute("role")).toBe("complementary");
     // A focus trap or an aria-modal here would make it interrupt the operator.
@@ -47,6 +68,7 @@ describe("community invite card", () => {
   });
 
   it("delegates dismissal from the close button", () => {
+    mountCard();
     const close = cardQuery(".invite__close");
     expect(close.getAttribute("aria-label")).toBe("Dismiss and don't show again");
     close.click();
@@ -55,6 +77,7 @@ describe("community invite card", () => {
   });
 
   it("opens each community destination without dismissing the invitation", () => {
+    mountCard();
     const links = [...container.querySelectorAll<HTMLAnchorElement>(".invite__cta")];
     expect(
       links.map((link) => [link.textContent?.trim(), link.getAttribute("aria-label"), link.href]),

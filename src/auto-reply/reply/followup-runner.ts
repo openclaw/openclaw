@@ -5,6 +5,7 @@ import {
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import type { ProgressContinuationCapability } from "../../channels/progress-continuation.js";
+import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -25,14 +26,19 @@ import {
   type FollowupRunnerParams,
 } from "./followup-turn-admission.js";
 import { executeFollowupTurn } from "./followup-turn-execution.js";
+import { enqueueGoalContinuation } from "./goal-continuation.js";
 import {
   completeFollowupRunLifecycle,
   FollowupRunDeferredError,
   type FollowupRun,
 } from "./queue.js";
+import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { isFollowupRunAborted, type QueuedFollowupReplyBatch } from "./queue/types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
-import { retainReplyOperationUntilComplete } from "./reply-run-registry.state.js";
+import {
+  getReplyOperationSessionReader,
+  retainReplyOperationUntilComplete,
+} from "./reply-run-registry.state.js";
 import {
   isReplyOperationStalledBeforeOutput,
   STALLED_TURN_NOTICE_TEXT,
@@ -93,16 +99,17 @@ export function createFollowupRunner(
     ? initialDefaults.resolveGatewayContext
     : getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   const defaults = { ...initialDefaults, resolveGatewayContext };
-  // Every queue handoff, including delivery retries, retains this host owner
-  // without borrowing the invoking turn's request or workspace-preparation authority.
+  // Follow-ups retain the host owner, never the invoking turn's transcript or request scope.
   const runFollowup = (queued: FollowupRun): Promise<void> =>
-    runWithAgentWorkspaceReadiness(undefined, () =>
-      withPluginRuntimeGatewayContextResolver(
-        resolveGatewayContext,
-        () => executeFollowup(queued),
-        {
-          inheritRequestScope: false,
-        },
+    withoutSessionTranscriptReadFence(() =>
+      runWithAgentWorkspaceReadiness(undefined, () =>
+        withPluginRuntimeGatewayContextResolver(
+          resolveGatewayContext,
+          () => executeFollowup(queued),
+          {
+            inheritRequestScope: false,
+          },
+        ),
       ),
     );
   const deliverProgress = async (
@@ -168,6 +175,7 @@ export function createFollowupRunner(
       const turn: AdmittedFollowupTurn = admission.turn;
       admittedTurn = turn;
       operation = turn.operation;
+      const initialGoalId = turn.session.current()?.goal?.id;
       retainReplyOperationUntilComplete(operation);
       const execution = await executeFollowupTurn({
         turn,
@@ -219,7 +227,7 @@ export function createFollowupRunner(
         resolveReplyDeliveryFacts: turn.queued.runObservers?.resolveReplyDeliveryFacts,
         commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
       };
-      const decision = await withAgentTurnCompletion(
+      const { decision, accounting: completedAccounting } = await withAgentTurnCompletion(
         {
           agentId: turn.queued.run.agentId,
           storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
@@ -246,7 +254,7 @@ export function createFollowupRunner(
             opts: deliveryOpts,
           });
           await turnCompletion?.complete();
-          return resolved;
+          return { decision: resolved, accounting };
         },
       );
       if (decision.kind === "deliver") {
@@ -273,6 +281,33 @@ export function createFollowupRunner(
       });
       // Source recovery has its own queued callback; this execution still closes once.
       terminalPayloads = delivery.kind === "completed" ? delivery.payloads : [];
+      // Gateway final batches are returned above, not delivered: their one-shot
+      // source owner settles in finally. Allocate its successor before that boundary.
+      if (
+        completion.kind === "completed" &&
+        completedAccounting?.activeSessionEntry?.goal?.status === "active" &&
+        turn.session.kind === "session" &&
+        turn.session.storePath
+      ) {
+        await enqueueGoalContinuation({
+          base: turn.queued,
+          result: completedAccounting.runResult,
+          initialGoalId: turn.queued.goalContinuation?.goalId ?? initialGoalId,
+          expectedSession: completedAccounting.expectedSession,
+          sessionKey: turn.session.key,
+          storePath: turn.session.storePath,
+          reader: getReplyOperationSessionReader(turn.operation),
+          queueKey: turn.queued.run.sessionKey ?? turn.session.key,
+          settings: resolveQueueSettings({
+            cfg: turn.config,
+            sessionEntry: turn.session.current(),
+            channel: turn.queued.originatingChannel,
+          }),
+          sourceRunId: turn.runId,
+          operation: turn.operation,
+          runFollowup,
+        });
+      }
     } catch (error) {
       let operatorAuthorityLost = false;
       try {
@@ -345,6 +380,13 @@ export function createFollowupRunner(
       }
       if (disposition.kind === "consumed") {
         completeFollowupRunLifecycle(queued);
+      }
+      try {
+        await admittedTurn?.restartRecovery?.clear();
+      } catch (error) {
+        defaultRuntime.error?.(
+          `followup queue: recovery settlement failed: ${formatErrorMessage(error)}`,
+        );
       }
       if (disposition.kind !== "deferred" && admittedTurn?.runId) {
         clearAgentRunContext(admittedTurn.runId);

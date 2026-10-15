@@ -53,7 +53,7 @@ openclaw update --channel dev --dry-run
 openclaw update --channel stable --dry-run
 ```
 
-`dev` ensures a git checkout, builds it, and installs the global CLI from that
+`dev` creates or reuses a git checkout, builds it, and installs the global CLI from that
 checkout. The `stable`, `extended-stable`, and `beta` channels use package
 installs. Extended-stable is rejected on a git checkout without mutating or
 converting it. If the gateway is already installed, `openclaw update` refreshes
@@ -97,7 +97,7 @@ Already-running older updaters retain their own activation and finalization beha
 For package installs with an owned managed Bun Gateway at a different root,
 `openclaw update` targets the Gateway's package root and leaves the invoking CLI
 installation unchanged. It validates the service's actual Bun executable for
-Bun 1.4+ and WAL-safe `node:sqlite`, and retains its recorded runtime pin through
+Bun 1.4.3+ and WAL-safe `node:sqlite`, and retains its recorded runtime pin through
 service installation and restart. Bun's emulated Node version is never compared
 to the target's `engines.node` requirement. When the updater runs on Node, its
 Node must also pass the target's engine and SQLite checks before package
@@ -460,7 +460,7 @@ intact.
 bun add -g --trust openclaw@latest
 ```
 
-`--trust` allows OpenClaw's lifecycle scripts. The canonical `openclaw update`
+`--trust` allows OpenClaw's lifecycle scripts. The standard `openclaw update`
 path applies the same OpenClaw-only Bun trust when it owns the install.
 For Bun-owned updates, package-manager checks and installs use the verified
 service Bun when updating a managed service root. Otherwise they use

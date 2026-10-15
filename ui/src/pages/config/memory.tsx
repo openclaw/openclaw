@@ -17,6 +17,7 @@ import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-ma
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { memoryAddonPresentations } from "./memory-addon-presentation.ts";
 import {
   selectedEngineId,
   DEFAULT_MEMORY_ENGINE_ID,
@@ -124,11 +125,6 @@ type MemoryAddonRow = {
   notice: string | null;
 };
 
-const MEMORY_ADDON_PLUGINS = [
-  { id: "active-memory", labelKey: "memoryPage.addons.activeMemory.title" },
-  { id: "memory-wiki", labelKey: "memoryPage.addons.memoryWiki.title" },
-] as const;
-
 export function buildMemoryAddonRows(
   catalog: MemoryCatalogState,
   state: {
@@ -138,7 +134,7 @@ export function buildMemoryAddonRows(
     refreshWarnings: ReadonlyMap<string, string>;
   },
 ): MemoryAddonRow[] {
-  return MEMORY_ADDON_PLUGINS.map((addon) => {
+  return memoryAddonPresentations.map((addon) => {
     const entry = findMemoryCatalogPlugin(catalog, addon.id);
     return {
       id: addon.id,
@@ -237,18 +233,11 @@ function EngineSection(props: MemoryViewProps) {
         <SettingsRow
           title={t("memoryPage.engine.rowTitle")}
           description={
-            available() ? (
-              <>
-                {" "}
-                {t(engineHintKey(props.engineSelection))} {defaultDescription}{" "}
-              </>
-            ) : (
-              <>
-                {" "}
-                {t("memoryPage.engine.catalogUnavailable")}
-                {t(engineHintKey(props.engineSelection))} {defaultDescription}{" "}
-              </>
-            )
+            <>
+              {" "}
+              {!available() && t("memoryPage.engine.catalogUnavailable")}
+              {t(engineHintKey(props.engineSelection))} {defaultDescription}{" "}
+            </>
           }
           stacked={available()}
           control={

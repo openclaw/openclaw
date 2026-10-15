@@ -24,10 +24,7 @@ import type {
   UsageCostWorkerInput,
   UsageCostWorkerDatabase,
 } from "./session-cost-usage-worker.types.js";
-import {
-  readSqliteDatabaseScopedWriteTokenForPath,
-  sqliteSessionIdWriteScope,
-} from "./sqlite-database-admission.js";
+import { readSqliteDatabaseScopedWriteTokenForPath } from "./sqlite-database-admission.js";
 
 type TranscriptStats = SessionTranscriptStats & { generation?: string | null; cold?: boolean };
 type RollupInput = {
@@ -37,7 +34,6 @@ type RollupInput = {
 
 // The refresh worker retains only its bounded working set. Retirement drops it;
 // physical database identity and committed write receipts cover reuse across tasks.
-const stats = new LruCache<{ receipt: string; value: TranscriptStats }>(256);
 const rollups = new LruCache<{ receipt: string; value: RollupInput }>(64, {
   maxBytes: 8 * 1024 * 1024,
   sizeOf: ({ value }) =>
@@ -52,19 +48,6 @@ const rollups = new LruCache<{ receipt: string; value: RollupInput }>(64, {
 export function usageRefreshInputs(databasePath: string) {
   const key = (id: string) => JSON.stringify([databasePath, id]);
   return {
-    statsReceipt: (sessionId: string) =>
-      readSqliteDatabaseScopedWriteTokenForPath(databasePath, [
-        sqliteSessionIdWriteScope(sessionId),
-      ]),
-    readStats(sessionId: string, receipt: string | undefined) {
-      const entry = stats.get(key(sessionId));
-      return receipt !== undefined && entry?.receipt === receipt ? entry.value : undefined;
-    },
-    retainStats(sessionId: string, receipt: string | undefined, value: TranscriptStats) {
-      if (receipt !== undefined) {
-        stats.set(key(sessionId), { receipt, value });
-      }
-    },
     rollupReceipt: () =>
       readSqliteDatabaseScopedWriteTokenForPath(databasePath, USAGE_COST_ROLLUP_SCOPE),
     readRollup(filePath: string, receipt: string | undefined) {
@@ -154,36 +137,17 @@ export function createUsageCostCollectionAccess(params: {
     },
     readSqliteStats: async (markers) => {
       const result: Array<TranscriptStats | undefined> = Array(markers.length);
-      const groups = new Map<
-        string,
-        Array<{ marker: SqliteSessionFileMarker; index: number; receipt?: string }>
-      >();
+      const groups = new Map<string, Array<{ marker: SqliteSessionFileMarker; index: number }>>();
       for (const [index, marker] of markers.entries()) {
-        const inputs =
-          operation.kind === "refresh"
-            ? usageRefreshInputs(target(marker.agentId, marker.storePath).path)
-            : undefined;
-        const receipt = inputs?.statsReceipt(marker.sessionId);
-        const cached = inputs?.readStats(marker.sessionId, receipt);
-        if (cached) {
-          result[index] = cached;
-          transcriptFacts.set(transcriptKey(marker), {
-            generation: cached.generation ?? null,
-            cold: cached.cold === true,
-          });
-          continue;
-        }
         const database = target(marker.agentId, marker.storePath);
         const key = JSON.stringify(database);
         const group = groups.get(key) ?? [];
-        group.push({ marker, index, receipt });
+        group.push({ marker, index });
         groups.set(key, group);
       }
       for (const group of groups.values()) {
         const marker = group[0]!.marker;
         const database = target(marker.agentId, marker.storePath);
-        const inputs = operation.kind === "refresh" ? usageRefreshInputs(database.path) : undefined;
-        const receipts = group.map(({ receipt }) => receipt);
         const loadedStats = await readStore(marker.agentId, marker.storePath, () => {
           try {
             const read = withOpenClawAgentDatabaseReadOnly(
@@ -200,7 +164,6 @@ export function createUsageCostCollectionAccess(params: {
             }
             for (const [index, item] of group.entries()) {
               const facts = read.value[index]!;
-              inputs?.retainStats(item.marker.sessionId, receipts[index], facts);
               transcriptFacts.set(transcriptKey(item.marker), {
                 generation: facts.generation ?? null,
                 cold: facts.cold === true,

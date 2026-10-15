@@ -74,7 +74,7 @@ function interceptDeliverySnapshot(afterRead: () => void) {
 
 describe("chat delivery watermark preparation", () => {
   it.each(["rewrite", "replacement"] as const)(
-    "reads released actor reply facts and rejects the old answer after %s",
+    "reads released durable reply facts through history and rejects the old answer after %s",
     async (change) => {
       await withOpenClawTestState({ label: "chat-delivery-actor-receipt" }, async () => {
         const { dispatch, rewriteSync, scope, runId } = await createReplyTranscriptFixture();
@@ -133,7 +133,8 @@ describe("chat delivery watermark preparation", () => {
         try {
           await runWithoutOwnedSessionTranscriptWrites(async () => {
             expect(await dispatch.resolveReplyDelivery()).toBe("delivered");
-            expect(anchorReads).not.toHaveBeenCalled();
+            // Durable append receipts omit full indexes; the history owner supplies anchors.
+            expect(anchorReads).toHaveBeenCalledTimes(1);
             if (change === "rewrite") {
               rewriteSync("answer", "NO_REPLY");
             } else {
@@ -144,9 +145,7 @@ describe("chat delivery watermark preparation", () => {
               });
             }
             expect(await dispatch.resolveReplyDelivery()).toBe("missing");
-            if (change === "rewrite") {
-              expect(anchorReads).toHaveBeenCalledTimes(1);
-            }
+            expect(anchorReads).toHaveBeenCalledTimes(change === "rewrite" ? 2 : 1);
           });
         } finally {
           readerSpy.mockRestore();

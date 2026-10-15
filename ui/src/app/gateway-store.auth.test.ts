@@ -167,8 +167,8 @@ describe("createApplicationGateway authentication diagnostics", () => {
 
     await vi.advanceTimersByTimeAsync(scenario.elapsed);
     expect(replace).toHaveBeenCalledTimes(scenario.reloads);
-    expect(sessionStorage.getItem(RELOAD_GUARD_KEY)).toBe(
-      scenario.reloads ? "replacement-build" : null,
+    expect(JSON.parse(sessionStorage.getItem(RELOAD_GUARD_KEY) ?? "null")).toEqual(
+      scenario.reloads ? { buildId: "replacement-build", at: expect.any(Number) } : null,
     );
   });
 

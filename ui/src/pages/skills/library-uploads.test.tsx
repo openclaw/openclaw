@@ -1,4 +1,3 @@
-import { LitElement } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   SkillLibraryFile,
@@ -8,8 +7,8 @@ import type {
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
+import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
-import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 /* @vitest-environment jsdom */
@@ -17,8 +16,7 @@ import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { SkillLibraryController } from "./library-controller.ts";
 import { SkillLibrary } from "./library-view.tsx";
 
-class LibraryHost extends LitElement {}
-customElements.define(`test-skill-uploads-${crypto.randomUUID()}`, LibraryHost);
+const bindings = new Set<GatewayPageBinding>();
 
 function harness() {
   const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(async () => {
@@ -35,12 +33,15 @@ function harness() {
     lastError: null,
     lastErrorCode: null,
   });
-  const host = new LibraryHost();
-  const gateway = new GatewayPageController(host, { getGateway: () => connection.gateway });
+  const host = { requestUpdate() {} };
+  const gateway = new GatewayPageBinding(() => host.requestUpdate(), {
+    getGateway: () => connection.gateway,
+  });
+  gateway.connect();
+  bindings.add(gateway);
   const base = createApplicationConfigCapability({ resourceBasePath: "" });
   const config = { ...base, current: { ...base.current, uploadsEnabled: true } };
   const library = new SkillLibraryController(host, gateway, () => config);
-  document.body.append(host);
   library.list = {
     entries: [],
     profileId: "alice",
@@ -93,6 +94,10 @@ function savedReceipt(read: SkillsLibraryReadResult): SkillsLibraryReceipt {
 }
 afterEach(() => {
   cleanupSolid();
+  for (const binding of bindings) {
+    binding.dispose();
+  }
+  bindings.clear();
   document.body.replaceChildren();
 });
 

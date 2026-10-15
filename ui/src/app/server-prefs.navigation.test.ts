@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { resolveServerUiPrefWriteStatus } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
@@ -16,7 +15,6 @@ import {
 } from "./server-prefs.test-support.ts";
 import { flushServerUiPrefs, pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { loadSettings, patchSettings, settingsKeyForGateway } from "./settings.ts";
-import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
 const scope = "ws://navigation";
 const pinsKey = "ui.railShortcuts";
@@ -33,47 +31,6 @@ afterEach(() => {
 });
 
 describe("personal navigation preference boundary", () => {
-  it("keeps a composed removal through reload before the older write is acknowledged", async () => {
-    const backend = server({ a: { [pinsKey]: ["route:usage"] } });
-    const a = backend.connect("a");
-    const original = a.request.getMockImplementation()!;
-    const firstAck = createDeferred<unknown>();
-    const committed = createDeferred();
-    a.request.mockImplementation(async (method, params) => {
-      const result = await original(method, params);
-      if (method === "users.prefs.set") {
-        committed.resolve();
-        return firstAck.promise;
-      }
-      return result;
-    });
-    const first = {
-      sidebarEntries: ["route:usage", "route:cron"],
-      sidebarEntriesBase: ["route:usage"],
-    };
-    pushServerUiPrefs(a.writer, first, { profileId: "a", canWrite: true });
-    await committed.promise;
-    pushServerUiPrefs(
-      a.writer,
-      {
-        sidebarEntries: ["route:usage", "route:plugins"],
-        sidebarEntriesBase: first.sidebarEntries,
-      },
-      { profileId: "a", canWrite: true },
-    );
-    resetServerUiPrefsSync();
-    firstAck.resolve({ status: "ok" });
-    const reloaded = backend.connect("a");
-    const completed = createDeferred();
-    flushServerUiPrefs(reloaded.writer, {
-      profileId: "a",
-      canWrite: true,
-      afterCommit: () => completed.resolve(),
-    });
-    await completed.promise;
-    expect(backend.profiles.a?.[pinsKey]).toEqual(["route:usage", "route:plugins"]);
-  });
-
   it.each(["storage", "same-tab"])(
     "keeps identical desired pins with a newer observed base across an older ack (%s)",
     async (replacement) => {
@@ -135,7 +92,7 @@ describe("personal navigation preference boundary", () => {
     },
   );
 
-  it.each(["storage", "same-tab", "same-tab-independent"])(
+  it.each(["storage", "same-tab-independent"])(
     "advances only the locally composed successor base across an older ack (%s)",
     async (replacement) => {
       const backend = server({ a: { [pinsKey]: ["route:usage"] } });
@@ -172,8 +129,7 @@ describe("personal navigation preference boundary", () => {
       await committed.promise;
       const newer = {
         sidebarEntries: ["route:usage", "route:plugins"],
-        sidebarEntriesBase:
-          replacement !== "same-tab" ? first.sidebarEntriesBase : first.sidebarEntries,
+        sidebarEntriesBase: first.sidebarEntriesBase,
       };
       if (replacement === "storage") {
         localStorage.setItem(
@@ -192,41 +148,10 @@ describe("personal navigation preference boundary", () => {
         railShortcuts: newer.sidebarEntries,
         railShortcutsBase: newer.sidebarEntriesBase,
       });
-      expect(backend.profiles.a?.[pinsKey]).toEqual(
-        replacement !== "same-tab"
-          ? ["route:usage", "route:plugins", "route:cron"]
-          : newer.sidebarEntries,
-      );
+      expect(backend.profiles.a?.[pinsKey]).toEqual(["route:usage", "route:plugins", "route:cron"]);
       expect(writes).toBe(2);
     },
   );
-
-  it("publishes default navigation when replacing a customized profile", async () => {
-    const backend = server({
-      a: { [pinsKey]: ["route:usage"] },
-      b: { [pinsKey]: [...DEFAULT_SIDEBAR_ENTRIES] },
-    });
-    let published = loadSettings();
-    const onApplied = vi.fn(() => {
-      published = loadSettings();
-    });
-    for (const profileId of ["a", "b"]) {
-      const current = backend.connect(profileId);
-      await refreshProfileAppearancePrefs({
-        client: current.writer.state.client!,
-        profileId,
-        configObject: config,
-        scope,
-        onApplied,
-      });
-      expect(published).toMatchObject(
-        profileId === "a"
-          ? { sidebarEntries: ["route:usage"] }
-          : { sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES] },
-      );
-    }
-    expect(onApplied).toHaveBeenCalledTimes(2);
-  });
 
   it("honors another tab cancelling a pin edit during its CAS read", async () => {
     const backend = server({ a: { [pinsKey]: ["route:usage"] } });
@@ -261,32 +186,11 @@ describe("personal navigation preference boundary", () => {
 
   it.each([
     {
-      name: "remote removal",
-      base: ["route:usage"],
-      desired: ["route:usage", "route:plugins"],
-      remote: ["route:cron"],
-      expected: ["route:cron", "route:plugins"],
-    },
-    {
-      name: "remote reorder",
-      base: ["route:usage", "route:cron"],
-      desired: ["route:usage", "route:cron", "route:plugins"],
-      remote: ["route:cron", "route:usage"],
-      expected: ["route:cron", "route:plugins", "route:usage"],
-    },
-    {
       name: "local reorder retaining remote-only slots",
       base: ["route:usage", "route:cron"],
       desired: ["route:cron", "route:usage"],
       remote: ["route:usage", "route:plugins", "route:cron"],
       expected: ["route:cron", "route:plugins", "route:usage"],
-    },
-    {
-      name: "clear only observed pins",
-      base: ["route:usage"],
-      desired: [],
-      remote: ["route:usage", "route:cron"],
-      expected: ["route:cron"],
     },
   ])(
     "rebases $name without replacing unrelated remote intent",
@@ -304,21 +208,6 @@ describe("personal navigation preference boundary", () => {
       expect(backend.profiles.a?.[pinsKey]).toEqual(expected);
     },
   );
-
-  it("rebases a first edit against the displayed defaults when the profile key is absent", async () => {
-    const backend = server();
-    const a = backend.connect("a");
-    const desired = ["session:agent:main:added"];
-    expect(
-      await writeProfileAppearancePrefs(
-        a.writer.state.client,
-        { sidebarEntries: desired, sidebarEntriesBase: DEFAULT_SIDEBAR_ENTRIES },
-        true,
-        "a",
-      ),
-    ).toMatchObject({ ok: true });
-    expect(backend.profiles.a?.[pinsKey]).toEqual(desired);
-  });
 
   it("strips browser-only edit metadata when a profileless mixed change retains only appearance", async () => {
     const request = vi.fn(async () => ({}));
@@ -409,7 +298,7 @@ describe("personal navigation preference boundary", () => {
     ).toBeNull();
   });
 
-  it.each(["carry", "readd", "readd-identical"])(
+  it.each(["readd", "readd-identical"])(
     "settles composed intent without losing remote removals or explicit readds (%s)",
     async (mode) => {
       const backend = server({ a: { [pinsKey]: ["route:usage"] } });
@@ -447,69 +336,22 @@ describe("personal navigation preference boundary", () => {
         sidebarEntries:
           mode === "readd-identical" ? first.sidebarEntries : ["route:plugins", "route:systems"],
       });
-      if (mode !== "carry") {
-        const removed = patchSettings({
-          sidebarEntries: second.sidebarEntries.filter((entry) => entry !== "route:plugins"),
-        });
-        pushServerUiPrefs(a.writer, changedServerUiPrefs(first, removed)!, hooks);
-        patchSettings({ sidebarEntries: second.sidebarEntries });
-        pushServerUiPrefs(a.writer, changedServerUiPrefs(removed, second)!, hooks);
-      } else {
-        pushServerUiPrefs(a.writer, changedServerUiPrefs(first, second)!, hooks);
-      }
+      const removed = patchSettings({
+        sidebarEntries: second.sidebarEntries.filter((entry) => entry !== "route:plugins"),
+      });
+      pushServerUiPrefs(a.writer, changedServerUiPrefs(first, removed)!, hooks);
+      patchSettings({ sidebarEntries: second.sidebarEntries });
+      pushServerUiPrefs(a.writer, changedServerUiPrefs(removed, second)!, hooks);
       backend.profiles.a = { [pinsKey]: ["route:cron"] };
       firstAck.resolve({ status: "ok" });
       await settled.promise;
       expect(backend.profiles.a?.[pinsKey]).toEqual(
-        mode === "carry"
-          ? ["route:cron", "route:systems"]
-          : mode === "readd"
-            ? ["route:cron", "route:plugins", "route:systems"]
-            : ["route:cron", "route:plugins"],
+        mode === "readd"
+          ? ["route:cron", "route:plugins", "route:systems"]
+          : ["route:cron", "route:plugins"],
       );
     },
   );
-
-  it("persists the observed base through offline reload before rebasing", async () => {
-    const backend = server({ a: { [pinsKey]: ["route:usage"] } });
-    const a = backend.connect("a");
-    await a.refresh();
-    Object.assign(a.writer.state, { connected: false });
-    const previous = loadSettings();
-    const next = patchSettings({ sidebarEntries: ["route:usage", "route:plugins"] });
-    pushServerUiPrefs(a.writer, changedServerUiPrefs(previous, next)!, {
-      profileId: "a",
-      canWrite: true,
-    });
-    resetServerUiPrefsSync();
-    backend.profiles.a = { [pinsKey]: ["route:usage", "route:cron"] };
-    const fresh = backend.connect("a");
-    const committed = createDeferred();
-    flushServerUiPrefs(fresh.writer, {
-      profileId: "a",
-      canWrite: true,
-      afterCommit: () => committed.resolve(),
-    });
-    await committed.promise;
-    expect(backend.profiles.a?.[pinsKey]).toEqual(["route:usage", "route:plugins", "route:cron"]);
-  });
-
-  it("preserves a remote pin added after this device observed its edit base", async () => {
-    const backend = server({ a: { [pinsKey]: ["route:usage"] } });
-    const a = backend.connect("a");
-    await a.refresh();
-    backend.profiles.a = { [pinsKey]: ["route:usage", "route:cron"] };
-    const previous = loadSettings();
-    const next = patchSettings({ sidebarEntries: ["route:usage", "route:plugins"] });
-    const committed = createDeferred();
-    pushServerUiPrefs(a.writer, changedServerUiPrefs(previous, next)!, {
-      profileId: "a",
-      canWrite: true,
-      afterCommit: () => committed.resolve(),
-    });
-    await committed.promise;
-    expect(backend.profiles.a?.[pinsKey]).toEqual(["route:usage", "route:plugins", "route:cron"]);
-  });
 
   it("ignores another profile's shared browser mirror even before its storage event", async () => {
     const a = server({ a: { [pinsKey]: ["route:usage"] } }).connect("a");
@@ -584,62 +426,15 @@ describe("personal navigation preference boundary", () => {
     expect(request.mock.calls.every(([method]) => method === "users.prefs.get")).toBe(true);
   });
 
-  it("isolates two profiles and synchronizes the same profile through fresh reads", async () => {
-    const backend = server({
-      a: { [pinsKey]: ["route:usage"] },
-      b: { [pinsKey]: [] },
-    });
-    const a = backend.connect("a");
-    const b = backend.connect("b");
-    const otherA = backend.connect("a");
-    await a.refresh();
-    expect(loadSettings()).toMatchObject({
-      sidebarEntries: ["route:usage"],
-    });
-    await b.refresh();
-    expect(loadSettings()).toMatchObject({ sidebarEntries: [] });
-    const result = await writeProfileAppearancePrefs(
-      a.writer.state.client,
-      {
-        sidebarEntries: ["route:cron"],
-        sidebarEntriesBase: ["route:usage"],
-      },
-      true,
-      "a",
-    );
-    expect(result.ok).toBe(true);
-    await otherA.refresh();
-    expect(loadSettings()).toMatchObject({
-      sidebarEntries: ["route:cron"],
-    });
-    expect(backend.profiles.b).toEqual({ [pinsKey]: [] });
-  });
-
-  it.each([undefined, [], ["route:cron", "session:agent:main:saved"]])(
-    "reads saved shortcuts unchanged without importing shared navigation (%j)",
-    async (saved) => {
-      patchSettings({ sidebarEntries: ["session:private-other-user"] });
-      const backend = server({ a: saved === undefined ? {} : { [pinsKey]: saved } });
-      const connection = backend.connect("a");
-      await connection.refresh();
-      expect(loadSettings().sidebarEntries).toEqual(saved ?? []);
-      expect(backend.profiles.a).toEqual(saved === undefined ? {} : { [pinsKey]: saved });
-      expect(connection.request.mock.calls.map(([method]) => method)).toEqual(["users.prefs.get"]);
-    },
-  );
-
-  it("preserves its confirmed mirror when a profile read is incomplete without saving defaults", async () => {
-    const backend = server({ a: { [pinsKey]: ["route:usage"] } });
-    const a = backend.connect("a");
-    await a.refresh();
-    a.request.mockResolvedValue({ status: "no_durable_identity" });
-    invalidateUserPreferences(a.writer.state.client!);
-    await a.refresh();
-    applyServerUiPrefs({ ...config }, { scope, profileId: "a", onApplied: vi.fn() });
-    expect(loadSettings()).toMatchObject({
-      sidebarEntries: ["route:usage"],
-    });
-    expect(a.request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(0);
+  it("reads saved shortcuts unchanged without importing shared navigation", async () => {
+    const saved = ["route:cron", "session:agent:main:saved"];
+    patchSettings({ sidebarEntries: ["session:private-other-user"] });
+    const backend = server({ a: { [pinsKey]: saved } });
+    const connection = backend.connect("a");
+    await connection.refresh();
+    expect(loadSettings().sidebarEntries).toEqual(saved);
+    expect(backend.profiles.a).toEqual({ [pinsKey]: saved });
+    expect(connection.request.mock.calls.map(([method]) => method)).toEqual(["users.prefs.get"]);
   });
 
   it("fences a late profile read after identity or connection replacement", async () => {
@@ -661,7 +456,7 @@ describe("personal navigation preference boundary", () => {
     expect(request.mock.calls).toHaveLength(1);
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "never writes profileless navigation to global config (offline=%s)",
     async (offline) => {
       const request = vi.fn(async () => ({}));

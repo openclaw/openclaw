@@ -34,6 +34,7 @@ import {
   legacyOwnedRepair,
   recordDoctorHealthWarnings,
 } from "./doctor-health-contribution.js";
+import { appContainerSpawnCheck, nativeStatusCheck } from "./doctor-native-status-check.js";
 
 function coreHealthRunner(checkId: string): DoctorHealthContribution["run"] {
   return async (ctx) => {
@@ -79,6 +80,9 @@ export function resolveInitialDoctorHealthContributions(params: {
           }));
         },
       },
+    }),
+    createDoctorHealthContribution("doctor:native-status", "Native helpers and child pipes", {
+      healthChecks: [appContainerSpawnCheck, nativeStatusCheck],
     }),
     createDoctorHealthContribution("doctor:node-runtime", "Node runtime", {
       healthCheckIds: ["core/doctor/node-runtime"],

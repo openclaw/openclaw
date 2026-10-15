@@ -55,6 +55,11 @@ error across retries. A confirmed handoff remains delivered even if its receipt
 callback fails; cleanup must not replay an already consumed result. Failures before
 a delivery result is reported follow the same retryability policy as direct sends.
 
+Transcript writer-claim changes remain retryable when no send is confirmed. If
+local retries are exhausted, the completion stays eligible for bounded requester
+recovery. Permanent delivery rejections still stop recovery, including when they
+are wrapped by a writer-claim error.
+
 If a chunk in a direct-message text fallback fails or is aborted after earlier
 chunks were sent, OpenClaw records an incomplete delivery. It stops automatic
 retries to avoid duplicating chunks the recipient already received. A successful
@@ -126,9 +131,17 @@ the newer producer end time owns the reply. Equal end times retain the first
 accepted reply; a correction with a newer end time can replace it.
 
 OpenClaw preserves prompt-data escaping and stable order when it delivers several
-results together. It does not shorten an answer to fit the former announce
-projection limits. The bounded lifecycle snapshot remains separate from the
-complete answer sent to the parent.
+results together. Completion findings have a strict shared 160,000-character cap,
+including escaping and framing. Small answers stay intact; larger answers keep
+their beginning and an explicit truncation marker pointing to `sessions_history`
+with the child session key. `sessions_history` truncates text fields to 4,000
+characters; this pointer does not provide lossless retrieval of an omitted tail.
+Each shown child keeps its task and status, with result heads sharing the remaining
+space above a small floor. If even floor-sized blocks would exceed the cap, the
+remaining children become one bounded summary line with their count, the first few
+session keys, and guidance to inspect them with the session tools. Ordering stays
+deterministic. The bounded lifecycle snapshot and retained complete transcript
+stay separate from these prompt limits.
 
 A successful child with an empty final reply remains in the batch with its task
 identity, `ok` status, and `(no output)` result. Its successful execution status

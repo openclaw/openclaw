@@ -577,18 +577,13 @@ async function performPreparedGatewaySessionReset({
       if (parentAcpError) {
         return { ok: false, error: parentAcpError };
       }
-      const pluginCleanup = await runPluginHostCleanup({
+      await runPluginHostCleanup({
         cfg,
         registry: resetPluginRegistry,
         reason: "reset",
         sessionKey: target.canonicalKey,
         skipPersistentSessionState: true,
       });
-      for (const failure of pluginCleanup.failures) {
-        logVerbose(
-          `plugin host cleanup failed for ${failure.pluginId}/${failure.hookId}: ${String(failure.error)}`,
-        );
-      }
       await closeChildAcpRuntimesForParent({
         cfg,
         parentKey: parentSessionKey,

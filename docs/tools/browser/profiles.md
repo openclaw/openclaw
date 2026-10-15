@@ -45,6 +45,11 @@ Tabs opened from a panel before this ownership existed have no recorded
 session, so they stay open but appear only in the Browser dock outside a chat
 session.
 
+The panel fits the viewport of an isolated, locally managed browser to its size.
+For existing-session Chrome, extension-attached browsers, attach-only CDP, and
+remote browsers, the preview scales locally without resizing the browser window
+or page viewport. Explicit browser resize actions remain available.
+
 The panel streams the active tab live as the page repaints. It falls back to
 screenshots for node-routed browsers, Chrome MCP existing-session profiles,
 missing Playwright, or stream connection failures. Navigation rules apply to

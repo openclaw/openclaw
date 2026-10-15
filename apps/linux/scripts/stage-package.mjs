@@ -11,6 +11,7 @@ import {
   stampDesktopRuntimePlugins,
 } from "../../../scripts/lib/desktop-runtime-plugins.mjs";
 import { resolveNpmRunner } from "../../../scripts/npm-runner.mts";
+import { pruneDesktopRuntime } from "../../../scripts/lib/desktop-runtime-prune.mjs";
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 
@@ -39,6 +40,7 @@ export function stageInstalledPackage(installed, work, target, plan) {
   fs.cpSync(path.join(installed, "node_modules"), path.join(destination, "node_modules"),
     { recursive: true, dereference: true,
       filter: (source) => ![".bin", ".package-lock.json"].includes(path.basename(source)) });
+  pruneDesktopRuntime(path.join(destination, "node_modules"));
   const manifestPath = path.join(work, "manifest.json");
   const previousManifest = fs.readFileSync(manifestPath);
   const manifest = JSON.parse(previousManifest);

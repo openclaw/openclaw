@@ -678,7 +678,7 @@ describe("startGatewayService", () => {
       it.each([
         {
           layout: "node-host entrypoint after dev loader",
-          args: [process.execPath, "--import", "tsx", program],
+          args: ["node", "--import", "tsx", program],
           subcommand: ["node", "run"],
         },
       ])("requests repair before start for $layout", async ({ args, subcommand }) => {
@@ -707,7 +707,7 @@ describe("startGatewayService", () => {
     it.each([
       {
         layout: "relative entrypoint",
-        args: [process.execPath, heapFlag, path.basename(entrypoint)],
+        args: ["node", heapFlag, path.basename(entrypoint)],
         workingDirectory: path.dirname(entrypoint),
       },
     ])(

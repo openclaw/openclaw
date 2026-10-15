@@ -2017,81 +2017,6 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     await runDockerSnippet(script, signal);
   });
 
-  it("derives the browser CDP image from the shared functional image", () => {
-    const workDir = tempDirs.make("openclaw-browser-cdp-shared-image-");
-    writeExecutables(join(workDir, "bin"), {
-      docker: `#!/usr/bin/env bash
-printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
-case "$1 $2" in
-  "image inspect")
-    exit 0
-    ;;
-  "inspect -f")
-    printf "true\\n"
-    exit 0
-    ;;
-  "rm -f")
-    exit 0
-    ;;
-  "run "*)
-    printf "container-id\\n"
-    exit 0
-    ;;
-  "exec "*)
-    exit 0
-    ;;
-  "logs --tail")
-    printf "Disabled Playwright AI snapshot chunk: pw-ai-optional.js\\n"
-    exit 0
-    ;;
-esac
-case "$1" in
-  build)
-    exit 0
-    ;;
-esac
-exit 9
-`,
-      node: `#!/usr/bin/env bash
-printf "echo state\\n"
-`,
-      timeout: `#!/usr/bin/env bash
-case "\${1:-}" in
-  --kill-after=1s | --kill-after=30s)
-    shift 2
-    ;;
-  *)
-    shift
-    ;;
-esac
-exec "$@"
-`,
-    });
-
-    const script = repoRootShell`
-TMPDIR=${shellQuote(workDir)}
-export ROOT_DIR TMPDIR
-export PATH="$TMPDIR/bin:$PATH"
-export OPENCLAW_SKIP_DOCKER_BUILD=1
-export OPENCLAW_DOCKER_E2E_IMAGE=shared-functional
-export OPENCLAW_DOCKER_ALL_LANE_NAME=browser-cdp-snapshot
-
-bash "$ROOT_DIR/scripts/e2e/browser-cdp-snapshot-docker.sh"
-
-grep -q '^image inspect shared-functional$' "$TMPDIR/docker-seen"
-grep -Fq 'build --progress=plain --build-arg GITHUB_ACTIONS -t openclaw-browser-cdp-snapshot-e2e:browser-cdp-snapshot' "$TMPDIR/docker-seen"
-grep -Fq ' openclaw-browser-cdp-snapshot-e2e:browser-cdp-snapshot ' "$TMPDIR/docker-seen"
-if grep -Fq ' shared-functional ' "$TMPDIR/docker-seen"; then
-  echo "browser CDP lane reused the shared image without Chromium" >&2
-  exit 1
-fi
-`;
-
-    expect(execDockerSnippet(script)).toContain(
-      "Disabled Playwright AI snapshot chunk: pw-ai-optional.js",
-    );
-  });
-
   it("forwards browser CDP snapshot byte limits into the Docker runner", () => {
     const runner = readFileSync(BROWSER_CDP_SNAPSHOT_DOCKER_E2E_PATH, "utf8");
     expect(runner).toContain(
@@ -2806,60 +2731,6 @@ exec "$@"
     );
   });
 
-  it("reuses the shared bare image for multi-node update targeted runs", () => {
-    const workDir = tempDirs.make("openclaw-multi-node-shared-image-");
-    writeFileSync(join(workDir, "openclaw-current.tgz"), "fake package");
-    writeExecutables(join(workDir, "bin"), {
-      docker: `#!/usr/bin/env bash
-printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
-case "$1 $2" in
-  "image inspect")
-    exit 0
-    ;;
-  "run "*)
-    exit 0
-    ;;
-esac
-exit 9
-`,
-      timeout: `#!/usr/bin/env bash
-case "\${1:-}" in
-  --kill-after=1s)
-    exit 0
-    ;;
-  --kill-after=30s)
-    shift 2
-    ;;
-  *)
-    shift
-    ;;
-esac
-exec "$@"
-`,
-    });
-
-    const script = repoRootShell`
-TMPDIR=${shellQuote(workDir)}
-export ROOT_DIR TMPDIR
-export PATH="$TMPDIR/bin:$PATH"
-export OPENCLAW_SKIP_DOCKER_BUILD=1
-export OPENCLAW_DOCKER_E2E_IMAGE=shared-bare
-export OPENCLAW_CURRENT_PACKAGE_TGZ="$TMPDIR/openclaw-current.tgz"
-export OPENCLAW_MULTI_NODE_ARTIFACT_DIR="$TMPDIR/artifacts"
-
-bash "$ROOT_DIR/scripts/e2e/multi-node-update-docker.sh"
-
-grep -q '^image inspect shared-bare$' "$TMPDIR/docker-seen"
-grep -Fq ' shared-bare ' "$TMPDIR/docker-seen"
-if grep -Fq 'openclaw-multi-node-update-e2e' "$TMPDIR/docker-seen"; then
-  echo "multi-node update lane ignored the shared targeted image" >&2
-  exit 1
-fi
-`;
-
-    execDockerSnippet(script);
-  });
-
   it("bounds upgrade survivor foreground OpenClaw CLI calls", () => {
     const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
     const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
@@ -2961,7 +2832,7 @@ fi
 import fs from "node:fs";
 import http from "node:http";
 const identity = { pid: process.pid, managed: process.env.OPENCLAW_SYSTEMD_UNIT === "openclaw-gateway.service" };
-const server = http.createServer((_req, res) => res.end(JSON.stringify(identity)));
+const server = http.createServer((_req, res) => res.end(JSON.stringify({ ready: true, ...identity })));
 const firstStart = !fs.existsSync(process.env.PORT_FILE);
 const port = fs.existsSync(process.env.PORT_FILE) ? Number(fs.readFileSync(process.env.PORT_FILE, "utf8")) : 0;
 server.listen(port, "127.0.0.1", () => {

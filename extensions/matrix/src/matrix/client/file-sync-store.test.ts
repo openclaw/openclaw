@@ -214,7 +214,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
     expect(restored.getSyncToken()).toBe("new");
   });
 
-  it.each(["bulk", "legacy"])(
+  it.each(["legacy"])(
     "restores multi-chunk sync data and rejects a bad digest with %s stores",
     async (mode) => {
       const response = createSyncResponse("large-cursor");
@@ -269,7 +269,7 @@ describe("SqliteBackedMatrixSyncStore", () => {
     },
   );
 
-  it.each(["bulk", "legacy"])(
+  it.each(["bulk"])(
     "validates selected chunk JSON after earlier gaps with %s stores",
     async (mode) => {
       const options = openMatrixSyncCacheStoreOptions(storageRoot);

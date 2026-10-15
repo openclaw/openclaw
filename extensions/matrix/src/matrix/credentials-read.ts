@@ -35,7 +35,7 @@ function matrixCredentialsStoreOptions(env: NodeJS.ProcessEnv) {
 
 /**
  * Retained only for the released synchronous channel-account compatibility callbacks.
- * @deprecated Use openMatrixCredentialsAsyncStore; removed in the next Plugin SDK major.
+ * @deprecated Use openMatrixCredentialsAsyncStore. Final compatibility day: 2026-12-31.
  */
 export function openMatrixCredentialsStore(env: NodeJS.ProcessEnv = process.env) {
   return createPluginStateSyncKeyedStore<MatrixCredentialStateRecord>(
@@ -74,7 +74,7 @@ export async function loadMatrixCredentialsAsync(
 
 /**
  * Retained only for the released synchronous channel-account compatibility callbacks.
- * @deprecated Use loadMatrixCredentialsAsync; removed in the next Plugin SDK major.
+ * @deprecated Use loadMatrixCredentialsAsync. Final compatibility day: 2026-12-31.
  */
 export function loadMatrixCredentials(
   env: NodeJS.ProcessEnv = process.env,

@@ -30,6 +30,7 @@ import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-st
 import { readStartupBundledDiscoveryMode } from "./gateway-startup-plugin-config.js";
 import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-record-reader.js";
+import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
 import {
   parseInstalledPluginIndex,
@@ -40,7 +41,9 @@ import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import { listPersistedBundledPluginRecoveryLocations } from "./location-bridges.js";
 import { loadFreshManagedPluginMetadata } from "./management-service.js";
 import {
+  adoptProcessPluginCache,
   createPluginCache,
+  getProcessPluginCache,
   PluginCacheFactInvalidatedError,
   retirePluginCache,
   withPluginCache,
@@ -117,30 +120,53 @@ async function withoutMainThreadSql(run: () => Promise<void>) {
   }
 }
 
-it("derives startup discovery from prepared facts and observes same-process migration", async () => {
+it("transfers startup metadata out of its private snapshot and observes same-process migration", async () => {
   const env = environment();
   const config = { plugins: { allow: ["fixture"] } };
-  await bundledDiscovery.prepareBundledDiscoveryMode(env);
-  await withoutMainThreadSql(async () => {
-    expect(readStartupBundledDiscoveryMode(config, env)).toBeUndefined();
-  });
+  await seed(env, index());
+  const processCache = getProcessPluginCache();
+  await using cache = createPluginCache();
+  const reads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
+  const batches = vi.spyOn(metadataWorker, "readPluginMetadataStateRows");
+  try {
+    await withPluginCache(cache, () =>
+      withArtifactPreservingStateReads(() =>
+        withOpenClawStateDatabaseReadSnapshot(
+          () => preparePluginMetadataMachineStateAsync({ env }),
+          { env },
+        ),
+      ),
+    );
+    adoptProcessPluginCache(cache);
+    await withoutMainThreadSql(async () => {
+      await preparePluginMetadataMachineStateAsync({ env });
+      expect(readStartupBundledDiscoveryMode(config, env)).toBeUndefined();
+      expect((await readPersistedInstalledPluginIndex({ env }))?.diagnostics).toEqual(
+        index().diagnostics,
+      );
+    });
+    expect(reads).not.toHaveBeenCalled();
+    expect(batches).toHaveBeenCalledOnce();
 
-  expect(migrateLegacyConfigMachineState({ config, env }).changes).toContain(
-    "Migrated plugins.bundledDiscovery → shared SQLite state",
-  );
-  for (const snapshot of [false, true]) {
-    const read = async () => {
-      await bundledDiscovery.prepareBundledDiscoveryMode(env);
-      await withoutMainThreadSql(async () => {
-        expect(readStartupBundledDiscoveryMode(config, env)).toBe("compat");
-        expect(readStartupBundledDiscoveryMode({}, env)).toBe("compat");
-      });
-    };
-    if (snapshot) {
-      await withArtifactPreservingStateReads(read);
-    } else {
-      await read();
+    expect(migrateLegacyConfigMachineState({ config, env }).changes).toContain(
+      "Migrated plugins.bundledDiscovery → shared SQLite state",
+    );
+    for (const snapshot of [false, true]) {
+      const read = async () => {
+        await bundledDiscovery.prepareBundledDiscoveryMode(env);
+        await withoutMainThreadSql(async () => {
+          expect(readStartupBundledDiscoveryMode(config, env)).toBe("compat");
+          expect(readStartupBundledDiscoveryMode({}, env)).toBe("compat");
+        });
+      };
+      if (snapshot) {
+        await withArtifactPreservingStateReads(read);
+      } else {
+        await read();
+      }
     }
+  } finally {
+    adoptProcessPluginCache(processCache);
   }
 });
 

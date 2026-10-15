@@ -43,6 +43,9 @@ export async function runAgentStep(params: {
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
   const response = await gatewayCall({
     method: "agent",
+    // This is a returned result, not a new request to the peer. Consuming it
+    // must not require an acknowledgment or repeat an already delivered final.
+    replyExpectation: "optional",
     params: {
       message: annotateInterSessionPromptText(params.message, inputProvenance),
       ...(params.agentId ? { agentId: params.agentId } : {}),

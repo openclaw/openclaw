@@ -359,7 +359,11 @@ function* openOpenClawAgentDatabaseSteps(
         reuseAdmittedIntegrity,
         pending?.workerPrepared,
       );
-      assertSupportedAgentSchemaVersion(db, pathname);
+      if (!reusedSchema) {
+        admitSqliteSchema(db, (userVersion) => {
+          assertSupportedAgentSchemaVersion(db, pathname, userVersion);
+        });
+      }
       const existingSchema = readExistingAgentSchemaMeta(db);
       assertExistingAgentSchemaOwner(existingSchema, agentId, pathname);
       if (reusedSchema) {
@@ -425,6 +429,8 @@ function* openOpenClawAgentDatabaseSteps(
       });
       walMaintenance = configureSqliteConnectionPragmas(db, {
         busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        // Native workers already checkpoint on maintenance ticks, outside foreground commits.
+        autoCheckpointPages: 0,
         databaseLabel: `openclaw-agent:${agentId}`,
         databasePath: pathname,
         foreignKeys: true,

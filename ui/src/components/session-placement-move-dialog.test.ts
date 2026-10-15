@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import { showSessionPlacementTargetDialog } from "./session-placement-move-dialog.ts";
+import { showSessionPlacementTargetDialog } from "./session-placement-move-dialog.tsx";
 
 let restoreDialogPolyfill: () => void;
 
@@ -100,6 +100,40 @@ it("does not repaint a cancelled placement dialog when its catalog finishes load
   await waitForSolid(() => expect(host.childElementCount).toBe(0));
 
   expect(host.childElementCount).toBe(0);
+});
+
+it("keeps Cancel focused and submission disabled when catalog loading fails", async () => {
+  const catalog = createDeferred<{ profiles: []; devices: [] }>();
+  const result = showSessionPlacementTargetDialog({
+    mode: "move",
+    sessionLabel: "Example session",
+    activeRun: false,
+    loadCatalog: () => catalog.promise,
+  });
+  flush();
+  const { modal } = await getRenderedModalDialog(document.body);
+  const cancel = modal.querySelector<HTMLButtonElement>(
+    '.exec-approval-actions button[type="button"]',
+  )!;
+  const submit = modal.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  try {
+    cancel.focus();
+    expect(modal.textContent).toContain("Loading");
+    expect(submit.disabled).toBe(true);
+
+    catalog.reject(new Error("Catalog unavailable"));
+    await waitForSolid(() =>
+      expect(modal.querySelector('[role="alert"]')?.textContent).toBe("Catalog unavailable"),
+    );
+    expect(document.activeElement).toBe(cancel);
+    expect(modal.querySelector('button[type="submit"]')).toBe(submit);
+    expect(submit.disabled).toBe(true);
+    cancel.click();
+    await expect(result).resolves.toBeNull();
+  } finally {
+    modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+    await result;
+  }
 });
 
 it("orders Move profiles by backend while keeping local selection and blockers", async () => {

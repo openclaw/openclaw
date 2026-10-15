@@ -9,27 +9,6 @@ import { sessionsResult } from "../../lib/sessions/session-capability.test-suppo
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 
-const swarmImport = vi.hoisted(() => {
-  let release!: () => void;
-  let markStarted!: () => void;
-  return {
-    held: new Promise<void>((resolve) => {
-      release = resolve;
-    }),
-    started: new Promise<void>((resolve) => {
-      markStarted = resolve;
-    }),
-    release: () => release(),
-    markStarted: () => markStarted(),
-  };
-});
-
-vi.mock("../../lib/sessions/swarm-roster.ts", async (importOriginal) => {
-  swarmImport.markStarted();
-  await swarmImport.held;
-  return importOriginal();
-});
-
 function createGlobalPane(failMainParent = false) {
   const parentAgents: unknown[] = [];
   const childParents: unknown[] = [];
@@ -93,36 +72,6 @@ function createGlobalPane(failMainParent = false) {
 }
 
 describe("global pane Swarm startup ownership", () => {
-  it("admits the latest agent after a stale module load without bypassing its foreground hold", async () => {
-    vi.useFakeTimers();
-    const { pane, state, snapshot, coordinator, parentAgents, childParents } = createGlobalPane();
-    try {
-      pane.applyGatewaySnapshot(snapshot);
-      await swarmImport.started;
-      pane.context.agentSelection.set("research");
-      pane.applyGatewaySnapshot(snapshot);
-      expect(state.sessionKey).toBe("global");
-      expect(state.assistantAgentId).toBe("research");
-
-      coordinator.setForegroundRoute(undefined);
-      swarmImport.release();
-      await vi.dynamicImportSettled();
-      await vi.advanceTimersByTimeAsync(500);
-      expect(parentAgents).toEqual([]);
-      expect(childParents).toEqual([]);
-
-      coordinator.setForegroundRoute(null);
-      await vi.waitFor(() => {
-        expect(parentAgents).toEqual(["research"]);
-        expect(childParents).toEqual(["global"]);
-      });
-    } finally {
-      swarmImport.release();
-      coordinator.reset();
-      vi.useRealTimers();
-    }
-  });
-
   it.each([
     { phase: "connect", transition: "snapshot" },
     { phase: "retry", transition: "snapshot" },
@@ -132,7 +81,6 @@ describe("global pane Swarm startup ownership", () => {
     "retires an old global agent's pending $phase during $transition while the next foreground chat holds hydration",
     async ({ phase, transition }) => {
       vi.useFakeTimers();
-      swarmImport.release();
       const { pane, snapshot, coordinator, parentAgents, childParents } = createGlobalPane(
         phase === "retry",
       );

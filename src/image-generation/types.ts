@@ -135,7 +135,7 @@ export type ImageGenerationProvider = {
   defaultTimeoutMs?: number;
   models?: string[];
   capabilities: ImageGenerationProviderCapabilities;
-  /** @deprecated Use isConfiguredAsync so credential reads run in the database worker. */
+  /** @deprecated Use isConfiguredAsync so credential reads run in the database worker. Final compatibility day: 2026-12-31. */
   isConfigured?: (ctx: ImageGenerationProviderConfiguredContext) => boolean;
   isConfiguredAsync?: (ctx: ImageGenerationProviderConfiguredContext) => Promise<boolean>;
   generateImage: (req: ImageGenerationRequest) => Promise<ImageGenerationResult>;

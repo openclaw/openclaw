@@ -340,9 +340,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   leaves thirteen inside the unchanged 84-row allowance and 5,110 bound.
 
 - Automatic canonical hybrid first attempts count every selected hosted row in
-  preflight. `HYBRID_HOSTED_BASE_ROW_LIMIT = 40` admits at most five optional
-  rows within `HYBRID_HOSTED_ROW_LIMIT = 45`: security, three Control UI unit
-  rows, and only browser-extension E2E. Above 40 base rows, retain their
+  preflight. `HYBRID_HOSTED_BASE_ROW_LIMIT = 40` admits at most two optional
+  rows within `HYBRID_HOSTED_ROW_LIMIT = 45`: security and browser-extension
+  E2E. Control UI unit rows retain the 8-class on eligible first attempts.
+  Above 40 base rows, retain the optional rows' existing
   Blacksmith routes; an eligible base above 45 warns with counts and retains
   the complete base manifest. The budget limits optional admission, not coverage.
   Record base/total rows and compare the actual workflow expansion in guards.
@@ -525,8 +526,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   it does not promote serial jobs or change worker limits. Preserve the separate
   300s ordered two-slot queue bound and runtime preparation charge.
   Gateway-exclusive serial bins and native numbered tooling bins use a 300s test
-  budget. Native tooling rows containing the partitioned changed-Node planner proof
-  retain a 150s test budget through initial and measured packing. The partition keeps
+  budget; hourly hybrid main validation packs its tooling rows within 420s plus
+  60s setup to keep headroom under its 77-row cap. Native tooling rows containing
+  the partitioned changed-Node planner proof retain a 150s test budget through
+  initial and measured packing. The partition keeps
   two workers and serial outer admission. Ordinary self-hosted bins share promoted capacity across logical
   classes; the existing group exchange fills stranded slots without raising caps.
   Parallel admission also bounds the ordered two-slot queue at 300 test seconds;
@@ -593,11 +596,11 @@ These are intentionally guarded by the `ci-workflow-guards`,
   elapsed-time, actual memory and cleanup proof; requested labels are not capacity.
 - The whole Blacksmith agent-support group requests `blacksmith-32vcpu-ubuntu-2404`.
   Its file inventory and resource-derived worker policy remain unchanged.
-- Precisely selected serial CLI and Gateway client jobs use the 16-class when
-  every group belongs to either family, has one or two explicit files, and keeps
-  its two-worker fallback, without build, dist, memory, or large-runner anchors.
-  Gateway client groups must pair `agentic-gateway-core-2` with
-  `vitest.gateway-client.config.ts`; other Gateway owners retain planned capacity.
+- Precisely selected serial CLI, Gateway client/server, and embedded-agent jobs
+  use the 16-class when every group has one qualified config, one or two explicit
+  files, and a two-worker pin or fallback. An explicit wider pin disqualifies the
+  group. Keep build, dist, memory, large-runner anchors, and unqualified configs
+  at planned capacity; resource-gated tooling tests are not qualified by this rule.
   Apply capacity after packing; preserve inventories, runtime selection, timing
   identities, and process boundaries. Full families retain their planned capacity.
   RunsOn inherits the hybrid choice for these retained Blacksmith jobs.

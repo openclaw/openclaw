@@ -15,6 +15,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
+import * as deviceIdentity from "../infra/device-identity-async.js";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -790,7 +791,9 @@ describe("createGatewayKernel", () => {
     }
   });
 
-  it("dispatches health and an agent turn without creating a transport", async ({ signal }) => {
+  it("dispatches without a transport when optional chat identity bootstrap fails", async ({
+    signal,
+  }) => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "gateway-kernel-no-transport",
@@ -837,6 +840,9 @@ describe("createGatewayKernel", () => {
       | undefined;
     let prematureCleanupCalls: number | undefined;
     let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
+    const loadIdentity = vi
+      .spyOn(deviceIdentity, "loadOrCreateProcessDeviceIdentityAsync")
+      .mockRejectedValueOnce(new Error("synthetic identity read failure"));
     try {
       stageActivePluginRegistry(ambientRegistry, null, "default");
       capturedLoadedPluginRegistry = captureActivePluginRegistrySnapshot();
@@ -859,6 +865,7 @@ describe("createGatewayKernel", () => {
         controlUiEnabled: false,
         sidecarStartup: "defer",
       });
+      expect(loadIdentity).toHaveBeenCalledOnce();
       expect(kernel.transportBridge.current()).toBeUndefined();
       await expect(kernel.transportBridge.ensureSandboxHostPort()).rejects.toThrow(
         "Gateway listener must start before the sandbox host",
@@ -895,11 +902,10 @@ describe("createGatewayKernel", () => {
       expect(getActiveGatewayRootWorkCount()).toBe(0);
 
       flushDiagnosticsTimeline();
-      const timeline = (await fs.readFile(timelinePath, "utf8"))
+      const measureNames = (await fs.readFile(timelinePath, "utf8"))
         .trim()
         .split("\n")
-        .map((line) => JSON.parse(line) as Record<string, unknown>);
-      const measureNames = timeline
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
         .filter((event) => event.type === "span.start" && event.phase === "startup")
         .map((event) => {
           const attributes = event.attributes as { traceName?: string } | undefined;
@@ -942,6 +948,7 @@ describe("createGatewayKernel", () => {
         "node-desktop.runtime-import",
         "host-desktop.runtime-import",
         "computer.runtime-import",
+        "device-identity",
         "runtime.config",
         "control-ui.root",
         "terminal.launch-import",
@@ -969,6 +976,7 @@ describe("createGatewayKernel", () => {
         "gateway.lifetime-sidecars",
       ]);
     } finally {
+      loadIdentity.mockRestore();
       try {
         await kernel?.closeOnStartupFailure();
       } finally {

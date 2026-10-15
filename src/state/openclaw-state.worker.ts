@@ -47,6 +47,7 @@ import type {
   OpenClawStateWorkerOpenPreparation,
   OpenClawStateWorkerOperations,
 } from "./openclaw-state-worker-contract.js";
+import { stateWorkerRegistry } from "./openclaw-state-worker-registry.js";
 import {
   createWorkerOperationRegistry,
   type WorkerWriteOperationContext,
@@ -95,6 +96,23 @@ let pluginState: typeof import("../plugin-state/plugin-state.worker.js") | undef
 let capture: typeof import("../proxy-capture/store.worker.js") | undefined;
 let runtime: typeof import("./openclaw-state-worker-runtime.js") | undefined;
 let publicationSource: typeof import("./github-publication-source.worker.js") | undefined;
+
+function prepareStateCommand(commandType: PropertyKey): Promise<void> | undefined {
+  const prepared = stateWorkerRegistry.prepare(commandType);
+  if (prepared) {
+    return prepared.then(() => prepareStateCommand(commandType));
+  }
+  if (stateWorkerRegistry.has({ type: commandType, input: undefined })) {
+    return undefined;
+  }
+  if (runtime) {
+    return runtime.prepareSharedStateCommand(commandType);
+  }
+  return import("./openclaw-state-worker-runtime.js").then((loaded) => {
+    runtime = loaded;
+    return runtime.prepareSharedStateCommand(commandType);
+  });
+}
 
 function stateDatabaseInitializationEnvironment(): NodeJS.ProcessEnv {
   const context = getSqliteWorkerStateContext();
@@ -227,6 +245,15 @@ function createSharedStateWorkerBackend(
       transactionEnvironment === "process" ? process.env : undefined,
     );
   };
+  const operationContext: WorkerWriteOperationContext = {
+    open,
+    write,
+    writeAdmitted,
+    stateOptions: () => ({
+      path: context.databasePath,
+      env: getSqliteWorkerStateContext().environment,
+    }),
+  };
   return {
     [SQLITE_WORKER_PREPARE_ADMITTED](command) {
       const source =
@@ -279,16 +306,13 @@ function createSharedStateWorkerBackend(
       ) {
         return Promise.all([
           publicationSource
-            ? Promise.resolve()
+            ? undefined
             : import("./github-publication-source.worker.js").then((loaded) => {
                 publicationSource = loaded;
               }),
           commandType === "githubPublication.sourceFacts"
-            ? Promise.resolve()
-            : import("./openclaw-state-worker-runtime.js").then((loaded) => {
-                runtime = loaded;
-                return runtime.prepareSharedStateCommand(commandType);
-              }),
+            ? undefined
+            : prepareStateCommand(commandType),
         ]).then(() => undefined);
       }
       if (
@@ -337,13 +361,7 @@ function createSharedStateWorkerBackend(
       ) {
         return undefined;
       }
-      if (runtime) {
-        return runtime.prepareSharedStateCommand(commandType);
-      }
-      return import("./openclaw-state-worker-runtime.js").then((loaded) => {
-        runtime = loaded;
-        return runtime.prepareSharedStateCommand(commandType);
-      });
+      return prepareStateCommand(commandType);
     },
     execute(command) {
       if (closed) {
@@ -356,15 +374,7 @@ function createSharedStateWorkerBackend(
         return publicationSourceReader.read(command.input.source);
       }
       if (commandRegistry.has(command)) {
-        return commandRegistry.execute(command, {
-          open,
-          write,
-          writeAdmitted,
-          stateOptions: () => ({
-            path: context.databasePath,
-            env: getSqliteWorkerStateContext().environment,
-          }),
-        });
+        return commandRegistry.execute(command, operationContext);
       }
       if (
         command.type === "capture.upsertSession" ||
@@ -487,6 +497,9 @@ function createSharedStateWorkerBackend(
           nativeDatabase?.db.isOpen === true,
         );
       }
+      if (stateWorkerRegistry.has(command)) {
+        return stateWorkerRegistry.execute(command, operationContext);
+      }
       const currentRuntime = runtime;
       if (!currentRuntime) {
         throw new Error("Shared-state worker command runtime is not prepared");
@@ -506,7 +519,6 @@ function createSharedStateWorkerBackend(
         context,
         open,
         write,
-        writeAdmitted,
         () =>
           (updateRunWriter ??= currentRuntime.openUpdateRunWriter({
             path: context.databasePath,

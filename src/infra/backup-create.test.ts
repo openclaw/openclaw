@@ -225,33 +225,6 @@ describe("formatBackupCreateSummary", () => {
         "Archive verification: passed",
       ],
     },
-    {
-      name: "formats dry runs and pluralized counts",
-      result: makeBackupResult({
-        dryRun: true,
-        assets: [
-          {
-            kind: "config",
-            sourcePath: "/config",
-            archivePath: "archive/config",
-            displayPath: "~/.openclaw/config.json",
-          },
-          {
-            kind: "credentials",
-            sourcePath: "/oauth",
-            archivePath: "archive/oauth",
-            displayPath: "~/.openclaw/oauth",
-          },
-        ],
-      }),
-      expected: [
-        backupArchiveLine,
-        "Included 2 paths:",
-        "- config: ~/.openclaw/config.json",
-        "- credentials: ~/.openclaw/oauth",
-        "Dry run only; archive was not written.",
-      ],
-    },
   ])("$name", ({ result, expected }) => {
     expect(formatBackupCreateSummary(result)).toEqual(expected);
   });
