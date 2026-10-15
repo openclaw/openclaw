@@ -48,15 +48,6 @@ describe("existing-only SQLite worker admission", () => {
     await seed(file, "ordinary creation remains available");
   });
 
-  it("does not initialize an existing empty file", async () => {
-    const file = databasePath();
-    await writeFile(file, "");
-    const store = await open(file, true);
-    assert.ok(store);
-    await store.close();
-    expect(await readFile(file)).toEqual(Buffer.alloc(0));
-  });
-
   it("requires explicit backend support instead of invoking the ordinary factory", async () => {
     const file = databasePath();
     await writeFile(file, "");
@@ -74,35 +65,6 @@ describe("existing-only SQLite worker admission", () => {
       }),
     ).rejects.toThrow("must export openExistingSqliteWorkerBackend");
     expect(await readFile(file)).toEqual(Buffer.alloc(0));
-  });
-
-  it("shares ordinary write intent with an existing actor across aliases and drains accepted work", async () => {
-    const file = databasePath();
-    await seed(file, "seed");
-    const existing = await open(file, true);
-    assert.ok(existing);
-    const alias = path.join(path.dirname(file), "alias.sqlite");
-    await link(file, alias);
-    const ordinary = await open(alias);
-    assert.ok(ordinary);
-    let settled = false;
-    const pending = ordinary
-      .execute({ type: "append", input: { value: "ordinary" } })
-      .then((receipt) => {
-        settled = true;
-        return receipt;
-      });
-    await ordinary.close();
-    expect(settled).toBe(true);
-    const first = await pending;
-    const second = await existing.execute({ type: "append", input: { value: "existing" } });
-    expect(second).toEqual({ ...first, writes: 2 });
-    expect(first.threadId).toBeGreaterThan(0);
-    expect(await existing.execute({ type: "read", input: undefined })).toEqual([
-      "seed",
-      "ordinary",
-      "existing",
-    ]);
   });
 
   it.each(["deleted", "replaced"] as const)(

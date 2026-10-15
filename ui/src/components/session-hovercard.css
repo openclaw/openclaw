@@ -125,11 +125,7 @@
   order: -1;
 }
 
-.session-hovercard__attribution-avatars .viewer-facepile {
-  margin-left: var(--session-hovercard-face-gap);
-  transition: margin-left 120ms ease;
-}
-
+.session-hovercard__attribution-avatars .viewer-facepile,
 .session-hovercard__attribution-avatars
   .viewer-facepile
   > openclaw-tooltip:not(:first-child)
@@ -493,4 +489,138 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
 
 .session-hovercard__notepad .session-progress-card__progress progress {
   margin-top: 0;
+}
+
+.session-hovercard__automation-tooltip {
+  --openclaw-tooltip-max-width: min(340px, calc(100dvw - 24px));
+  --openclaw-tooltip-padding: 0;
+}
+
+.session-hovercard__automations {
+  width: min(320px, calc(100dvw - 40px));
+  padding: var(--space-3);
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 400;
+  line-height: 1.5;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.session-hovercard__automation-caption {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.session-hovercard__automation-detail {
+  margin-top: var(--space-3);
+  min-width: 0;
+}
+
+.session-hovercard__automation-name {
+  margin-bottom: var(--space-1);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.session-hovercard__automation-meta,
+.session-hovercard__automation-message {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  overflow-wrap: anywhere;
+}
+
+.session-hovercard__automation-meta[data-running="true"] {
+  color: var(--accent);
+}
+
+.session-hovercard__automation-list {
+  display: grid;
+  gap: var(--space-1);
+  max-height: 140px;
+  margin-top: var(--space-2);
+  overflow: auto;
+}
+
+.session-hovercard__automation-choice {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: start;
+}
+
+.session-hovercard__automation-choice small {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.session-hovercard__automation-choice:is(:hover, :focus-visible, [aria-pressed="true"]) {
+  background: var(--bg-hover);
+}
+
+.session-hovercard__automation-instructions {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.session-hovercard__automation-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  margin: var(--space-2) 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.session-hovercard__automation-instructions summary {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.session-hovercard__automation-instructions pre {
+  max-height: 180px;
+  margin: var(--space-2) 0;
+  overflow: auto;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.session-hovercard__automation-open {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.session-hovercard__automation-open svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-hovercard__automation-error {
+  color: var(--danger);
+  font-size: var(--control-ui-text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }

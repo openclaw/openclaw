@@ -25,6 +25,7 @@ import type { ServiceDefinitionDrift } from "./service-audit-types.js";
 import {
   GatewayServiceDefinitionBackupReceiptSchema,
   matchesServiceFilePublication,
+  matchesServiceFileState,
   publishServiceFile,
   readServiceFileState,
   type GatewayServiceDefinitionBackupReceipt,
@@ -173,15 +174,33 @@ function mutationHooks(
         ) {
           file.after = current;
           delete file.prepared;
-        } else if (isDeepStrictEqual(current, file.after)) {
+        } else if (matchesServiceFileState(current, file.after)) {
           delete file.prepared;
         }
       }
     }
-    for (const { sourcePath, after } of [...receipt.files, ...receipt.guards]) {
-      if (!isDeepStrictEqual(after, await readServiceFileState(sourcePath))) {
-        throw new Error(`SERVICE_DEFINITION_UNKNOWN: Service definition changed: ${sourcePath}`);
+    for (const file of receipt.files) {
+      const current = await readServiceFileState(file.sourcePath);
+      if (!matchesServiceFileState(current, file.after)) {
+        throw new Error(
+          `SERVICE_DEFINITION_UNKNOWN: Service definition changed: ${file.sourcePath}`,
+        );
       }
+      if (matchesServiceFileState(current, file.before)) {
+        file.before = current;
+      }
+      // Checkpoints retain exact observations; historical replaced files keep
+      // their legacy facts because their original precision cannot be recovered.
+      file.after = current;
+    }
+    for (const guard of receipt.guards) {
+      const current = await readServiceFileState(guard.sourcePath);
+      if (!matchesServiceFileState(current, guard.after)) {
+        throw new Error(
+          `SERVICE_DEFINITION_UNKNOWN: Service definition changed: ${guard.sourcePath}`,
+        );
+      }
+      guard.after = current;
     }
     if (receipt.task) {
       const current = taskPolicy(await readScheduledTaskDefinition(params.env));

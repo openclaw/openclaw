@@ -110,7 +110,7 @@ Hydration adds eligible model ids and fills only undefined metadata. Explicit ma
 
 This field is publication-time authoring metadata, not a Gateway discovery hook. It does not add runtime network calls or hot reload; the existing [hosted catalog update lifecycle](/concepts/models#hosted-catalog-updates) is unchanged.
 
-`aliases` participates in provider ownership lookup for model-catalog planning. Alias targets must be top-level providers owned by the same plugin. When a provider-filtered list uses an alias, OpenClaw can read the owning manifest and apply alias API/base URL overrides without loading provider runtime. Aliases do not expand unfiltered catalog listings; broad lists emit the owning canonical provider rows only.
+`aliases` participates in provider ownership lookup for model-catalog planning. Alias targets must be top-level providers owned by the same plugin. When a provider-filtered list uses an alias, OpenClaw can read the owning manifest and apply alias API/base URL overrides without loading provider runtime. Aliases do not expand unfiltered catalog listings; broad lists emit the owning primary provider rows only.
 
 `suppressions` replaces the old provider runtime `suppressBuiltInModel` hook. Suppression entries are honored only when the provider is owned by the plugin or declared as a `modelCatalog.aliases` key that targets an owned provider. Runtime suppression hooks are no longer called during model resolution.
 
@@ -124,10 +124,9 @@ Provider fields:
 | `defaultUtilityModel` | `string`                 | Optional provider-recommended small model id for short internal utility tasks (titles, progress narration). Used when `agents.defaults.utilityModel` is unset and this provider serves the agent's primary model. |
 | `models`              | `object[]`               | Required model rows. Rows without an `id` are ignored.                                                                                                                                                            |
 
-`recommendedModels` is an optional ordered shortlist of distinct model
-ids from this provider's `models`. Ids are trimmed and must be non-empty. The field
-is reserved for picker ordering and is not yet used. It is published only in catalog
-v2, never v1. Invalid manifest lists are omitted; invalid remote v2 lists are rejected.
+Manifests do not author recommendations. Catalog v2 derives each provider's
+`recommendedModels` from the [curated recommended models list](/concepts/recommended-models).
+Manifests that still set `recommendedModels` load unchanged; the field is ignored.
 
 The catalog generator opts into local paired output with `--out <v1-file> --out-v2 <v2-file>`.
 It validates both bundles and prepares candidate bytes and previous-file backups
@@ -146,11 +145,9 @@ If publication fails or the process stops between replacements, inspect the
 and recovery directories. Stop competing writers, compare the current outputs with
 these artifacts, and explicitly restore or finish the pair before retrying. There
 is no automatic rollback or replay that could overwrite another writer's replacement.
-Identity checks detect observed changes but are not filesystem compare-and-swap;
+Concurrent publishers and replacement of private recovery files are unsupported;
 this protocol does not promise power-loss durability. After successful publication,
 cleanup failures warn with retained paths without reporting the pair as unpublished.
-Cleanup retains recovery entries when their device or inode is unknown (zero)
-or differs from the captured identity.
 
 Model fields:
 
@@ -161,7 +158,7 @@ Model fields:
 | `api`                  | `ModelApi`                                                     | Optional per-model API override.                                                     |
 | `baseUrl`              | `string`                                                       | Optional per-model base URL override.                                                |
 | `headers`              | `Record<string, string>`                                       | Optional per-model static headers.                                                   |
-| `input`                | `Array<"text" \| "image" \| "document">`                       | Modalities the model accepts. Other values are silently dropped.                     |
+| `input`                | `Array<"text" \| "image" \| "video" \| "document">`            | Modalities the model accepts. Other values are silently dropped.                     |
 | `reasoning`            | `boolean`                                                      | Whether the model exposes reasoning behavior.                                        |
 | `contextWindow`        | `number`                                                       | Native provider context window.                                                      |
 | `contextWindows`       | `Array<{ id: string; label: string; contextWindow: number }>`  | Up to 16 selectable windows, normalized in ascending token-count order.              |
@@ -196,6 +193,8 @@ Declare retirement only from affirmative provider evidence, never from a failed 
 `upstreamModel` marks a row that serves the same upstream model as a row in another bundled catalog under a different name, for example a subscription endpoint next to the vendor's API endpoint. It is authoring metadata: normalization drops it, and a contract test uses it to keep capability flags such as `compat.codeMode` from drifting between catalogs that ship the same model. Most rows need no marker, because matching ignores a leading vendor namespace and casing: `moonshotai/kimi-k3` and `zai-org/GLM-5.2` already match the first-party `kimi-k3` and `glm-5.2` rows. Reach for `upstreamModel` only when the vendor's own names genuinely differ. See [Code mode](/tools/code-mode/configuration#models-shipped-by-more-than-one-provider).
 
 Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest rows are complete enough for provider-filtered list and picker surfaces to skip registry/runtime discovery. Use `refreshable` when manifest rows are useful listable seeds or supplements but a refresh/cache can add more rows later; refreshable rows are not authoritative by themselves. Use `runtime` when OpenClaw must load provider runtime to know the list.
+
+After a provider gains credentials, list and picker surfaces show its declared manifest rows while account discovery is still pending, in every discovery mode. Once discovery publishes for that provider, its account result replaces them.
 
 Catalog refresh plans keep manual root declarations separate from generated provider inventory. A plugin owning the same provider ID does not turn a manual model into disposable cache data. Merge mode preserves those declarations and auth-only records; explicit replace mode retains its replacement contract. Generated catalogs still follow current ownership, endpoint eligibility, and authoritative replacement rules.
 

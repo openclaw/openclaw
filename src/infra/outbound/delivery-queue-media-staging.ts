@@ -13,10 +13,9 @@ export async function createDeliveryQueueMediaRetention(
   context?: DeliveryQueueStateContext,
 ): Promise<string> {
   const prepared = { id: generateSecureUuid(), enqueuedAt: Date.now() };
-  const preparedArtifacts = [...artifacts];
   return executeDeliveryQueueOperation(context, stateDir, {
     type: "deliveryQueue.createMediaRetention",
-    input: { artifacts: preparedArtifacts, entryKind, prepared },
+    input: { artifacts: [...artifacts], entryKind, prepared },
   });
 }
 

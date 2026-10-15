@@ -1,5 +1,6 @@
 import fsNode from "node:fs";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
@@ -22,6 +23,7 @@ import { withGatewayServiceOperationLock } from "../../daemon/service-operation-
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
+import { readExistingStateRootMode } from "../../infra/private-dir-mode.js";
 import {
   readUpdateStateSchemaVersions,
   resolveUpdateStateContentVersion,
@@ -44,7 +46,7 @@ import {
 } from "./update-command-config-snapshot.js";
 import { restoreFailedUpdateDatabases } from "./update-command-database-backup.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
-import { readPackageUpdateIdentity } from "./update-command-package.js";
+import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import type {
   UpdateServiceDefinitionRecovery,
@@ -463,6 +465,7 @@ export async function rollbackFailedUpdate(params: {
               filePath: targetPath,
               content: file.raw,
               mode: 0o600,
+              dirMode: readExistingStateRootMode(path.dirname(targetPath), resolveStateDir(env)),
               preserveExistingMode: false,
               beforeRename: async () => {
                 await assertConfigUnchanged();

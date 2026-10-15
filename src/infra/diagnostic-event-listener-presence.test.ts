@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { hasInternalDiagnosticEventInterest } from "./diagnostic-event-listener-presence.js";
+import {
+  hasInternalDiagnosticEventInterest,
+  onInternalDiagnosticEventInterest,
+} from "./diagnostic-event-listener-presence.js";
 import {
   emitDiagnosticEvent,
   emitTrustedDiagnosticEvent,
@@ -18,7 +21,40 @@ describe("diagnostic event listener interest", () => {
     vi.restoreAllMocks();
   });
 
-  it("applies internal listener interests before dispatch", async () => {
+  it("notifies only newly interested producers across filters, unsubscribe, and reset", () => {
+    onInternalDiagnosticEvent(() => {}, { include: ["message.queued"] });
+    const type = "gateway.event_loop.sample";
+    const observations: boolean[] = [];
+    const stopObserving = onInternalDiagnosticEventInterest(type, () => {
+      observations.push(hasInternalDiagnosticEventInterest(type));
+    });
+    try {
+      onInternalDiagnosticEvent(() => {}, { include: ["diagnostic.heartbeat"] });
+      onTrustedInternalDiagnosticEvent(() => {}, { exclude: [type] });
+      expect(observations).toEqual([]);
+      const stopFirst = onInternalDiagnosticEvent(() => {}, { include: [type] });
+      const stopSecond = onTrustedInternalDiagnosticEvent(() => {}, { include: [type] });
+      expect(observations).toEqual([true]);
+      stopFirst();
+      expect(observations).toEqual([true]);
+      stopSecond();
+      expect(observations).toEqual([true]);
+      onTrustedInternalDiagnosticEvent(() => {}, { exclude: ["log.record"] });
+      expect(observations).toEqual([true, true]);
+      expect(hasInternalDiagnosticEventInterest("message.queued")).toBe(true);
+      resetDiagnosticEventsForTest();
+      const stopAfterReset = onInternalDiagnosticEvent(() => {}, { include: [type] });
+      expect(observations).toEqual([true, true, true]);
+      stopObserving();
+      stopAfterReset();
+      onInternalDiagnosticEvent(() => {}, { include: [type] });
+      expect(observations).toEqual([true, true, true]);
+    } finally {
+      stopObserving();
+    }
+  });
+
+  it("filters listener interests across dispatch, unsubscribe, and reset", async () => {
     const included: string[] = [];
     const excluded: string[] = [];
     onInternalDiagnosticEvent((event) => included.push(event.type), {
@@ -34,9 +70,6 @@ describe("diagnostic event listener interest", () => {
 
     expect(included).toEqual(["message.queued"]);
     expect(excluded).toEqual(["message.queued"]);
-  });
-
-  it("tracks broad, included, and excluded event interest through unsubscribe and reset", () => {
     const stopBroad = onInternalDiagnosticEvent(() => undefined);
     expect(hasInternalDiagnosticEventInterest("log.record")).toBe(true);
     stopBroad();

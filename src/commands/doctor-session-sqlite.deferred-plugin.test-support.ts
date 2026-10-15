@@ -3,17 +3,73 @@ import path from "node:path";
 import { expect } from "vitest";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   readDeferredPluginMigrations,
   recordDeferredPluginMigrations,
 } from "../infra/deferred-plugin-migrations.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { recordLegacyMigrationRun } from "../infra/state-migrations.receipts.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+
+export async function seedStaleDeferredPluginSessionImport(state: OpenClawTestState) {
+  const fixture = await seedDeferredPluginSessionSource(state, "default", "brave");
+  const index = JSON.parse(fs.readFileSync(fixture.storePath, "utf8"));
+  for (const key of Object.keys(index)) {
+    index[key].updatedAt = Date.now();
+  }
+  index["agent:main:kept"].acp = {
+    backend: "acpx",
+    agent: "fixture",
+    runtimeSessionName: "legacy-runtime",
+    mode: "persistent",
+    state: "idle",
+    lastActivityAt: 100,
+  };
+  fs.writeFileSync(fixture.storePath, JSON.stringify(index));
+  await runDoctorSessionSqlite({
+    cfg: fixture.cfg,
+    env: state.env,
+    allAgents: true,
+    mode: "import",
+  });
+  let foreignReport = "";
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const row = db
+        .prepare(
+          "SELECT report_json FROM migration_sources WHERE migration_kind = 'deferred-plugin-session-import'",
+        )
+        .get()!;
+      foreignReport = JSON.stringify({
+        ...JSON.parse(String(row.report_json)),
+        databaseIdentity: "123:456",
+      });
+      db.prepare(
+        "UPDATE migration_sources SET report_json = ? WHERE migration_kind = 'deferred-plugin-session-import'",
+      ).run(foreignReport);
+    },
+    { env: state.env },
+  );
+  await closeOpenClawAgentDatabasesAsync();
+  const sqlitePath = resolveSqliteTargetFromSessionStorePath(fixture.storePath, fixture.scope).path;
+  const db = openNodeSqliteDatabase(sqlitePath);
+  try {
+    db.prepare("DELETE FROM transcript_events WHERE session_id = ?").run("legacy-kept");
+    db.prepare("DELETE FROM session_windows WHERE session_id = ?").run("legacy-kept");
+    db.prepare("DELETE FROM session_nodes WHERE session_key = ?").run("agent:main:kept");
+  } finally {
+    db.close();
+  }
+  return { ...fixture, foreignReport, sqlitePath };
+}
 
 export async function editAndDeleteImportedSessions(
   scope: Awaited<ReturnType<typeof seedDeferredPluginSessionSource>>["scope"],
@@ -124,7 +180,7 @@ export async function seedDeferredPluginSessionSource(
   );
   fs.writeFileSync(storePath, JSON.stringify(records));
   const cfg: OpenClawConfig = {
-    agents: { entries: { main: { default: true } } },
+    agents: { entries: { main: {} } },
     ...(layout === "external" ? { session: { store: storePath } } : {}),
   };
   await recordDeferredPluginMigrations({

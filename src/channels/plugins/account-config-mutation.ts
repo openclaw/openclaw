@@ -20,7 +20,7 @@ import type { ChannelId } from "./types.public.js";
 
 export type ChannelAccountMutationPlugin = Pick<
   ChannelPlugin,
-  "id" | "meta" | "config" | "setup" | "setupContract" | "gateway" | "lifecycle"
+  "id" | "meta" | "config" | "setup" | "setupContract" | "lifecycle"
 >;
 
 type ChannelSetupExecutionAdapter = NonNullable<

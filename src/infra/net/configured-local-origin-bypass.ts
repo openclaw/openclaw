@@ -13,16 +13,12 @@ export type ConfiguredLocalOriginManagedProxyBypass = {
 };
 
 function parseHttpUrl(value: string): URL | undefined {
-  try {
-    const parsed = new URL(value.trim());
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
-    return parsed;
-  } catch {
+  const parsed = URL.parse(value.trim());
+  if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
     return undefined;
   }
+  parsed.hostname = parsed.hostname.replace(/\.+$/, "");
+  return parsed;
 }
 
 function isLoopbackManagedProxyBypassHost(hostname: string): boolean {

@@ -57,7 +57,10 @@ export function formatUnknownToolIdError(
 ): string {
   const skill = options.codeModeSkills?.find((candidate) => candidate.name === needle);
   const canReadSkills = entries.some(
-    (entry) => entry.source === "openclaw" && entry.sourceName === "core" && entry.name === "read",
+    (entry) =>
+      entry.source === "openclaw" &&
+      entry.sourceName === "core" &&
+      (entry.name === "read" || entry.name === "skills_read"),
   );
   if (skill && canReadSkills) {
     // Use admitted, mapped prompt locations; never load a skill as a side effect of recovery.
@@ -84,7 +87,7 @@ export function formatUnknownToolIdError(
   const recoveryText =
     options.recoverySurface === "catalog"
       ? "Use catalog.search to find a callable tool handle, then call the handle or use its describe method."
-      : "Use tool_search to find a tool, tool_describe to inspect it, then tool_call with the exact id or name.";
+      : "Use tool_search to find a tool, tool_describe to inspect it, then dispatch_action with the exact id or name.";
   if (suggestions.length === 0) {
     return `Unknown tool id: ${needle}. ${recoveryText}`;
   }

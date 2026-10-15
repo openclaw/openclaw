@@ -319,7 +319,14 @@ describe("gateway node pairing authorization", () => {
       requestId: string,
       displayName: string,
     ) {
-      expect((await rpcReq(ws, "node.pair.approve", { requestId })).ok).toBe(true);
+      const approved = await rpcReq(ws, "node.pair.approve", { requestId });
+      expect(approved.ok).toBe(true);
+      expect(approved.payload).toEqual(
+        expect.objectContaining({
+          requestId: requestId.trim(),
+          node: expect.objectContaining({ nodeId }),
+        }),
+      );
       await expect(findPairedNode(nodeId)).resolves.toMatchObject({
         commands: [NODE_MCP_TOOLS_CALL_COMMAND],
       });
@@ -477,7 +484,12 @@ describe("gateway node pairing authorization", () => {
           expect.objectContaining({ nodeId: victimNodeId }),
         );
 
-        await approveRenameAndReject(ws, victimNodeId, request.request.requestId, "shared renamed");
+        await approveRenameAndReject(
+          ws,
+          victimNodeId,
+          `  ${request.request.requestId}  `,
+          "shared renamed",
+        );
       } finally {
         ws.close();
       }

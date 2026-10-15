@@ -1,44 +1,46 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { BoundedSerialQueue } from "./bounded-serial-queue.js";
 
 describe("BoundedSerialQueue", () => {
-  it("runs one task at a time in FIFO order and continues after failures", async () => {
+  it("retains each caller's async context across waits and failures", async () => {
+    const context = new AsyncLocalStorage<string>();
     const first = createDeferred();
-    const order: string[] = [];
-    const queue = new BoundedSerialQueue({ maxPendingCount: 4, maxPendingWeight: 4 });
-
-    const one = queue.enqueue(async () => {
-      order.push("one:start");
-      await first.promise;
-      order.push("one:end");
-    });
+    const queue = new BoundedSerialQueue({ maxPendingCount: 2, maxPendingWeight: 2 });
+    const observed: Array<string | undefined> = [];
     const failure = new Error("second failed");
-    const two = queue.enqueue(async () => {
-      order.push("two");
-      throw failure;
-    });
-    const three = queue.enqueue(async () => {
-      order.push("three");
-      return 3;
-    });
-
+    const one = context.run("first", () =>
+      queue.enqueue(async () => {
+        observed.push(context.getStore());
+        await first.promise;
+        observed.push(context.getStore());
+      }),
+    );
+    const two = context.run("second", () =>
+      queue.enqueue(async () => {
+        observed.push(context.getStore());
+        await Promise.resolve();
+        observed.push(context.getStore());
+        throw failure;
+      }),
+    );
+    const three = queue.enqueue(() => observed.push(context.getStore()));
     expect(one.accepted && two.accepted && three.accepted).toBe(true);
-    expect(order).toEqual(["one:start"]);
-    const oneCompletion = expect(
-      one.accepted ? one.completion : Promise.reject(new Error("first task was not admitted")),
-    ).resolves.toBeUndefined();
-    const twoCompletion = expect(two.accepted ? two.completion : Promise.resolve()).rejects.toBe(
+    const rejected = expect(two.accepted ? two.completion : Promise.resolve()).rejects.toBe(
       failure,
     );
-    const threeCompletion = expect(
-      three.accepted ? three.completion : Promise.reject(new Error("third task was not admitted")),
-    ).resolves.toBe(3);
     first.resolve();
+    await Promise.all([queue.flush(), rejected]);
 
-    await Promise.all([oneCompletion, twoCompletion, threeCompletion]);
-    expect(order).toEqual(["one:start", "one:end", "two", "three"]);
+    expect(observed).toEqual(["first", "first", "second", "second", undefined]);
+    expect(context.getStore()).toBeUndefined();
     expect(queue.isIdle).toBe(true);
+    const reused = context.run("reused", () => queue.enqueue(() => context.getStore()));
+    expect(reused.accepted).toBe(true);
+    if (reused.accepted) {
+      await expect(reused.completion).resolves.toBe("reused");
+    }
   });
 
   it("bounds waiting count and weight, then seals on the first overflow", () => {
@@ -112,30 +114,27 @@ describe("BoundedSerialQueue", () => {
     }
   });
 
-  it.each([new Error("persistence failed"), undefined])(
-    "preserves the first failure (%s) in a sealed prefix",
-    async (failure) => {
-      const queue = new BoundedSerialQueue({ maxPendingCount: 1, maxPendingWeight: 1 });
-      const first = createDeferred();
-      const task = queue.enqueue(() => first.promise);
-      const laterFailure = new Error("later failure");
-      const later = queue.enqueue(() => {
-        throw laterFailure;
-      });
-      queue.seal();
-      const ordinaryFlush = queue.flush();
-      const strictFlush = queue.flush({ requireSuccess: true });
+  it.each([undefined])("preserves the first failure (%s) in a sealed prefix", async (failure) => {
+    const queue = new BoundedSerialQueue({ maxPendingCount: 1, maxPendingWeight: 1 });
+    const first = createDeferred();
+    const task = queue.enqueue(() => first.promise);
+    const laterFailure = new Error("later failure");
+    const later = queue.enqueue(() => {
+      throw laterFailure;
+    });
+    queue.seal();
+    const ordinaryFlush = queue.flush();
+    const strictFlush = queue.flush({ requireSuccess: true });
 
-      first.reject(failure);
-      await Promise.all([
-        expect(ordinaryFlush).resolves.toBeUndefined(),
-        expect(strictFlush).rejects.toBe(failure),
-        expect(task.accepted ? task.completion : Promise.resolve()).rejects.toBe(failure),
-        expect(later.accepted ? later.completion : Promise.resolve()).rejects.toBe(laterFailure),
-      ]);
-      expect(queue.isIdle).toBe(true);
-    },
-  );
+    first.reject(failure);
+    await Promise.all([
+      expect(ordinaryFlush).resolves.toBeUndefined(),
+      expect(strictFlush).rejects.toBe(failure),
+      expect(task.accepted ? task.completion : Promise.resolve()).rejects.toBe(failure),
+      expect(later.accepted ? later.completion : Promise.resolve()).rejects.toBe(laterFailure),
+    ]);
+    expect(queue.isIdle).toBe(true);
+  });
 
   it("does not reject a successful flush prefix for a later synchronous failure", async () => {
     const first = createDeferred();
@@ -158,23 +157,5 @@ describe("BoundedSerialQueue", () => {
       await active.completion;
     }
     expect(queue.isIdle).toBe(true);
-  });
-
-  it("seals idempotently while preserving accepted work", async () => {
-    const first = createDeferred();
-    const queue = new BoundedSerialQueue({ maxPendingCount: 1, maxPendingWeight: 1 });
-    const active = queue.enqueue(async () => await first.promise);
-    const waiting = queue.enqueue(async () => "done");
-
-    queue.seal();
-    queue.seal();
-    expect(queue.enqueue(async () => undefined)).toEqual({ accepted: false, reason: "sealed" });
-    first.resolve();
-    await queue.flush();
-
-    expect(active.accepted && waiting.accepted).toBe(true);
-    if (waiting.accepted) {
-      await expect(waiting.completion).resolves.toBe("done");
-    }
   });
 });

@@ -2,5 +2,4 @@
 export type { ChannelGroupContext, OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export { setMattermostRuntime } from "./src/runtime.js";

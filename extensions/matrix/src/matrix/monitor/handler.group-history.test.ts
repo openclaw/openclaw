@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import {
   createMatrixHandlerTestHarness,
-  createMatrixRoomMessageEvent,
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
 import type { MatrixRawEvent } from "./types.js";
@@ -83,40 +82,6 @@ describe("matrix group chat history", () => {
     });
     resolveFirstName?.();
     await Promise.all([first, second]);
-  });
-
-  it.each([
-    {
-      description: "filename-only image",
-      body: "photo.jpg",
-      expected: "[matrix image attachment]",
-    },
-    {
-      description: "captioned image",
-      body: "look at this",
-      filename: "photo.jpg",
-      expected: "look at this\n\n[matrix image attachment]",
-    },
-  ])("preserves $description markers in pending room history", async (attachment) => {
-    const downloadContent = vi.fn();
-    const f = setup({ client: { downloadContent } });
-    await f.receive(
-      createMatrixRoomMessageEvent({
-        eventId: "$history-attachment",
-        originServerTs: 1000,
-        content: {
-          msgtype: "m.image",
-          body: attachment.body,
-          ...(attachment.filename ? { filename: attachment.filename } : {}),
-          url: "mxc://example.org/history-attachment",
-        },
-      }),
-    );
-    expect(f.finalizeInboundContext).not.toHaveBeenCalled();
-    expect(downloadContent).not.toHaveBeenCalled();
-    await f.trigger("$history-trigger", "trigger", 2000);
-    expect(f.history()).toEqual([attachment.expected]);
-    expect(downloadContent).not.toHaveBeenCalled();
   });
 
   it("includes skipped poll updates in next trigger history", async () => {

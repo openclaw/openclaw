@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -48,6 +49,9 @@ function fixture(
   const root = path.join(directory, "checkout");
   const recovery = path.join(directory, "recovery");
   const uploadAudit = path.join(directory, "upload.json");
+  const firebaseAudit = path.join(directory, "firebase.jsonl");
+  const firebasePreload = path.join(directory, "firebase-fixture.mjs");
+  let firebaseKey = "";
   git(directory, "init", "--bare", "--initial-branch=main", remote);
   git(directory, "clone", remote, root);
   git(root, "config", "user.name", "Release Fixture");
@@ -55,7 +59,11 @@ function fixture(
   git(root, "config", "commit.gpgsign", "false");
   write(root, metadataPath, "# iOS releases\n\n## Unreleased\n\nHistorical notes.\n");
   write(root, "README.md", "Original application source.\n");
-  write(root, ".gitignore", "node_modules\napps/ios/build\napps/ios/fastlane/screenshots\n");
+  write(
+    root,
+    ".gitignore",
+    "node_modules\napps/ios/build\napps/android/build\napps/ios/fastlane/screenshots\n",
+  );
   write(
     root,
     "package.json",
@@ -74,6 +82,9 @@ function fixture(
     "scripts/lib/mobile-release-evidence.ts",
     "scripts/lib/mobile-release-notes.ts",
     "scripts/mobile-release-ref.ts",
+    "scripts/lib/arg-utils.mts",
+    "scripts/lib/arg-utils.runtime.mjs",
+    "scripts/lib/version-script-args.ts",
     "scripts/lib/android-store-version.ts",
     "scripts/lib/mobile-store-version.ts",
     "scripts/lib/release-version.mjs",
@@ -89,7 +100,8 @@ function fixture(
   write(
     root,
     "scripts/fixture-upload.mjs",
-    `import fs from "node:fs";
+    `import { generateKeyPairSync } from "node:crypto";
+import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import { renderMobileReleaseNotes } from "./lib/mobile-release-notes.ts";
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
@@ -116,6 +128,52 @@ console.log(stageOnly ? "Synthetic notes staged" : "Synthetic store upload accep
 `,
   );
   if (platform === "android") {
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    firebaseKey = JSON.stringify({
+      type: "service_account",
+      project_id: "synthetic-project",
+      client_email: "publisher@synthetic-project.iam.gserviceaccount.com",
+      private_key: privateKey.export({ type: "pkcs8", format: "pem" }),
+    });
+    fs.writeFileSync(
+      firebasePreload,
+      String.raw`
+import fs from "node:fs";
+import { registerHooks } from "node:module";
+registerHooks({ resolve(specifier, context, nextResolve) {
+  return specifier === "undici" ? { url: import.meta.url, shortCircuit: true } : nextResolve(specifier, context);
+} });
+export class Agent { async close() {} }
+const app = "projects/123/apps/1:123:android:abc123";
+const response = (body, status = 200) => new Response(JSON.stringify(body), { status });
+export const fetch = async (url, options = {}) => {
+  const pathname = new URL(url).pathname;
+  if (pathname === "/token") return response({ access_token: "synthetic-token", expires_in: 3600 });
+  if (pathname.endsWith("/aabInfo")) return response({ integrationState: "INTEGRATED" });
+  if (pathname.includes("/groups")) {
+    return response(process.env.FIXTURE_FIREBASE_PREFLIGHT_FAIL === "1" ? {} : { name: "projects/123/groups/android-daily" });
+  }
+  const body = options.body ? Buffer.from(await new Response(options.body).arrayBuffer()).toString() : "";
+  fs.appendFileSync(process.env.FIXTURE_FIREBASE_AUDIT, JSON.stringify({ pathname, method: options.method || "GET", body }) + "\n");
+  if (pathname.endsWith("releases:upload")) {
+    const audience = body.includes("wear") ? "wear" : "phone";
+    return response({ name: app + "/releases/-/operations/" + audience });
+  }
+  if (pathname.includes("/operations/")) {
+    const audience = pathname.endsWith("wear") ? "wear" : "phone";
+    return response({ done: true, response: { result: "RELEASE_CREATED", release: {
+      name: app + "/releases/" + audience,
+      displayVersion: "2026.9.20",
+      buildVersion: audience === "wear" ? "2026090251" : "2026090250",
+      createTime: "2026-09-01T12:00:00Z",
+    } } });
+  }
+  if (pathname.endsWith("phone:distribute") && process.env.FIXTURE_FIREBASE_FAIL === "1") return response({ error: { status: "INVALID_ARGUMENT" } }, 400);
+  if (pathname.endsWith(":distribute") || options.method === "PATCH") return response({});
+  throw new Error("Unexpected fixture Firebase request: " + pathname);
+};
+`,
+    );
     for (const file of [
       "scripts/android-sync-versioning.ts",
       "scripts/android-version.ts",
@@ -123,12 +181,10 @@ console.log(stageOnly ? "Synthetic notes staged" : "Synthetic store upload accep
       "scripts/lib/mobile-changelog.ts",
       "scripts/lib/mobile-version.ts",
       "scripts/lib/release-version.mjs",
-      "scripts/lib/version-script-args.ts",
-      "scripts/lib/arg-utils.mts",
-      "scripts/lib/arg-utils.runtime.mjs",
       "apps/android/scripts/build-release-artifacts.ts",
       "apps/android/Config/ReleaseSigning.json",
       "apps/android/fastlane/Fastfile",
+      "scripts/android-release-upload.sh",
     ]) {
       write(root, file, fs.readFileSync(path.join(process.cwd(), file), "utf8"));
     }
@@ -152,15 +208,20 @@ console.log(stageOnly ? "Synthetic notes staged" : "Synthetic store upload accep
       root,
       "scripts/lib/android-fastlane.sh",
       `run_android_fastlane() {
+  if [[ "$2" != "release_plan" ]]; then
+    (cd ../.. && ruby scripts/fixture-upload.rb "$3")
+    return
+  fi
   echo '{"schemaVersion":2,"gatewayVersion":"2026.9.2","revision":0,"buildNumber":1,"version":"2026.9.20","versionCode":2026090250,"wearVersionCode":2026090251,"legacyMaxVersionCode":2026090249,"releaseNotesBaselines":[{"audience":"phone","version":null,"build":null},{"audience":"wear","version":null,"build":null}]}' > "\u0024{3#output_path:}"
 }\n`,
     );
-    write(root, "scripts/android-release-upload.sh", "exec ruby scripts/fixture-upload.rb\n");
     write(
       root,
       "scripts/fixture-upload.rb",
       String.raw`
 $LOADED_FEATURES << "supply.rb"
+require "digest"
+require "fileutils"
 module UI
   def self.user_error!(message); raise message; end
   def self.success(message); end
@@ -178,14 +239,20 @@ def capture_android_screenshots!; end
 def screenshots; $lanes.fetch(:screenshots).call; end
 def build_release_artifacts!
   raise "Archive failed" unless system("node", "--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--dry-run")
+  FileUtils.mkdir_p("apps/android/build/release-artifacts")
+  %w(play wear).each do |audience|
+    file = "apps/android/build/release-artifacts/openclaw-2026.9.20-#{audience}-release.aab"
+    File.write(file, "synthetic signed #{audience} bundle")
+    File.write("#{file}.sha256", "#{Digest::SHA256.file(file).hexdigest}  #{File.basename(file)}\n")
+  end
 end
 def upload_play_store_build!(metadata, **options)
-  File.write(ENV.fetch("FIXTURE_UPLOAD_AUDIT"), JSON.generate({ version: metadata.fetch(:version), versionCode: metadata.fetch(:version_code), wearVersionCode: metadata.fetch(:wear_version_code), gradleVersion: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_NAME"], gradleCode: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_CODE"], gradleWearCode: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_WEAR_VERSION_CODE"] }) + "\n")
+  File.open(ENV.fetch("FIXTURE_UPLOAD_AUDIT"), "a") { |file| file.write(JSON.generate({ version: metadata.fetch(:version), versionCode: metadata.fetch(:version_code), wearVersionCode: metadata.fetch(:wear_version_code), uploadMetadata: options.fetch(:upload_metadata), gradleVersion: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_NAME"], gradleCode: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_VERSION_CODE"], gradleWearCode: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_WEAR_VERSION_CODE"] }) + "\n") }
   %w(initialize-android record).each do |command|
     raise "Record failed" unless system("node", "--import", "tsx", "scripts/mobile-release-ref.ts", command, "--plan", ENV.fetch("OPENCLAW_ANDROID_RELEASE_PLAN"))
   end
 end
-$lanes.fetch(:release_upload).call
+$lanes.fetch(:release_upload).call(destination: ARGV.fetch(0).delete_prefix("destination:"))
 `,
     );
   }
@@ -196,6 +263,10 @@ $lanes.fetch(:release_upload).call
   const env = {
     ...process.env,
     FIXTURE_UPLOAD_AUDIT: uploadAudit,
+    FIXTURE_FIREBASE_AUDIT: firebaseAudit,
+    FIREBASE_APP_DISTRIBUTION_JSON_KEY_DATA: firebaseKey,
+    FIREBASE_APP_ID: "1:123:android:abc123",
+    FIREBASE_TESTER_GROUPS: "android-daily",
     OPENAI_API_KEY: "synthetic-key",
     GITHUB_ACTIONS: "false",
     GITHUB_EVENT_NAME: "workflow_dispatch",
@@ -207,13 +278,22 @@ $lanes.fetch(:release_upload).call
     GITHUB_STEP_SUMMARY: path.join(directory, "summary.md"),
   };
   const invoke = (
-    operation: "run" | "stage",
+    operation: "run" | "stage" | "firebase",
     extra: string[] = [],
     overrides: Record<string, string> = {},
   ) =>
     spawnSync(
       process.execPath,
-      [script, operation, "--platform", platform, "--recovery-dir", recovery, ...extra],
+      [
+        ...(platform === "android" ? ["--import", firebasePreload] : []),
+        script,
+        operation,
+        "--platform",
+        platform,
+        "--recovery-dir",
+        recovery,
+        ...extra,
+      ],
       { cwd: root, env: { ...env, ...overrides }, encoding: "utf8" },
     );
   const audit = () =>
@@ -222,7 +302,7 @@ $lanes.fetch(:release_upload).call
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
-  return { directory, root, remote, recovery, base, invoke, uploadAudit, audit };
+  return { directory, root, remote, recovery, base, invoke, uploadAudit, audit, firebaseAudit };
 }
 
 function advanceMain(f: ReturnType<typeof fixture>): string {
@@ -237,55 +317,113 @@ function advanceMain(f: ReturnType<typeof fixture>): string {
 }
 
 describe("mobile release CLI", () => {
-  it("builds Android from the saved store plan and notes without changing Git or pinned metadata", () => {
-    const f = fixture("android");
-    const pinned = [
-      "apps/android/version.json",
-      "apps/android/Config/Version.properties",
-      "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
-    ];
-    const original = pinned.map((file) => fs.readFileSync(path.join(f.root, file), "utf8"));
-    const result = f.invoke("run");
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("Android versionName: 2026.9.20");
-    expect(result.stdout).toContain("Android versionCode: 2026090250");
-    expect(result.stdout).toContain("Android Wear versionCode: 2026090251");
-    expect(f.audit()[0]).toMatchObject({
-      version: "2026.9.20",
-      versionCode: 2026090250,
-      wearVersionCode: 2026090251,
-      gradleVersion: "2026.9.20",
-      gradleCode: "2026090250",
-      gradleWearCode: "2026090251",
-    });
-    expect(
-      git(
-        f.remote,
-        "rev-parse",
-        "refs/openclaw/mobile-releases/android/v2/2026.9.2/0/1/2026090250-2026090251",
-      ),
-    ).toBe(f.base);
-    expect(git(f.remote, "rev-parse", "main")).toBe(f.base);
-    for (const [index, file] of pinned.entries()) {
-      expect(fs.readFileSync(path.join(f.root, file), "utf8")).toBe(original[index]);
-    }
-    const rebuilt = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--dry-run"],
-      {
-        cwd: f.root,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_ANDROID_RELEASE_PLAN: path.join(f.recovery, "android-plan.json"),
-          OPENCLAW_MOBILE_RELEASE_NOTES: path.join(f.recovery, "release-notes.json"),
+  it.each(["play-store", "internal"])(
+    "builds Android %s from the saved plan without changing Git or pinned metadata",
+    (destination) => {
+      const f = fixture("android");
+      const pinned = [
+        "apps/android/version.json",
+        "apps/android/Config/Version.properties",
+        "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+      ];
+      const original = pinned.map((file) => fs.readFileSync(path.join(f.root, file), "utf8"));
+      const ci = {
+        GITHUB_ACTIONS: "true",
+        GITHUB_EVENT_NAME: "schedule",
+        GITHUB_RUN_ATTEMPT: "1",
+        GITHUB_REF: "refs/heads/main",
+        GITHUB_SHA: f.base,
+      };
+      if (destination === "internal") {
+        const rejected = f.invoke("run", ["--destination", "play-store"], ci);
+        expect(rejected.status).toBe(1);
+        expect(rejected.stderr).toContain("scheduled events are accepted only");
+        expect(fs.existsSync(f.uploadAudit)).toBe(false);
+      }
+      if (destination === "internal") {
+        const rejected = f.invoke("run", ["--destination", destination], {
+          ...ci,
+          FIXTURE_FIREBASE_PREFLIGHT_FAIL: "1",
+        });
+        expect(rejected.status).toBe(1);
+        expect(fs.existsSync(f.uploadAudit)).toBe(false);
+        expect(fs.existsSync(path.join(f.recovery, "source"))).toBe(false);
+      }
+      const result = f.invoke(
+        "run",
+        destination === "internal" ? ["--destination", destination] : [],
+        destination === "internal" ? { ...ci, FIXTURE_FIREBASE_FAIL: "1" } : {},
+      );
+      if (destination === "internal") {
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("Play upload confirmed; Firebase incomplete");
+        const recovered = f.invoke("firebase", [], { OPENAI_API_KEY: "" });
+        expect(recovered.status, recovered.stderr).toBe(0);
+        const calls = fs
+          .readFileSync(f.firebaseAudit, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(
+          calls
+            .filter((call) => call.pathname.endsWith("releases:upload"))
+            .map((call) => call.body),
+        ).toEqual(["synthetic signed wear bundle", "synthetic signed play bundle"]);
+        expect(
+          calls
+            .filter((call) => call.pathname.endsWith(":distribute"))
+            .map((call) => call.pathname.split("/").at(-1)),
+        ).toEqual(["wear:distribute", "phone:distribute", "phone:distribute"]);
+        expect(f.audit()).toHaveLength(1);
+        expect(recovered.stdout).not.toContain("Android versionName:");
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        expect(fs.existsSync(f.firebaseAudit)).toBe(false);
+      }
+      expect(
+        JSON.parse(fs.readFileSync(path.join(f.recovery, "android-plan.json"), "utf8")),
+      ).toMatchObject({ destination, sourceSha: f.base });
+      expect(result.stdout).toContain("Android versionName: 2026.9.20");
+      expect(result.stdout).toContain("Android versionCode: 2026090250");
+      expect(result.stdout).toContain("Android Wear versionCode: 2026090251");
+      expect(f.audit()[0]).toMatchObject({
+        version: "2026.9.20",
+        versionCode: 2026090250,
+        wearVersionCode: 2026090251,
+        uploadMetadata: destination === "play-store",
+        gradleVersion: "2026.9.20",
+        gradleCode: "2026090250",
+        gradleWearCode: "2026090251",
+      });
+      expect(
+        git(
+          f.remote,
+          "rev-parse",
+          "refs/openclaw/mobile-releases/android/v2/2026.9.2/0/1/2026090250-2026090251",
+        ),
+      ).toBe(f.base);
+      expect(git(f.remote, "rev-parse", "main")).toBe(f.base);
+      for (const [index, file] of pinned.entries()) {
+        expect(fs.readFileSync(path.join(f.root, file), "utf8")).toBe(original[index]);
+      }
+      const rebuilt = spawnSync(
+        process.execPath,
+        ["--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--dry-run"],
+        {
+          cwd: f.root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_ANDROID_RELEASE_PLAN: path.join(f.recovery, "android-plan.json"),
+            OPENCLAW_MOBILE_RELEASE_NOTES: path.join(f.recovery, "release-notes.json"),
+          },
         },
-      },
-    );
-    expect(rebuilt.status, rebuilt.stderr).toBe(0);
-    expect(rebuilt.stdout).toContain("Android versionCode: 2026090250");
-    expect(git(f.root, "status", "--porcelain")).toBe("");
-  });
+      );
+      expect(rebuilt.status, rebuilt.stderr).toBe(0);
+      expect(rebuilt.stdout).toContain("Android versionCode: 2026090250");
+      expect(git(f.root, "status", "--porcelain")).toBe("");
+    },
+  );
 
   it("uploads the detached dispatch source with generated notes and leaves advanced main untouched", () => {
     const f = fixture();

@@ -29,21 +29,18 @@ const LITELLM_MAX_INPUT_IMAGES = 5;
 // for loopback-style hosts; LAN/custom private endpoints should use the
 // explicit models.providers.litellm.request.allowPrivateNetwork opt-in.
 function shouldAutoAllowPrivateLitellmEndpoint(baseUrl: string): boolean {
-  try {
-    const { protocol, hostname } = new URL(baseUrl);
-    if (protocol !== "http:" && protocol !== "https:") {
-      return false;
-    }
-    return (
-      hostname === "localhost" ||
-      hostname === "host.docker.internal" ||
-      hostname.endsWith(".localhost") ||
-      hostname === "[::1]" ||
-      (isIP(hostname) === 4 && hostname.startsWith("127."))
-    );
-  } catch {
+  const url = URL.parse(baseUrl);
+  if (!url || (url.protocol !== "http:" && url.protocol !== "https:")) {
     return false;
   }
+  const { hostname } = url;
+  return (
+    hostname === "localhost" ||
+    hostname === "host.docker.internal" ||
+    hostname.endsWith(".localhost") ||
+    hostname === "[::1]" ||
+    (isIP(hostname) === 4 && hostname.startsWith("127."))
+  );
 }
 
 export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {

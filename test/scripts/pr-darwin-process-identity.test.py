@@ -146,6 +146,7 @@ class LockTests(unittest.TestCase):
         library = self.sources.parent/'lib';library.mkdir()
         # Preserve the supervisor's eager script imports without copying an app graph.
         for name in ('plain-gh.mjs', 'direct-run.mjs', 'managed-child-process.mts',
+                     'managed-cleanup-handoff.mts',
                      'vitest-resource-ownership.mts', 'windows-taskkill.mjs'):
             shutil.copyfile(ROOT/'scripts'/'lib'/name,library/name)
         shutil.copyfile(ROOT/'scripts'/'windows-cmd-helpers.mjs',
@@ -176,6 +177,36 @@ class LockTests(unittest.TestCase):
         self.addCleanup(self.stop, p)
         return p
 
+    def supervise_anchor(self, body, handoff='valid'):
+        anchor = self.root/'openclaw-pr-anchor.fixture'
+        anchor.mkdir(mode=0o700)
+        shutil.copytree(self.sources.parent, anchor/'scripts')
+        script = anchor/'scripts'/'pr'
+        script.write_text('#!/bin/bash\nset -eu\nsource "$(dirname "$0")/pr-lib/operation-lock.sh"\n'
+                          '_fixture_root="$1"; repo_root() { printf "%s\\n" "$_fixture_root"; }\n'+body+'\n')
+        script.chmod(0o755)
+        outside = self.root/'external-dependency'; outside.mkdir()
+        (outside/'preserved').write_text('dependency bytes\n')
+        (anchor/'node_modules').symlink_to(outside, target_is_directory=True)
+        opened = anchor
+        if handoff == 'foreign':
+            opened = self.root/'foreign'; opened.mkdir(mode=0o700)
+        prepare = 'exec 9< "$1"; export OPENCLAW_PR_ANCHOR_CREATOR_PID=$$ OPENCLAW_PR_ANCHOR_FD=9; '
+        if handoff == 'missing':
+            prepare = ''
+        elif handoff == 'closed':
+            prepare += 'exec 9<&-; '
+        elif handoff == 'wrong-pid':
+            prepare += 'export OPENCLAW_PR_ANCHOR_CREATOR_PID=1; '
+        command = [BASH, '-c', prepare+'exec "$2" "$3" "$4" "$5" "$4"',
+                   'anchor-fixture', str(opened.resolve()), NODE,
+                   str(anchor.resolve()/'scripts'/'pr-lib'/'process-group-runner.mjs'),
+                   str(self.repo.resolve()), str(script.resolve())]
+        p = subprocess.Popen(command, env=self.env, text=True, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, start_new_session=True)
+        self.addCleanup(self.stop, p)
+        return p, anchor, outside
+
     def stop(self, p):
         if p.poll() is None:
             os.killpg(p.pid, signal.SIGTERM)
@@ -194,6 +225,71 @@ class LockTests(unittest.TestCase):
         self.complete(self.supervise('acquire_pr_operation_lock 42\nprintf "held\\n"'),0)
         self.assertFalse(self.exists())
         self.assertFalse((self.repo/'node_modules').exists())
+
+    def test_anchor_cleanup_after_clean_completion_preserves_dependency_target(self):
+        p, anchor, outside = self.supervise_anchor('acquire_pr_operation_lock 42')
+        self.complete(p, 0)
+        self.assertFalse(self.exists())
+        self.assertFalse(anchor.exists())
+        self.assertEqual((outside/'preserved').read_text(), 'dependency bytes\n')
+
+    def test_anchor_authority_not_inherited_by_operation(self):
+        p, anchor, _ = self.supervise_anchor(
+            'acquire_pr_operation_lock 42\n'
+            'test -z "${OPENCLAW_PR_ANCHOR_CREATOR_PID:-}${OPENCLAW_PR_ANCHOR_FD:-}"\n'
+            'if { : <&9; } 2>/dev/null; then exit 8; fi')
+        self.complete(p, 0)
+        self.assertFalse(self.exists())
+        self.assertFalse(anchor.exists())
+
+    def test_anchor_cleanup_after_validation_failure(self):
+        p, anchor, outside = self.supervise_anchor(
+            'acquire_pr_operation_lock 42\nbegin_pr_operation_validation_phase\nexit 1')
+        self.complete(p, 1)
+        self.assertFalse(self.exists())
+        self.assertFalse(anchor.exists())
+        self.assertTrue((outside/'preserved').exists())
+
+    def test_anchor_retained_when_operation_lock_is_retained(self):
+        p, anchor, _ = self.supervise_anchor('acquire_pr_operation_lock 42\nexit 7')
+        self.complete(p, 7)
+        self.assertTrue(self.exists())
+        self.assertTrue(anchor.exists())
+
+    def test_anchor_retained_without_creation_authority(self):
+        for handoff in ('missing', 'closed', 'wrong-pid', 'foreign'):
+            with self.subTest(handoff=handoff):
+                p, anchor, outside = self.supervise_anchor('acquire_pr_operation_lock 42', handoff)
+                self.complete(p, 0)
+                self.assertFalse(self.exists())
+                self.assertTrue(anchor.exists())
+                self.assertTrue((outside/'preserved').exists())
+                shutil.rmtree(anchor); shutil.rmtree(outside)
+
+    def test_anchor_replacement_retained(self):
+        ready, go = self.root/'ready', self.root/'go'
+        p, anchor, _ = self.supervise_anchor('acquire_pr_operation_lock 42\n: > "'+str(ready)+'"\n'
+            'while [ ! -f "'+str(go)+'" ]; do sleep 0.02; done')
+        deadline = time.monotonic()+5
+        while not ready.exists():
+            self.assertIsNone(p.poll()); self.assertLess(time.monotonic(), deadline); time.sleep(.02)
+        original = anchor.with_name('original-anchor')
+        anchor.rename(original); anchor.mkdir(mode=0o700)
+        (anchor/'replacement').write_text('foreign bytes\n')
+        go.touch(); self.complete(p, 0)
+        self.assertTrue(original.exists())
+        self.assertEqual((anchor/'replacement').read_text(), 'foreign bytes\n')
+
+    def test_anchor_retained_after_interruption(self):
+        ready = self.root/'ready'
+        p, anchor, _ = self.supervise_anchor('acquire_pr_operation_lock 42\n: > "'+str(ready)+'"\nsleep 30')
+        deadline = time.monotonic()+5
+        while not ready.exists():
+            self.assertIsNone(p.poll()); self.assertLess(time.monotonic(), deadline); time.sleep(.02)
+        p.send_signal(signal.SIGTERM)
+        self.complete(p, 128+signal.SIGTERM)
+        self.assertTrue(anchor.exists())
+        self.assertTrue(self.exists())
 
     @unittest.skipUnless(sys.platform == 'darwin', 'Darwin sandbox')
     def test_sandbox_lock_completion_without_app_graph(self):

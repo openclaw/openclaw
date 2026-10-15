@@ -18,6 +18,22 @@ export const PluginRuntimeCloseRetainedError = resolveGlobalSingleton(
 
 export type PluginRuntimeCloseRetainedError = InstanceType<typeof PluginRuntimeCloseRetainedError>;
 
+/** The resource owner finished cleanup and returned callback failures for observation. */
+export const PluginRuntimeCloseCompletedError = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginRuntimeCloseCompletedError"),
+  () => class CompletedRuntimeError extends AggregateError {},
+);
+
+export function aggregatePluginRuntimeCloseErrors(
+  failures: readonly unknown[],
+  message: string,
+): AggregateError {
+  return failures.length > 0 &&
+    failures.every((failure) => failure instanceof PluginRuntimeCloseCompletedError)
+    ? new PluginRuntimeCloseCompletedError(failures, message)
+    : new AggregateError(failures, message);
+}
+
 export function hasRetainedPluginRuntimeCloseError(error: unknown): boolean {
   return collectNestedErrorCandidates(error).some(
     (candidate) => candidate instanceof PluginRuntimeCloseRetainedError,

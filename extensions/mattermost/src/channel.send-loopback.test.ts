@@ -57,174 +57,36 @@ async function sendPreparedMattermostLoopback(params: {
   });
 }
 
-describe("Mattermost send action loopback", () => {
-  it("reuses the inbound provider channel when delivering a direct reply", async () => {
-    const requests: Array<{ path: string; body?: unknown }> = [];
+type LoopbackRequest = { path: string; body: string };
 
-    await withServer(
-      (request, response) => {
-        let body = "";
-        request.setEncoding("utf8");
-        request.on("data", (chunk) => {
-          body += chunk;
-        });
-        request.on("end", () => {
-          const path = request.url ?? "";
-          requests.push({ path, ...(body ? { body: JSON.parse(body) as unknown } : {}) });
-          response.writeHead(201, { "content-type": "application/json" });
-          if (path === "/api/v4/users/me") {
-            response.end(JSON.stringify({ id: "cccccccccccccccccccccccccc" }));
-            return;
-          }
-          if (path === "/api/v4/channels/direct") {
-            response.end(JSON.stringify({ id: CHANNEL_ID }));
-            return;
-          }
-          response.end(
-            JSON.stringify({
-              id: "post-loopback",
-              channel_id: CHANNEL_ID,
-              message: "prepared direct reply",
-            }),
-          );
-        });
-      },
-      async (baseUrl) => {
-        const core = createPluginRuntimeMock();
-        setMattermostRuntime(core);
-        const cfg = {
-          channels: {
-            mattermost: {
-              botToken: "prepared-inbound-loopback",
-              baseUrl,
-              network: { dangerouslyAllowPrivateNetwork: true },
-            },
-          },
-        } as OpenClawConfig;
-
-        const result = await deliverMattermostReplyPayload({
-          core,
-          cfg,
-          payload: { text: "prepared direct reply" },
-          channelId: CHANNEL_ID,
-          accountId: "default",
-          textLimit: 4000,
-          tableMode: "off",
-          sendMessage: sendMessageMattermost,
-        });
-
-        expect(result).toMatchObject({
-          outcome: "text",
-          messageIds: ["post-loopback"],
-          visibleReplySent: true,
-        });
-        expect(requests).toEqual([
-          {
-            path: "/api/v4/posts",
-            body: { channel_id: CHANNEL_ID, message: "prepared direct reply" },
-          },
-        ]);
-      },
-    );
-  });
-
-  it("sends text with blank attachment placeholders and rejects nonblank payloads", async () => {
-    const requests: Array<{ path: string; body: unknown }> = [];
-
-    await withServer(
-      (request, response) => {
-        let body = "";
-        request.setEncoding("utf8");
-        request.on("data", (chunk) => {
-          body += chunk;
-        });
-        request.on("end", () => {
-          requests.push({
-            path: request.url ?? "",
-            body: JSON.parse(body) as unknown,
-          });
-          response.writeHead(201, { "content-type": "application/json" });
-          response.end(JSON.stringify({ id: "post-loopback", channel_id: CHANNEL_ID }));
-        });
-      },
-      async (baseUrl) => {
-        setMattermostRuntime(createPluginRuntimeMock());
-        const cfg = {
-          channels: {
-            mattermost: {
-              botToken: ["loopback", "fixture"].join("-"),
-              baseUrl,
-              network: { dangerouslyAllowPrivateNetwork: true },
-            },
-          },
-        } as OpenClawConfig;
-        const result = await sendPreparedMattermostLoopback({
-          cfg,
-          actionParams: {
-            to: `channel:${CHANNEL_ID}`,
-            message: "loopback proof",
-            buffer: "",
-            base64: "  ",
-          },
-        });
-
-        expect(result).toMatchObject({
-          channel: "mattermost",
-          messageId: "post-loopback",
-          target: { kind: "channel", id: CHANNEL_ID },
-        });
-        expect(requests).toEqual([
-          {
-            path: "/api/v4/posts",
-            body: { channel_id: CHANNEL_ID, message: "loopback proof" },
-          },
-        ]);
-
-        await expect(
-          sendPreparedMattermostLoopback({
-            cfg,
-            actionParams: {
-              to: `channel:${CHANNEL_ID}`,
-              message: "must not send",
-              base64: "cmVwb3J0",
-            },
-          }),
-        ).rejects.toThrow("buffer/base64 payloads are not supported");
-        expect(requests).toHaveLength(1);
-      },
-    );
-  });
-
-  it("infers a MIME extension for unnamed uploads", async () => {
-    const uploads: string[] = [];
-
-    await withServer(
-      (request, response) => {
-        let body = "";
-        request.setEncoding("utf8");
-        request.on("data", (chunk) => {
-          body += chunk;
-        });
-        request.on("end", () => {
-          if (request.url === "/api/v4/files") {
-            uploads.push(body);
-            response.writeHead(201, { "content-type": "application/json" });
-            response.end(JSON.stringify({ file_infos: [{ id: `file-${uploads.length}` }] }));
-            return;
-          }
-          response.writeHead(201, { "content-type": "application/json" });
-          response.end(JSON.stringify({ id: "post-loopback", channel_id: CHANNEL_ID }));
-        });
-      },
-      async (baseUrl) => {
-        setMattermostRuntime(createPluginRuntimeMock());
-        loadOutboundMediaFromUrl.mockReset();
-        loadOutboundMediaFromUrl.mockResolvedValueOnce({
-          buffer: Buffer.from("!unnamed-image?").subarray(1, -1),
-          contentType: "image/png",
-          kind: "image",
-        });
-        const cfg = {
+async function withMattermostServer(
+  run: (cfg: OpenClawConfig, requests: LoopbackRequest[]) => Promise<void>,
+) {
+  const requests: LoopbackRequest[] = [];
+  await withServer(
+    (request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        const path = request.url ?? "";
+        requests.push({ path, body });
+        response.writeHead(201, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify(
+            path === "/api/v4/files"
+              ? { file_infos: [{ id: "file-loopback" }] }
+              : { id: "post-loopback", channel_id: CHANNEL_ID },
+          ),
+        );
+      });
+    },
+    async (baseUrl) => {
+      setMattermostRuntime(createPluginRuntimeMock());
+      await run(
+        {
           channels: {
             mattermost: {
               botToken: "loopback-fixture",
@@ -232,30 +94,108 @@ describe("Mattermost send action loopback", () => {
               network: { dangerouslyAllowPrivateNetwork: true },
             },
           },
-        } as OpenClawConfig;
-        await sendPreparedMattermostLoopback({
+        },
+        requests,
+      );
+    },
+  );
+}
+
+describe("Mattermost send action loopback", () => {
+  it("reuses the inbound provider channel when delivering a direct reply", async () => {
+    await withMattermostServer(async (cfg, requests) => {
+      const core = createPluginRuntimeMock();
+      setMattermostRuntime(core);
+      const result = await deliverMattermostReplyPayload({
+        core,
+        cfg,
+        payload: { text: "prepared direct reply" },
+        channelId: CHANNEL_ID,
+        accountId: "default",
+        textLimit: 4000,
+        tableMode: "off",
+        sendMessage: sendMessageMattermost,
+      });
+      expect(result).toMatchObject({
+        outcome: "text",
+        messageIds: ["post-loopback"],
+        visibleReplySent: true,
+      });
+      expect(requests).toEqual([
+        {
+          path: "/api/v4/posts",
+          body: JSON.stringify({ channel_id: CHANNEL_ID, message: "prepared direct reply" }),
+        },
+      ]);
+    });
+  });
+
+  it("sends text with blank attachment placeholders and rejects nonblank payloads", async () => {
+    await withMattermostServer(async (cfg, requests) => {
+      const result = await sendPreparedMattermostLoopback({
+        cfg,
+        actionParams: {
+          to: "channel:" + CHANNEL_ID,
+          message: "loopback proof",
+          buffer: "",
+          base64: "  ",
+        },
+      });
+      expect(result).toMatchObject({
+        channel: "mattermost",
+        messageId: "post-loopback",
+        target: { kind: "channel", id: CHANNEL_ID },
+      });
+      expect(requests).toEqual([
+        {
+          path: "/api/v4/posts",
+          body: JSON.stringify({ channel_id: CHANNEL_ID, message: "loopback proof" }),
+        },
+      ]);
+      await expect(
+        sendPreparedMattermostLoopback({
           cfg,
           actionParams: {
-            to: `channel:${CHANNEL_ID}`,
-            message: "loopback media proof",
-            mediaUrl: "https://media.example.test/unnamed",
+            to: "channel:" + CHANNEL_ID,
+            message: "must not send",
+            base64: "cmVwb3J0",
           },
-        });
-      },
-    );
+        }),
+      ).rejects.toThrow("buffer/base64 payloads are not supported");
+      expect(requests).toHaveLength(1);
+    });
+  });
 
-    expect(uploads).toHaveLength(1);
-    expect(uploads[0]).toContain('filename="upload.png"');
-    expect(uploads[0]).toContain("Content-Type: image/png");
-    expect(uploads[0]).toContain("\r\n\r\nunnamed-image\r\n");
+  it("infers a MIME extension for unnamed uploads", async () => {
+    await withMattermostServer(async (cfg, requests) => {
+      loadOutboundMediaFromUrl.mockReset();
+      loadOutboundMediaFromUrl.mockResolvedValueOnce({
+        buffer: Buffer.from("!unnamed-image?").subarray(1, -1),
+        contentType: "image/png",
+        kind: "image",
+      });
+      await sendPreparedMattermostLoopback({
+        cfg,
+        actionParams: {
+          to: "channel:" + CHANNEL_ID,
+          message: "loopback media proof",
+          mediaUrl: "https://media.example.test/unnamed",
+        },
+      });
+      const uploads = requests.filter(({ path }) => path === "/api/v4/files");
+      expect(uploads).toHaveLength(1);
+      expect(uploads[0]?.body).toContain('filename="upload.png"');
+      expect(uploads[0]?.body).toContain("Content-Type: image/png");
+      expect(uploads[0]?.body).toContain("\r\n\r\nunnamed-image\r\n");
+    });
   });
 });
 
 describe("Mattermost sender authority over HTTP", () => {
   it.each([
-    ...(["text", "media", "payload"] as const).flatMap((mode) =>
-      [false, true].map((revoke) => ({ mode, revoke, uploadFails: false })),
-    ),
+    { mode: "text" as const, revoke: false, uploadFails: false },
+    { mode: "text" as const, revoke: true, uploadFails: false },
+    { mode: "payload" as const, revoke: true, uploadFails: false },
     ...[false, true].map((revoke) => ({ mode: "media" as const, revoke, uploadFails: true })),
   ])(
     "keeps preferred $mode delivery current after preparation (revoke=$revoke, uploadFails=$uploadFails)",
@@ -348,6 +288,8 @@ describe("Mattermost sender authority over HTTP", () => {
             },
             to: mode === "text" ? "@alice" : `channel:${CHANNEL_ID}`,
             text: "authority proof",
+            threadId: "thread-root",
+            ...(mode === "text" ? {} : { replyToId: "explicit-root" }),
             accountId: "default",
             assertDirectAdapterHandoff: () => {
               if (!current) {
@@ -398,7 +340,10 @@ describe("Mattermost sender authority over HTTP", () => {
               expect(onDeliveryResult).toHaveBeenCalledOnce();
               expect(sequence.slice(-3)).toEqual(["dispatch", "/api/v4/posts", "result"]);
               expect(postBodies).toMatchObject([
-                { message: uploadFails ? `${ctx.text}\n${mediaUrl}` : ctx.text },
+                {
+                  message: uploadFails ? `${ctx.text}\n${mediaUrl}` : ctx.text,
+                  root_id: mode === "text" ? "thread-root" : "explicit-root",
+                },
               ]);
             }
             expect(requests.every(({ authorization }) => authorization === `Bearer ${token}`)).toBe(

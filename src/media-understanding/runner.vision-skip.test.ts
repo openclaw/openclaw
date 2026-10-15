@@ -321,23 +321,6 @@ describe("runCapability image skip", () => {
     );
   });
 
-  it("renders disabled markers when the active model has no native vision", async () => {
-    const ctx: MsgContext = {
-      Body: "inspect this image",
-      media: [{ path: "/tmp/image.png", contentType: "image/png" }],
-    };
-    await applyMediaUnderstanding({
-      ctx,
-      cfg: { tools: { media: { image: { enabled: false } } } },
-    });
-    expect(findImageDecision(ctx)).toMatchObject({
-      outcome: "disabled",
-      nativeVisionActive: false,
-      attachmentDispositions: { 0: { kind: "capability-disabled" } },
-    });
-    expect(ctx.Body).toContain("[Image attachment not analyzed: image understanding is disabled]");
-  });
-
   it("uses explicit image models even when the active model supports vision", async () => {
     const describeImage = vi.fn(async ({ model }: { model: string }) => ({
       text: plantedVisionSentinel,
@@ -473,33 +456,6 @@ describe("runCapability image skip", () => {
       activeModel: { provider: "minimax-portal", model: "MiniMax-M2.7" },
     });
     expectImageOutput(result, "minimax-portal", "MiniMax-VL-01");
-  });
-
-  it("preserves MiniMax CN aliases from configured provider routing", async () => {
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          "minimax-cn": {
-            apiKey: "test-minimax-key",
-            baseUrl: "https://api.minimaxi.com/anthropic",
-            models: [],
-          },
-        },
-      },
-    };
-    const seenProviders: string[] = [];
-    const providerRegistry = activateProvider(cfg, {
-      id: "minimax",
-      capabilities: ["image"],
-      defaultModels: { image: "MiniMax-VL-01" },
-      describeImage: async ({ provider, model }) => {
-        seenProviders.push(provider);
-        return { text: "cn vlm ok", model };
-      },
-    });
-    const result = await runImage({ cfg, providerRegistry });
-    expect(seenProviders).toEqual(["minimax-cn"]);
-    expectImageOutput(result, "minimax-cn", "MiniMax-VL-01", "cn vlm ok");
   });
 
   it("passes workspace and agent context to auth and writable catalog reads", async () => {

@@ -31,8 +31,11 @@ export TELEGRAM_E2E_SKILL_DIR
 Verify `node`, `uv`, and a dependency-ready runtime for the exact ref before
 leasing a credential. The runner uses built `dist/entry.js`; `--source-gateway`
 uses the repository's development launcher when a dependency-ready source run
-is appropriate. The live run must not implicitly install or build. Only the
-`mock` backend needs `scripts/e2e/mock-openai-server.mjs`.
+is appropriate. It runs core and the Telegram plugin from TypeScript source;
+other plugins, including the model provider, use built output when it exists,
+so rebuild before claiming their changes. The live run must not implicitly
+install or build. Only the `mock` backend needs
+`scripts/e2e/mock-openai-server.mjs`.
 
 Convex access can come from either:
 
@@ -73,8 +76,10 @@ explicitly; the runner does not read port environment variables:
 
 Read [the verification map](features/README.md), then only the recipe for the
 behavior under test. Prefer a DM; use groups for group policy, mentions,
-commands, topics, or reactions. A generic success turn does not prove formatting,
-media, timing, or lifecycle behavior.
+commands, topics, or reactions. For a topic proof without a prepared forum,
+`--create-forum` gives the scenario a run-owned forum topic that cleanup deletes.
+A generic success turn does not prove formatting, media, timing, or lifecycle
+behavior.
 
 Extend the harness when its current actions or recorder fields cannot expose the
 claim. Scenario `command` actions can inspect the leased TDLib state, private
@@ -127,9 +132,10 @@ account's Bot API receipt, to connect edits and deletions. Require a provider
 request when the path should reach the model; native commands may produce none.
 
 Report the sanitized command, sent action, relevant timeline rows, provider
-request count, and the claim those facts prove. Inspect `test-group.json` when
-setup ran; fixture evidence is not message proof. Keep credentials, identities,
-and private paths out of shared logs, screenshots, and reports.
+request count, and the claim those facts prove. Inspect `test-group.json` or the
+summary's `testForum` when setup ran; fixture evidence is not message proof.
+Keep credentials, identities, and private paths out of shared logs, screenshots,
+and reports.
 
 Completion requires the claimed Telegram evidence, no runner-owned processes or
 listeners, released lease, removed credential scratch, and readable proof files.

@@ -12,6 +12,7 @@ import {
 import { operationLeaseId } from "./crabbox-worker-profile.js";
 import type { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
 import {
+  destroyAndWait,
   commandResult,
   createProviderFixtures,
   nodeEnrollmentFixture,
@@ -84,7 +85,7 @@ export function createWarmProvider(
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => ({
     binary: params?.binary ?? "crabbox",
-    version: "999.0.0",
+    version: "0.77.0",
   }));
   const calls: CommandCall[] = [];
   const warn = vi.fn();
@@ -108,6 +109,28 @@ export function createWarmProvider(
             state: "running",
             ready: true,
             providerMetadata: { instanceProfileAttached: false },
+            expiresAt: new Date(Date.now() + 4 * 60 * 60_000).toISOString(),
+            idleTimeout: "60m",
+            labels: {
+              created_at: String(Math.floor(Date.now() / 1_000)),
+              ttl_secs: "14400",
+            },
+            maxLifetime: "4h",
+            leasePolicy: {
+              runtimeExtension: true,
+              maxTTLSeconds: 14400,
+              extension: "allow",
+            },
+          }),
+        });
+      }
+      if (argv[1] === "heartbeat") {
+        return commandResult({
+          stdout: JSON.stringify({
+            id: argv[argv.indexOf("--id") + 1],
+            state: "running",
+            idleTimeout: "60m",
+            expiresAt: new Date(Date.now() + 4 * 60 * 60_000).toISOString(),
           }),
         });
       }
@@ -165,7 +188,7 @@ export async function captureWarmImage(
   machineClass?: string,
 ) {
   const lease = await provisionWarmProfile(provider, profile, operationId, machineClass);
-  await provider.destroy({ leaseId: lease.leaseId, profile });
+  await destroyAndWait(provider, { leaseId: lease.leaseId, profile });
 }
 
 export const PROJECT_KEY = "a".repeat(64);

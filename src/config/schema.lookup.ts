@@ -1,4 +1,5 @@
 import type { ConfigSchemaLookupResult as ProtocolConfigSchemaLookupResult } from "../../packages/gateway-protocol/src/schema/config.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import type { ConfigUiHints } from "./schema.hints.js";
 import {
@@ -11,7 +12,6 @@ import {
 
 type JsonSchemaNode = Record<string, unknown>;
 
-const FORBIDDEN_LOOKUP_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 const LOOKUP_SCHEMA_STRING_KEYS = new Set([
   "$id",
   "$schema",
@@ -89,13 +89,22 @@ function resolveLookupChildSchema(
   schema: JsonSchemaObject,
   segment: string,
 ): JsonSchemaObject | null {
-  if (FORBIDDEN_LOOKUP_SEGMENTS.has(segment)) {
+  if (isBlockedObjectKey(segment)) {
     return null;
   }
 
   const properties = schema.properties;
   if (properties && Object.hasOwn(properties, segment)) {
     return asSchemaObject(properties[segment]);
+  }
+  for (const [pattern, child] of Object.entries(schema.patternProperties ?? {})) {
+    try {
+      if (new RegExp(pattern).test(segment)) {
+        return asSchemaObject(child);
+      }
+    } catch {
+      // Config validation reports malformed plugin schemas; lookup remains available.
+    }
   }
 
   const itemIndex = parseConfigPathArrayIndex(segment);
@@ -316,6 +325,14 @@ function stripSchemaForLookup(schema: JsonSchemaObject, nestedFormDepth = 0): Js
     next.additionalProperties = stripSchemaForLookup(
       schema.additionalProperties,
       nestedFormDepth + 1,
+    );
+  }
+  if (schema.patternProperties) {
+    next.patternProperties = Object.fromEntries(
+      Object.entries(schema.patternProperties).map(([pattern, child]) => [
+        pattern,
+        stripSchemaForLookup(child, nestedFormDepth + 1),
+      ]),
     );
   }
   if (Array.isArray(schema.items)) {

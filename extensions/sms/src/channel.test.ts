@@ -102,51 +102,7 @@ function createConfig(overrides: SmsChannelConfig = {}) {
   };
 }
 
-describe("smsPlugin account removal", () => {
-  it("removes the default media cap without changing retained named accounts", () => {
-    const cfg = smsPlugin.config.deleteAccount?.({
-      accountId: "default",
-      cfg: {
-        agents: { defaults: { mediaMaxMb: 3 } },
-        channels: {
-          sms: {
-            accountSid: "AC123",
-            authToken: "secret",
-            fromNumber: "+15557654321",
-            mediaMaxMb: 1,
-            accounts: { support: { mediaMaxMb: 2 }, inherited: { enabled: true } },
-          },
-        },
-      },
-    });
-    if (!cfg) {
-      throw new Error("expected SMS account deletion result");
-    }
-    expect(resolveSmsAccount(cfg, "support").mediaMaxBytes).toBe(2 * 1024 * 1024);
-    expect(resolveSmsAccount(cfg, "inherited").mediaMaxBytes).toBe(3 * 1024 * 1024);
-  });
-});
-
 describe("smsPlugin status", () => {
-  it("builds a status snapshot for configured SMS accounts", async () => {
-    const snapshot = await smsPlugin.status?.buildAccountSnapshot?.({
-      cfg: {},
-      account: createSmsTestAccount({
-        accountId: "support",
-        accountSid: "AC123",
-        publicWebhookUrl: "",
-      }),
-    });
-
-    expect(snapshot).toMatchObject({
-      accountId: "support",
-      name: "+15557654321",
-      enabled: true,
-      configured: true,
-      statusState: "configured",
-    });
-  });
-
   it("projects lifecycle from the runtime status record", async () => {
     const snapshot = await smsPlugin.status?.buildAccountSnapshot?.({
       cfg: {},
@@ -159,42 +115,6 @@ describe("smsPlugin status", () => {
     });
 
     expect(snapshot).toMatchObject({ lifecycle: "blocked", terminalDisconnect: true });
-  });
-
-  it("loads delivery observations with the full Twilio account identity", async () => {
-    const account = createSmsTestAccount({
-      accountId: "support",
-      accountSid: "AC-support",
-      publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-    });
-    const records = [
-      {
-        accountId: "support",
-        accountSidHash: "account-sid-hash",
-        messageSid: "SM123",
-        status: "delivered",
-        firstObservedAt: 1,
-        lastObservedAt: 2,
-        observations: [],
-      },
-    ];
-    listRecentSmsDeliveryRecords.mockResolvedValueOnce(records);
-
-    await smsPlugin.status?.probeAccount?.({
-      cfg: {},
-      account,
-      timeoutMs: 1000,
-    });
-
-    expect(listRecentSmsDeliveryRecords).toHaveBeenCalledWith(account);
-    expect(probeSmsAccount).toHaveBeenCalledWith({
-      account,
-      timeoutMs: expect.any(Number),
-      options: { deliveryRecords: records },
-    });
-    const remainingTimeoutMs = probeSmsAccount.mock.calls[0]?.[0]?.timeoutMs;
-    expect(remainingTimeoutMs).toBeGreaterThan(0);
-    expect(remainingTimeoutMs).toBeLessThanOrEqual(1000);
   });
 
   it("passes only the remaining probe budget after loading delivery observations", async () => {

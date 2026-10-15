@@ -21,9 +21,10 @@ export default defineSingleProviderPluginEntry({
     docsPath: "/providers/baseten",
     manifestAuth: {
       applyConfig: applyBasetenSetupConfig,
+      preserveExistingPrimary: true,
       noteTitle: "Baseten",
       noteMessage: [
-        "Baseten hosts Thinking Machines Lab's Inkling and other frontier models behind one OpenAI-compatible API.",
+        "Baseten hosts DeepSeek V4.1 Flash and other models behind one OpenAI-compatible API.",
         "Get your API key at: https://app.baseten.co/settings/api_keys",
       ].join("\n"),
     },

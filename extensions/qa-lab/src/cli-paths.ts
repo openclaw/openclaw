@@ -42,18 +42,20 @@ export function resolveRepoRelativeOutputDir(repoRoot: string, outputDir?: strin
   return resolved.path;
 }
 
-function assertRepoRelativePath(repoRoot: string, targetPath: string, label: string) {
-  if (!isPathInside(repoRoot, targetPath)) {
+export async function ensureRepoBoundDirectory(
+  repoRoot: string,
+  targetDir: string,
+  label: string,
+  opts?: { mode?: number },
+) {
+  const rootDir = path.resolve(repoRoot);
+  const targetPath = path.resolve(targetDir);
+  if (!isPathInside(rootDir, targetPath)) {
     throw new Error(`${label} must stay within the repo root.`);
   }
-  return path.relative(repoRoot, targetPath);
-}
-
-async function assertNoSymlinkSegments(repoRoot: string, targetPath: string, label: string) {
-  assertRepoRelativePath(repoRoot, targetPath, label);
   try {
     await assertNoSymlinkParents({
-      rootDir: repoRoot,
+      rootDir,
       targetPath,
       messagePrefix: label,
     });
@@ -63,15 +65,6 @@ async function assertNoSymlinkSegments(repoRoot: string, targetPath: string, lab
     }
     throw error;
   }
-}
-
-export async function ensureRepoBoundDirectory(
-  repoRoot: string,
-  targetDir: string,
-  label: string,
-  opts?: { mode?: number },
-) {
-  await assertNoSymlinkSegments(path.resolve(repoRoot), path.resolve(targetDir), label);
   const result = await pathScope(repoRoot, { label }).ensureDir(targetDir, { mode: opts?.mode });
   if (!result.ok) {
     throw new Error(`${label} must stay within the repo root.`);

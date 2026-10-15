@@ -289,6 +289,7 @@ try {
     // source's install owner before any caller payload can run.
     const installEnv = { ...env, CI: "true", GITHUB_WORKSPACE: cwd,
       NODE_BIN: path.dirname(process.execPath), FROZEN_LOCKFILE: "true",
+      PNPM_CONFIG_FROZEN_LOCKFILE: "true",
       DEPENDENCY_CACHE: "false", DEPENDENCY_CACHE_HIT: "false" };
     for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]) delete installEnv[key];
     process.stderr.write("[crabbox] reconciling selected-source dependencies\n");

@@ -42,6 +42,10 @@ BUSCTL
     printf 'pid_file=%q\n' "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE:-$shim_dir/systemctl-shim.pid}"
     printf 'daemon_log=%q\n' "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-$shim_dir/systemctl-shim-gateway.log}"
     printf 'manager_env=%q\n' "$manager_env"
+    printf 'legacy_pending_observer=%q\n' "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/assertions.mjs"
+    printf 'legacy_pending_state=%q\n' "${OPENCLAW_STATE_DIR:-}"
+    printf 'legacy_pending_artifacts=%q\n' "${ARTIFACT_ROOT:-}"
+    printf 'legacy_pending_enabled=%q\n' "${SCENARIO:-}"
     cat <<'SHIM'
 supervisor_script="${pid_file}.supervisor.mjs"
 manager_script="$(dirname "$0")/systemd-fixture.mjs"
@@ -136,12 +140,20 @@ unit_path() {
 start_gateway() {
   local exec_start
   exec_start="$(node "$manager_script" command)"
+  # Observe migration after stop has settled, before recovery can adopt the saved final.
+  if [ "$legacy_pending_enabled" = "legacy-operator-state" ]; then
+    if ! node "$legacy_pending_observer" capture-legacy-operator-pending-delivery \
+      "$legacy_pending_state" "$legacy_pending_artifacts"; then
+      echo "Legacy pending-delivery observation failed; post-update proof will require its receipt." >&2
+    fi
+  fi
   node "$manager_script" begin-start
   rm -f "$pid_file" "$supervisor_script"
   rm -f "${daemon_log}.exit.json"
   cat >"$supervisor_script" <<'SUPERVISOR'
 import fs from "node:fs";
 import { spawn, execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 
 const managerScript = process.env.OPENCLAW_SYSTEMCTL_SHIM_MANAGER_SCRIPT;
 const command = process.env.OPENCLAW_SYSTEMCTL_SHIM_EXEC_START;
@@ -173,6 +185,7 @@ const restartWindowMs = 60_000;
 const restartBurst = 5;
 const starts = [];
 let totalStarts = 0;
+let invocationId = "";
 let firstExit;
 let child;
 let activeGroupPid;
@@ -184,7 +197,7 @@ const publishRuntime = (pid, supervisorPid = process.pid) => {
   const file = `${daemonLog}.runtime.json`;
   // Both manager adapters observe the ExecStart child, not this synthetic manager.
   fs.writeFileSync(`${file}.pending`, JSON.stringify({
-    pid, supervisorPid, groupPid: activeGroupPid ?? 0, stopFailed,
+    pid, supervisorPid, groupPid: activeGroupPid ?? 0, stopFailed, invocationId,
     restarts: totalStarts - 1, entered: Number(process.hrtime.bigint() / 1000n),
   }));
   fs.renameSync(`${file}.pending`, file);
@@ -232,8 +245,11 @@ const drainProcessGroup = (pid, onStopped) => {
   };
   // Read at stop, not launch: daemon-reload can repair a running unit's policy.
   let stopTimeoutMs;
+  let controlGroup;
   try {
-    stopTimeoutMs = Number(execFileSync(process.execPath, [managerScript, "stop-timeout-ms"], { encoding: "utf8" }));
+    const policy = JSON.parse(execFileSync(process.execPath, [managerScript, "stop-context"], { encoding: "utf8" }));
+    stopTimeoutMs = Number(policy.stopTimeoutMs);
+    if (policy.killMode === "mixed") controlGroup = policy.controlGroup;
   } catch (error) {
     // Broken fixture policy is fatal, not a new stop-budget default. Keep the
     // supervisor alive until its owned group is gone, then report the policy failure.
@@ -242,15 +258,77 @@ const drainProcessGroup = (pid, onStopped) => {
     fs.writeSync(output, `[systemctl-shim] stop policy read failed; cleaning up process group: ${String(error)}\n`);
     publishRuntime(child?.pid ?? 0);
   }
-  signalProcessGroup(pid, "SIGTERM");
-  if (stopFailed) signalProcessGroup(pid, "SIGKILL");
-  const forceKill = stopFailed || stopTimeoutMs === Infinity ? undefined : setTimeout(() => {
-    signalProcessGroup(pid, "SIGKILL");
-    // Signal delivery is not settlement; the existing observer must confirm exit.
-  }, stopTimeoutMs);
+  let cgroupFailed = false;
+  const failControlGroup = (error) => {
+    if (cgroupFailed) return;
+    cgroupFailed = true;
+    stopFailed = true;
+    stopping = true;
+    fs.writeSync(output, `[systemctl-shim] service cgroup cleanup failed; retaining custody: ${String(error)}\n`);
+    publishRuntime(child?.pid ?? 0);
+  };
+  let forced = false;
+  const signalledMembers = new Set();
+  const killRemaining = () => {
+    if (forced && !controlGroup) return;
+    forced = true;
+    if (!controlGroup) return signalProcessGroup(pid, "SIGKILL");
+    try {
+      const members = fs.readFileSync(`/sys/fs/cgroup${controlGroup}/cgroup.procs`, "utf8");
+      for (const member of members.trim().split(/\s+/).filter(Boolean)) {
+        const memberPid = Number(member);
+        try {
+          const stat = fs.readFileSync(`/proc/${memberPid}/stat`, "utf8");
+          const startTime = stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[19];
+          if (!/^\d+$/.test(startTime ?? "")) throw new Error("Missing cgroup process identity");
+          const identity = `${memberPid}:${startTime}`;
+          if (signalledMembers.has(identity)) continue;
+          // Revalidate membership immediately before signalling: detached children
+          // remain owned, while an exited/reused PID outside this cgroup does not.
+          const membership = fs.readFileSync(`/proc/${memberPid}/cgroup`, "utf8");
+          if (membership.split("\n").includes(`0::${controlGroup}`)) {
+            signalledMembers.add(identity);
+            process.kill(memberPid, "SIGKILL");
+          }
+        } catch (error) {
+          if (!["ENOENT", "ESRCH"].includes(error?.code)) failControlGroup(error);
+        }
+      }
+    } catch (error) {
+      failControlGroup(error);
+    }
+  };
+  if (controlGroup) {
+    if (child?.pid === pid) {
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch (error) {
+        if (error?.code !== "ESRCH") failControlGroup(error);
+      }
+    }
+  } else {
+    signalProcessGroup(pid, "SIGTERM");
+  }
+  if (stopFailed) killRemaining();
+  const forceKill = stopFailed || stopTimeoutMs === Infinity ? undefined : setTimeout(killRemaining, stopTimeoutMs);
   const finishWhenStopped = () => {
     if (completed) return;
-    if (isProcessGroupRunning(pid)) {
+    // KillMode=mixed lets the main process drain before killing the remainder,
+    // including detached or newly discovered descendants. Signal each observed
+    // native identity once while the existing observer joins their settlement.
+    if (controlGroup && (forced || child?.pid !== pid)) killRemaining();
+    let populated = false;
+    if (controlGroup) {
+      try {
+        const events = fs.readFileSync(`/sys/fs/cgroup${controlGroup}/cgroup.events`, "utf8");
+        if (!/^populated [01]$/m.test(events)) throw new Error("Missing cgroup population state");
+        populated = /^populated 1$/m.test(events);
+      } catch (error) {
+        failControlGroup(error);
+        populated = true;
+      }
+    }
+    if (isProcessGroupRunning(pid) || populated) {
       setTimeout(finishWhenStopped, 25);
       return;
     }
@@ -287,6 +365,8 @@ const start = () => {
   }
   starts.push(now);
   totalStarts++;
+  invocationId = randomUUID().replaceAll("-", "");
+  childEnv.INVOCATION_ID = invocationId;
   child = spawn("bash", ["-c", command], {
     detached: true,
     env: childEnv,
@@ -420,14 +500,19 @@ case "$command" in
       exit 0
     fi
     [ "$unit_name" = openclaw-gateway.service ] || exit 1
+    if [ "$property" = TimeoutStopUSec,InvocationID,LoadState ]; then
+      node "$manager_script" stop-policy --invocation-id
+      exit 0
+    fi
     if [ "$property" = LoadState,TimeoutStopUSec ]; then
       node "$manager_script" stop-policy
       exit 0
     fi
     # Published readers omit LoadState or ControlGroup; retain their exact queries.
     runtime_properties='Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent'
+    current_runtime_properties="${runtime_properties/Id,/Id,LoadState,UnitFileState,RefuseManualStart,CanStart,},ControlGroup"
     case "$property" in
-      "$runtime_properties" | "${runtime_properties/Id,/Id,LoadState,}" | "${runtime_properties/Id,/Id,LoadState,},ControlGroup") ;;
+      "$runtime_properties" | "${runtime_properties/Id,/Id,LoadState,}" | "${runtime_properties/Id,/Id,LoadState,},ControlGroup" | "$current_runtime_properties") ;;
       *)
         echo "systemctl shim unsupported user-scope show: $*" >&2
         exit 1
@@ -436,6 +521,18 @@ case "$command" in
     if [[ "$property" == Id,LoadState,* ]]; then
       load_state="$(node "$manager_script" load-state)"
       printf 'Id=%s\nLoadState=%s\n' "$unit_name" "$load_state"
+    fi
+    if [ "$property" = "$current_runtime_properties" ]; then
+      unit_file_state=""
+      can_start=no
+      if [ "$load_state" = loaded ]; then
+        unit_file_state=disabled
+        can_start=yes
+        if [ -L "$(dirname "$(unit_path)")/default.target.wants/openclaw-gateway.service" ]; then
+          unit_file_state=enabled
+        fi
+      fi
+      printf 'UnitFileState=%s\nRefuseManualStart=no\nCanStart=%s\n' "$unit_file_state" "$can_start"
     fi
     node "$manager_script" runtime
     exit 0

@@ -9,6 +9,8 @@ import {
   type AndroidStorePlan,
   validateAndroidStorePlan,
 } from "./lib/android-store-version.ts";
+import { parseFlagArgs } from "./lib/arg-utils.mts";
+import { versionValueFlag } from "./lib/version-script-args.ts";
 
 type MobileReleasePlatform = "ios" | "android";
 type MobileReleaseCommand = "preflight" | "record" | "resolve" | "initialize-android";
@@ -21,26 +23,18 @@ type GitDeps = {
   ) => string;
 };
 
-type MobileReleaseOptions = {
-  androidPlan?: AndroidStorePlan;
-  build: string | null;
-  command: MobileReleaseCommand;
-  platform: MobileReleasePlatform;
-  remote: string;
-  rootDir: string;
-  sha: string;
-  version: string;
-  versionCode: string | null;
-};
-
-type RemoteRefState = {
-  ref: string;
-  sha: string;
-};
+type MobileReleaseOptions = ReturnType<typeof parseArgs>;
+type RemoteRefState = ReturnType<typeof readRemoteRefs>[number];
 
 const REF_PREFIX = "refs/openclaw/mobile-releases";
 const VERSION_RE = /^20\d{2}\.(?:[1-9]\d?)\.(?:[1-9]\d*)$/u;
 const POSITIVE_INTEGER_RE = /^[1-9]\d*$/u;
+const GIT_RETRY_DELAYS_MS = [5_000, 10_000, 20_000];
+const TRANSIENT_GIT_ERRORS = [
+  /Unable to determine if workflow can be created or updated due to timeout/iu,
+  /The requested URL returned error: (?:408|500|502|503|504)\b/iu,
+  /\b(?:connection timed out|operation timed out|connection (?:was )?reset|could not resolve host|temporary failure in name resolution|remote end hung up unexpectedly|unexpected disconnect while reading sideband packet)\b/iu,
+];
 
 function git(args: string[], rootDir: string, deps: GitDeps = {}): string {
   const exec = deps.execFileSync ?? execFileSync;
@@ -80,12 +74,26 @@ function gitAllowFailure(
   }
 }
 
-function readOptionValue(argv: string[], index: number, flag: string): string {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`Missing value for ${flag}.`);
+function waitForGitRetry(
+  result: ReturnType<typeof gitAllowFailure>,
+  retry: number,
+  operation: string,
+): boolean {
+  const delayMs = GIT_RETRY_DELAYS_MS[retry];
+  const detail = `${result.stderr}\n${result.stdout}`;
+  if (
+    result.ok ||
+    delayMs === undefined ||
+    !TRANSIENT_GIT_ERRORS.some((pattern) => pattern.test(detail))
+  ) {
+    return false;
   }
-  return value;
+  process.stderr.write(
+    `Transient Git failure while ${operation}; retrying in ${delayMs / 1_000}s (attempt ${retry + 2}/${GIT_RETRY_DELAYS_MS.length + 1}).\n`,
+  );
+  // This one-shot CLI already performs Git operations synchronously.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+  return true;
 }
 
 function parsePlatform(raw: string | null): MobileReleasePlatform {
@@ -112,64 +120,51 @@ function parseCommand(raw: string | undefined): MobileReleaseCommand {
   );
 }
 
-export function parseArgs(argv: string[]): MobileReleaseOptions {
+export function parseArgs(argv: string[]) {
   const command = parseCommand(argv[0]);
-  let build: string | null = null;
-  let platform: string | null = null;
-  let remote = "origin";
-  let rootDir = path.resolve(".");
-  let sha = "HEAD";
-  let version = "";
-  let versionCode: string | null = null;
-  let planPath: string | null = null;
-  let explicitSha = false;
-
-  for (let index = 1; index < argv.length; index += 1) {
-    const arg = argv[index];
-    switch (arg) {
-      case "--":
-        break;
-      case "--platform":
-        platform = readOptionValue(argv, index, arg);
-        index += 1;
-        break;
-      case "--version":
-        version = readOptionValue(argv, index, arg);
-        index += 1;
-        break;
-      case "--build":
-        build = readOptionValue(argv, index, arg);
-        index += 1;
-        break;
-      case "--version-code":
-        versionCode = readOptionValue(argv, index, arg);
-        index += 1;
-        break;
-      case "--sha":
-        sha = readOptionValue(argv, index, arg);
-        explicitSha = true;
-        index += 1;
-        break;
-      case "--plan":
-        planPath = path.resolve(readOptionValue(argv, index, arg));
-        index += 1;
-        break;
-      case "--remote":
-        remote = readOptionValue(argv, index, arg);
-        index += 1;
-        break;
-      case "--root":
-        rootDir = path.resolve(readOptionValue(argv, index, arg));
-        index += 1;
-        break;
-      case "-h":
-      case "--help":
-        throw new Error(usage());
-      default:
+  const args: {
+    build: string | null;
+    platform: string | null;
+    remote: string;
+    rootDir: string;
+    sha: string | undefined;
+    version: string;
+    versionCode: string | null;
+    planPath: string | null;
+  } = {
+    build: null,
+    platform: null,
+    remote: "origin",
+    rootDir: path.resolve("."),
+    sha: undefined,
+    version: "",
+    versionCode: null,
+    planPath: null,
+  };
+  parseFlagArgs(
+    argv.slice(1),
+    args,
+    [
+      versionValueFlag("--platform", "platform"),
+      versionValueFlag("--version", "version"),
+      versionValueFlag("--build", "build"),
+      versionValueFlag("--version-code", "versionCode"),
+      versionValueFlag("--sha", "sha"),
+      versionValueFlag("--plan", "planPath", path.resolve),
+      versionValueFlag("--remote", "remote"),
+      versionValueFlag("--root", "rootDir", path.resolve),
+    ],
+    {
+      onUnhandledArg(arg) {
+        if (arg === "-h" || arg === "--help") {
+          throw new Error(usage());
+        }
         throw new Error(`Unknown argument: ${arg}`);
-    }
-  }
-
+      },
+    },
+  );
+  let { build, platform, sha = "HEAD", version, versionCode } = args;
+  const { planPath, remote, rootDir } = args;
   const androidPlan = planPath
     ? validateAndroidStorePlan(JSON.parse(readFileSync(planPath, "utf8")))
     : undefined;
@@ -182,7 +177,7 @@ export function parseArgs(argv: string[]): MobileReleaseOptions {
       (version && version !== androidPlan.version) ||
       (versionCode !== null && versionCode !== String(androidPlan.versionCode)) ||
       (build !== null && build !== String(androidPlan.buildNumber)) ||
-      (explicitSha && sha !== androidPlan.sourceSha)
+      (args.sha !== undefined && sha !== androidPlan.sourceSha)
     ) {
       throw new Error("Explicit release identity does not match the Android store plan.");
     }
@@ -300,13 +295,12 @@ function readRemoteRef(
   return refs[0];
 }
 
-function readRemoteRefs(
-  remote: string,
-  pattern: string,
-  rootDir: string,
-  deps: GitDeps = {},
-): RemoteRefState[] {
-  const result = gitAllowFailure(["ls-remote", "--refs", remote, pattern], rootDir, deps);
+function readRemoteRefs(remote: string, pattern: string, rootDir: string, deps: GitDeps = {}) {
+  const args = ["ls-remote", "--refs", remote, pattern];
+  let result = gitAllowFailure(args, rootDir, deps);
+  for (let retry = 0; waitForGitRetry(result, retry, `reading ${pattern}`); retry += 1) {
+    result = gitAllowFailure(args, rootDir, deps);
+  }
   if (!result.ok) {
     const detail = (result.stderr || result.stdout).trim();
     throw new Error(`Failed to inspect remote release ref ${pattern}: ${detail}`);
@@ -351,25 +345,36 @@ function createRemoteRef(
   },
   deps: GitDeps,
 ): RemoteRefState & { status: "created" | "already-recorded" } {
-  const result = gitAllowFailure(
-    ["push", `--force-with-lease=${options.ref}:`, options.remote, `${options.sha}:${options.ref}`],
-    options.rootDir,
-    deps,
-  );
-  // A transport failure can follow an accepted push. Read back before offering recovery.
-  const recorded = readRemoteRef(options.remote, options.ref, options.rootDir, deps);
-  if (recorded && (recorded.sha === options.sha || options.acceptExistingSha)) {
-    return { ...recorded, status: result.ok ? "created" : "already-recorded" };
-  }
-  if (recorded) {
+  for (let retry = 0; ; retry += 1) {
+    // The empty lease atomically requires absence, including after a retry delay.
+    const result = gitAllowFailure(
+      [
+        "push",
+        `--force-with-lease=${options.ref}:`,
+        options.remote,
+        `${options.sha}:${options.ref}`,
+      ],
+      options.rootDir,
+      deps,
+    );
+    // A transport failure can follow an accepted push. Reconcile before retrying.
+    const recorded = readRemoteRef(options.remote, options.ref, options.rootDir, deps);
+    if (recorded && (recorded.sha === options.sha || options.acceptExistingSha)) {
+      return { ...recorded, status: result.ok ? "created" : "already-recorded" };
+    }
+    if (recorded) {
+      throw new Error(
+        `Mobile release ref ${options.ref} already points at ${recorded.sha}; refusing to record ${options.sha}.`,
+      );
+    }
+    if (waitForGitRetry(result, retry, `recording ${options.ref}`)) {
+      continue;
+    }
+    const detail = (result.stderr || result.stdout).trim();
     throw new Error(
-      `Mobile release ref ${options.ref} already points at ${recorded.sha}; refusing to record ${options.sha}.`,
+      `Failed to create mobile release ref ${options.ref}. Recovery command:\n${recoveryCommand(options)}\n${detail}`,
     );
   }
-  const detail = (result.stderr || result.stdout).trim();
-  throw new Error(
-    `Failed to create mobile release ref ${options.ref}. Recovery command:\n${recoveryCommand(options)}\n${detail}`,
-  );
 }
 
 function readAndroidCutoverMarker(

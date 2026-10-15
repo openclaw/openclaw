@@ -1,11 +1,14 @@
-import { asFiniteNumber, resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   isAcpTagVisible,
   resolveAcpProjectionSettings,
 } from "../../../auto-reply/reply/acp-stream-settings.js";
+import type { SessionEventTarget } from "../../../auto-reply/reply/session-event-contract.js";
+import { enqueueSessionEventForHost as enqueueSessionEvent } from "../../../auto-reply/reply/session-event-handoff.js";
 import {
   resolveChannelStreamingProgressCommentary,
   type StreamingCompatEntry,
@@ -14,27 +17,26 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { onAgentEventForRun } from "../../../infra/agent-events.js";
 import {
   resolveEventSessionKeyForPolicy,
-  scopedHeartbeatWakeOptionsForPolicy,
   type EventSessionRoutingPolicy,
 } from "../../../infra/event-session-routing.js";
-import { requestHeartbeat } from "../../../infra/heartbeat-wake.js";
-import { resolveSystemEventQueueKey } from "../../../infra/system-event-ownership.js";
-import { enqueueSystemEvent } from "../../../infra/system-events.js";
+import { isSqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { getBoundLegacyPluginSdkResourceHost } from "../../../plugins/legacy-sdk-resource-host.js";
 import { resolveChannelAccountEntry } from "../../../routing/account-lookup.js";
-import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import { normalizeAccountId } from "../../../routing/session-key.js";
+import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { normalizeAssistantPhase } from "../../../shared/chat-message-content.js";
 import { truncateUtf16WithEllipsis as truncate } from "../../../shared/text-truncate.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import {
-  recordAcpParentStreamEvents,
+  createAcpParentStreamRecorder,
   type AcpParentStreamEvent,
 } from "./acp-parent-stream-store.sqlite.js";
 
-const DEFAULT_STREAM_FLUSH_MS = 2_500;
-const DEFAULT_NO_OUTPUT_NOTICE_MS = 60_000;
-const DEFAULT_NO_OUTPUT_POLL_MS = 15_000;
-const DEFAULT_MAX_RELAY_LIFETIME_MS = 6 * 60 * 60 * 1000;
+const STREAM_FLUSH_MS = 2_500;
+const NO_OUTPUT_NOTICE_MS = 60_000;
+const NO_OUTPUT_POLL_MS = 15_000;
+const MAX_RELAY_LIFETIME_MS = 6 * 60 * 60 * 1000;
 const STREAM_BUFFER_MAX_CHARS = 4_000;
 const STREAM_SNIPPET_MAX_CHARS = 220;
 const STREAM_LOG_BATCH_SIZE = 100;
@@ -46,17 +48,6 @@ const log = createSubsystemLogger("agents/acp-parent-stream");
 type AcpParentProgressStreamingConfig = StreamingCompatEntry & {
   accounts?: Record<string, StreamingCompatEntry | undefined>;
 };
-
-function compactWhitespace(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function normalizeStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.filter((item): item is string => typeof item === "string" && item.length > 0);
-}
 
 function mergeStreamingConfig(base: unknown, override: unknown): unknown {
   const baseRecord = asObjectRecord(base);
@@ -116,70 +107,45 @@ function resolveParentProgressStreamingEntry(params: {
 export function startAcpSpawnParentStreamRelay(params: {
   runId: string;
   parentSessionKey: string;
-  requesterAgentId?: string;
+  requesterAgentId: string;
+  expectedTarget: SessionEventTarget;
   childSessionKey: string;
   childSessionId?: string;
   agentId: string;
+  ownerAgentId?: string;
   env?: NodeJS.ProcessEnv;
-  /**
-   * Optional `session.mainKey` from the runtime config. Used to remap
-   * cron-run parent session keys to the agent's main queue when relaying
-   * events. Caller passes the spawn-time `cfg.session?.mainKey`; pass-through
-   * of `undefined` falls back to the literal "main" default. Long-running
-   * relays keep using that start-time value if config changes while the child
-   * session is still streaming.
-   */
-  mainKey?: string;
-  /**
-   * Optional `session.scope` from the runtime config. Required so global-scope
-   * agents route cron-run events to the "global" queue instead of agent-main.
-   * Snapshotted with `mainKey` for the same start-time routing reason.
-   */
-  sessionScope?: "per-sender" | "global";
-  eventRouting?: EventSessionRoutingPolicy;
+  eventRouting: EventSessionRoutingPolicy;
   deliveryContext?: DeliveryContext;
-  surfaceUpdates?: boolean;
-  streamFlushMs?: number;
-  noOutputNoticeMs?: number;
-  noOutputPollMs?: number;
-  maxRelayLifetimeMs?: number;
-  emitStartNotice?: boolean;
   cfg?: OpenClawConfig;
 }): AcpSpawnParentRelayHandle {
-  const runId = normalizeOptionalString(params.runId) ?? "";
-  const parentSessionKey = normalizeOptionalString(params.parentSessionKey) ?? "";
-  if (!runId || !parentSessionKey) {
-    return {
-      dispose: () => {},
-      notifyStarted: () => {},
-    };
-  }
-
-  const streamFlushMs = resolveIntegerOption(params.streamFlushMs, DEFAULT_STREAM_FLUSH_MS, {
-    min: 0,
-  });
-  const noOutputNoticeMs = resolveIntegerOption(
-    params.noOutputNoticeMs,
-    DEFAULT_NO_OUTPUT_NOTICE_MS,
-    {
-      min: 0,
-    },
-  );
-  const noOutputPollMs = resolveIntegerOption(params.noOutputPollMs, DEFAULT_NO_OUTPUT_POLL_MS, {
-    min: 250,
-  });
-  const maxRelayLifetimeMs = resolveIntegerOption(
-    params.maxRelayLifetimeMs,
-    DEFAULT_MAX_RELAY_LIFETIME_MS,
-    { min: 1_000 },
-  );
-
-  const relayLabel = truncate(compactWhitespace(params.agentId), 40) || "ACP child";
+  const { runId, parentSessionKey, eventRouting } = params;
+  const relayLabel = truncate(params.agentId.replace(/\s+/g, " ").trim(), 40) || "ACP child";
   const contextPrefix = `acp-spawn:${runId}`;
   const childSessionId = normalizeOptionalString(params.childSessionId);
   // Delayed flushes must keep the state database selected when the relay started.
   const stateEnv = { ...(params.env ?? process.env) };
+  const host = getBoundLegacyPluginSdkResourceHost();
+  const closingSignal = host?.scheduler.signal;
+  const acceptedWork = new AsyncWorkScope();
+  let recorder: ReturnType<typeof createAcpParentStreamRecorder> | undefined;
+  try {
+    if (childSessionId) {
+      recorder = createAcpParentStreamRecorder({
+        agentId: params.ownerAgentId ?? params.agentId,
+        env: stateEnv,
+        sessionId: childSessionId,
+        runId,
+      });
+    }
+  } catch (error) {
+    log.warn("Failed to capture ACP parent stream diagnostic store", {
+      runId,
+      error: String(error),
+    });
+  }
   const pendingLogEvents: Array<{ event: AcpParentStreamEvent; createdAt: number }> = [];
+  let logFlush: Promise<void> | undefined;
+  let disposal: Promise<void> | undefined;
   let logFlushTimer: NodeJS.Timeout | undefined;
   let logFailureWarned = false;
   let logBufferWarned = false;
@@ -201,58 +167,70 @@ export function startAcpSpawnParentStreamRelay(params: {
     }
   };
   const clearLogFlushTimer = () => {
-    if (!logFlushTimer) {
-      return;
-    }
     clearTimeout(logFlushTimer);
     logFlushTimer = undefined;
   };
-  function flushLogEvents(options: { terminal?: boolean } = {}) {
+  function flushLogEvents(): Promise<void> | undefined {
     clearLogFlushTimer();
-    if (!childSessionId || pendingLogEvents.length === 0) {
-      return;
+    if (logFlush || !recorder || pendingLogEvents.length === 0) {
+      return logFlush;
     }
     const events = pendingLogEvents.splice(0);
-    try {
-      recordAcpParentStreamEvents({
-        agentId: params.agentId,
-        env: stateEnv,
-        sessionId: childSessionId,
-        runId,
-        events,
+    const writer = recorder;
+    // Accepted persistence has its own settlement lifetime, independent of scheduler abort.
+    logFlush = acceptedWork
+      .track(async () => {
+        let retryable = false;
+        try {
+          const result = await writer.record(events);
+          if (!result.ok) {
+            retryable = true;
+            throw result.error;
+          }
+          logFailureWarned = false;
+          logBufferWarned = false;
+          consecutiveLogFailures = 0;
+        } catch (error) {
+          retryable ||=
+            isSqliteWorkerError(error, "overloaded") || isSqliteWorkerError(error, "unavailable");
+          const retrying = retryable && !disposed;
+          if (retrying) {
+            pendingLogEvents.unshift(...events);
+            capPendingLogEvents();
+            consecutiveLogFailures += 1;
+            clearLogFlushTimer();
+            scheduleLogFlush(
+              Math.min(STREAM_LOG_FLUSH_MS * 2 ** consecutiveLogFailures, STREAM_LOG_MAX_RETRY_MS),
+            );
+          }
+          if (!logFailureWarned || disposed) {
+            log.warn("Failed to persist ACP parent stream diagnostics", {
+              runId,
+              childSessionId,
+              retrying,
+              error: String(error),
+            });
+            logFailureWarned = true;
+          }
+        }
+      })
+      .finally(() => {
+        logFlush = undefined;
+        scheduleLogFlush();
       });
-      logFailureWarned = false;
-      logBufferWarned = false;
-      consecutiveLogFailures = 0;
-    } catch (error) {
-      if (!options.terminal) {
-        pendingLogEvents.unshift(...events);
-        capPendingLogEvents();
-        consecutiveLogFailures += 1;
-        scheduleLogFlush(
-          Math.min(STREAM_LOG_FLUSH_MS * 2 ** consecutiveLogFailures, STREAM_LOG_MAX_RETRY_MS),
-        );
-      }
-      if (!logFailureWarned || options.terminal) {
-        log.warn("Failed to persist ACP parent stream diagnostics", {
-          runId,
-          childSessionId,
-          retrying: !options.terminal,
-          error: String(error),
-        });
-        logFailureWarned = true;
-      }
-    }
+    return logFlush;
   }
   function scheduleLogFlush(delayMs = STREAM_LOG_FLUSH_MS) {
     if (disposed || logFlushTimer || pendingLogEvents.length === 0) {
       return;
     }
-    logFlushTimer = setTimeout(() => flushLogEvents(), delayMs);
+    logFlushTimer = setTimeout(() => {
+      void flushLogEvents();
+    }, delayMs);
     logFlushTimer.unref?.();
   }
   const logEvent = (kind: string, fields?: Record<string, unknown>) => {
-    if (!childSessionId) {
+    if (disposed || !recorder) {
       return;
     }
     const createdAt = Date.now();
@@ -271,12 +249,11 @@ export function startAcpSpawnParentStreamRelay(params: {
     });
     capPendingLogEvents();
     if (consecutiveLogFailures === 0 && pendingLogEvents.length >= STREAM_LOG_BATCH_SIZE) {
-      flushLogEvents();
+      void flushLogEvents();
       return;
     }
     scheduleLogFlush();
   };
-  const shouldSurfaceUpdates = params.surfaceUpdates !== false;
   const shouldRelayProgressCommentary = resolveChannelStreamingProgressCommentary(
     resolveParentProgressStreamingEntry({
       cfg: params.cfg,
@@ -285,44 +262,31 @@ export function startAcpSpawnParentStreamRelay(params: {
     true,
   );
   const acpProjectionSettings = resolveAcpProjectionSettings(params.cfg ?? {});
-  const eventRouting = params.eventRouting ?? {
-    mainKey: params.mainKey,
-    sessionScope: params.sessionScope,
-  };
-  const wake = () => {
-    if (!shouldSurfaceUpdates) {
-      return;
-    }
-    requestHeartbeat(
-      scopedHeartbeatWakeOptionsForPolicy(
-        parentSessionKey,
-        {
-          source: "acp-spawn",
-          intent: "event",
-          reason: "acp:spawn:stream",
-        },
-        eventRouting,
-      ),
-    );
-  };
+  const eventSessionKey = resolveEventSessionKeyForPolicy(parentSessionKey, eventRouting);
+  const deliveryContext = structuredClone(params.deliveryContext);
   const emit = (text: string, contextKey: string) => {
-    const cleaned = text.trim();
-    if (!cleaned) {
+    const cleaned = truncate(text.trim(), STREAM_BUFFER_MAX_CHARS);
+    if (disposed || !cleaned) {
       return;
     }
     logEvent("system_event", { contextKey, text: cleaned });
-    if (!shouldSurfaceUpdates) {
-      return;
+    try {
+      const receipt = enqueueSessionEvent(cleaned, {
+        agentId: params.requesterAgentId,
+        sessionKey: eventSessionKey,
+        source: "task",
+        contextKey,
+        deliveryContext,
+        expectedTarget: params.expectedTarget,
+      });
+      void receipt.settled.then((outcome) => {
+        if (outcome.status !== "completed") {
+          log.warn("ACP parent relay follow-up failed", { runId, contextKey, ...outcome });
+        }
+      });
+    } catch (error) {
+      log.warn("ACP parent relay follow-up rejected", { runId, contextKey, error: String(error) });
     }
-    enqueueSystemEvent(cleaned, {
-      sessionKey: resolveSystemEventQueueKey(
-        resolveEventSessionKeyForPolicy(parentSessionKey, eventRouting),
-        resolveAgentIdFromSessionKey(parentSessionKey, params.requesterAgentId),
-      ),
-      contextKey,
-      deliveryContext: params.deliveryContext,
-    });
-    wake();
   };
   const emitStartNotice = () => {
     emit(
@@ -343,21 +307,9 @@ export function startAcpSpawnParentStreamRelay(params: {
   let lastRuntimeEventType: string | undefined;
   let proxyEnvKeysAtPrompt: string[] = [];
   let flushTimer: NodeJS.Timeout | undefined;
-  let relayLifetimeTimer: NodeJS.Timeout | undefined;
-
   const clearFlushTimer = () => {
-    if (!flushTimer) {
-      return;
-    }
     clearTimeout(flushTimer);
     flushTimer = undefined;
-  };
-  const clearRelayLifetimeTimer = () => {
-    if (!relayLifetimeTimer) {
-      return;
-    }
-    clearTimeout(relayLifetimeTimer);
-    relayLifetimeTimer = undefined;
   };
 
   const flushPending = () => {
@@ -365,7 +317,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (!pendingText) {
       return;
     }
-    const snippet = truncate(compactWhitespace(pendingText), STREAM_SNIPPET_MAX_CHARS);
+    const snippet = truncate(pendingText.replace(/\s+/g, " ").trim(), STREAM_SNIPPET_MAX_CHARS);
     pendingText = "";
     pendingProgressKind = undefined;
     if (!snippet) {
@@ -375,10 +327,10 @@ export function startAcpSpawnParentStreamRelay(params: {
   };
 
   const scheduleFlush = () => {
-    if (disposed || flushTimer || streamFlushMs <= 0) {
+    if (disposed || flushTimer) {
       return;
     }
-    flushTimer = setTimeout(flushPending, streamFlushMs);
+    flushTimer = setTimeout(flushPending, STREAM_FLUSH_MS);
     flushTimer.unref?.();
   };
 
@@ -431,7 +383,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   };
 
   const buildNoOutputNotice = () => {
-    const seconds = Math.round(noOutputNoticeMs / 1000);
+    const seconds = Math.round(NO_OUTPUT_NOTICE_MS / 1000);
     if (!promptSubmittedAt) {
       return `${relayLabel} session started but no prompt submission was observed for ${seconds}s.`;
     }
@@ -447,35 +399,25 @@ export function startAcpSpawnParentStreamRelay(params: {
   };
 
   const noOutputWatcherTimer = setInterval(() => {
-    if (disposed || noOutputNoticeMs <= 0) {
-      return;
-    }
-    if (stallNotified) {
-      return;
-    }
-    if (Date.now() - lastProgressAt < noOutputNoticeMs) {
+    if (disposed || stallNotified || Date.now() - lastProgressAt < NO_OUTPUT_NOTICE_MS) {
       return;
     }
     stallNotified = true;
     emit(buildNoOutputNotice(), `${contextPrefix}:stall`);
-  }, noOutputPollMs);
+  }, NO_OUTPUT_POLL_MS);
   noOutputWatcherTimer.unref?.();
 
-  relayLifetimeTimer = setTimeout(() => {
+  const relayLifetimeTimer = setTimeout(() => {
     if (disposed) {
       return;
     }
     emit(
-      `${relayLabel} stream relay timed out after ${Math.max(1, Math.round(maxRelayLifetimeMs / 1000))}s without completion.`,
+      `${relayLabel} stream relay timed out after ${Math.round(MAX_RELAY_LIFETIME_MS / 1000)}s without completion.`,
       `${contextPrefix}:timeout`,
     );
-    dispose();
-  }, maxRelayLifetimeMs);
+    void dispose();
+  }, MAX_RELAY_LIFETIME_MS);
   relayLifetimeTimer.unref?.();
-
-  if (params.emitStartNotice !== false) {
-    emitStartNotice();
-  }
 
   const unsubscribe = onAgentEventForRun(runId, (event) => {
     if (disposed || event.runId !== runId) {
@@ -545,7 +487,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       if (phase === "prompt_submitted") {
         const at = asFiniteNumber(data?.at) ?? Date.now();
         promptSubmittedAt ??= at;
-        proxyEnvKeysAtPrompt = normalizeStringArray(data?.proxyEnvKeys);
+        proxyEnvKeysAtPrompt = filterStringEntries(data?.proxyEnvKeys).filter(Boolean);
         lastProgressAt = Date.now();
         return;
       }
@@ -576,51 +518,61 @@ export function startAcpSpawnParentStreamRelay(params: {
 
     const phase = normalizeOptionalString(event.data.phase);
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
+    if (phase !== "end" && phase !== "error") {
+      return;
+    }
+    flushReplaceableAssistantSnapshot();
+    flushPending();
     if (phase === "end") {
-      flushReplaceableAssistantSnapshot();
-      flushPending();
       const startedAt = asFiniteNumber(event.data.startedAt);
       const endedAt = asFiniteNumber(event.data.endedAt);
       const durationMs =
         startedAt != null && endedAt != null && endedAt >= startedAt
           ? endedAt - startedAt
           : undefined;
-      if (durationMs != null) {
-        emit(
-          `${relayLabel} run completed in ${Math.max(1, Math.round(durationMs / 1000))}s.`,
-          `${contextPrefix}:done`,
-        );
-      } else {
-        emit(`${relayLabel} run completed.`, `${contextPrefix}:done`);
-      }
-      dispose();
-      return;
-    }
-
-    if (phase === "error") {
-      flushReplaceableAssistantSnapshot();
-      flushPending();
+      emit(
+        durationMs != null
+          ? `${relayLabel} run completed in ${Math.max(1, Math.round(durationMs / 1000))}s.`
+          : `${relayLabel} run completed.`,
+        `${contextPrefix}:done`,
+      );
+    } else {
       const errorText = normalizeOptionalString(event.data.error);
-      if (errorText) {
-        emit(`${relayLabel} run failed: ${errorText}`, `${contextPrefix}:error`);
-      } else {
-        emit(`${relayLabel} run failed.`, `${contextPrefix}:error`);
-      }
-      dispose();
+      emit(
+        errorText ? `${relayLabel} run failed: ${errorText}` : `${relayLabel} run failed.`,
+        `${contextPrefix}:error`,
+      );
     }
+    void dispose();
   });
 
-  const dispose = () => {
-    if (disposed) {
-      return;
+  const dispose = (): Promise<void> => {
+    if (disposal) {
+      return disposal;
     }
     disposed = true;
     clearFlushTimer();
-    flushLogEvents({ terminal: true });
-    clearRelayLifetimeTimer();
+    clearLogFlushTimer();
+    clearTimeout(relayLifetimeTimer);
     clearInterval(noOutputWatcherTimer);
     unsubscribe();
+    closingSignal?.removeEventListener("abort", onClose);
+    disposal = (async () => {
+      await logFlush;
+      await flushLogEvents();
+      await acceptedWork.drain();
+      await recorder?.close();
+    })().catch((error: unknown) => {
+      log.warn("Failed to close ACP parent stream diagnostics", { runId, error: String(error) });
+    });
+    const completion = disposal;
+    host?.releaseClaim({ release: () => completion });
+    return disposal;
   };
+  const onClose = () => {
+    void dispose();
+  };
+  closingSignal?.addEventListener("abort", onClose, { once: true });
 
   return {
     dispose,
@@ -629,6 +581,6 @@ export function startAcpSpawnParentStreamRelay(params: {
 }
 
 export type AcpSpawnParentRelayHandle = {
-  dispose: () => void;
+  dispose: () => Promise<void>;
   notifyStarted: () => void;
 };

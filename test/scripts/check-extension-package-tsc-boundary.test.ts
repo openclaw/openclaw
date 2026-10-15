@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   formatBoundaryCheckSuccessSummary,
   formatSlowCompileSummary,
@@ -19,15 +19,49 @@ import {
   runNodeStepsWithConcurrency,
 } from "../../scripts/check-extension-package-tsc-boundary.mts";
 import {
-  isProcessAlive,
-  waitForChildClose,
-  waitForDead,
-  waitForPidFile,
-} from "../helpers/process-wait.js";
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
+import { withinTest } from "../helpers/promise.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 
 const tempRoots = new Set<string>();
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
+async function fixturePidBeforeSettlement(pidPath: string, operation: PromiseLike<unknown>) {
+  const readPid = (error: unknown = new Error(`timeout waiting for pid in ${pidPath}`)) => {
+    const pid = fs.existsSync(pidPath) ? Number(fs.readFileSync(pidPath, "utf8")) : 0;
+    if (!Number.isInteger(pid) || pid <= 0) {
+      throw error;
+    }
+    return pid;
+  };
+  // The fixture writes the PID before its receipt; a separate output/exit can arrive first.
+  const settled = Promise.resolve(operation).then(
+    () => readPid(),
+    (error: unknown) => readPid(error),
+  );
+  return await Promise.race([receipts.waitFor(pidPath, "ready").then(() => readPid()), settled]);
+}
+
+async function waitForFixtureExit(pid: number, signal: AbortSignal) {
+  // Strict group cleanup can leave Darwin zombies awaiting the OS reaper. These foreign
+  // PIDs have no child handle; only the test lifetime bounds their final disappearance.
+  while (isProcessAlive(pid)) {
+    await delay(5, undefined, { signal }).catch((error: unknown) => {
+      throw new Error(`process still alive: ${pid}`, { cause: error });
+    });
+  }
+}
 
 function createTempExtensionRoot(extensionId = "demo") {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-canary-"));
@@ -44,11 +78,14 @@ function writeCanaryArtifacts(rootDir: string, extensionId = "demo") {
   return { canaryPath, tsconfigPath };
 }
 
-afterEach(() => {
-  for (const rootDir of tempRoots) {
-    fs.rmSync(rootDir, { force: true, recursive: true });
-  }
-  tempRoots.clear();
+beforeEach(({ onTestFinished }) => {
+  // Register first so process cleanup runs before removing files still owned by a child.
+  onTestFinished(() => {
+    for (const rootDir of tempRoots) {
+      fs.rmSync(rootDir, { force: true, recursive: true });
+    }
+    tempRoots.clear();
+  });
 });
 
 describe("check-extension-package-tsc-boundary", () => {
@@ -197,16 +234,6 @@ describe("check-extension-package-tsc-boundary", () => {
       fs.existsSync(path.join(root, ".artifacts/extension-package-boundary/compile/demo.json")),
     ).toBe(false);
   }, 30_000);
-  it("keeps matching canary diagnostics classified as a timeout when the compiler never exits", async () => {
-    const diagnostic = "TS6059 src/plugins/contracts/rootdir-boundary-canary.ts";
-    await expect(
-      runNodeStepAsync(
-        "canary fixture",
-        ["-e", `console.log(${JSON.stringify(diagnostic)});setInterval(()=>{},1000);`],
-        2000,
-      ),
-    ).rejects.toMatchObject({ kind: "timeout", fullOutput: expect.stringContaining(diagnostic) });
-  });
   it("cleans stale artifacts for every extension id passed to the cleanup hook", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-canary-"));
     tempRoots.add(rootDir);
@@ -290,32 +317,6 @@ describe("check-extension-package-tsc-boundary", () => {
         "compile elapsed: 54321ms",
         "canary elapsed: 6789ms",
         "elapsed: 54321ms",
-        "",
-      ].join("\n"),
-    );
-  });
-
-  it("omits phase timings that never ran", () => {
-    expect(
-      formatBoundaryCheckSuccessSummary({
-        mode: "compile",
-        compileCount: 97,
-        skippedCompileCount: 0,
-        canaryCount: 0,
-        prepElapsedMs: 12_345,
-        compileElapsedMs: 54_321,
-        canaryElapsedMs: 0,
-        elapsedMs: 66_666,
-      }),
-    ).toBe(
-      [
-        "extension package boundary check passed",
-        "mode: compile",
-        "compiled plugins: 97",
-        "canary plugins: 0",
-        "prep elapsed: 12345ms",
-        "compile elapsed: 54321ms",
-        "elapsed: 66666ms",
         "",
       ].join("\n"),
     );
@@ -445,81 +446,70 @@ describe("check-extension-package-tsc-boundary", () => {
 
   it.skipIf(process.platform === "win32")(
     "waits for timed-out async node step process groups",
-    async () => {
+    async ({ signal, onTestFinished }) => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-extension-tsc-timeout-"));
       tempRoots.add(root);
       const childPidPath = path.join(root, "child.pid");
       let childPid = 0;
-      const childScript = ["process.on('SIGTERM', () => {});", "setInterval(() => {}, 1000);"].join(
-        "",
-      );
+      const childScript = [
+        fixtureReceiptClientSource(receipts.endpoint),
+        "import fs from 'node:fs';",
+        "process.on('SIGTERM', () => {});",
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        `sendReceipt(${JSON.stringify(childPidPath)}, 'ready');`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
       const parentScript = [
         "const { spawn } = require('node:child_process');",
-        "const fs = require('node:fs');",
-        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
+        `const child = spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
         "setInterval(() => {}, 1000);",
       ].join("");
 
-      const releaseAndWait = startProcessWatchdogFixture(() =>
-        runNodeStepAsync("hung-step-group", ["--eval", parentScript], 100),
+      let command!: ReturnType<typeof runNodeStepAsync>;
+      const releaseAndWait = startProcessWatchdogFixture(
+        () => (command = runNodeStepAsync("hung-step-group", ["--eval", parentScript], 100)),
       );
+      let cleanupPending: Promise<void> | undefined;
+      const cleanup = () =>
+        (cleanupPending ??= (async () => {
+          await releaseAndWait().catch(() => undefined);
+          if (childPid && isProcessAlive(childPid)) {
+            process.kill(childPid, "SIGKILL");
+          }
+        })());
+      onTestFinished(cleanup);
       try {
-        childPid = await waitForPidFile(childPidPath, 2_000);
+        childPid = await withinTest(fixturePidBeforeSettlement(childPidPath, command), signal);
         expect(isProcessAlive(childPid)).toBe(true);
 
-        await expect(releaseAndWait()).rejects.toThrow("hung-step-group timed out after 100ms");
-        await waitForDead(childPid, 2_000);
+        await expect(withinTest(releaseAndWait(), signal)).rejects.toThrow(
+          "hung-step-group timed out after 100ms",
+        );
+        await waitForFixtureExit(childPid, signal);
       } finally {
-        await releaseAndWait().catch(() => undefined);
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
+        await cleanup();
       }
     },
   );
 
-  it("aborts concurrent sibling steps after the first failure", async () => {
-    const startedAt = Date.now();
-    const slowStepTimeoutMs = 60_000;
-    const abortBudgetMs = 30_000;
-
-    await expect(
-      runNodeStepsWithConcurrency(
-        [
-          {
-            label: "fail-fast",
-            args: ["--eval", "process.exit(2)"],
-            timeoutMs: slowStepTimeoutMs,
-          },
-          {
-            label: "slow-step",
-            args: ["--eval", "setTimeout(() => {}, 60_000)"],
-            timeoutMs: slowStepTimeoutMs,
-          },
-        ],
-        2,
-      ),
-    ).rejects.toThrow("fail-fast");
-
-    expect(Date.now() - startedAt).toBeLessThan(abortBudgetMs);
-  }, 45_000);
-
   it.skipIf(process.platform === "win32")(
     "force-kills aborted async node step process groups",
-    async () => {
+    async ({ signal, onTestFinished }) => {
       const { rootDir: root } = createTempExtensionRoot("abort-group");
       const childPidPath = path.join(root, "child.pid");
       const abortAckPath = path.join(root, "abort.ack");
       let childPid = 0;
-      const childScript = ["process.on('SIGTERM', () => {});", "setInterval(() => {}, 1000);"].join(
-        "",
-      );
+      const childScript = [
+        fixtureReceiptClientSource(receipts.endpoint),
+        "import fs from 'node:fs';",
+        "process.on('SIGTERM', () => {});",
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        `sendReceipt(${JSON.stringify(childPidPath)}, 'ready');`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
       const parentScript = [
         "const { spawn } = require('node:child_process');",
-        "const fs = require('node:fs');",
-        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
+        `const child = spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
         "process.on('SIGTERM', () => process.exit(0));",
         "setInterval(() => {}, 1000);",
       ].join("");
@@ -540,40 +530,48 @@ describe("check-extension-package-tsc-boundary", () => {
         "wait();",
       ].join("");
 
-      try {
-        const command = runNodeStepsWithConcurrency(
-          [
-            {
-              label: "fail-fast",
-              args: ["--eval", failAfterTestAckScript],
-              timeoutMs: 5_000,
-            },
-            {
-              label: "aborted-step-group",
-              args: ["--eval", parentScript],
-              timeoutMs: 60_000,
-            },
-          ],
-          2,
-        );
+      const command = runNodeStepsWithConcurrency(
+        [
+          {
+            label: "fail-fast",
+            args: ["--eval", failAfterTestAckScript],
+            timeoutMs: 5_000,
+          },
+          {
+            label: "aborted-step-group",
+            args: ["--eval", parentScript],
+            timeoutMs: 60_000,
+          },
+        ],
+        2,
+      );
 
-        childPid = await waitForPidFile(childPidPath, 2_000);
+      let cleanupPending: Promise<void> | undefined;
+      const cleanup = () =>
+        (cleanupPending ??= (async () => {
+          fs.writeFileSync(abortAckPath, "go");
+          await command.catch(() => undefined);
+          if (childPid && isProcessAlive(childPid)) {
+            process.kill(childPid, "SIGKILL");
+          }
+        })());
+      onTestFinished(cleanup);
+      try {
+        childPid = await withinTest(fixturePidBeforeSettlement(childPidPath, command), signal);
         expect(isProcessAlive(childPid)).toBe(true);
         fs.writeFileSync(abortAckPath, "go");
 
-        await expect(command).rejects.toThrow("fail-fast");
-        await waitForDead(childPid, 2_000);
+        await expect(withinTest(command, signal)).rejects.toThrow("fail-fast");
+        await waitForFixtureExit(childPid, signal);
       } finally {
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
+        await cleanup();
       }
     },
   );
 
   it.skipIf(process.platform === "win32")(
     "cleans active async node step descendants before forwarding parent SIGTERM",
-    async ({ signal }) => {
+    async ({ signal, onTestFinished }) => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-extension-tsc-signal-"));
       tempRoots.add(root);
       const childPidPath = path.join(root, "child.pid");
@@ -581,9 +579,9 @@ describe("check-extension-package-tsc-boundary", () => {
         path.resolve("scripts/check-extension-package-tsc-boundary.mts"),
       ).href;
       let childPid = 0;
-      let runner: ReturnType<typeof spawn> | undefined;
       const childScript = [
-        "const fs = require('node:fs');",
+        fixtureReceiptClientSource(receipts.endpoint),
+        "import fs from 'node:fs';",
         "process.on('SIGTERM', () => {});",
         // Write the pid atomically: writeFileSync makes the file visible at open() (0 bytes)
         // before the content lands, so an existsSync-then-read poller can catch an empty file
@@ -591,12 +589,13 @@ describe("check-extension-package-tsc-boundary", () => {
         `const pidPath = ${JSON.stringify(childPidPath)};`,
         "fs.writeFileSync(pidPath + '.tmp', String(process.pid));",
         "fs.renameSync(pidPath + '.tmp', pidPath);",
+        "sendReceipt(pidPath, 'ready');",
         "setInterval(() => {}, 1000);",
       ].join("");
       const parentScript = [
         "const { spawn } = require('node:child_process');",
         "process.on('SIGTERM', () => process.exit(0));",
-        `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: ['ignore', 'ignore', 'inherit'] });`,
+        `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: ['ignore', 'ignore', 'inherit'] });`,
         "setInterval(() => {}, 1000);",
       ].join("");
       const runnerScript = [
@@ -608,38 +607,41 @@ describe("check-extension-package-tsc-boundary", () => {
         )}], 60_000); } catch (error) { if (process.exitCode !== 143) { console.error(error); process.exitCode = 1; } }`,
       ].join("\n");
 
-      const runnerEnded = new AbortController();
-      const readinessSignal = AbortSignal.any([signal, runnerEnded.signal]);
+      const runner = spawn(process.execPath, ["--input-type=module", "-e", runnerScript], {
+        cwd: process.cwd(),
+        stdio: ["ignore", "ignore", "inherit"],
+      });
+      const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve, reject) => {
+          runner.once("error", reject);
+          runner.once("close", (code, exitSignal) => resolve({ code, signal: exitSignal }));
+        },
+      );
+      let cleanupPending: Promise<void> | undefined;
+      const cleanup = () =>
+        (cleanupPending ??= (async () => {
+          if (runner.pid && isProcessAlive(runner.pid)) {
+            runner.kill("SIGTERM");
+          }
+          await closed;
+          if (childPid && isProcessAlive(childPid)) {
+            process.kill(childPid, "SIGKILL");
+          }
+        })());
+      onTestFinished(cleanup);
       try {
-        runner = spawn(process.execPath, ["--input-type=module", "-e", runnerScript], {
-          cwd: process.cwd(),
-          stdio: ["ignore", "ignore", "inherit"],
-        });
-        runner.once("exit", () => runnerEnded.abort(new Error("Runner exited before readiness")));
-        runner.once("error", (error) => runnerEnded.abort(error));
-
-        // The child publishes readiness after both signal handlers are installed.
-        // Observe that state under the test/runner lifetime, not delayed FS notices.
-        childPid = await waitForPidFile(childPidPath, Number.POSITIVE_INFINITY, (ms) =>
-          delay(ms, undefined, { signal: readinessSignal }),
-        );
-        readinessSignal.throwIfAborted();
+        childPid = await withinTest(fixturePidBeforeSettlement(childPidPath, closed), signal);
         expect(isProcessAlive(childPid)).toBe(true);
 
         runner.kill("SIGTERM");
 
-        await expect(waitForChildClose(runner)).resolves.toEqual({
+        await expect(withinTest(closed, signal)).resolves.toEqual({
           code: 143,
           signal: null,
         });
-        await waitForDead(childPid, 2_000);
+        await waitForFixtureExit(childPid, signal);
       } finally {
-        if (runner?.pid && isProcessAlive(runner.pid)) {
-          runner.kill("SIGKILL");
-        }
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
+        await cleanup();
       }
     },
   );

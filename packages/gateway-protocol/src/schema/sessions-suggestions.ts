@@ -3,29 +3,27 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionSharingIdentitySchema, SessionSharingRoleSchema } from "./sessions-sharing.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 const SessionSuggestionTargetParamsSchema = {
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
 };
 
-export const SessionSuggestionStateSchema = Type.Union([
-  Type.Literal("pending"),
-  Type.Literal("accepted"),
-  Type.Literal("dismissed"),
+export const SessionSuggestionStateSchema = stringLiteralUnion([
+  "pending",
+  "accepted",
+  "dismissed",
 ]);
 
-export const SessionSuggestionResolutionSchema = Type.Union([
-  Type.Literal("send"),
-  Type.Literal("queue"),
-  Type.Literal("edit"),
-  Type.Literal("dismiss"),
+export const SessionSuggestionResolutionSchema = stringLiteralUnion([
+  "send",
+  "queue",
+  "edit",
+  "dismiss",
 ]);
 
-export const SessionSuggestionActionSchema = Type.Union([
-  Type.Literal("added"),
-  Type.Literal("resolved"),
-]);
+export const SessionSuggestionActionSchema = stringLiteralUnion(["added", "resolved"]);
 
 export const SessionSuggestionSchema = closedObject({
   id: NonEmptyString,
@@ -73,6 +71,8 @@ export const SessionTypingParamsSchema = closedObject({
   sessionId: NonEmptyString,
   typing: Type.Boolean(),
   preview: Type.Optional(Type.String({ maxLength: 400 })),
+  // UTF-16 offset in preview, matching textarea selection offsets.
+  cursor: Type.Optional(Type.Integer({ minimum: 0, maximum: 800 })),
 });
 
 export const SessionTypingResultSchema = closedObject({
@@ -87,6 +87,8 @@ export const SessionTypingEventSchema = closedObject({
   actor: SessionSharingIdentitySchema,
   typing: Type.Boolean(),
   preview: Type.Optional(Type.String({ maxLength: 400 })),
+  // UTF-16 offset in preview, matching textarea selection offsets.
+  cursor: Type.Optional(Type.Integer({ minimum: 0, maximum: 800 })),
   ts: Type.Integer({ minimum: 0 }),
 });
 

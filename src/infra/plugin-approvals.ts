@@ -2,7 +2,7 @@ import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { summarizeApprovalScope, type ApprovalScope } from "./approval-scope.js";
 import type { ExecApprovalDecision } from "./exec-approvals-core.js";
 
-export type PluginApprovalActionView = {
+type PluginApprovalActionView = {
   kind?: "command" | "decision";
   label: string;
   command: string;
@@ -81,9 +81,9 @@ export const DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS = 120_000;
 export const MAX_PLUGIN_APPROVAL_TIMEOUT_MS = 600_000;
 export const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
 export const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 512;
-export const PLUGIN_APPROVAL_DETAIL_MAX_LENGTH = 16_384;
+const PLUGIN_APPROVAL_DETAIL_MAX_LENGTH = 16_384;
 const PLUGIN_APPROVAL_DETAIL_TRUNCATION_SUFFIX = "…[truncated]";
-export const DEFAULT_PLUGIN_APPROVAL_DECISIONS = [
+const DEFAULT_PLUGIN_APPROVAL_DECISIONS = [
   "allow-once",
   "allow-always",
   "deny",

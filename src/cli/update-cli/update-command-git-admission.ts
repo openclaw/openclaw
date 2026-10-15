@@ -1,7 +1,7 @@
 import { inspectSourceUpdateArtifacts } from "../../../scripts/lib/source-update-artifact-preflight.mts";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import type { UpdateRunnerOptions } from "../../infra/update-runner-types.js";
+import { assertReadableGitMetadata } from "./schema-preflight.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import type { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 
@@ -38,14 +38,5 @@ export async function recordInspectedGitTarget(
     target: { kind: "git", sha: target.sha, version: target.version },
   });
   assertCurrent();
-  assertReadableGitTarget(target);
-}
-
-export function assertReadableGitTarget(target: Parameters<BeforeGitMutation>[0]): void {
-  if (target.metadataUnreadable) {
-    const failure = createUpdatePreflightFailure("target-git-metadata", target.metadataUnreadable);
-    throw new UpdatePreMutationError("target-metadata-preflight", failure.message, {
-      failureFacts: failure.failureFacts,
-    });
-  }
+  assertReadableGitMetadata(target.metadataUnreadable);
 }

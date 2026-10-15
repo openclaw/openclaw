@@ -6,6 +6,17 @@ import type { AgentCommandOpts } from "./types.js";
 const SUBAGENT_ANNOUNCE_CHILD_SESSION_KEY = "agent:main:subagent:child";
 const SUBAGENT_ANNOUNCE_REQUESTER_TOOLS = ["read", "exec", "sessions_spawn", "message"];
 
+export function createSubagentAnnounceConfig(
+  { operatorTools, sandboxMode }: SubagentAnnounceDeliveryCase,
+  storePath: string,
+): OpenClawConfig {
+  return {
+    session: { store: storePath },
+    ...(operatorTools ? { tools: operatorTools } : {}),
+    ...(sandboxMode ? { agents: { defaults: { sandbox: { mode: sandboxMode } } } } : {}),
+  };
+}
+
 export function createSubagentAnnounceHandoffOptions(params: {
   sourceReplyDeliveryMode: "automatic" | "message_tool_only";
   targetSessionKey: string;
@@ -79,7 +90,7 @@ export type SubagentAnnounceDeliveryCase = {
   expectedToolsAllow?: readonly string[];
 };
 
-export const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] = [
+const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDeliveryCase[] = [
   {
     name: "automatic source replies",
     sourceReplyDeliveryMode: "automatic" as const,
@@ -183,6 +194,23 @@ export const SUBAGENT_ANNOUNCE_DELIVERY_CASES: readonly SubagentAnnounceDelivery
   },
 ];
 
+// Only automatic Claude CLI completion replies restore requester tools.
+function createClaudeCliSubagentAnnounceDeliveryCases(): SubagentAnnounceDeliveryCase[] {
+  return SUBAGENT_ANNOUNCE_DELIVERY_CASES.map((testCase) => {
+    const retainsRequesterTools =
+      testCase.sourceReplyDeliveryMode === "automatic" && testCase.trustedInternalHandoff !== false;
+    return retainsRequesterTools
+      ? {
+          ...testCase,
+          expectedDisableTools: false,
+          expectedToolsAllow: testCase.runtimeToolsAllow ?? SUBAGENT_ANNOUNCE_REQUESTER_TOOLS,
+        }
+      : testCase;
+  });
+}
+export const SUBAGENT_ANNOUNCE_CLAUDE_CLI_DELIVERY_CASES =
+  createClaudeCliSubagentAnnounceDeliveryCases();
+
 function createEmbeddedSubagentAnnounceDeliveryCases(): SubagentAnnounceDeliveryCase[] {
   const cases: SubagentAnnounceDeliveryCase[] = [];
   for (const testCase of SUBAGENT_ANNOUNCE_DELIVERY_CASES) {
@@ -219,3 +247,18 @@ export function createSubagentAnnounceSessionStore(
     },
   };
 }
+
+// Required public outputs and optional result intake share both command runtimes.
+export const INTER_SESSION_REPLY_POLICY_CASES = [
+  ["agent:main:subagent:reply-required", "discord"],
+  ["agent:main:subagent:optional-settle", "discord", true, true, "subagent_settle", "optional"],
+  ["agent:main:direct:optional-settle", "webchat", true, true, "subagent_settle", "optional"],
+  ["agent:main:direct:required-settle", "webchat", false, false, "subagent_settle", "required"],
+  ["agent:main:direct:peer-result", "webchat", false, true, "sessions_send", "optional"],
+  ["agent:main:direct:reply-required", "webchat"],
+  ["agent:main:direct:private-reply-required", "telegram", true],
+  ["agent:main:telegram:direct:reply-required", "telegram"],
+  ["agent:main:telegram:group:optional", "telegram", undefined, true],
+  ["agent:main:telegram:direct:delegated", "telegram", undefined, false, "sessions_send"],
+  ["agent:main:telegram:group:delegated", "telegram", undefined, true, "sessions_send"],
+] as const;

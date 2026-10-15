@@ -115,8 +115,11 @@ it("finalizes fixture calls and releases their timers, database workers, and dir
   }
   await setImmediate();
   expect(allocated).toEqual({ duration: 2, transcript: 1 });
-  expect([...pending.values()].filter((owner) => owner !== "database-timer")).toHaveLength(
-    3 + allocatedWorkers,
-  );
+  // Database admission workers can finish before fixture teardown; call timers must stay live.
+  expect(
+    [...pending.values()]
+      .filter((owner) => owner === "duration" || owner === "transcript")
+      .toSorted(),
+  ).toEqual(["duration", "duration", "transcript"]);
   expect(turnResult).toBeUndefined();
 });

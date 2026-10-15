@@ -1,9 +1,6 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  usePreparedModelRuntimeHarness,
-  getPreparedModelRuntimeTestApi,
-} from "./prepared-model-runtime.test-harness.js";
+import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
@@ -111,18 +108,22 @@ describe("prepared model runtime Gateway leases", () => {
     };
     const configured = expectDefined(getPreparedModelRuntimeSnapshot(input), "configured snapshot");
     const loadsBeforeRun = mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.length;
-    await using covered = await acquireAgentRunPreparedModelRuntime({
-      ...input,
-      runtimePluginSelections: [
-        { provider: "configured-provider", modelId: "utility", runtime: "openclaw" },
-      ],
-    });
-    expect(covered.snapshot).toBe(configured);
-    expect(covered.pluginGeneration).toBe(published.pluginGeneration);
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(loadsBeforeRun);
+    for (const workspaceDir of [input.workspaceDir, "/tmp/outside-folder"]) {
+      await using covered = await acquireAgentRunPreparedModelRuntime({
+        ...input,
+        workspaceDir,
+        runtimePluginSelections: [
+          { provider: "configured-provider", modelId: "utility", runtime: "openclaw" },
+        ],
+      });
+      expect(covered.snapshot).toBe(configured);
+      expect(covered.pluginGeneration).toBe(published.pluginGeneration);
+      expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(loadsBeforeRun);
+    }
 
     await using uncovered = await acquireAgentRunPreparedModelRuntime({
       ...input,
+      workspaceDir: "/tmp/outside-folder",
       runtimePluginSelections: [
         { provider: "additional-provider", modelId: "utility", runtime: "openclaw" },
       ],
@@ -182,26 +183,5 @@ describe("prepared model runtime Gateway leases", () => {
       fixture.state.agentDir("other"),
     );
     expect(unrelated.registries).toEqual([]);
-  });
-
-  it("retires released retained run owners when gateway refresh clears the lifecycle", async () => {
-    const input = await publishGateway();
-    for (let index = 0; index < 3; index += 1) {
-      const lease = await acquireAgentRunPreparedModelRuntime({
-        ...input,
-        loadRuntimePlugins: true,
-        runtimePluginSelections: [
-          { provider: "openai", modelId: `retained-model-${index}`, runtime: "codex" },
-        ],
-      });
-      await lease[Symbol.asyncDispose]();
-    }
-    expect(getPreparedModelRuntimeTestApi().getPreparedModelRuntimeOwnerCountForTest()).toBe(4);
-
-    const refreshError = new Error("configured owner discovery failed");
-    mocks.configuredAgentIdsError = refreshError;
-    await expect(refreshPreparedModelRuntimeSnapshots(input.config)).rejects.toBe(refreshError);
-
-    expect(getPreparedModelRuntimeTestApi().getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
   });
 });

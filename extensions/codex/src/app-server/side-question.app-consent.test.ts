@@ -1,5 +1,9 @@
 import "./side-question.test-support.js";
-import { describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const {
   createFakeClient,
@@ -9,6 +13,9 @@ const {
   sideParams,
   useSideQuestionTestSetup,
 } = await import("./side-question.test-support.js");
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("Codex side-question app consent", () => {
   useSideQuestionTestSetup();

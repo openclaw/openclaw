@@ -134,87 +134,98 @@ async function withHarness(
   expect(listeners.size).toBe(0);
 }
 
-it.each(["fresh", "native"] as const)(
-  "rejects unsupported restricted %s execution before invoking the harness",
-  async (mode) =>
-    withHarness(mode, true, false, async ({ execute, runAttempt }) => {
-      await expect(execute()).rejects.toThrow("cannot enforce your operator role's model policy");
-      expect(runAttempt).not.toHaveBeenCalled();
-    }),
+type HarnessOperation = "execution" | "finalization";
+type HarnessMode = Parameters<typeof withHarness>[0];
+const admissionCases: Array<[HarnessOperation, HarnessMode, boolean, boolean]> = [
+  ["execution", "fresh", true, false],
+  ["execution", "native", true, false],
+  ["execution", "fresh", false, false],
+  ["execution", "native", false, false],
+  ["execution", "fresh", true, true],
+  ["execution", "host", true, true],
+  ["execution", "native", true, true],
+  ["finalization", "native", false, false],
+  ["finalization", "native", true, false],
+];
+
+it.each(admissionCases)(
+  "checks %s admission for %s with model policy=%s and exact support=%s",
+  async (operation, mode, restricted, exact) =>
+    withHarness(
+      mode,
+      restricted,
+      exact,
+      async ({ execute, finalize, runAttempt, finalizeSettledTurn, listeners, sourceHolds }) => {
+        const unsupported = "cannot enforce your operator role's model policy";
+        if (operation === "finalization") {
+          await expect(finalize()).rejects.toThrow(
+            restricted ? unsupported : "fixture finalization reached",
+          );
+          expect(finalizeSettledTurn).toHaveBeenCalledTimes(restricted ? 0 : 1);
+        } else if (restricted && !exact) {
+          await expect(execute()).rejects.toThrow(unsupported);
+          expect(runAttempt).not.toHaveBeenCalled();
+        } else {
+          expect((await execute()).assistantTexts).toEqual(["done"]);
+          expect(runAttempt).toHaveBeenCalledTimes(1);
+          if (!restricted) {
+            expect(listeners.size).toBe(0);
+            expect(sourceHolds()).toBe(1);
+          }
+        }
+      },
+    ),
 );
 
-it.each(["fresh", "native"] as const)(
-  "preserves unsupported %s execution without a model policy",
-  async (mode) =>
-    withHarness(mode, false, false, async ({ execute, runAttempt, listeners, sourceHolds }) => {
-      expect((await execute()).assistantTexts).toEqual(["done"]);
-      expect(runAttempt).toHaveBeenCalledTimes(1);
-      expect(listeners.size).toBe(0);
-      expect(sourceHolds()).toBe(1);
-    }),
-);
-
-it.each(["fresh", "host", "native"] as const)(
-  "admits exact model-policy support for %s execution",
-  async (mode) =>
-    withHarness(mode, true, true, async ({ execute, runAttempt }) => {
-      expect((await execute()).assistantTexts).toEqual(["done"]);
-      expect(runAttempt).toHaveBeenCalledTimes(1);
-    }),
-);
-
-it.each(["fresh", "native"] as const)(
-  "cancels unsupported %s work when a policy is introduced even if its outer model is allowed",
-  async (mode) =>
+const cancellationCases: Array<[HarnessOperation, HarnessMode]> = [
+  ["execution", "fresh"],
+  ["execution", "native"],
+  ["finalization", "native"],
+];
+it.each(cancellationCases)(
+  "cancels unsupported %s through %s when a model policy is introduced",
+  async (operation, mode) =>
     withHarness(
       mode,
       false,
       false,
-      async ({ execute, runAttempt, restrict, listeners, sourceHolds }) => {
-        runAttempt.mockImplementation(async (attempt) => {
-          expect(attempt.abortSignal?.aborted).toBe(false);
+      async ({
+        execute,
+        finalize,
+        runAttempt,
+        finalizeSettledTurn,
+        restrict,
+        listeners,
+        sourceHolds,
+      }) => {
+        const introducePolicy = (signal: AbortSignal | undefined) => {
+          expect(signal?.aborted).toBe(false);
           restrict();
-          expect(attempt.abortSignal?.aborted).toBe(true);
-          return result;
-        });
-        await expect(execute()).rejects.toThrow("operator role cannot use this model");
-        expect(runAttempt).toHaveBeenCalledTimes(1);
+          expect(signal?.aborted).toBe(true);
+        };
+        if (operation === "execution") {
+          runAttempt.mockImplementation(async (attempt) => {
+            introducePolicy(attempt.abortSignal);
+            return result;
+          });
+        } else {
+          finalizeSettledTurn.mockImplementation(async ({ attempt }) => {
+            introducePolicy(attempt.abortSignal);
+            attempt.abortSignal?.throwIfAborted();
+            throw new Error("finalization must be canceled");
+          });
+        }
+        await expect((operation === "execution" ? execute : finalize)()).rejects.toThrow(
+          "operator role cannot use this model",
+        );
+        expect(operation === "execution" ? runAttempt : finalizeSettledTurn).toHaveBeenCalledTimes(
+          1,
+        );
         expect(listeners.size).toBe(0);
         expect(sourceHolds()).toBe(1);
       },
     ),
 );
-
-it.each([false, true])("checks unsupported finalization with model policy=%s", async (restricted) =>
-  withHarness("native", restricted, false, async ({ finalize, finalizeSettledTurn }) => {
-    await expect(finalize()).rejects.toThrow(
-      restricted
-        ? "cannot enforce your operator role's model policy"
-        : "fixture finalization reached",
-    );
-    expect(finalizeSettledTurn).toHaveBeenCalledTimes(restricted ? 0 : 1);
-  }),
-);
-
-it("cancels unsupported finalization when a model policy is introduced", async () =>
-  withHarness(
-    "native",
-    false,
-    false,
-    async ({ finalize, finalizeSettledTurn, restrict, listeners, sourceHolds }) => {
-      finalizeSettledTurn.mockImplementation(async ({ attempt }) => {
-        expect(attempt.abortSignal?.aborted).toBe(false);
-        restrict();
-        expect(attempt.abortSignal?.aborted).toBe(true);
-        attempt.abortSignal?.throwIfAborted();
-        throw new Error("finalization must be canceled");
-      });
-      await expect(finalize()).rejects.toThrow("operator role cannot use this model");
-      expect(finalizeSettledTurn).toHaveBeenCalledTimes(1);
-      expect(listeners.size).toBe(0);
-      expect(sourceHolds()).toBe(1);
-    },
-  ));
 
 it.each([
   ["foreground", false],

@@ -87,10 +87,7 @@ public enum InstanceIdentity {
 
     public static let instanceId: String = {
         let defaults = Self.defaults
-        if let existing = defaults.string(forKey: instanceIdKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !existing.isEmpty
-        {
+        if let existing = defaults.string(forKey: instanceIdKey)?.trimmedNonEmpty {
             return existing
         }
 
@@ -104,22 +101,11 @@ public enum InstanceIdentity {
         if ProcessInfo.processInfo.isiOSAppOnMac {
             return "OpenClaw Mac App"
         }
-        let name = Self.readMainActor {
-            UIDevice.current.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return name.isEmpty ? "openclaw" : name
+        return Self.readMainActor { UIDevice.current.name.trimmedNonEmpty } ?? "openclaw"
         #elseif os(watchOS)
-        let name = Self.readMainActor {
-            WKInterfaceDevice.current().name.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return name.isEmpty ? "Apple Watch" : name
+        return Self.readMainActor { WKInterfaceDevice.current().name.trimmedNonEmpty } ?? "Apple Watch"
         #else
-        if let name = Host.current().localizedName?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !name.isEmpty
-        {
-            return name
-        }
-        return "openclaw"
+        return Host.current().localizedName?.trimmedNonEmpty ?? "openclaw"
         #endif
     }()
 

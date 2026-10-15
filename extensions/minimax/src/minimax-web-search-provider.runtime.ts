@@ -71,11 +71,7 @@ function isMiniMaxCnHost(value: string | undefined): boolean {
   if (!trimmed) {
     return false;
   }
-  try {
-    return new URL(trimmed).hostname.endsWith("minimaxi.com");
-  } catch {
-    return trimmed.includes("minimaxi.com");
-  }
+  return URL.parse(trimmed)?.hostname.endsWith("minimaxi.com") ?? trimmed.includes("minimaxi.com");
 }
 
 function resolveMiniMaxRegion(

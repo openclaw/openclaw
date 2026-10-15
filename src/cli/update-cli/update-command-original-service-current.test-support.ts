@@ -40,6 +40,7 @@ type Fixture = {
   state: OpenClawTestState;
   rootA: string;
   rootB: string;
+  serviceNodeRunner: string;
   before: PreManagedServiceStop;
   serviceState: GatewayServiceState;
   mocks: {
@@ -160,7 +161,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
     "revoked",
     "schema-newer",
   ] as const)("retained own-rebind compensation: %s", async (scenario) => {
-    const { state, rootA, rootB, before, serviceState, mocks } = fixture();
+    const { state, rootA, rootB, serviceNodeRunner, before, serviceState, mocks } = fixture();
     const managedDefinition = structuredClone(serviceState.command!);
     serviceState.command = {
       ...managedDefinition,
@@ -179,7 +180,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
         pinScope,
         {
           expected: readDaemonRuntimePinForInstall(pinScope, serviceState.command, true),
-          pin: { runtime: "node", path: process.execPath },
+          pin: { runtime: "node", path: serviceNodeRunner },
         },
         serviceState.command,
       );
@@ -207,7 +208,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
                   serviceState.command = {
                     ...originalCommand,
                     programArguments: [
-                      process.execPath,
+                      serviceNodeRunner,
                       path.join(rootB, "dist/index.js"),
                       "gateway",
                     ],
@@ -388,7 +389,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
     });
   });
 
-  it.each(["slow", "revoked", "generation-change"] as const)(
+  it.each(["slow", "generation-change"] as const)(
     "retained readiness uses current bounded owner: %s",
     async (scenario) => {
       const { rootB, before, mocks } = fixture();
@@ -397,9 +398,6 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
         mocks.health.mockImplementation(async (params) => {
           expect(params.timeoutMs).toBeGreaterThan(3_000);
           const result = await initial(params);
-          if (scenario === "revoked") {
-            run.executorFence = undefined;
-          }
           return {
             ...result,
             gatewayBootId: scenario === "generation-change" ? "prior-boot" : undefined,
@@ -444,113 +442,48 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
     });
   });
 
-  it("refuses a completed later fingerprint mismatch instead of downgrading it to a warning", async () => {
-    const { rootB, before } = fixture();
-    await admitted(async (run) => {
-      const original = await observeOriginalManagedServiceRuntime(
-        { root: rootB, opts: { run } },
-        before,
-      );
-      if (!original?.packageFingerprint) {
-        throw new Error("missing complete baseline");
-      }
-      const reader = integrity.createPackageIntegrityReader;
-      vi.spyOn(integrity, "createPackageIntegrityReader").mockImplementation((timeout) => ({
-        ...reader(timeout),
-        tree: async () => ({ ...original.packageFingerprint!, digest: "different" }),
-      }));
-      await expect(
-        revalidateOriginalManagedServiceRuntime(original, () => run.executorFence!.assertCurrent()),
-      ).rejects.toThrow("package changed");
-      expect(original.packageFingerprintWarning).toBeUndefined();
-    });
-  });
-
-  it.each([
-    "entry-limit",
-    "read-error",
-    "later-timeout",
-    "later-entry-limit",
-    "launcher-limit",
-    "launcher-drift",
-    "read-window",
-  ] as const)("current F3 mandatory identity and optional tree: %s", async (scenario) => {
-    const { rootA, rootB, before } = fixture();
-    const createReader = integrity.createPackageIntegrityReader;
-    let treeReads = 0;
-    let displaced = false;
-    vi.spyOn(integrity, "createPackageIntegrityReader").mockImplementation((timeout) => {
-      const reader = createReader(timeout);
-      return {
-        ...reader,
-        tree: async (root, originalRoot) => {
-          treeReads++;
-          if (scenario === "read-error") {
-            throw new Error("mandatory package access failed");
-          }
-          if (!scenario.startsWith("later-") || treeReads > 1) {
-            if (scenario.includes("entry-limit")) {
-              throw new integrity.PackageIntegrityLimitError("entry");
+  it.each(["launcher-limit", "launcher-drift"] as const)(
+    "current F3 mandatory launcher identity: %s",
+    async (scenario) => {
+      const { rootA, rootB, before } = fixture();
+      const createReader = integrity.createPackageIntegrityReader;
+      vi.spyOn(integrity, "createPackageIntegrityReader").mockImplementation((timeout) => {
+        const reader = createReader(timeout);
+        return {
+          ...reader,
+          launcher: async (launcher) => {
+            if (scenario === "launcher-limit") {
+              throw new integrity.PackageIntegrityLimitError("byte");
             }
-            throw new integrity.PackageIntegrityTimeoutError(30_000);
-          }
-          return reader.tree(root, originalRoot);
-        },
-        launcher: async (launcher) => {
-          if (scenario === "launcher-limit") {
-            throw new integrity.PackageIntegrityLimitError("byte");
-          }
-          const value = await reader.launcher(launcher);
-          if (scenario === "read-window" && !displaced) {
-            displaced = true;
-            await fs.rename(rootA, `${rootA}-displaced`);
-            await fs.cp(`${rootA}-displaced`, rootA, { recursive: true });
-          }
-          return value;
-        },
-      };
-    });
-    await admitted(async (run) => {
-      const observation = observeOriginalManagedServiceRuntime(
-        { root: rootB, opts: { run } },
-        before,
-      );
-      if (["read-error", "read-window", "launcher-limit"].includes(scenario)) {
-        await expect(observation).rejects.toMatchObject({
-          reason: "original-service-unverified",
-        });
-        return;
-      }
-      const original = await observation;
-      expect(original).toMatchObject({ root: rootA, version: "2026.9.3", verified: true });
-      if (scenario.startsWith("later-")) {
-        expect(original).toHaveProperty("packageFingerprint");
-      } else {
-        expect(original).not.toHaveProperty("packageFingerprint");
-      }
-      expect(original).toHaveProperty(
-        "packageFingerprintWarning",
-        expect.stringContaining("full package contents are unverified"),
-      );
-      expect(treeReads).toBe(scenario.startsWith("later-") ? 2 : 1);
-      if (!original || !run.executorFence) {
-        throw new Error("missing admitted observation");
-      }
-      if (scenario === "launcher-drift") {
+            return reader.launcher(launcher);
+          },
+        };
+      });
+      await admitted(async (run) => {
+        const observation = observeOriginalManagedServiceRuntime(
+          { root: rootB, opts: { run } },
+          before,
+        );
+        if (scenario === "launcher-limit") {
+          await expect(observation).rejects.toMatchObject({
+            reason: "original-service-unverified",
+          });
+          return;
+        }
+        const original = await observation;
+        expect(original).toMatchObject({ root: rootA, version: "2026.9.3", verified: true });
+        if (!original || !run.executorFence) {
+          throw new Error("missing admitted observation");
+        }
         await fs.appendFile(path.join(rootA, "dist/index.js"), "// replaced\n");
         await expect(
           revalidateOriginalManagedServiceRuntime(original, () =>
             run.executorFence!.assertCurrent(),
           ),
         ).rejects.toThrow("changed");
-      } else {
-        await revalidateOriginalManagedServiceRuntime(original, () =>
-          run.executorFence!.assertCurrent(),
-        );
-        expect(treeReads).toBe(scenario.startsWith("later-") ? 3 : 1);
-      }
-    });
-  });
+      });
+    },
+  );
 
   it.each([
     "healthy",

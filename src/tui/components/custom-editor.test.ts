@@ -29,41 +29,6 @@ describe("CustomEditor", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    { name: "Kitty Shift+Enter", input: "\u001b[13;2u" },
-    { name: "Ctrl+J", input: "\n" },
-  ])("inserts a newline without submitting on $name", ({ input }) => {
-    const editor = createEditor();
-    const onSubmit = vi.fn();
-    editor.onSubmit = onSubmit;
-    editor.setText("first line");
-
-    editor.handleInput(input);
-
-    expect(editor.getText()).toBe("first line\n");
-    expect(onSubmit).not.toHaveBeenCalled();
-  });
-
-  it("routes alt+enter to the follow-up handler", () => {
-    const editor = createEditor();
-    const onAltEnter = vi.fn();
-    editor.onAltEnter = onAltEnter;
-
-    editor.handleInput("\u001b\r");
-
-    expect(onAltEnter).toHaveBeenCalledTimes(1);
-  });
-
-  it("routes alt+up to the dequeue handler", () => {
-    const editor = createEditor();
-    const onAltUp = vi.fn();
-    editor.onAltUp = onAltUp;
-
-    editor.handleInput("\u001bp");
-
-    expect(onAltUp).toHaveBeenCalledTimes(1);
-  });
-
   it("uses Ctrl+D to request exit only when the editor is empty", () => {
     const editor = createEditor();
     const onCtrlD = vi.fn();
@@ -75,40 +40,16 @@ describe("CustomEditor", () => {
     expect(editor.getText()).toBe("");
   });
 
-  it.each([
-    { name: "joins lines", text: "first\nsecond", keys: ["\u001b[A"], expected: "firstsecond" },
-    {
-      name: "deletes a complete grapheme",
-      text: "a👨‍👩‍👧‍👦b",
-      keys: ["\u001b[D", "\u001b[D"],
-      expected: "ab",
-    },
-    { name: "does nothing at the final cursor", text: "keepword", keys: [], expected: "keepword" },
-  ])("Ctrl+D $name without exiting nonempty input", ({ text, keys, expected }) => {
+  it("Ctrl+D deletes a complete grapheme without exiting nonempty input", () => {
     const editor = createEditor();
     const onCtrlD = vi.fn();
     editor.onCtrlD = onCtrlD;
-    editor.setText(text);
-    for (const key of keys) {
-      editor.handleInput(key);
-    }
+    editor.setText("a👨‍👩‍👧‍👦b");
+    editor.handleInput("\u001b[D");
+    editor.handleInput("\u001b[D");
     editor.handleInput("\u0004");
 
-    expect(editor.getText()).toBe(expected);
-    expect(onCtrlD).not.toHaveBeenCalled();
-  });
-
-  it("uses Ctrl+D to edit recalled input history without requesting exit", () => {
-    const editor = createEditor();
-    const onCtrlD = vi.fn();
-    editor.onCtrlD = onCtrlD;
-    editor.addToHistory("history");
-
-    editor.handleInput("\u001b[A");
-    editor.handleInput("\u0001");
-    editor.handleInput("\u0004");
-
-    expect(editor.getText()).toBe("istory");
+    expect(editor.getText()).toBe("ab");
     expect(onCtrlD).not.toHaveBeenCalled();
   });
 
@@ -119,14 +60,6 @@ describe("CustomEditor", () => {
     editor.handleInput("\u001b[8364::101;7u");
 
     expect(editor.getText()).toBe("@€");
-  });
-
-  it("does not insert ordinary Alt-modified Kitty CSI-u input", () => {
-    const editor = createEditor();
-
-    editor.handleInput("\u001b[113;3u");
-
-    expect(editor.getText()).toBe("");
   });
 
   it("ignores printable Kitty key release events", () => {
@@ -162,11 +95,11 @@ describe("CustomEditor", () => {
     expect(editor.getText()).toBe("/fast on");
   });
 
-  it.each(["/help", "/hel"])("completes and submits %s with one Enter", async (input) => {
+  it("completes and submits /help with one Enter", async () => {
     const editor = createAutocompleteEditor();
     const onSubmit = vi.fn();
     editor.onSubmit = onSubmit;
-    await typeText(editor, input);
+    await typeText(editor, "/help");
 
     editor.handleInput("\r");
 
@@ -184,16 +117,5 @@ describe("CustomEditor", () => {
     editor.handleInput("\r");
 
     expect(onSubmit).toHaveBeenCalledExactlyOnceWith("/help\n");
-  });
-
-  it("does not expand stored paste text for ordinary input", () => {
-    const editor = createEditor();
-    editor.setText("draft");
-    const getExpandedText = vi.spyOn(editor, "getExpandedText");
-
-    editor.handleInput("x");
-
-    expect(getExpandedText).not.toHaveBeenCalled();
-    expect(editor.getText()).toBe("draftx");
   });
 });

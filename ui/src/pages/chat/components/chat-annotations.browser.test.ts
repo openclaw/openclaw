@@ -1,12 +1,12 @@
-import { html, nothing, render } from "lit";
+import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/composer.css";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
-import "./chat-comment-pins.ts";
-import { renderCommentPreviewChip, renderCommentPreviewRow } from "./chat-comment-preview.ts";
+import "./chat-comment-pins.tsx";
+import { renderCommentPreviewChip, renderCommentPreviewRows } from "./chat-comment-preview.tsx";
 import { removeChatSelectionPopup, showChatAnnotationEditor } from "./chat-selection-popup.ts";
 
 const longSelection = "Selected passage with enough words to exceed a compact preview. ".repeat(8);
@@ -45,11 +45,11 @@ function mountComments(count: number, top: number) {
   render(
     renderCommentPreviewChip(
       count,
-      html`<ol class="chat-comment-preview__list">
-        ${Array.from({ length: count }, () =>
-          renderCommentPreviewRow({ text: longSelection, comment: longComment }),
-        )}
-      </ol>`,
+      renderCommentPreviewRows(
+        Array.from({ length: count }, () => ({
+          comment: { text: longSelection, comment: longComment },
+        })),
+      ),
     ),
     container,
   );
@@ -59,14 +59,13 @@ function mountComments(count: number, top: number) {
 async function openComments(trigger: HTMLElement) {
   const tooltip = container.querySelector("openclaw-tooltip")!;
   await tooltip.updateComplete;
-  const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
   const shown = new Promise<Event>((resolve) => {
-    popup.addEventListener("wa-after-show", resolve, { once: true });
+    tooltip.addEventListener("overlay-after-show", resolve, { once: true });
   });
   trigger.focus();
   await shown;
-  await expect.poll(() => popup.open).toBe(true);
-  const body = popup.shadowRoot!.querySelector<HTMLElement>('[part="body"]')!;
+  const body = tooltip.shadowRoot!.querySelector<HTMLElement>(".tooltip-surface")!;
+  await expect.poll(() => body.matches(":popover-open")).toBe(true);
   await expect.poll(() => body.getBoundingClientRect().height).toBeGreaterThan(0);
   return { tooltip, body };
 }
@@ -184,7 +183,13 @@ describe("annotation chip and hovercard", () => {
             scroll.scrollTop = scroll.scrollHeight;
             expect(scroll.scrollTop).toBeGreaterThan(0);
           }
-          const row = container.querySelector(".chat-comment-preview__item")!;
+          const rows = container.querySelectorAll(".chat-comment-preview__item");
+          const row = rows[0]!;
+          if (count > 1) {
+            expect(
+              rows[1]!.getBoundingClientRect().top - row.getBoundingClientRect().bottom,
+            ).toBeCloseTo(12, 0);
+          }
           const passages = row.querySelectorAll<HTMLElement>(".chat-comment-preview__text");
           const selection = passages[0]!;
           const comment = passages[1]!;
@@ -194,9 +199,8 @@ describe("annotation chip and hovercard", () => {
           expect(comment.getBoundingClientRect().height).toBeLessThanOrEqual(
             Number.parseFloat(getComputedStyle(comment).lineHeight) * 4 + 1,
           );
-          const nativeTooltip = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
           const hidden = new Promise<Event>((resolve) => {
-            nativeTooltip.addEventListener("wa-after-hide", resolve, { once: true });
+            tooltip.addEventListener("overlay-after-hide", resolve, { once: true });
           });
           await userEvent.keyboard("{Escape}");
           await hidden;
@@ -306,11 +310,16 @@ describe("annotation editor", () => {
     },
   );
 
-  it.each([1440, 390])(
-    "grows downward from one line to five, then scrolls (%ipx)",
-    async (width) => {
+  it.each([
+    { width: 1440, expanded: false },
+    { width: 390, expanded: false },
+    { width: 1440, expanded: true },
+    { width: 390, expanded: true },
+  ])(
+    "grows to five lines and scrolls without fading editable text ($width px, editing=$expanded)",
+    async ({ width, expanded }) => {
       await page.viewport(width, 900);
-      const { input, popup } = openEditor();
+      const { input, popup } = openEditor(expanded);
       const oneLine = input.getBoundingClientRect().height;
       const originalTop = popup.getBoundingClientRect().top;
       const lineHeight = Number.parseFloat(getComputedStyle(input).lineHeight);
@@ -325,7 +334,15 @@ describe("annotation editor", () => {
       expect(input.getBoundingClientRect().height).toBeLessThanOrEqual(
         oneLine + lineHeight * 4 + 1,
       );
-      input.scrollTop = input.scrollHeight;
+      for (const scrollTop of [
+        0,
+        (input.scrollHeight - input.clientHeight) / 2,
+        input.scrollHeight,
+      ]) {
+        input.scrollTop = scrollTop;
+        input.dispatchEvent(new Event("scroll"));
+        expect(getComputedStyle(input).maskImage).toBe("none");
+      }
       expect(input.scrollTop).toBeGreaterThan(0);
       expect(popup.getBoundingClientRect().top).toBeCloseTo(originalTop, 0);
       expect(popup.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth);

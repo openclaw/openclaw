@@ -1,16 +1,13 @@
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
 import { selectDeliverableSessionsReply } from "../../tools/sessions-send-tokens.js";
 
-/** Selects the canonical operator-visible result from captured completion state. */
 export function resolveSubagentCompletionResultText(entry: {
   completion?: {
-    required?: boolean;
     resultText?: string | null;
     fallbackResultText?: string | null;
     terminalReply?: AgentRunTerminalReplySnapshot;
   };
   execution: {
-    status?: "queued" | "running" | "interrupted" | "terminal";
     outcome?: { status: "ok" | "error" | "timeout" | "unknown" };
   };
 }): string | undefined {

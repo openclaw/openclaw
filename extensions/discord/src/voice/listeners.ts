@@ -5,8 +5,6 @@ import {
   type Client,
   GatewayDispatchEvents,
   type GatewayGuildCreateDispatchData,
-  ReadyListener,
-  ResumedListener,
   VoiceStateUpdateListener,
 } from "../internal/discord.js";
 import type { DiscordVoiceListenerManager } from "./listener-contract.js";
@@ -19,24 +17,19 @@ function startAutoJoin(operation: () => Promise<unknown>, context = "") {
   );
 }
 
-export class DiscordVoiceReadyListener extends ReadyListener {
-  constructor(private manager: DiscordVoiceListenerManager) {
-    super();
-  }
+export class DiscordVoiceReadyListener {
+  readonly type: GatewayDispatchEvents.Ready | GatewayDispatchEvents.Resumed =
+    GatewayDispatchEvents.Ready;
+
+  constructor(private manager: DiscordVoiceListenerManager) {}
 
   async handle(_data: unknown, _client: Client): Promise<void> {
     startAutoJoin(() => this.manager.autoJoin());
   }
 }
 
-export class DiscordVoiceResumedListener extends ResumedListener {
-  constructor(private manager: DiscordVoiceListenerManager) {
-    super();
-  }
-
-  async handle(_data: unknown, _client: Client): Promise<void> {
-    startAutoJoin(() => this.manager.autoJoin());
-  }
+export class DiscordVoiceResumedListener extends DiscordVoiceReadyListener {
+  override readonly type = GatewayDispatchEvents.Resumed;
 }
 
 export class DiscordVoiceGuildCreateListener {

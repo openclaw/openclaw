@@ -44,10 +44,7 @@ type SqliteSessionImportRowsParams = Pick<
   repairLegacyTranscript?: boolean;
   /** Doctor-discovered history cannot replace the current logical session or window owner. */
   historicalOnly?: boolean;
-  /** Unverified recovery history may only bootstrap an empty destination. */
-  requireEmptyStore?: boolean;
   preserveExactStoredKey?: boolean;
-  skipIfExists?: boolean;
   entry: SessionEntry;
   legacyAcpMigrationSource?: LegacyAcpMigrationSource;
   readTranscriptEvents?: (append: (event: TranscriptEvent) => void) => void | (() => void);
@@ -58,7 +55,6 @@ type SqliteSessionImportRowsParams = Pick<
 type SqliteSessionImportRowsResult = {
   sessionId: string;
   sessionKey: string;
-  skippedExisting?: true;
   recovery?: { complete: boolean; repaired: boolean; events: number };
   transcriptEvents: number;
 };
@@ -86,14 +82,6 @@ function importSqliteSessionRowsInTransaction(
   const currentEntry = readExactSessionEntryRowForCanonicalRepair(database, resolved.sessionKey, {
     allowMalformedRowRepair: params.allowMalformedRowRepair === true,
   })?.entry;
-  if (params.skipIfExists === true && currentEntry) {
-    return {
-      sessionId: params.entry.sessionId,
-      sessionKey: resolved.sessionKey,
-      skippedExisting: true,
-      transcriptEvents,
-    };
-  }
   assertSessionTranscriptHot(database.db, params.entry.sessionId);
   const preservedHarnessId =
     params.entry.agentHarnessId === undefined &&
@@ -204,7 +192,6 @@ export async function importSqliteSessionRowsBatch(
     return [];
   }
   const prepared = params.map(resolveSqliteSessionImport);
-  const requireEmptyStore = params.some((row) => row.requireEmptyStore);
   const resolved = prepared[0]!.resolved;
   const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
   if (
@@ -244,22 +231,8 @@ export async function importSqliteSessionRowsBatch(
           importParams.beforePersistentApply?.();
         }
         return runOpenClawAgentWriteTransaction(
-          (database) => {
-            if (
-              requireEmptyStore &&
-              executeSqliteQueryTakeFirstSync(
-                database.db,
-                getSessionKysely(database.db)
-                  .selectFrom("session_nodes")
-                  .select("session_key")
-                  .limit(1),
-              )
-            ) {
-              throw new Error(
-                "Session recovery history cannot be verified; SQLite destination is not empty",
-              );
-            }
-            return prepared.map((row, source) =>
+          (database) =>
+            prepared.map((row, source) =>
               importSqliteSessionRowsInTransaction(
                 database,
                 row,
@@ -267,8 +240,7 @@ export async function importSqliteSessionRowsBatch(
                 source,
                 repairs.get(source),
               ),
-            );
-          },
+            ),
           toDatabaseOptions(resolved),
           { operationLabel: "session.import.batch" },
         );

@@ -5,6 +5,7 @@ import { ClickClackDiscussionService } from "./service.js";
 import {
   enforceClickClackDiscussionToolTarget,
   isClickClackDiscussionSessionTarget,
+  resolveClickClackDiscussionSessionTarget,
 } from "./tool-policy.js";
 import { createClickClackDiscussionTool } from "./tool.js";
 
@@ -17,7 +18,8 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
   const service = new ClickClackDiscussionService(api.runtime);
   api.registerService({
     id: "clickclack-discussion-session-events",
-    start: ({ gatewayEvents }) => service.bindGatewayEvents(gatewayEvents),
+    apiVersion: 2,
+    start: ({ gatewayEvents, scheduler }) => service.bindGatewayEvents(gatewayEvents, scheduler),
     stop: () => service.cleanup(),
   });
   api.registerTool((context) =>
@@ -34,6 +36,16 @@ export function registerClickClackDiscussions(api: OpenClawPluginApi): void {
         targetSessionKey,
       });
       return target ? { expectedSessionId: target.binding.sessionId } : undefined;
+    },
+    {
+      async resolveAsync({ requesterSessionKey, targetSessionKey }) {
+        const target = await resolveClickClackDiscussionSessionTarget({
+          runtime: api.runtime,
+          requesterSessionKey,
+          targetSessionKey,
+        });
+        return target ? { expectedSessionId: target.binding.sessionId } : undefined;
+      },
     },
   );
   // Registration is process-stable; provider methods read live config so a

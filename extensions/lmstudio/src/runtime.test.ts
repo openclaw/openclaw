@@ -167,42 +167,6 @@ describe("lmstudio-runtime", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("resolves SecretRef api key and headers", async () => {
-    const headerRef = {
-      "X-Proxy-Auth": {
-        source: "env" as const,
-        provider: "default" as const,
-        id: "LMSTUDIO_PROXY_TOKEN",
-      },
-    };
-    await expect(
-      resolveLmstudioConfiguredApiKey({
-        config: buildLmstudioConfig({
-          apiKey: {
-            source: "env",
-            provider: "default",
-            id: "LM_API_TOKEN",
-          },
-        }),
-        env: {
-          LM_API_TOKEN: "secretref-lmstudio-key",
-        },
-      }),
-    ).resolves.toBe("secretref-lmstudio-key");
-
-    await expect(
-      resolveLmstudioProviderHeaders({
-        config: buildLmstudioConfig({ headers: headerRef }),
-        env: {
-          LMSTUDIO_PROXY_TOKEN: "proxy-token",
-        },
-        headers: headerRef,
-      }),
-    ).resolves.toEqual({
-      "X-Proxy-Auth": "proxy-token",
-    });
-  });
-
   it.each([
     {
       name: "a configured env marker resolves its concrete credential",

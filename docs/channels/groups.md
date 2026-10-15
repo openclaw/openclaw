@@ -127,7 +127,7 @@ the shared [thread mention policy](/plugins/sdk-channel-plugins/mention-policy).
 
 For normal group/channel requests, OpenClaw defaults to `messages.groupChat.visibleReplies: "automatic"`: the final assistant text posts to the room as the visible reply.
 
-Use `messages.groupChat.visibleReplies: "message_tool"` when visible answers must go through `message(action=send)`. This selects the delivery method, not whether a reply is required. It works best with models that reliably follow tool-only delivery. If the model misses the tool and returns substantive final text, OpenClaw keeps that text private and attempts a bounded delivery recovery rather than posting it directly.
+Use `messages.groupChat.visibleReplies: "message_tool"` when visible answers must go through `message(action=send)`. This selects the delivery method, not whether a reply is required. It works best with models that reliably follow tool-only delivery. If the model misses the tool and returns substantive final text, OpenClaw keeps that text private and attempts a bounded delivery recovery rather than posting it directly. Claude CLI runs call the registered tool as `mcp__openclaw__message`; the backend explains this mapping and how to discover deferred tools in the system prompt.
 
 Use `"automatic"` for models or runtimes that do not reliably follow tool-only delivery: normal text finals post directly to the room, and the agent may still call `message(action=send)` for files, images, or other attachments that cannot ride along with the final text.
 
@@ -198,7 +198,7 @@ By default OpenClaw keeps context as received: allowlists decide who can trigger
 | `"allowlist"`       | Only inject history/thread/quote/forwarded context from allowlisted senders.     |
 | `"allowlist_quote"` | `allowlist`, plus keep the explicitly quoted/replied-to message from any sender. |
 
-Set it per channel (`channels.<channel>.contextVisibility`), per account (`channels.<channel>.accounts.<accountId>.contextVisibility`), or globally (`channels.defaults.contextVisibility`). Channels that fetch supplemental context (Discord, Feishu, iMessage, Matrix, Mattermost, Microsoft Teams, QQBot, Signal, Slack, Telegram, WhatsApp) apply the policy when building inbound context; unknown policy combinations fail closed and omit the context.
+Set it per channel (`channels.<channel>.contextVisibility`), per account (`channels.<channel>.accounts.<accountId>.contextVisibility`), or globally (`channels.defaults.contextVisibility`). Channels that fetch supplemental context (Discord, Feishu, iMessage, Matrix, Mattermost, Microsoft Teams, QQBot, Signal, Slack, Telegram, WhatsApp) apply the policy when building inbound context; unknown policy combinations omit the context.
 
 These modes filter channel-supplied supplemental context only. Tool policy and the owner-only tool inventory are still selected from the current turn's originating requester, not every sender represented in the prompt. See [Requester-scoped controls and prompt context](/gateway/security/hardened-baseline#requester-scoped-controls-and-prompt-context).
 
@@ -393,7 +393,7 @@ Control how group/room messages are handled per channel:
     - Group DMs are controlled separately (`channels.discord.dm.*`, `channels.slack.dm.*`: `groupEnabled`, `groupChannels`).
     - Telegram: sender allowlists accept numeric user IDs only (`"123456789"`; `telegram:`/`tg:` prefixes are stripped case-insensitively). `@username` entries do not match at runtime and log a warning; setup resolves `@username` to IDs. Negative chat IDs belong under `channels.telegram.groups`, not sender allowlists.
     - Default is `groupPolicy: "allowlist"`; if your group allowlist is empty, group messages are blocked.
-    - Runtime safety: when a provider block is completely missing (`channels.<provider>` absent), group policy fails closed to `allowlist` instead of inheriting `channels.defaults.groupPolicy`, and the gateway logs the fallback once per account.
+    - Runtime safety: when a provider block is completely missing (`channels.<provider>` absent), group policy defaults to `allowlist` instead of inheriting `channels.defaults.groupPolicy`, and the gateway logs the fallback once per account.
 
   </Accordion>
 </AccordionGroup>
@@ -451,7 +451,6 @@ Each fact defaults to enabled when the channel produces it. Among bundled channe
   agents: {
     entries: {
       main: {
-        default: true,
         groupChat: {
           mentionPatterns: ["@openclaw", "openclaw", "\\+15555550123"],
           historyLimit: 50,
@@ -554,7 +553,15 @@ Account-level channel configs can set the same policy under `channels.<channel>.
 Some channel configs support restricting which tools are available **inside a specific group/room/channel**.
 
 - `tools`: allow/deny tools for the whole group (`allow`, `alsoAllow`, `deny`; deny wins).
-- `toolsBySender`: per-sender overrides within the group. Use explicit key prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, and `"*"` wildcard. Channel ids use canonical OpenClaw channel ids; aliases such as `teams` normalize to `msteams`. Legacy unprefixed keys are still accepted, matched as `id:` only, and log a deprecation warning.
+- `toolsBySender`: per-sender overrides within the group. Use explicit key prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, and `"*"` wildcard. Use the primary OpenClaw channel ids; aliases such as `teams` normalize to `msteams`. Run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries before starting the Gateway.
+
+When a sender or group policy restricts the turn's tools, that requester can
+create only hidden helpers of the same agent. Visible and cross-agent sessions
+are refused, including through ACP or automatic session creation by
+`sessions_send`. Helpers retain the restricted tools and the requester's workspace
+and session root. The restriction follows delegated and queued turns; an
+unrestricted sender's later turn does not replace it.
+Owner-authorized automations retain their separate scheduling policy and workspace.
 
 Resolution order (most specific wins):
 
@@ -691,4 +698,4 @@ The agent system prompt includes a group intro on the first turn of a new group 
 - [Channel routing](/channels/channel-routing)
 - [Group messages](/channels/group-messages) — WhatsApp-only behavior (history injection, mention handling details)
 - [Pairing](/channels/pairing)
-- [WhatsApp](/channels/whatsapp#system-prompts) — canonical WhatsApp system prompt rules, including group and direct prompt resolution, wildcard behavior, and account override semantics
+- [WhatsApp](/channels/whatsapp#system-prompts) — WhatsApp system prompt rules, including group and direct prompt resolution, wildcard behavior, and account override semantics

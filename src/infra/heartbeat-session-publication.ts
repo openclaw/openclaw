@@ -1,26 +1,27 @@
 import { createHash } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
-import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import {
-  loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
   publishTranscriptUpdate,
-  readActiveTranscriptEntryAnchor,
 } from "../config/sessions/session-accessor.js";
 import {
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { readCommittedTranscriptMessageSequence } from "../config/sessions/session-accessor.sqlite-transcript-sequences.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
+import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
 import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { SessionTranscriptAssistantMessage } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeMediaReferenceForComparison } from "../media/media-reference-comparison.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { resolveRawAssistantAnswerText } from "../shared/assistant-answer-text.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import {
@@ -28,7 +29,14 @@ import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
 } from "../shared/transcript-only-openclaw-assistant.js";
 import { formatErrorMessage } from "./errors.js";
+import { HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX } from "./heartbeat-events-filter.js";
 import { heartbeatLog as log } from "./heartbeat-log.js";
+import {
+  resolveOutboundPayloadMirrorText,
+  type NormalizedOutboundPayload,
+} from "./outbound/payloads.js";
+import { withSystemEventOwner } from "./system-event-ownership.js";
+import { enqueueSystemEvent } from "./system-events.js";
 
 type HeartbeatSessionPublication = { ok: true; messageId: string } | { ok: false; reason: string };
 
@@ -60,7 +68,7 @@ export async function publishHeartbeatSessionReply(params: {
     const assertOwnedWrite = captureOwnedTranscriptWriteAssertion(scope);
     const metadata = getReplyPayloadMetadata(params.payload);
     const authority = metadata?.sessionWriterDeliveryAuthority;
-    const initial = loadSessionEntryReadOnly({ ...scope, readConsistency: "latest" });
+    const initial = await readSessionEntryReadOnlyInWorker({ ...scope, readConsistency: "latest" });
     const writerRunId = authority?.expectedWriterRunId ?? initial?.activeWriterRunId;
     const expected = {
       expectedSessionId: scope.sessionId,
@@ -69,31 +77,18 @@ export async function publishHeartbeatSessionReply(params: {
     };
     // Delivery is already admitted. Preserve its fence through the queued write;
     // waiting for all session admissions here would wait for this very delivery.
-    const assertCurrent = (messageId?: string) => {
+    const assertCurrent = () => {
       params.signal?.throwIfAborted();
       assertOwnedWrite();
-      const current = loadSessionEntryReadOnly({ ...scope, readConsistency: "latest" });
       if (
-        !scope.sessionId ||
-        current?.sessionId !== scope.sessionId ||
-        current.lifecycleRevision !== params.expectedGeneration.lifecycleRevision ||
-        current.activeWriterRunId !== writerRunId ||
-        (authority &&
-          (authority.sessionKey !== scope.sessionKey ||
-            (authority.agentId !== undefined && authority.agentId !== scope.agentId) ||
-            authority.expectedSessionId !== scope.sessionId ||
-            (authority.expectedLifecycleRevision !== undefined &&
-              authority.expectedLifecycleRevision !== current.lifecycleRevision))) ||
-        (messageId && !readActiveTranscriptEntryAnchor({ ...scope, entryId: messageId }))
+        authority &&
+        (authority.sessionKey !== scope.sessionKey ||
+          (authority.agentId !== undefined && authority.agentId !== scope.agentId) ||
+          authority.expectedSessionId !== scope.sessionId ||
+          (authority.expectedLifecycleRevision !== undefined &&
+            authority.expectedLifecycleRevision !== params.expectedGeneration.lifecycleRevision))
       ) {
         throw new Error("heartbeat publication no longer owns the active transcript");
-      }
-      const unavailable = resolveSessionWorkStartError(scope.sessionKey, current, {
-        ...expected,
-        purpose: "accepted-result-settlement",
-      });
-      if (unavailable) {
-        throw new Error(unavailable);
       }
     };
     assertCurrent();
@@ -173,7 +168,6 @@ export async function publishHeartbeatSessionReply(params: {
     ) {
       return { ok: false, reason: "heartbeat runtime final has no matching committed receipt" };
     }
-    assertCurrent(priorId);
     const content: SessionTranscriptAssistantMessage["content"] = [
       { type: "text", text: text.trim() },
     ];
@@ -201,21 +195,30 @@ export async function publishHeartbeatSessionReply(params: {
         ? (await import("../gateway/managed-image-attachments.js"))
             .attachManagedOutgoingMediaToMessage
         : undefined;
-    assertCurrent(priorId);
     // Exact replay preserves runtime rows and rejects changed notification bytes.
     // The transaction guard also prevents resurrecting a removed/abandoned row.
     const committed = await persistSessionTranscriptTurn(scope, {
       ...expected,
       config: params.cfg,
+      assertCurrent,
+      acceptedResultGuard: {
+        expectedWriterRunId: writerRunId ?? null,
+        errorMessage: "heartbeat publication no longer owns the active transcript",
+      },
       messages: [
         {
           message,
-          ...(priorId ? { eventId: priorId } : {}),
+          ...(priorId
+            ? {
+                eventId: priorId,
+                predicate: {
+                  kind: "active-entry" as const,
+                  entryId: priorId,
+                  errorMessage: "heartbeat publication no longer owns the active transcript",
+                },
+              }
+            : {}),
           idempotencyLookup: "scan",
-          shouldAppendInTransaction: () => {
-            assertCurrent(priorId);
-            return true;
-          },
         },
       ],
       touchSessionEntry: !owned,
@@ -223,10 +226,10 @@ export async function publishHeartbeatSessionReply(params: {
       // A later drain failure cannot revoke a notification already published here.
       updateMode: "none",
       onMessageCommitted: (receipt, acceptCompletion) => {
-        assertCurrent(receipt.messageId);
+        assertCurrent();
         const publish = (): Promise<HeartbeatSessionPublication> => {
           const messageSeq = readCommittedTranscriptMessageSequence(receipt);
-          assertCurrent(receipt.messageId);
+          assertCurrent();
           // Replays invalidate history without emitting the assistant message again.
           return publishTranscriptUpdate(
             scope,
@@ -282,5 +285,59 @@ export async function publishHeartbeatSessionReply(params: {
       return receipt;
     }
     return { ok: false, reason: formatErrorMessage(error) };
+  }
+}
+
+const MAX_HEARTBEAT_TARGET_AWARENESS_CHARS = 1_000;
+
+export async function prepareHeartbeatTargetAwareness(params: {
+  agentId: string;
+  storePath: string;
+  runSessionKey: string;
+  targetSessionKey?: string;
+  startedAt: number;
+}): Promise<((payload: NormalizedOutboundPayload) => void) | undefined> {
+  const sessionKey = params.targetSessionKey?.trim();
+  if (!sessionKey || sessionKey === params.runSessionKey) {
+    return undefined;
+  }
+  try {
+    if (resolveAgentIdFromSessionKey(sessionKey, params.agentId) !== params.agentId) {
+      return undefined;
+    }
+    const scope = { agentId: params.agentId, storePath: params.storePath, sessionKey };
+    const entry = await readSessionEntryReadOnlyInWorker(scope);
+    if (!entry?.sessionId) {
+      return undefined;
+    }
+    const idempotencyKey = `${HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX}${params.startedAt}:${params.runSessionKey}`;
+    return (payload) => {
+      try {
+        // Awareness is best-effort bookkeeping; a concurrent reset can inherit this notice.
+        const deliveredText = resolveMirroredTranscriptText({
+          text: payload.hookContent ?? resolveOutboundPayloadMirrorText(payload),
+          mediaUrls: payload.mediaUrls,
+        });
+        if (!deliveredText) {
+          return;
+        }
+        const text = truncateUtf16Safe(deliveredText, MAX_HEARTBEAT_TARGET_AWARENESS_CHARS);
+        const suffix = text.length < deliveredText.length ? "\n[truncated]" : "";
+        enqueueSystemEvent(
+          `A heartbeat delivered this message to this channel:\n${text}${suffix}`,
+          withSystemEventOwner({ sessionKey, contextKey: idempotencyKey }, params.agentId),
+        );
+      } catch (error) {
+        // Platform delivery already succeeded; projection remains best-effort bookkeeping.
+        log.warn("heartbeat: failed to queue target session awareness", {
+          error: formatErrorMessage(error),
+        });
+      }
+    };
+  } catch (error) {
+    log.warn("heartbeat: failed to resolve existing target session projection", {
+      error: formatErrorMessage(error),
+    });
+    return undefined;
   }
 }

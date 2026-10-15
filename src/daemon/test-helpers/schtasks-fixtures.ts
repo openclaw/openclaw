@@ -13,6 +13,11 @@ import { resolveTaskScriptPath } from "../schtasks.js";
 
 export const schtasksResponses: Array<{ code: number; stdout: string; stderr: string }> = [];
 export const schtasksCalls: string[][] = [];
+// Opt-in native registration state: repeated XML reads do not consume mutation results.
+export const schtasksRegistration: {
+  response?: (typeof schtasksResponses)[number];
+  onCommand?: (argv: string[], response: (typeof schtasksResponses)[number]) => void;
+} = {};
 
 export const inspectPortUsageMock: MockFn<
   (port: number, options?: { probeHosts?: readonly string[] }) => Promise<PortUsage>
@@ -42,6 +47,8 @@ export async function withWindowsEnv(
 export function resetSchtasksBaseMocks() {
   schtasksResponses.length = 0;
   schtasksCalls.length = 0;
+  delete schtasksRegistration.response;
+  delete schtasksRegistration.onCommand;
   inspectPortUsageMock.mockReset();
   gatewayServiceProbeHostsMock.mockReset();
   gatewayServiceProbeHostsMock.mockResolvedValue(["127.0.0.1"]);
@@ -110,6 +117,18 @@ export type SpawnSyncResult = {
   status: number;
   signal: null;
 };
+
+export function isProcessSnapshotQuery(args: readonly string[] | undefined): boolean {
+  return (
+    args?.some(
+      (arg) =>
+        arg.includes("Get-CimInstance Win32_Process") &&
+        arg.includes("Select-Object ProcessId,CommandLine") &&
+        arg.includes("ConvertTo-Json"),
+    ) ?? false
+  );
+}
+
 export function makeSpawnSyncResult(overrides: Partial<SpawnSyncResult> = {}): SpawnSyncResult {
   return {
     pid: 0,
@@ -129,4 +148,90 @@ export function createSpawnChild(unref: () => void, error?: Error): ChildProcess
     child.emit(error ? "error" : "spawn", error);
   });
   return child;
+}
+
+export type TaskProbeResult = { status: number; stdout: string; stderr?: string };
+export type TaskSnapshot = { state: number; lastRunTime: string; lastRunResult: number };
+export type NativeResponse = (typeof schtasksResponses)[number] | TaskSnapshot;
+
+export function notYetRunTaskSnapshot(lastRunTime = "1999-11-30T00:00:00.0000000Z"): TaskSnapshot {
+  return { state: 3, lastRunTime, lastRunResult: 267011 };
+}
+
+export function cleanExitTaskSnapshot(lastRunTime = "2026-05-02T14:41:39.0000000Z"): TaskSnapshot {
+  return { state: 3, lastRunTime, lastRunResult: 0 };
+}
+
+export function runningTaskSnapshot(): TaskSnapshot {
+  return { state: 4, lastRunTime: "2026-04-15T23:42:31.0000000Z", lastRunResult: 267009 };
+}
+
+/** Native registration/process facts remain stable across repeated inspection reads. */
+export function createSchtasksNativeFixture(getEnv: () => Record<string, string>) {
+  const queuedProbes: TaskProbeResult[] = [];
+  let currentProbe = { status: 0, stdout: JSON.stringify(notYetRunTaskSnapshot()) };
+  const advance = () => {
+    if (schtasksCalls.some(([action]) => action === "/Run")) {
+      currentProbe = queuedProbes.shift() ?? currentProbe;
+    }
+  };
+  return {
+    advance,
+    queue: (...responses: NativeResponse[]) => {
+      for (const response of responses) {
+        if ("state" in response) {
+          const probe = { status: 0, stdout: JSON.stringify(response) };
+          if (schtasksResponses.length === 0) {
+            currentProbe = probe;
+          } else {
+            queuedProbes.push(probe);
+          }
+        } else {
+          schtasksResponses.push(response);
+        }
+      }
+    },
+    probe: (): TaskProbeResult => {
+      if (schtasksRegistration.response?.code !== 0) {
+        return { status: 1, stdout: "-2147024894" };
+      }
+      const snapshot = JSON.parse(currentProbe.stdout);
+      return {
+        ...currentProbe,
+        stdout: JSON.stringify({
+          ...snapshot,
+          enabled: !schtasksRegistration.response.stdout.includes("<Enabled>false</Enabled>"),
+          taskPath: getEnv().OPENCLAW_WINDOWS_TASK_NAME ?? "OpenClaw Gateway",
+          actions: [
+            { type: 0, path: "C:\\fixture\\gateway.cmd", arguments: "", workingDirectory: "" },
+          ],
+        }),
+      };
+    },
+    reset: () => {
+      schtasksRegistration.response = {
+        code: 0,
+        stdout:
+          "<Task><Settings><Enabled>true</Enabled></Settings><Actions><Exec><Command>C:\\fixture\\gateway.cmd</Command></Exec></Actions></Task>",
+        stderr: "",
+      };
+      currentProbe = { status: 0, stdout: JSON.stringify(notYetRunTaskSnapshot()) };
+      queuedProbes.length = 0;
+      schtasksRegistration.onCommand = (argv, response) => {
+        if (response.code === 0 && argv[0] === "/Run") {
+          advance();
+        }
+        if (response.code === 0 && argv[0] === "/End") {
+          currentProbe = { status: 0, stdout: JSON.stringify(cleanExitTaskSnapshot()) };
+        }
+      };
+      // Keep native absolute-path admission while storing launcher bytes in the host temp directory.
+      const readFile = fs.readFile.bind(fs);
+      vi.spyOn(fs, "readFile").mockImplementation((pathname, options) => {
+        const realPath =
+          pathname === "C:\\fixture\\gateway.cmd" ? resolveTaskScriptPath(getEnv()) : pathname;
+        return readFile(realPath, options);
+      });
+    },
+  };
 }

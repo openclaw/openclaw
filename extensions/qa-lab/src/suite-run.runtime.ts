@@ -68,11 +68,11 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
     !selectedScenarios.some((scenario) => scenario.id === params.roundTripProbe?.scenarioId)
   ) {
     throw new Error(
-      `QA round-trip probe scenario is not selected: ${params.roundTripProbe.scenarioId}`,
+      `QA round-trip check scenario is not selected: ${params.roundTripProbe.scenarioId}`,
     );
   }
   if (params?.roundTripProbe && params.runtimePair) {
-    throw new Error("QA round-trip probes are not supported with runtime-pair runs.");
+    throw new Error("QA round-trip checks are not supported with runtime-pair runs.");
   }
   await invalidateQaSuiteArtifactGeneration(outputDir);
   const preparedParams = {

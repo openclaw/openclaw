@@ -79,6 +79,8 @@ APP_STORE_SCREENSHOT_LIMIT_PER_SET = 10
 APP_STORE_SCREENSHOT_SET_DELETE_TIMEOUT_SECONDS = 120
 APP_STORE_SCREENSHOT_PROCESSING_TIMEOUT_SECONDS = 3600
 APP_STORE_SCREENSHOT_PROCESSING_POLL_SECONDS = 5
+APP_STORE_SCREENSHOT_PROCESSING_RETRY_SECONDS = 600
+APP_STORE_SCREENSHOT_PROCESSING_MAX_RETRIES = 2
 APP_STORE_BUILD_PROCESSING_TIMEOUT_SECONDS = 3600
 IOS_BUILD_UPLOAD_STATES = [
   "AWAITING_UPLOAD",
@@ -241,9 +243,17 @@ def require_idle_screenshot_simulators!
 end
 
 def require_exclusive_screenshot_simulator!(udid, diagnostics)
-  active = available_simulator_devices.select { |device| device.fetch("state") != "Shutdown" }
+  devices = available_simulator_devices
+  active = devices.select { |device| device.fetch("state") != "Shutdown" }
   diagnostics.events.last["activeSimulatorCount"] = active.length if diagnostics
-  UI.user_error!("Screenshot capture requires its task-owned simulator to be the only active simulator.") unless active.map { |device| device.fetch("udid") } == [udid]
+  others = active.reject { |device| device.fetch("udid") == udid }
+  unless others.empty?
+    listed = others.map { |device| "#{device.fetch("name")} (#{device.fetch("udid")}, #{device.fetch("state")})" }.join(", ")
+    UI.user_error!("Screenshot capture requires its task-owned simulator to be the only active simulator; also active: #{listed}.")
+  end
+  # `simctl bootstatus -b` can exit 0 after CoreSimulator ends a boot.
+  state = devices.find { |device| device.fetch("udid") == udid }&.fetch("state") || "missing"
+  UI.user_error!("Task-owned screenshot simulator #{udid} is #{state}, not Booted; CoreSimulator ended its session.") unless state == "Booted"
 end
 
 def with_screenshot_simulator(template, diagnostics: nil)
@@ -945,11 +955,7 @@ def app_store_version_state(version)
 end
 
 def preflight_app_store_version!(short_version:)
-  app_identifier = ENV["APP_STORE_CONNECT_APP_IDENTIFIER"]
-  app_id = ENV["APP_STORE_CONNECT_APP_ID"]
-  app_identifier = nil unless env_present?(app_identifier)
-  app_id = nil unless env_present?(app_id)
-  app = resolve_app_store_connect_app(app_identifier: app_identifier, app_id: app_id)
+  app = app_store_connect_target_app
   versions = app.get_app_store_versions(
     filter: { platform: Spaceship::ConnectAPI::Platform::IOS },
     includes: nil
@@ -1072,36 +1078,54 @@ def app_store_screenshot_processing_timeout_seconds
 end
 
 def app_store_screenshot_state_counts(screenshots)
-  screenshots.each_with_object({}) do |screenshot, counts|
-    state = (screenshot.asset_delivery_state || {})["state"] || "UNKNOWN"
-    counts[state] ||= 0
-    counts[state] += 1
-  end
+  screenshots.map { |screenshot| (screenshot.asset_delivery_state || {})["state"] || "UNKNOWN" }.tally
 end
 
-def wait_for_app_store_screenshots_processing!(screenshot_ids:, locale:, display_type:)
+def wait_for_app_store_screenshots_processing!(app_screenshot_set:, screenshots:, screenshot_ids:, locale:, display_type:)
   timeout_seconds = app_store_screenshot_processing_timeout_seconds
   deadline = Time.now + timeout_seconds
+  retry_at = Time.now + APP_STORE_SCREENSHOT_PROCESSING_RETRY_SECONDS
+  retries = 0
   loop do
-    screenshots = screenshot_ids.map do |screenshot_id|
+    remote_screenshots = screenshot_ids.map do |screenshot_id|
       Spaceship::ConnectAPI.get_app_screenshot(app_screenshot_id: screenshot_id).first
     end
 
-    failed = screenshots.select(&:error?)
+    failed = remote_screenshots.select(&:error?)
     unless failed.empty?
       details = failed.map { |screenshot| "#{screenshot.file_name}: #{screenshot.error_messages.join(', ')}" }
       UI.user_error!("App Store Connect failed processing #{locale} #{display_type} screenshots: #{details.join('; ')}.")
     end
-    return screenshots if screenshots.all?(&:complete?)
+    return screenshot_ids if remote_screenshots.all?(&:complete?)
 
     if Time.now >= deadline
-      states = app_store_screenshot_state_counts(screenshots)
+      states = app_store_screenshot_state_counts(remote_screenshots)
+      incomplete = remote_screenshots.reject(&:complete?).map { |screenshot| "#{screenshot.file_name} (#{screenshot.id})" }
       UI.user_error!(
-        "Timed out after #{timeout_seconds}s waiting for App Store Connect to process #{locale} #{display_type} screenshots: #{states}."
+        "Timed out after #{timeout_seconds}s waiting for App Store Connect to process #{locale} #{display_type} screenshots: #{states}. Incomplete: #{incomplete.join(', ')}."
       )
     end
 
-    UI.verbose("Waiting for #{locale} #{display_type} screenshots to finish processing: #{app_store_screenshot_state_counts(screenshots)}.")
+    if Time.now >= retry_at && retries < APP_STORE_SCREENSHOT_PROCESSING_MAX_RETRIES
+      # Apple can leave a committed upload stuck without reporting an error.
+      # Replace only that known asset; transport errors must not trigger reuploads.
+      remote_screenshots.each_with_index do |screenshot, index|
+        next unless (screenshot.asset_delivery_state || {})["state"] == "UPLOAD_COMPLETE"
+
+        UI.important(
+          "Replacing stalled #{locale} #{display_type} screenshot #{screenshot.file_name} (#{screenshot.id}); " \
+            "retry #{retries + 1}/#{APP_STORE_SCREENSHOT_PROCESSING_MAX_RETRIES}."
+        )
+        screenshot.delete!
+        uploaded = app_screenshot_set.upload_screenshot(path: screenshots.fetch(index).path, wait_for_processing: false)
+        screenshot_ids[index] = uploaded.id
+      end
+      retries += 1
+      retry_at = Time.now + APP_STORE_SCREENSHOT_PROCESSING_RETRY_SECONDS
+      next
+    end
+
+    UI.verbose("Waiting for #{locale} #{display_type} screenshots to finish processing: #{app_store_screenshot_state_counts(remote_screenshots)}.")
     sleep(APP_STORE_SCREENSHOT_PROCESSING_POLL_SECONDS)
   end
 end
@@ -1173,7 +1197,9 @@ def replace_app_store_screenshot_set!(localization:, display_type:, screenshots:
     )
     uploaded.id
   end
-  wait_for_app_store_screenshots_processing!(
+  uploaded_ids = wait_for_app_store_screenshots_processing!(
+    app_screenshot_set: app_screenshot_set,
+    screenshots: screenshots,
     screenshot_ids: uploaded_ids,
     locale: localization.locale,
     display_type: display_type
@@ -1328,7 +1354,7 @@ def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, bui
     explicit_gateway = read_ios_version_metadata(release_version: release_version)[:version]
     if explicit_gateway != gateway_metadata[:version]
       UI.user_error!(
-        "Explicit iOS gateway version #{explicit_gateway} does not match canonical root version #{gateway_metadata[:version]}."
+        "Explicit iOS gateway version #{explicit_gateway} does not match the root package version #{gateway_metadata[:version]}."
       )
     end
   end
@@ -1382,7 +1408,7 @@ def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, bui
   unless status&.success?
     detail = stderr.to_s.strip
     detail = stdout.to_s.strip if detail.empty?
-    UI.user_error!("Unable to resolve deterministic iOS release plan: #{detail}")
+    UI.user_error!("Unable to calculate the iOS release plan: #{detail}")
   end
   plan = JSON.parse(stdout)
   if testflight_group
@@ -1910,6 +1936,18 @@ def build_app_store_release(context)
   }
 end
 
+def prepare_screenshot_project(options)
+  version_args = { release_version: "--version", app_store_revision: "--revision", build_number: "--build-number" }
+    .flat_map do |key, flag|
+      value = options[key].to_s.strip
+      value.empty? ? [] : [flag, value]
+    end
+  sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-configure-signing.sh")]))
+  sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args]))
+  sh(shell_join(["node", File.join(repo_root, "scripts", "ios-write-swift-filelist.mjs")]))
+  sh(shell_join(["xcodegen", "generate", "--spec", File.join(ios_root, "project.yml"), "--project", ios_root]))
+end
+
 def app_store_connect_api_key_config
   load_env_file(File.join(__dir__, ".env"))
   clear_empty_env_var("APP_STORE_CONNECT_API_KEY_PATH")
@@ -2023,7 +2061,7 @@ platform :ios do
     }
   end
 
-  desc "Print the deterministic App Store release plan without mutating remote state"
+  desc "Print the calculated App Store release plan without mutating remote state"
   lane :release_plan do |options|
     app_store_connect_api_key_config
     plan = resolve_ios_release_plan!(
@@ -2278,20 +2316,9 @@ platform :ios do
     end
   end
 
-  desc "Generate deterministic iOS screenshots for App Store metadata"
+  desc "Generate repeatable iOS screenshots for App Store metadata"
   lane :screenshots do |options|
-    version_args = []
-    release_version = options[:release_version].to_s.strip
-    app_store_revision = options[:app_store_revision].to_s.strip
-    build_number = options[:build_number].to_s.strip
-    version_args += ["--version", release_version] unless release_version.empty?
-    version_args += ["--revision", app_store_revision] unless app_store_revision.empty?
-    version_args += ["--build-number", build_number] unless build_number.empty?
-
-    sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-configure-signing.sh")]))
-    sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args]))
-    sh(shell_join(["node", File.join(repo_root, "scripts", "ios-write-swift-filelist.mjs")]))
-    sh(shell_join(["xcodegen", "generate", "--spec", File.join(ios_root, "project.yml"), "--project", ios_root]))
+    prepare_screenshot_project(options)
 
     output_directory = File.join(ios_root, "fastlane", "screenshots")
     result_bundle_path = File.join(output_directory, "test_output", "en-US", "OpenClawUITests.xcresult")
@@ -2389,20 +2416,9 @@ platform :ios do
     end
   end
 
-  desc "Generate deterministic Apple Watch screenshot for App Store metadata"
+  desc "Generate repeatable Apple Watch screenshot for App Store metadata"
   lane :watch_screenshot do |options|
-    version_args = []
-    release_version = options[:release_version].to_s.strip
-    app_store_revision = options[:app_store_revision].to_s.strip
-    build_number = options[:build_number].to_s.strip
-    version_args += ["--version", release_version] unless release_version.empty?
-    version_args += ["--revision", app_store_revision] unless app_store_revision.empty?
-    version_args += ["--build-number", build_number] unless build_number.empty?
-
-    sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-configure-signing.sh")]))
-    sh(shell_join(["bash", File.join(repo_root, "scripts", "ios-write-version-xcconfig.sh"), *version_args]))
-    sh(shell_join(["node", File.join(repo_root, "scripts", "ios-write-swift-filelist.mjs")]))
-    sh(shell_join(["xcodegen", "generate", "--spec", File.join(ios_root, "project.yml"), "--project", ios_root]))
+    prepare_screenshot_project(options)
     capture_watch_screenshot { build_watch_screenshot_app }
   end
 

@@ -2,6 +2,7 @@ import path from "node:path";
 import { createChannelInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -67,6 +68,7 @@ it("changes iMessage batching delay without replacing the attached RPC client", 
     toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
   });
   const monitor = monitorIMessageProvider({
+    scheduler: createTestPluginServiceScheduler(),
     config: cfg,
     abortSignal: abort.signal,
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },

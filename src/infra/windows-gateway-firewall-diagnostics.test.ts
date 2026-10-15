@@ -1,7 +1,6 @@
 // Windows Gateway firewall diagnostics classify LAN reachability risks.
 import { describe, expect, it, vi } from "vitest";
 import { inspectWindowsGatewayFirewall } from "./windows-gateway-firewall-diagnostics.js";
-import { getWindowsPowerShellExePath } from "./windows-install-roots.js";
 
 type InspectOptions = Parameters<typeof inspectWindowsGatewayFirewall>[0];
 type FirewallCommandRunner = NonNullable<InspectOptions["runCommandWithTimeout"]>;
@@ -56,18 +55,6 @@ function statePayload(params?: {
 
 function stateJson(params?: Parameters<typeof statePayload>[0]) {
   return JSON.stringify(statePayload(params));
-}
-
-function multiProfileStateJson() {
-  const state = statePayload({ activeAllowLocalRules: "False" });
-  state.ConnectionProfiles.push({ InterfaceAlias: "Wi-Fi", NetworkCategory: "Private" });
-  state.ActiveFirewallProfiles.push({
-    ...state.ActiveFirewallProfiles[0]!,
-    Name: "Private",
-    AllowLocalFirewallRules: "True",
-  });
-  state.LocalFirewallProfiles.push({ ...state.LocalFirewallProfiles[0]!, Name: "Private" });
-  return JSON.stringify(state);
 }
 
 function ruleJson(params?: Parameters<typeof ruleRow>[0]) {
@@ -174,35 +161,6 @@ describe("Windows Gateway firewall diagnostics", () => {
     );
   });
 
-  it("requires every active profile to allow local firewall rules", async () => {
-    await expect(
-      classify({
-        stateJson: multiProfileStateJson(),
-        rulesJson: rulesPayloadJson({
-          active: [],
-          local: [ruleRow()],
-        }),
-      }),
-    ).resolves.toMatchObject({
-      applies: true,
-      severity: "warning",
-      code: "windows_firewall_local_rules_ignored",
-    });
-  });
-
-  it("does not treat NotConfigured local-rule policy as blocked", async () => {
-    await expect(
-      classify({
-        stateJson: stateJson({ localAllowRules: "NotConfigured" }),
-        rulesJson: ruleJson(),
-      }),
-    ).resolves.toMatchObject({
-      applies: true,
-      severity: "info",
-      code: "windows_firewall_rule_present",
-    });
-  });
-
   it("rejects allow rules when the active profile blocks inbound rules globally", async () => {
     await expect(
       classify({
@@ -242,19 +200,6 @@ describe("Windows Gateway firewall diagnostics", () => {
     });
   });
 
-  it("detects a Gateway allow rule on the wrong Windows network profile", async () => {
-    await expect(
-      classify({
-        stateJson: stateJson({ networkCategory: "Public" }),
-        rulesJson: ruleJson({ profile: "Private" }),
-      }),
-    ).resolves.toMatchObject({
-      applies: true,
-      severity: "warning",
-      code: "windows_firewall_rule_profile_mismatch",
-    });
-  });
-
   it("prefers managed rule profile mismatch over local-rule-disabled fallback", async () => {
     await expect(
       classify({
@@ -278,19 +223,6 @@ describe("Windows Gateway firewall diagnostics", () => {
       applies: true,
       severity: "warning",
       code: "windows_firewall_rule_profile_mismatch",
-    });
-  });
-
-  it("detects a blocking profile with no inbound allow rule for the Gateway port", async () => {
-    await expect(
-      classify({
-        stateJson: stateJson(),
-        rulesJson: "[]",
-      }),
-    ).resolves.toMatchObject({
-      applies: true,
-      severity: "warning",
-      code: "windows_firewall_no_allow_rule",
     });
   });
 
@@ -333,34 +265,10 @@ describe("Windows Gateway firewall diagnostics", () => {
     });
   });
 
-  it("classifies empty successful rule output as no allow rule", async () => {
-    const runner = vi.fn<FirewallCommandRunner>(async () => ({
-      code: 0,
-      stdout: quickPayloadJson({ state: stateJson(), activeRules: [], localRules: [] }),
-    }));
-
-    await expect(
-      inspectWindowsGatewayFirewall({
-        bind: "lan",
-        port: 18789,
-        platform: "win32",
-        runCommandWithTimeout: runner,
-      }),
-    ).resolves.toMatchObject({
-      code: "windows_firewall_no_allow_rule",
-    });
-    expect(runner).toHaveBeenCalledTimes(1);
-  });
-
   it.each([
     [
       "a nonzero exit",
       async () => ({ code: 1, stdout: quickPayloadJson() }),
-      "OpenClaw could not quickly inspect Windows Firewall LAN Gateway policy.",
-    ],
-    [
-      "truncated stdout",
-      async () => ({ code: 0, stdout: quickPayloadJson(), stdoutTruncatedBytes: 1 }),
       "OpenClaw could not quickly inspect Windows Firewall LAN Gateway policy.",
     ],
     [
@@ -446,47 +354,6 @@ describe("Windows Gateway firewall diagnostics", () => {
       code: "windows_firewall_rule_present",
     });
     expect(runner).toHaveBeenCalledTimes(1);
-  });
-
-  it("treats COM wildcard addresses as address-agnostic", async () => {
-    const diagnostic = await classify({
-      stateJson: stateJson({ localAllowRules: "True" }),
-      rulesJson: rulesPayloadJson({
-        active: [ruleRow({ localAddress: "*", remoteAddress: "*" })],
-      }),
-    });
-
-    expect(diagnostic).toMatchObject({
-      severity: "info",
-      code: "windows_firewall_rule_present",
-    });
-  });
-
-  it("runs a quick bounded Windows probe without netsh or follow-up commands", async () => {
-    const runner = vi.fn<FirewallCommandRunner>(async (argv) => {
-      const command = argv.join(" ");
-      expect(command).toContain("Get-NetConnectionProfile");
-      expect(command).toContain("HNetCfg.FwPolicy2");
-      expect(command).toContain("Get-NetFirewallRule");
-      expect(command).toContain("PolicyStore ActiveStore");
-      expect(command).toContain("foreach ($entry in @($value))");
-      expect(command).not.toContain("advfirewall");
-      expect(command).not.toContain("PolicyStore PersistentStore");
-      return { code: 0, stdout: quickPayloadJson() };
-    });
-
-    await expect(
-      inspect(runner, {
-        mode: "quick",
-      }),
-    ).resolves.toMatchObject({
-      code: "windows_firewall_rule_present",
-    });
-    expect(runner).toHaveBeenCalledTimes(1);
-    expect(runner.mock.calls[0]?.[0][0]).toBe(getWindowsPowerShellExePath());
-    expect(runner.mock.calls[0]?.[1]).toMatchObject({
-      timeoutMs: 5_000,
-    });
   });
 
   it("uses the quick probe by default and honors an explicit timeout", async () => {

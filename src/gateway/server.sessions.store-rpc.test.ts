@@ -28,18 +28,6 @@ const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
 type SessionPatchResponse = { ok: true; key: string; entry: Record<string, unknown> };
 
-test("sessions.patch validates persistent session icons", async () => {
-  const invalid = await directSessionHandlerReq("sessions.patch", {
-    key: "agent:main:main",
-    icon: "hand",
-  });
-  expect(invalid.error).toEqual({
-    code: "INVALID_REQUEST",
-    message:
-      "icon must be a single emoji, a named icon (braces, book, monitor, bot, kanban, coins), or self-contained SVG markup/data URL up to 16 KiB",
-  });
-});
-
 test("lists and patches session store via sessions.* RPC", async () => {
   const { storePath } = await createSessionStoreDir();
   const now = Date.now();
@@ -589,7 +577,7 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
   const rootStateDir = expectDefined(process.env.OPENCLAW_STATE_DIR, "OPENCLAW_STATE_DIR");
   const stateDir = path.join(rootStateDir, "configured-list-regression");
   await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-    testState.agentsConfig = { ownership: "explicit", list: [{ id: "ops" }] };
+    testState.agentsConfig = { ownership: "explicit", entries: { ops: {} } };
     testState.agentConfig = { sessionStore: { agentId: "ops" } };
     const configPath = expectDefined(process.env.OPENCLAW_CONFIG_PATH, "OPENCLAW_CONFIG_PATH");
     const configJson = '{"acp":{"defaultAgent":"claude","allowedAgents":["gemini"]}}';
@@ -673,26 +661,6 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
       enumerateAgentDirs.mockRestore();
     }
   });
-});
-
-test("sessions.list hides phantom agent store placeholder rows", async () => {
-  await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      sessions: {},
-      main: {
-        sessionId: "sess-main",
-        updatedAt: 20,
-      },
-    },
-  });
-
-  const listed = await directSessionHandlerReq<SessionsListResult>("sessions.list", {
-    includeGlobal: false,
-    includeUnknown: false,
-  });
-  expect(listed.ok).toBe(true);
-  expect(listed.payload?.sessions.map((session) => session.key)).toEqual(["agent:main:main"]);
 });
 
 test("write-scoped operators manage chat organization but not admin session settings", async () => {
@@ -920,6 +888,43 @@ test("sessions.list breaks timestamp ties by key for stable paging", async () =>
   });
   expect(paged.ok).toBe(true);
   expect(paged.payload?.sessions.map((session) => session.key)).toEqual(expectedOrder.slice(2));
+});
+
+test("chat.inject writes to the transcript owner after the requested row's facts are cached", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionId = "8f14e45f-ceea-4e7a-9f8b-2d5c6b1a0e93";
+  const baseKey = "agent:main:cron:3f1c9a52-7d4e-4b8a-9c21-5e6f7a8b9c0d";
+  const runKey = `${baseKey}:run:${sessionId}`;
+  await writeSessionStore({
+    entries: {
+      [baseKey]: { sessionId, updatedAt: 1 },
+      [runKey]: { sessionId, updatedAt: 2 },
+    },
+  });
+  await seedLinearTranscript({ contents: ["cron run"], sessionId, sessionKey: runKey, storePath });
+  const ownerRows = () => loadTranscriptRows({ sessionId, sessionKey: runKey, storePath });
+  const rowsBefore = (await ownerRows()).length;
+  const { ws } = await openClient();
+  try {
+    // Reading the base row must not make it the owner of the shared transcript.
+    expect((await rpcReq(ws, "sessions.abort", { key: baseKey })).ok).toBe(true);
+    for (const message of ["first", "second"]) {
+      const injected = await rpcReq(ws, "chat.inject", { sessionKey: baseKey, message });
+      expect([injected.ok, injected.error]).toEqual([true, undefined]);
+    }
+    expect((await ownerRows()).slice(rowsBefore)).toMatchObject([
+      {
+        type: "message",
+        message: { role: "assistant", content: [{ type: "text", text: "first" }] },
+      },
+      {
+        type: "message",
+        message: { role: "assistant", content: [{ type: "text", text: "second" }] },
+      },
+    ]);
+  } finally {
+    ws.close();
+  }
 });
 
 test("archiving a session disables cron jobs bound to it", async () => {

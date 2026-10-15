@@ -11,6 +11,7 @@ const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
   "wa-dropdown",
   "[contenteditable='true']",
   "[role='button']",
+  "[role='menu']",
   "[role='listbox']",
   "[role='option']",
 ].join(",");
@@ -310,12 +311,14 @@ export function adjustTextareaHeight(
       thread.scrollTop = thread.scrollHeight;
     }
     const after = thread.scrollTop;
-    if (thread.clientHeight === threadHeight && after === scrollPosition?.scrollTop) {
+    const clientHeight = thread.clientHeight;
+    if (clientHeight === threadHeight && after === scrollPosition?.scrollTop) {
       return;
     }
     // A following composer commit can hide this viewport from browser observers.
     publishTranscriptScroll(thread, {
       type: "resize",
+      viewport: { clientHeight, scrollHeight: thread.scrollHeight, scrollTop: after },
       ...(scrollPosition?.anchorToEnd && scrollPosition.scrollTop !== after
         ? { scrollCorrection: { before: scrollPosition.scrollTop, after } }
         : {}),
@@ -406,11 +409,10 @@ export function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
   }
   state.observer?.disconnect();
   state.events.abort();
-  if (state.adjustmentFrame !== null) {
-    cancelAnimationFrame(state.adjustmentFrame);
-  }
-  if (state.overflowFrame !== null) {
-    cancelAnimationFrame(state.overflowFrame);
+  for (const frame of [state.adjustmentFrame, state.overflowFrame]) {
+    if (frame !== null) {
+      cancelAnimationFrame(frame);
+    }
   }
 }
 
@@ -434,7 +436,10 @@ export function focusComposerFromChrome(event: MouseEvent | PointerEvent, connec
   }
   if (event.type === "pointerdown") {
     // Cancel only pointer focus; click and popover-owned focus still run.
-    if (event.button === 0 && target.closest("summary, wa-dropdown>[slot='trigger']")) {
+    if (
+      event.button === 0 &&
+      target.closest("summary, .oc-menu-trigger, wa-dropdown>[slot='trigger']")
+    ) {
       event.preventDefault();
     }
     return;

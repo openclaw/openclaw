@@ -5,11 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import * as backoff from "../infra/backoff.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
-import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
+import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -20,22 +21,21 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { executeGitHubPublication } from "./github-publication-executor.js";
 import { restoreGitHubPublicationRequester } from "./github-publication-requester.js";
 import {
-  ensureGitHubPublicationStore,
-  insertGitHubPublicationRequest,
-  claimGitHubPublicationExecution,
-  createGitHubPublicationExecutionStore,
-  isGitHubPublicationExecutionOwner,
-  projectGitHubPublicationResult,
-} from "./github-publication-store.js";
+  ensureGitHubPublicationStoreFixture as ensureGitHubPublicationStore,
+  claimGitHubPublicationExecutionFixture as claimGitHubPublicationExecution,
+  createGitHubPublicationExecutionStoreFixture as createGitHubPublicationExecutionStore,
+  insertRepositoryGitHubPublicationFixture as insertRepositoryGitHubPublication,
+  claimRepositoryGitHubPublicationFixture as claimRepositoryGitHubPublication,
+  readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication,
+} from "./github-publication-store.test-support.js";
+import { insertGitHubPublicationRequest } from "./github-publication-store.worker.js";
 import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
 import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "./github-repository-publication-snapshot.js";
+import { repositoryGitHubPublicationDigest } from "./github-repository-publication-store.js";
 import {
-  insertRepositoryGitHubPublication,
-  repositoryGitHubPublicationDigest,
-  claimRepositoryGitHubPublication,
-  readRepositoryGitHubPublication,
-} from "./github-repository-publication-store.js";
-import { assertReceiptOwner } from "./github-repository-publication-workspace.js";
+  assertReceiptOwner,
+  prepareReceiptOwner,
+} from "./github-repository-publication-workspace.js";
 import { materializeSessionRepositoryWorkspaceOnGateway } from "./session-repository-materialization.js";
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
@@ -46,8 +46,9 @@ vi.mock("../process/exec.js", async (original) => ({
   runCommandBuffered: mocked.run,
   runCommandWithTimeout: mocked.timed,
 }));
+// mock-isolation: Publication handoff does not discover worker GitHub credentials.
 vi.mock("./worker-environments/worker-github-binding.js", () => ({
-  prepareWorkerGitHubBinding: async () => undefined,
+  prepareGitHubPublicationFact: async () => undefined,
 }));
 afterEach(() => vi.restoreAllMocks());
 it.each([
@@ -69,6 +70,7 @@ it.each([
       mocked.timed.mockImplementation(actual.runCommandWithTimeout);
       const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
       await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
       const source = state.path("source"),
         bare = state.path("origin.git"),
         cloud = state.path("cloud");
@@ -328,7 +330,7 @@ it.each([
           scenario === "unsettled" ? "awaiting a GitHub effect" : "differs from its recorded push",
         );
         expect(loadSessionEntry(scope)?.repositoryWorkspaceId).toBe(repository.workspaceId);
-        expect(managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
+        expect(await managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
         if (scenario === "foreign head") {
           return;
         }
@@ -353,17 +355,18 @@ it.each([
         });
         await expect(move()).rejects.toThrow("move revoked");
         expect(loadSessionEntry(scope)?.repositoryWorkspaceId).toBe(repository.workspaceId);
-        expect(managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
+        expect(await managedWorktrees.findLiveByOwner("session", scope.sessionKey)).toBeUndefined();
         expect(await fs.readFile(path.join(source, "file.txt"), "utf8")).toBe("base\n");
         return;
       }
       await move();
-      const receiptWorkspace = await store.prepare(row.workspace_id);
+      const receiptWorkspace = await prepareReceiptOwner(row);
+      using _ = { [Symbol.dispose]: () => receiptWorkspace.release() };
       expect(() => assertReceiptOwner(row, receiptWorkspace)).toThrow();
       expect(readRepositoryGitHubPublication(row.request_id)?.pushed_head_commit).toBe(
         publishedHead,
       );
-      const worktree = managedWorktrees.findLiveByOwner("session", scope.sessionKey)!;
+      const worktree = (await managedWorktrees.findLiveByOwner("session", scope.sessionKey))!;
       const moveHead = git(worktree.path, "rev-parse", "HEAD");
       if (scenario === "shifted membership") {
         expect(await fs.readFile(path.join(worktree.path, "published-only.ignored"), "utf8")).toBe(
@@ -411,8 +414,10 @@ it.each([
       const initial = claimGitHubPublicationExecution(requestId, "local-instance");
       const execution = createGitHubPublicationExecutionStore("local-instance");
       const requester = await restoreGitHubPublicationRequester(
-        readGitHubPublicationSessionLifecycle({ publicationKind: "shared", requestId })
-          ?.requester_authority_json,
+        readGitHubPublicationSessionLifecycle(
+          { publicationKind: "shared", requestId },
+          openOpenClawStateDatabase().db,
+        )?.requester_authority_json,
         scope,
         () => cfg,
       );
@@ -420,14 +425,13 @@ it.each([
         initial,
         ...execution,
         identity: { prepare: async () => identity, isCurrent: () => true },
-        validateCustody: () => isGitHubPublicationExecutionOwner(requestId, "local-instance"),
+        validateCustody: () => currentOwner,
         validateAuthority: () => {
           requester.assertCurrent();
           return true;
         },
         assertWorkflowChangesAllowed: () =>
           assertGitHubPublicationWorkflowChangesAllowed(requester),
-        projectResult: projectGitHubPublicationResult,
       }).finally(requester.release);
       const localHead = git(worktree.path, "rev-parse", "HEAD");
       const receipt = {
@@ -486,7 +490,7 @@ it("can hold publisher exclusion during an existing reclaim claim without taking
       environmentId: "handoff-worker",
       ownerEpoch: 1,
     });
-    const draining = placements.startDrain({
+    const draining = await placements.startDrain({
       sessionId: REQUEST.sessionId,
       environmentId: "handoff-worker",
       ownerEpoch: 1,
@@ -495,7 +499,7 @@ it("can hold publisher exclusion during an existing reclaim claim without taking
     if (draining.state !== "draining") {
       throw new Error(`Expected draining placement, received ${draining.state}`);
     }
-    const claim = placements.claimReclaimWorkspaceResult({
+    const claim = await placements.claimReclaimWorkspaceResult({
       sessionId: REQUEST.sessionId,
       sessionKey: REQUEST.sessionKey,
       agentId: "main",

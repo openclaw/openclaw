@@ -8,6 +8,7 @@ import {
   resolveControlUiRootOverrideSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import {
@@ -17,10 +18,6 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
-import {
-  createControlUiAssetRetention,
-  type ControlUiAssetRetention,
-} from "./control-ui-asset-retention.js";
 import type {
   ControlUiFileRead,
   ControlUiFileSnapshot,
@@ -34,7 +31,6 @@ export type ControlUiRootState =
       kind: "bundled";
       path: string;
       realPath?: string;
-      retainedAssets?: ControlUiAssetRetention;
       publicAssetBuildId?: string;
     }
   | { kind: "resolved"; path: string; realPath?: string }
@@ -48,8 +44,7 @@ type ReadyRoot = Extract<ControlUiRootState, { path: string; kind: "bundled" | "
 type RootFiles = {
   controller: AbortController;
   pending: Map<string, Promise<ControlUiRootAsset | null>>;
-  cached: Map<string, { asset: ControlUiRootAsset; bytes: number }>;
-  bytes: number;
+  cached: LruCache<{ asset: ControlUiRootAsset; bytes: number }>;
 };
 type FileRuntime = {
   pool?: WorkerTaskPool<ControlUiFileRead, ControlUiFileSnapshot | null>;
@@ -74,7 +69,14 @@ function fileRuntime() {
 function rootFiles(runtime: FileRuntime, root: ControlUiRootState): RootFiles {
   let files = runtime.roots.get(root);
   if (!files) {
-    files = { controller: new AbortController(), pending: new Map(), cached: new Map(), bytes: 0 };
+    files = {
+      controller: new AbortController(),
+      pending: new Map(),
+      cached: new LruCache(MAX_PREPARED_ENTRIES, {
+        maxBytes: MAX_PREPARED_BYTES,
+        sizeOf: (entry) => entry.bytes,
+      }),
+    };
     runtime.roots.set(root, files);
   }
   return files;
@@ -90,11 +92,9 @@ export function readControlUiRootAsset(
   const owner = rootFiles(runtime, root);
   owner.controller.signal.throwIfAborted();
   const key = `${readBody ? "body" : "metadata"}:${fileRel}`;
-  const cachedKey = owner.cached.has(`body:${fileRel}`) ? `body:${fileRel}` : key;
+  const cachedKey = owner.cached.peek(`body:${fileRel}`) ? `body:${fileRel}` : key;
   const cached = owner.cached.get(cachedKey);
   if (cached) {
-    owner.cached.delete(cachedKey);
-    owner.cached.set(cachedKey, cached);
     return Promise.resolve(cached.asset);
   }
   const pending =
@@ -104,8 +104,7 @@ export function readControlUiRootAsset(
   }
   const pool = (runtime.pool ??= new WorkerTaskPool({
     workerUrl: resolveRuntimeProcessEntrypointUrl("controlUiFile"),
-    maxWorkers: 2,
-    sharedCompute: true,
+    workerClass: "file-reader",
     maxPendingTasks: 2_048,
     maxPendingBytes: 8 * 1024 * 1024,
   }));
@@ -129,20 +128,13 @@ export function readControlUiRootAsset(
     );
   };
   const preparation = (async (): Promise<ControlUiRootAsset | null> => {
-    let location = {
+    const location = {
       rootPath: root.path,
       rootRealPath: root.realPath,
       filePath: path.resolve(root.path, fileRel),
       rejectHardlinks: root.kind !== "bundled",
     };
-    let file = await read(location);
-    if (!file && root.kind === "bundled" && fileRel.startsWith("assets/")) {
-      const retained = root.retainedAssets?.resolveAsset(fileRel);
-      if (retained) {
-        location = { ...retained, rootPath: retained.rootRealPath, rejectHardlinks: true };
-        file = await read(location);
-      }
-    }
+    const file = await read(location);
     if (!file) {
       return null;
     }
@@ -167,15 +159,6 @@ export function readControlUiRootAsset(
         (asset.gzip?.body?.byteLength ?? 0);
       if (bytes <= MAX_PREPARED_BYTES) {
         owner.cached.set(key, { asset, bytes });
-        owner.bytes += bytes;
-        while (owner.bytes > MAX_PREPARED_BYTES || owner.cached.size > MAX_PREPARED_ENTRIES) {
-          const oldest = owner.cached.entries().next().value;
-          if (!oldest) {
-            break;
-          }
-          owner.cached.delete(oldest[0]);
-          owner.bytes -= oldest[1].bytes;
-        }
       }
     }
     return asset;
@@ -231,7 +214,6 @@ function prepareResolvedRootState({
           kind: "bundled",
           ...resolvedRoot,
           publicAssetBuildId,
-          retainedAssets: createControlUiAssetRetention(root),
         }
       : { kind: "resolved", ...resolvedRoot };
   } catch (error) {
@@ -324,16 +306,6 @@ export function createGatewayControlUiRootLifecycle(
         const detail = error instanceof Error ? error.message : String(error);
         params.log.warn(`gateway: Control UI assets build failed: ${detail}`);
       }
-      return;
-    }
-    if (state.kind === "bundled") {
-      await state.retainedAssets?.prepare({ signal }).catch((error: unknown) => {
-        if (isStopped()) {
-          return;
-        }
-        const detail = error instanceof Error ? error.message : String(error);
-        params.log.warn(`gateway: Control UI asset retention failed: ${detail}`);
-      });
     }
   };
   const start = (): Promise<void> => {
@@ -384,7 +356,6 @@ export function createGatewayControlUiRootLifecycle(
       files.controller.abort();
       await Promise.allSettled(files.pending.values());
       files.cached.clear();
-      files.bytes = 0;
     },
   };
 }

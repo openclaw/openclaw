@@ -7,7 +7,7 @@ read_when:
 title: Session permission modes
 ---
 
-Session permission modes set one session's filesystem boundary and exec escalation reviewer. The boundary is the session's recorded canonical `sessionRoot`, or the selected agent's canonical workspace when no root is recorded. The mode determines what may happen inside or outside that boundary.
+Session permission modes set one session's filesystem boundary and exec escalation reviewer. The boundary is the session's recorded resolved `sessionRoot`, or the selected agent's resolved workspace when no root is recorded. The mode determines what may happen inside or outside that boundary.
 
 | Mode        | Filesystem access                                         | Exec escalation reviewer                |
 | ----------- | --------------------------------------------------------- | --------------------------------------- |
@@ -20,6 +20,8 @@ These tool-visibility and exec rules describe OpenClaw-managed tools. Native har
 
 Required workspace roots and sandbox restrictions still constrain file tools in `full` mode. Memory-flush runs expose only `read` and append-only `write`.
 
+Control UI file previews follow this filesystem boundary; opening files outside the session root also requires current permission to start a turn in that session.
+
 In `workspace` mode, an exec reviewer denial returns a reason to the agent without creating a human approval card. The agent must choose a materially safer alternative or ask the user; it must not work around the denial. Reviewer `ask` verdicts and review failures request human approval. Three consecutive gateway reviewer denials also escalate to a human. Existing command-binding checks and explicit human-approval requirements remain in force; see [Exec modes](/tools/exec#modes).
 
 Gateway approval-backed commands bind every resolved command-segment executable before review and re-check it before launch: protected executables use resolved real-path identity only, while writable executables also use a content hash. Node identity checks cover local policy evaluation through dispatch, with a [remote shell-wrapper approval limitation](/tools/exec-approvals-advanced#interpreter%2Fruntime-commands). POSIX login or interactive shell wrappers skip auto-review and require human approval when binding succeeds; existing binding rejections remain denied. Their implicit startup files are outside operand binding.
@@ -28,7 +30,7 @@ Gateway approval-backed commands bind every resolved command-segment executable 
 
 ## Session root and defaults
 
-A permission mode can be set on any session. When a session has a recorded `sessionRoot`, that canonical path is its filesystem boundary. An explicit working directory and a managed worktree each pin their session's root. When no root is recorded, the boundary defaults to the selected agent's canonical workspace when the run is prepared.
+A permission mode can be set on any session. When a session has a recorded `sessionRoot`, that resolved path is its filesystem boundary. An explicit working directory and a managed worktree each pin their session's root. When no root is recorded, the boundary defaults to the selected agent's resolved workspace when the run is prepared.
 
 Managed worktree sessions use the worktree checkout as `sessionRoot`. A nested working directory remains the runtime `cwd`, so relative paths start there while filesystem containment covers the whole checkout.
 

@@ -76,7 +76,13 @@ describe("spawn broker resource socket", () => {
     const large = { bytes: Buffer.alloc(2 * 1024 * 1024 + 17, 73), nested: { count: 42n } };
     await Promise.all([first.send(large), first.send(undefined), first.send("after")]);
     await completed.promise;
-    expect(messages).toEqual([large, undefined, "after"]);
+    expect(messages).toEqual([{ ...large, bytes: expect.any(Buffer) }, undefined, "after"]);
+    const received = messages[0];
+    if (!received || typeof received !== "object" || !("bytes" in received)) {
+      throw new Error("Missing echoed broker payload");
+    }
+    // Compare every byte without treating the multi-megabyte Buffer as object properties.
+    expect(Buffer.isBuffer(received.bytes) && received.bytes.equals(large.bytes)).toBe(true);
   });
 
   it("accepts split headers and coalesced records, then reports actual peer EOF once", async () => {

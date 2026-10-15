@@ -3,6 +3,7 @@ import path from "node:path";
 import { parseDocument } from "yaml";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { hasErrnoCode } from "./errno.js";
+import { isFullGitObjectId } from "./update-dev-target.js";
 import { resolvePnpmCandidateEnv } from "./update-package-manager.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
@@ -27,8 +28,8 @@ export type StepFactory = (
   env?: NodeJS.ProcessEnv,
 ) => RunStepOptions;
 
-function looksLikeFullCommitSha(value: string): boolean {
-  return /^[0-9a-f]{40}$/i.test(value.trim());
+export function createGitStepFactory(root: string, step: StepFactory) {
+  return (name: string, ...args: string[]) => step(name, ["git", "-C", root, ...args], root);
 }
 
 export function resolveTagFetchRef(candidate: string): string | null {
@@ -38,7 +39,7 @@ export function resolveTagFetchRef(candidate: string): string | null {
 
 export function buildDevTargetRefResolutionCandidates(devTargetRef: string): string[] {
   const trimmed = devTargetRef.trim();
-  if (looksLikeFullCommitSha(trimmed) || trimmed.startsWith("refs/remotes/")) {
+  if (isFullGitObjectId(trimmed) || trimmed.startsWith("refs/remotes/")) {
     return [trimmed];
   }
   if (trimmed.startsWith("refs/heads/")) {
@@ -112,15 +113,12 @@ function resolveBuildNodeOptions(baseOptions: string | undefined): string {
   return current.replace(/(?:^|\s)--max-old-space-size=\d+(?=\s|$)/, ` ${desired}`).trim();
 }
 
-export function resolveBuildEnv(
-  env: NodeJS.ProcessEnv = process.env,
-  buildCacheRoot?: string,
-): NodeJS.ProcessEnv {
+export function resolveBuildEnv(env: NodeJS.ProcessEnv, buildCacheRoot: string): NodeJS.ProcessEnv {
   return {
     ...env,
     OPENCLAW_UPDATE_IN_PROGRESS: "1",
     NODE_OPTIONS: resolveBuildNodeOptions(env.NODE_OPTIONS ?? process.env.NODE_OPTIONS),
-    ...(buildCacheRoot ? { BUILD_ALL_CACHE_ROOT: buildCacheRoot } : {}),
+    BUILD_ALL_CACHE_ROOT: buildCacheRoot,
   };
 }
 
@@ -182,17 +180,15 @@ export async function prepareCandidateCommandEnv(
   }
   const hasExplicitPreferOffline =
     effectiveEnv.pnpm_config_prefer_offline !== undefined ||
-    effectiveEnv.PNPM_CONFIG_PREFER_OFFLINE !== undefined;
-  const hasConfigPreferOffline = hasExplicitPreferOffline
-    ? false
-    : await hasExplicitPnpmPreferOfflineConfig({ runCommand, cwd, timeoutMs, env: effectiveEnv });
+    effectiveEnv.PNPM_CONFIG_PREFER_OFFLINE !== undefined ||
+    (await hasExplicitPnpmPreferOfflineConfig({ runCommand, cwd, timeoutMs, env: effectiveEnv }));
   const candidateEnv: NodeJS.ProcessEnv = {
     ...resolvePnpmCandidateEnv(effectiveEnv, "node_modules/.pnpm"),
     PNPM_CONFIG_RESOLUTION_MODE: env?.PNPM_CONFIG_RESOLUTION_MODE ?? "highest",
     npm_config_resolution_mode: env?.npm_config_resolution_mode ?? "highest",
     pnpm_config_resolution_mode: env?.pnpm_config_resolution_mode ?? "highest",
   };
-  if (!hasExplicitPreferOffline && !hasConfigPreferOffline) {
+  if (!hasExplicitPreferOffline) {
     candidateEnv.PNPM_CONFIG_PREFER_OFFLINE = "true";
     candidateEnv.pnpm_config_prefer_offline = "true";
   }

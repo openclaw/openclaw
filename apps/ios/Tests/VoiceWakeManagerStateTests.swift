@@ -174,7 +174,7 @@ private actor VoiceWakeCommandBarrier {
             errorText: nil)
         await barrier.waitUntilEntered()
 
-        manager.setSuppressedByPushToTalk(true)
+        manager.setSuppressed(true, reason: .pushToTalk)
         await barrier.release()
         for _ in 0..<100 {
             if await barrier.observedCancellation != nil {

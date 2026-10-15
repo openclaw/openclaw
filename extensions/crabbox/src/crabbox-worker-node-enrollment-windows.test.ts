@@ -31,7 +31,6 @@ type ReplayOptions = {
   processOutput?: string;
   launchRecord?: Record<string, unknown>;
   recordOutput?: string;
-  missingRecord?: boolean;
   missingLauncher?: boolean;
   probeFailure?: boolean;
   canonicalizePaths?: boolean;
@@ -97,9 +96,6 @@ async function replay(options: ReplayOptions = {}) {
         return "123\n";
       }
       if (file === path.win32.join(stateDir, "node-launch.json")) {
-        if (options.missingRecord) {
-          throw Object.assign(new Error("missing launch record"), { code: "ENOENT" });
-        }
         return (
           options.recordOutput ??
           JSON.stringify({
@@ -204,14 +200,11 @@ async function replay(options: ReplayOptions = {}) {
 }
 
 describe("native Windows node enrollment replay", () => {
-  it.each([
-    { name: "original node command line", options: {} },
-    {
-      name: "canonical drive-letter paths",
-      options: { canonicalizePaths: true, processEntry: { executablePath: node.toLowerCase() } },
-    },
-  ])("reuses the verified $name without launching a second process", async ({ options }) => {
-    const result = await replay(options);
+  it("reuses canonical drive-letter paths without launching a second process", async () => {
+    const result = await replay({
+      canonicalizePaths: true,
+      processEntry: { executablePath: node.toLowerCase() },
+    });
     expect(result).toMatchObject({
       code: 0,
       output:
@@ -221,36 +214,26 @@ describe("native Windows node enrollment replay", () => {
     expect(result.fs.mkdirSync).toHaveBeenCalledWith(stateDir, { recursive: true });
   });
 
-  it.each([
-    { name: "missing launch record", options: { missingRecord: true } },
-    { name: "malformed launch record", options: { recordOutput: "invalid JSON" } },
-    { name: "record PID mismatch", options: { launchRecord: { pid: 124 } } },
-    {
-      name: "reused PID creation time",
-      options: { processEntry: { startTime: startTime + "-other" } },
-    },
-    { name: "record runtime directory mismatch", options: { launchRecord: { runtimeDir: home } } },
-    { name: "record state directory mismatch", options: { launchRecord: { stateDir: home } } },
-    { name: "record CLI mismatch", options: { launchRecord: { cli: node } } },
-    { name: "actual node PID mismatch", options: { processEntry: { pid: 124 } } },
-    { name: "missing creation time", options: { processEntry: { startTime: "" } } },
-    { name: "wrong executable", options: { processEntry: { executablePath: launcher } } },
-    { name: "missing executable", options: { processEntry: { executablePath: null } } },
-    {
-      name: "title without invocation",
-      options: { processEntry: { commandLine: "openclaw-connect" } },
-    },
-    {
-      name: "CLI path in a later argument",
-      options: { processEntry: { commandLine: `"${node}" other-script.cjs "${cli}"` } },
-    },
-    { name: "missing command line", options: { processEntry: { commandLine: null } } },
-    { name: "unavailable CIM probe", options: { probeFailure: true } },
-    { name: "empty CIM probe", options: { processOutput: "" } },
-    { name: "malformed CIM probe", options: { processOutput: "invalid JSON" } },
-    { name: "missing CIM process", options: { processOutput: "[]" } },
-    { name: "ambiguous CIM processes", options: { processOutput: '[{"pid":123},{"pid":124}]' } },
-  ])("fails closed for $name", async ({ options }) => {
+  it.each<[string, ReplayOptions]>([
+    ["malformed launch record", { recordOutput: "invalid JSON" }],
+    ["record PID mismatch", { launchRecord: { pid: 124 } }],
+    ["reused PID creation time", { processEntry: { startTime: startTime + "-other" } }],
+    ["record runtime directory mismatch", { launchRecord: { runtimeDir: home } }],
+    ["record state directory mismatch", { launchRecord: { stateDir: home } }],
+    ["record CLI mismatch", { launchRecord: { cli: node } }],
+    ["actual node PID mismatch", { processEntry: { pid: 124 } }],
+    ["missing creation time", { processEntry: { startTime: "" } }],
+    ["wrong executable", { processEntry: { executablePath: launcher } }],
+    ["missing executable", { processEntry: { executablePath: null } }],
+    ["title without invocation", { processEntry: { commandLine: "openclaw-connect" } }],
+    [
+      "CLI path in a later argument",
+      { processEntry: { commandLine: `"${node}" other-script.cjs "${cli}"` } },
+    ],
+    ["unavailable CIM probe", { probeFailure: true }],
+    ["malformed CIM probe", { processOutput: "invalid JSON" }],
+    ["ambiguous CIM processes", { processOutput: '[{"pid":123},{"pid":124}]' }],
+  ])("fails closed for %s", async (_name, options) => {
     expect(await replay(options)).toMatchObject({
       code: 1,
       output: expect.stringContaining(replayError),

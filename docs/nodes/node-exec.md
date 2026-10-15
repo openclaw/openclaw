@@ -38,6 +38,11 @@ Or per session:
 
 Once set, any `exec` call with `host=node` runs on the node host (subject to the node allowlist/approvals).
 
+Child commands retain the node's profile and state paths, but do not inherit its
+daemon identity or native service selectors. This lets `openclaw gateway status`
+and `openclaw update` inspect the Gateway independently of the node service.
+Explicit service selectors in permitted environment overrides still apply.
+
 `host=auto` will not implicitly choose the node on its own. An explicit per-call `host=node` request is allowed from `auto` only when no sandbox runtime is active; while a sandbox runtime is active, `auto` rejects it. To run on a node from a sandboxed session, or to make node exec the session default, set `tools.exec.host=node` or `/exec host=node ...` explicitly.
 
 Related:
@@ -45,6 +50,37 @@ Related:
 - [Node host CLI](/cli/node)
 - [Exec tool](/tools/exec)
 - [Exec approvals](/tools/exec-approvals)
+
+## Channel and subagent context
+
+Nodes advertising `system.run.execution-context.v1` receive optional
+`executionContext` on both `system.run.prepare` and `system.run`. Its only fields
+are `senderId`, `chatId` (nonempty strings), and `subagent` (`true` when present).
+The node injects `OPENCLAW_CHANNEL_CONTEXT` with the sender/chat identity JSON and
+`OPENCLAW_SUBAGENT_EXEC=1` into the child environment. These routing hints do not
+grant session, turn, or command approval authority, and do not modify approved argv.
+When context is present, it replaces both routing markers, including inherited
+values. Omitted fields do not retain a previous channel or subagent hint. Requests
+without typed context keep their existing environment behavior.
+
+Custom `env` overrides still follow the node's existing restrictions. Supporting
+this context does not enable arbitrary environment overrides on Windows companion
+nodes that reject them. A node must support the context through its preparation,
+approval, and launch paths before advertising the capability.
+
+Update both the Gateway and node to use this transport, and approve an updated
+node capability surface in **Devices** if requested after reconnecting. Older Gateways keep sending
+the markers through `env`; newer Gateways do the same for nodes without the
+capability. That compatibility path preserves existing behavior, including
+`custom-env-not-supported` on older Windows companions. The Gateway does not omit
+markers to bypass that rejection. An unsupported context request is rejected
+before dispatch; reconnecting a node without the capability does not silently
+downgrade a prepared request. No protocol-version or configuration change is needed.
+
+For `openclaw agent --local` connected to a remote Gateway, the CLI also checks the
+Gateway's advertised capability. An older Gateway selects the existing `env`
+transport even with an updated node. A Gateway downgrade after discovery rejects
+the typed request before dispatch rather than dropping its context.
 
 ## Invoking commands
 

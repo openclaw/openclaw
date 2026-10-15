@@ -1,7 +1,6 @@
 // Connection-bound capture operations retain their caller's synchronous write admission.
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { StringDecoder } from "node:string_decoder";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -10,6 +9,7 @@ import { sha256Hex } from "../infra/crypto-digest.js";
 import { executeWithCachedStatement } from "../infra/kysely-sync-cache-state.js";
 import { compileSqliteQueryBindings, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -46,7 +46,7 @@ export const DEBUG_PROXY_CAPTURE_DIR_MODE = 0o700;
 export const DEBUG_PROXY_CAPTURE_FILE_MODE = 0o600;
 
 export type DebugProxyCaptureKernelOptions = {
-  db: DatabaseSync;
+  db: EngineConnection;
   dbPath: string;
   blobDir: string;
   pathBased?: { blobDir: string };
@@ -54,7 +54,7 @@ export type DebugProxyCaptureKernelOptions = {
 };
 
 export class DebugProxyCaptureKernel {
-  readonly db: DatabaseSync;
+  readonly db: EngineConnection;
   readonly dbPath: string;
   readonly blobDir: string;
   private readonly capturePathBased?: { blobDir: string };
@@ -177,7 +177,6 @@ export class DebugProxyCaptureKernel {
     const { compiled, bind } = compileSqliteQueryBindings<Buffer>((parameter) =>
       getNodeSqliteKysely<CaptureDatabase>(this.db)
         .insertInto("capture_blobs")
-        .orIgnore()
         .values({
           blob_id: blobId,
           content_type: contentType ?? null,
@@ -186,7 +185,8 @@ export class DebugProxyCaptureKernel {
           sha256,
           data: parameter((value) => gzipSync(value)),
           created_at: parameter(() => Date.now()),
-        }),
+        })
+        .onConflict((conflict) => conflict.column("blob_id").doNothing()),
     );
     // Prepare errors must precede payload compression and its creation timestamp.
     // Size cache admission with source bytes so large payloads never retain a cached binding.
@@ -219,14 +219,14 @@ export class DebugProxyCaptureKernel {
       const implicitSession = compileSqliteQueryBindings<CaptureEventRecord>((parameter) =>
         getNodeSqliteKysely<CaptureDatabase>(this.db)
           .insertInto("capture_sessions")
-          .orIgnore()
           .values({
             id: parameter((value) => value.sessionId),
             started_at: parameter((value) => value.ts),
             mode: "implicit",
             source_scope: parameter((value) => value.sourceScope),
             source_process: parameter((value) => value.sourceProcess),
-          }),
+          })
+          .onConflict((conflict) => conflict.column("id").doNothing()),
       );
       const sessionParameters = implicitSession.bind(event);
       executeWithCachedStatement(

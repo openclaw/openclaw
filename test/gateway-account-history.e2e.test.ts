@@ -252,10 +252,12 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
     );
     const session = listed.sessions.find((entry) => entry.key === key);
     expect(session).toBeDefined();
-    const conversation = listConversations({
-      agentId: "main",
-      storePath: path.join(instance.state.agentDir("main"), "openclaw-agent.sqlite"),
-    }).find(
+    const conversation = (
+      await listConversations({
+        agentId: "main",
+        storePath: path.join(instance.state.agentDir("main"), "openclaw-agent.sqlite"),
+      })
+    ).find(
       (entry) =>
         entry.sessionKey === key &&
         entry.sessionId === session!.sessionId &&

@@ -1,6 +1,6 @@
 import {
   configureAiTransportHost,
-  getAiTransportHost,
+  getDefaultAiTransportHost,
   type AiProviderRequestCapabilities,
 } from "@openclaw/ai";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,6 +18,10 @@ import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { resolveModelExtraParamSources } from "./model-extra-params.js";
 import { createOpenAICompletionsPayloadPolicyWrapper } from "./openai-completions-payload-policy.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
+import {
+  attachModelProviderLocalServiceReconciler,
+  getModelProviderLocalServiceReconciler,
+} from "./provider-local-service-reconcile.js";
 import {
   attachModelProviderLocalService,
   getModelProviderLocalService,
@@ -38,7 +42,7 @@ export function configureAiTransportRuntimeHost(): void {
   if (configured) {
     return;
   }
-  const host = getAiTransportHost();
+  const host = getDefaultAiTransportHost();
   configureAiTransportHost({
     ...host,
     plugin: {
@@ -66,6 +70,13 @@ export function configureAiTransportRuntimeHost(): void {
         }),
       wrapSimpleCompletionStream: (params) => {
         const config = params.config as OpenClawConfig | undefined;
+        const { defaultParams, modelParams, agentModelParams, agentParams } =
+          resolveModelExtraParamSources({
+            config,
+            provider: params.provider,
+            modelId: params.context.modelId,
+            agentId: params.context.agentId,
+          });
         const providerStreamFn = wrapProviderSimpleCompletionStreamFn({
           ...params,
           config,
@@ -74,19 +85,14 @@ export function configureAiTransportRuntimeHost(): void {
             ...params.context,
             config: params.context.config as OpenClawConfig | undefined,
             model: params.context.model as ProviderRuntimeModel,
+            modelParams: { ...modelParams, ...agentModelParams },
+            modelCallUrgency: "background",
           },
         });
         const baseStreamFn = providerStreamFn ?? params.context.streamFn;
         if ((params.context.sourceApi ?? params.context.model.api) !== "openai-completions") {
           return providerStreamFn;
         }
-        const { defaultParams, modelParams, agentModelParams, agentParams } =
-          resolveModelExtraParamSources({
-            config,
-            provider: params.provider,
-            modelId: params.context.modelId,
-            agentId: params.context.agentId,
-          });
         return createOpenAICompletionsPayloadPolicyWrapper(baseStreamFn, [
           defaultParams,
           modelParams,
@@ -115,9 +121,12 @@ export function configureAiTransportRuntimeHost(): void {
     inheritManagedTransport: (source, target) =>
       inheritModelProviderRequestRouteFacts(
         source,
-        attachModelProviderLocalService(
-          attachModelProviderRequestTransport(target, getModelProviderRequestTransport(source)),
-          getModelProviderLocalService(source),
+        attachModelProviderLocalServiceReconciler(
+          attachModelProviderLocalService(
+            attachModelProviderRequestTransport(target, getModelProviderRequestTransport(source)),
+            getModelProviderLocalService(source),
+          ),
+          getModelProviderLocalServiceReconciler(source),
         ),
       ),
     transformTransportMessages,

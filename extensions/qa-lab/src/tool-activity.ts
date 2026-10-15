@@ -1,4 +1,8 @@
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asFiniteNumber,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 function isCorrelationId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 1024;
@@ -169,10 +173,6 @@ function activityInput(input: unknown) {
   return isRecord(value) ? value : undefined;
 }
 
-function finiteTimestamp(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 function nativeCodeModeCellId(result: Record<string, unknown>) {
   const block = Array.isArray(result.content) ? result.content[0] : undefined;
   const content =
@@ -244,7 +244,7 @@ export function projectQaToolActivity(messages: readonly unknown[]): QaToolActiv
       conflictingIds.add(id);
       return;
     }
-    const timestamp = finiteTimestamp(result.timestamp);
+    const timestamp = asFiniteNumber(result.timestamp);
     const isError = typeof result.isError === "boolean" ? result.isError : undefined;
     const details = isRecord(result.details) ? result.details : undefined;
     const shell =
@@ -352,7 +352,7 @@ export function projectQaToolActivity(messages: readonly unknown[]): QaToolActiv
             : "tool",
         callIndex: index,
         startAfterIndex: index - 1,
-        startedAt: finiteTimestamp(block.timestamp) ?? finiteTimestamp(message.timestamp),
+        startedAt: asFiniteNumber(block.timestamp) ?? asFiniteNumber(message.timestamp),
         completed: false,
         successful: false,
       });

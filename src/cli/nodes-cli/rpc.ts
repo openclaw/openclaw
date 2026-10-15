@@ -5,7 +5,6 @@ import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import {
@@ -18,7 +17,9 @@ import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeFromNodeList } from "../../shared/node-resolve.js";
+import { positiveDurationError } from "../../shared/positive-duration.js";
 import { callGatewayFromCliWithTransport } from "../gateway-rpc.js";
+import { parseDurationMs } from "../parse-duration.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import type { NodesRpcOpts } from "./types.js";
 
@@ -217,6 +218,16 @@ export function parseOptionalNodeInteger(
   return parsed;
 }
 
+export function parseNodeDurationMs(value: string): number {
+  try {
+    const durationMs = parseDurationMs(value);
+    parseOptionalNodeInteger(durationMs, "--duration");
+    return durationMs;
+  } catch {
+    throw positiveDurationError("--duration", "ms");
+  }
+}
+
 /** Parse an optional finite number node CLI flag with optional bounds. */
 export function parseOptionalNodeFiniteNumber(
   value: unknown,
@@ -244,23 +255,6 @@ export function parseOptionalNodeFiniteNumber(
     throw new Error(`${flag} must be at most ${bounds.maxInclusive}.`);
   }
   return parsed;
-}
-
-/** Return the local-development hint for known unsigned Peekaboo bridge authorization failures. */
-export function unauthorizedHintForMessage(message: string): string | null {
-  const haystack = normalizeLowercaseStringOrEmpty(message);
-  if (
-    haystack.includes("unauthorizedclient") ||
-    haystack.includes("bridge client is not authorized") ||
-    haystack.includes("unsigned bridge clients are not allowed")
-  ) {
-    return [
-      "peekaboo bridge rejected the client.",
-      "sign the peekaboo CLI (TeamID Y5PE65HELJ) or launch the host with",
-      "PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1 for local dev.",
-    ].join(" ");
-  }
-  return null;
 }
 
 /** Resolve a node query to a node id via live node list or paired-node fallback. */

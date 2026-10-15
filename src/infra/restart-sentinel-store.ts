@@ -1,43 +1,31 @@
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import { z } from "zod";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { updateRecoverySchema } from "./update-recovery.js";
 import { UpdateFailureFactSchema } from "./update-run-schema.js";
 
 type RestartSentinelStats = z.infer<typeof restartSentinelStatsSchema>;
 export type RestartSentinelContinuation = z.infer<typeof restartSentinelContinuationSchema>;
 
-export type RestartSentinelPayload = {
-  kind: "config-apply" | "config-auto-recovery" | "config-patch" | "update" | "restart";
-  status: "ok" | "error" | "skipped";
-  ts: number;
-  sessionKey?: string;
-  deliveryContext?: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-  };
-  threadId?: string;
-  message?: string | null;
+export type RestartSentinelPayload = SchemaContract<
+  Omit<z.input<typeof restartSentinelPayloadSchema>, "stats" | "continuation">
+> & {
   continuation?: RestartSentinelContinuation | null;
-  doctorHint?: string | null;
   stats?: RestartSentinelStats | null;
 };
 
-export type RestartSentinelEnvelope = {
+export type RestartSentinel = {
   version: 1;
   payload: RestartSentinelPayload;
-};
-
-export type RestartSentinel = RestartSentinelEnvelope & {
   /** Optimistic-concurrency revision backed by gateway_restart_sentinel.updated_at_ms. */
   revision: number;
 };
@@ -159,14 +147,6 @@ function parseRestartSentinelPayload(value: unknown): RestartSentinelPayload | n
   return parsed.success ? parsed.data : null;
 }
 
-export function parseRestartSentinelEnvelope(value: unknown): RestartSentinelEnvelope | null {
-  if (!isPlainRecord(value) || value.version !== 1) {
-    return null;
-  }
-  const payload = parseRestartSentinelPayload(value.payload);
-  return payload ? { version: 1, payload } : null;
-}
-
 function parseRequiredJson(value: string | null): unknown {
   if (value === null) {
     return undefined;
@@ -206,7 +186,7 @@ function decodeRestartSentinelRow(row: RestartSentinelRow): RestartSentinel | nu
 }
 
 export function readRestartSentinelRowForKeySync(
-  db: DatabaseSync,
+  db: EngineConnection,
   sentinelKey: string,
 ): RestartSentinelRowState {
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
@@ -239,11 +219,11 @@ export function readRestartSentinelRowForKeySync(
   return sentinel ? { kind: "valid", sentinel } : { kind: "invalid", revision: row.updated_at_ms };
 }
 
-export function readRestartSentinelRowSync(db: DatabaseSync): RestartSentinelRowState {
+export function readRestartSentinelRowSync(db: EngineConnection): RestartSentinelRowState {
   return readRestartSentinelRowForKeySync(db, RESTART_SENTINEL_KEY);
 }
 
-export function readUpdateInstallReceiptRowSync(db: DatabaseSync): RestartSentinel | null {
+export function readUpdateInstallReceiptRowSync(db: EngineConnection): RestartSentinel | null {
   const current = readRestartSentinelRowForKeySync(db, UPDATE_INSTALL_RECEIPT_KEY);
   return current.kind === "valid" ? current.sentinel : null;
 }
@@ -269,7 +249,7 @@ export function nextRevision(currentRevision: number | null): number {
   return revision;
 }
 
-function readRestartSentinelRevisionFloorSync(db: DatabaseSync): number | null {
+function readRestartSentinelRevisionFloorSync(db: EngineConnection): number | null {
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
   const row = executeSqliteQueryTakeFirstSync(
     db,
@@ -324,7 +304,7 @@ export function buildRestartSentinelRow(
 }
 
 function upsertRestartSentinelRowSync(
-  db: DatabaseSync,
+  db: EngineConnection,
   row: ReturnType<typeof buildRestartSentinelRow>,
 ): void {
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
@@ -338,7 +318,7 @@ function upsertRestartSentinelRowSync(
   );
 }
 
-function advanceRestartSentinelRevisionFloorSync(db: DatabaseSync, revision: number): void {
+function advanceRestartSentinelRevisionFloorSync(db: EngineConnection, revision: number): void {
   // `current` is deleted after durable delivery. The reserved row survives that
   // clear so a later same-millisecond write cannot reuse an idempotency revision.
   const payload: RestartSentinelPayload = { kind: "restart", status: "skipped", ts: revision };
@@ -349,7 +329,7 @@ function advanceRestartSentinelRevisionFloorSync(db: DatabaseSync, revision: num
 }
 
 export function writeRestartSentinelRowSync(
-  db: DatabaseSync,
+  db: EngineConnection,
   rawPayload: RestartSentinelPayload,
 ): RestartSentinel {
   const payload = requireValidPayload(rawPayload);
@@ -361,7 +341,7 @@ export function writeRestartSentinelRowSync(
 }
 
 /** Read inside a transaction; the floor also identifies an absent, consumed notification. */
-export function readRestartSentinelSnapshotSync(db: DatabaseSync): {
+export function readRestartSentinelSnapshotSync(db: EngineConnection): {
   state: RestartSentinelRowState;
   revision: number | null;
 } {
@@ -379,7 +359,7 @@ export function readRestartSentinelSnapshotSync(db: DatabaseSync): {
 }
 
 export function writeUpdateInstallReceiptRowSync(
-  db: DatabaseSync,
+  db: EngineConnection,
   rawPayload: RestartSentinelPayload,
 ): RestartSentinel {
   const payload = requireValidPayload(rawPayload);
@@ -403,7 +383,7 @@ export function writeUpdateInstallReceiptRowSync(
 
 /** Compare inside the caller's transaction; null requires an absent current row. */
 export function writeRestartSentinelRowIfRevisionSync(
-  db: DatabaseSync,
+  db: EngineConnection,
   rawPayload: RestartSentinelPayload,
   expectedRevision: number | null,
 ): RestartSentinel | null {
@@ -439,7 +419,10 @@ export function writeRestartSentinelRowIfRevisionSync(
   return { version: 1, payload, revision };
 }
 
-export function deleteRestartSentinelRowSync(db: DatabaseSync, expectedRevision: number): boolean {
+export function deleteRestartSentinelRowSync(
+  db: EngineConnection,
+  expectedRevision: number,
+): boolean {
   const current = readRestartSentinelRowSync(db);
   if (current.kind === "missing") {
     return false;

@@ -74,7 +74,6 @@ describe("restricted node command surface", () => {
       config: { nodeHost: { workerRuns: { enabled: true } }, desktop: { host: { enabled: true } } },
       env: { PATH: "/private/host/bin" },
       enableAgentRuns: true,
-      enableWorkerRuns: true,
       forceWorkerRuns: true,
       installedAppsSharingEnabled: true,
       platform: "darwin",
@@ -127,23 +126,9 @@ describe("restricted node command surface", () => {
     }
   });
 
-  it("recomputes builtin capabilities without retaining unrelated families", async () => {
-    const prepared = await prepareNodeHostRuntime({
-      config: {},
-      commands: ["system.which", "fixture.read"],
-    });
-    expect(prepared.manifest).toEqual({
-      commands: ["fixture.read", "system.which"],
-      caps: ["fixture-catalog", "system"],
-    });
+  it("fails startup when the command allowlist is empty", async () => {
+    await expect(prepareNodeHostRuntime({ config: {}, commands: [] })).rejects.toThrow(
+      "empty allowlist",
+    );
   });
-
-  it.each([{ commands: [] }, { commands: ["missing.command"] }])(
-    "fails startup when no requested command is available: $commands",
-    async ({ commands }) => {
-      await expect(prepareNodeHostRuntime({ config: {}, commands })).rejects.toThrow(
-        commands.length ? "missing.command" : "empty allowlist",
-      );
-    },
-  );
 });

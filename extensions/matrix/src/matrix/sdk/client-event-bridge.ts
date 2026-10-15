@@ -16,7 +16,7 @@ export function registerMatrixClientBridge(params: {
   emitter: EventEmitter;
   emitMembershipForRoom: (room: Room) => void;
   getSelfUserId: () => string;
-  setCurrentSyncState: (state: MatrixSyncState, error?: unknown) => void;
+  setCurrentSyncState: (state: MatrixSyncState, error: unknown, fromCache: boolean) => void;
 }): void {
   let initialSyncComplete = false;
   const joinTransitions = new WeakSet<MatrixEvent>();
@@ -83,7 +83,9 @@ export function registerMatrixClientBridge(params: {
         data && typeof data === "object" && "error" in data
           ? (data as { error?: unknown }).error
           : undefined;
-      params.setCurrentSyncState(state, error);
+      const fromCache =
+        data != null && typeof data === "object" && "fromCache" in data && data.fromCache === true;
+      params.setCurrentSyncState(state, error, fromCache);
       params.emitter.emit("sync.state", state, prevState, error);
     },
   );

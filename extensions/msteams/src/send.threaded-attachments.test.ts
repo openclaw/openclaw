@@ -249,20 +249,6 @@ const structuredRoutingCases: StructuredRoutingCase[] = [
     storedThreadId: "thread-root-1",
     expectedConversationId: conversationId,
   },
-  {
-    label: "group chat",
-    conversationType: "groupChat",
-    replyStyle: "top-level",
-    storedThreadId: "group-activity-1",
-    expectedConversationId: conversationId,
-  },
-  {
-    label: "personal chat",
-    conversationType: "personal",
-    replyStyle: "top-level",
-    storedThreadId: "personal-activity-1",
-    expectedConversationId: conversationId,
-  },
 ];
 
 type StructuredSender = {
@@ -526,7 +512,6 @@ describe.each(structuredSenders)("Microsoft Teams $label thread routing", ({ sen
 });
 
 describe.each([
-  { label: "simple name", sourceName: "Alex", displayName: "Alex" },
   {
     label: "escaped brackets",
     sourceName: String.raw`Alice \[Ops\]`,

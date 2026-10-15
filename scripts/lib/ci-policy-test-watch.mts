@@ -1,9 +1,17 @@
 import { readFileSync } from "node:fs";
 import { matchesGlob } from "node:path";
 import { isPlainRepoRelativePath } from "../../test/vitest/vitest.include-patterns.ts";
+import { resolveUiTypeScriptPath } from "../../test/vitest/vitest.ui-paths.mjs";
+import { isTestFileTarget } from "./changed-path-facts.mjs";
+import {
+  NODE_WORKER_E2E_OWNER_GLOBS,
+  NODE_WORKER_E2E_TEST_FILES,
+} from "./ci-node-worker-e2e-inventory.mts";
+import { UI_E2E_OWNER_WATCHES } from "./ci-ui-e2e-owner-inventory.mts";
 
 type PolicyTestWatch = {
   ownerGlobs?: readonly string[];
+  sourceOnly?: boolean;
   testFile: string;
   watchGlobs: readonly string[];
 };
@@ -12,7 +20,43 @@ type PolicyTestWatch = {
 // they enforce. Boundary and contract suites have dedicated always-on lanes;
 // this inventory covers the remaining tests that changed targeting cannot
 // discover from imports alone.
-const policyTestWatches = [
+const policyTestWatches: readonly PolicyTestWatch[] = [
+  ...NODE_WORKER_E2E_TEST_FILES.map((testFile): PolicyTestWatch => ({
+    testFile,
+    watchGlobs: NODE_WORKER_E2E_OWNER_GLOBS,
+    sourceOnly: true,
+  })),
+  {
+    testFile: "test/scripts/ios-lifecycle-workflow.test.ts",
+    watchGlobs: [
+      ".github/workflows/ci.yml",
+      "scripts/lib/ci-ios-smoke-plan.mjs",
+      "apps/ios/project.yml",
+      "apps/ios/Tests/**",
+      "apps/macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift",
+      "apps/shared/OpenClawKit/Tests/OpenClawKitTests/NativeGatewayWebSocketFixture.swift",
+    ],
+  },
+  // Browser-served route owners are not imports of the Playwright entry point.
+  ...UI_E2E_OWNER_WATCHES.map(({ testFile, watchGlobs }): PolicyTestWatch => ({
+    testFile: resolveUiTypeScriptPath(testFile),
+    watchGlobs,
+    sourceOnly: true,
+  })),
+  // New or removed modules and new import edges can escape a static inventory.
+  // Watch source edits conservatively: the absent inventory entry cannot own its guard.
+  ...[
+    "test/scripts/pr-wrapper-source-closure.test.ts",
+    "test/scripts/pr-worktree-provision.test.ts",
+    "test/scripts/eager-import-closure.test.ts",
+    "test/scripts/update-restart-module-outcome.test.ts",
+    "test/scripts/type-suppression-inventory.test.ts",
+    "test/scripts/plugin-sdk-surface-report.test.ts",
+  ].map((testFile): PolicyTestWatch => ({
+    testFile,
+    sourceOnly: true,
+    watchGlobs: ["{src,extensions,packages,scripts,ui/src}/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
+  })),
   {
     testFile: "test/vitest-pr-exempt-retention.test.ts",
     watchGlobs: [
@@ -33,6 +77,18 @@ const policyTestWatches = [
     ],
   },
   // These owner contracts enter production through fixture adapters or a facade.
+  {
+    testFile: "src/gateway/server.agents.config-readiness.test.ts",
+    watchGlobs: [
+      "src/gateway/config-reload.ts",
+      "src/secrets/runtime-auth-store-admission.ts",
+      "src/agents/prepared-model-runtime.configured.ts",
+    ],
+  },
+  {
+    testFile: "src/gateway/server.config-patch.test.ts",
+    watchGlobs: ["src/gateway/config-reload.ts"],
+  },
   {
     testFile: "src/agents/agent-bundle-mcp-reload.test.ts",
     watchGlobs: ["src/agents/agent-bundle-mcp-manager.ts"],
@@ -67,7 +123,7 @@ const policyTestWatches = [
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
-      "src/gateway/worker-environments/placement-dispatch-store.worker.ts",
+      "src/gateway/worker-environments/placement-lifecycle.worker.ts",
       "src/gateway/worker-environments/placement-turn-claims.worker.ts",
     ],
   })),
@@ -230,7 +286,6 @@ const policyTestWatches = [
     ],
   },
   ...[
-    "src/acp/runtime/session-meta.alias-lifecycle.test.ts",
     "src/commands/doctor-config-health-freshness.test.ts",
     "src/commands/doctor/shared/post-core-plugin-convergence.persistence.test.ts",
     "src/hooks/installs.test.ts",
@@ -259,9 +314,11 @@ const policyTestWatches = [
   },
   ...[
     "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",
+    "src/agents/embedded-agent-runner/run/attempt-prompt-submit.runtime-replay.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-stream-custody.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
     "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts",
+    "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.orphan.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
     "src/agents/subagents/spawn/subagent-spawn.preparation-authority.test.ts",
   ].map((testFile): PolicyTestWatch => ({
@@ -379,7 +436,6 @@ const policyTestWatches = [
   ...[
     "src/agents/worktrees/empty-source.test.ts",
     "src/agents/worktrees/service.remove-lease.test.ts",
-    "src/agents/worktrees/service.snapshot-index.test.ts",
     "src/agents/worktrees/service.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
@@ -417,14 +473,12 @@ const policyTestWatches = [
     testFile: "src/auto-reply/reply/get-reply.dashboard.test.ts",
     watchGlobs: ["skills/control-ui/SKILL.md"],
   },
-  ...[
-    "src/boards/board-generated-identity.test.ts",
-    "src/boards/board-store.parity.test.ts",
-    "src/boards/board-store.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: ["src/boards/sqlite-board-store.worker.ts"],
-  })),
+  ...["src/boards/board-generated-identity.test.ts", "src/boards/board-store.test.ts"].map(
+    (testFile): PolicyTestWatch => ({
+      testFile,
+      watchGlobs: ["src/boards/sqlite-board-store.worker.ts"],
+    }),
+  ),
   ...[
     "src/cli/capability-cli/model.account-secrets.provenance.test.ts",
     "src/commands/models/list.probe.resources.test.ts",
@@ -524,22 +578,6 @@ const policyTestWatches = [
       "src/state/openclaw-state.worker.ts",
     ],
   },
-  {
-    testFile: "src/commands/doctor-sandbox-legacy-registry.test.ts",
-    watchGlobs: [
-      "src/agents/sandbox/registry-import.worker.ts",
-      "src/infra/sqlite-store.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
-      "src/state/openclaw-state.worker.ts",
-    ],
-  },
-  ...[
-    "src/commands/doctor-skill-workshop-relocation.reservations.test.ts",
-    "src/commands/doctor-skill-workshop-sqlite.relocation.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: ["src/skills/workshop/store.worker.ts"],
-  })),
   {
     testFile: "src/commands/models/auth.minimax-chat.test.ts",
     watchGlobs: [
@@ -665,22 +703,6 @@ const policyTestWatches = [
       "src/state/openclaw-agent-execution.worker.ts",
     ],
   })),
-  ...[
-    "src/fleet/doctor.runtime.test.ts",
-    "src/fleet/registry-read.test.ts",
-    "src/fleet/service-removal.runtime.test.ts",
-    "src/fleet/service-upgrade.runtime.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: [
-      "src/fleet/registry.kernel.ts",
-      "src/fleet/registry.worker.ts",
-      "src/state/openclaw-state-read-registry.ts",
-      "src/state/openclaw-state-read.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
-      "src/state/openclaw-state.worker.ts",
-    ],
-  })),
   {
     testFile: "src/gateway/board-store.test.ts",
     watchGlobs: [
@@ -731,10 +753,6 @@ const policyTestWatches = [
       "src/state/openclaw-state-read.worker.ts",
     ],
   })),
-  {
-    testFile: "src/gateway/server-methods/board.website.test.ts",
-    watchGlobs: ["src/boards/sqlite-board-store.worker.ts", "src/infra/sqlite-store.worker.ts"],
-  },
   ...[
     "src/gateway/server-methods/chat-history-handler.cli-import.test.ts",
     "src/gateway/server-methods/chat-history-registry.test.ts",
@@ -932,7 +950,6 @@ const policyTestWatches = [
     ],
   },
   ...[
-    "src/gateway/talk/client-spoken-confirmation.test.ts",
     "src/gateway/talk/handlers/client-native-control.test.ts",
     "src/gateway/talk/handlers/native-consult-target.test.ts",
     "src/gateway/talk/handlers/target.test.ts",
@@ -1081,7 +1098,7 @@ const policyTestWatches = [
   ...[
     "src/infra/sqlite-worker-transcripts.test.ts",
     "src/meeting-bot/transcripts-bridge.test.ts",
-    "src/transcripts/status.producer.shutdown.test.ts",
+    "src/transcripts/status.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
@@ -1139,20 +1156,20 @@ const policyTestWatches = [
     watchGlobs: ["src/plugin-state/plugin-state.worker.ts"],
   },
   {
-    testFile: "src/plugin-sdk/session-transcript-runtime.catalog.test.ts",
+    testFile: "src/plugin-sdk/session-transcript-runtime.test.ts",
     watchGlobs: [
       "src/config/sessions/session-cold-storage-worker.ts",
       "src/config/sessions/session-transcript-reconcile.worker.ts",
     ],
   },
   {
-    testFile: "src/plugin-sdk/session-transcript-runtime.read-fence.test.ts",
-    watchGlobs: ["src/config/sessions/session-transcript-reconcile.worker.ts"],
+    testFile: "src/plugin-sdk/session-transcript-runtime.guarded.test.ts",
+    watchGlobs: [
+      "src/config/sessions/session-cold-storage-worker.ts",
+      "src/config/sessions/session-transcript-reconcile.worker.ts",
+    ],
   },
-  ...[
-    "src/plugin-state/plugin-blob-store.readonly.test.ts",
-    "src/plugin-state/plugin-blob-store.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
+  ...["src/plugin-state/plugin-blob-store.test.ts"].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
       "src/plugin-state/plugin-blob-store.worker.ts",
@@ -1192,17 +1209,6 @@ const policyTestWatches = [
   {
     testFile: "src/skills/library/persistence.test.ts",
     watchGlobs: ["src/skills/library/persistence-child.test-support.ts"],
-  },
-  {
-    testFile: "src/skills/workshop/experience-review.apply.test.ts",
-    watchGlobs: [
-      "src/infra/sqlite-store.worker.ts",
-      "src/skills/workshop/curator.kernel.ts",
-      "src/skills/workshop/store-proposal.kernel.ts",
-      "src/skills/workshop/store.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
-      "src/state/openclaw-state.worker.ts",
-    ],
   },
   {
     testFile: "src/state/openclaw-agent-participants-migration.test.ts",
@@ -1395,11 +1401,20 @@ const policyTestWatches = [
     watchGlobs: ["scripts/lib/bounded-command.mts"],
   },
   {
+    testFile: "test/scripts/run-vitest-bounded.test.ts",
+    watchGlobs: [
+      "package.json",
+      "scripts/lib/vitest-cli-bootstrap.mts",
+      "scripts/test-extension-batch.mts",
+    ],
+  },
+  {
     testFile: "test/scripts/vitest-report-owner.test.ts",
     watchGlobs: [
       "scripts/lib/vitest-report-capture.mts",
       "scripts/run-vitest.mts",
       "scripts/test-extension-batch.mts",
+      "scripts/test-extension-batch-run.mts",
       "scripts/test-projects-run.mts",
     ],
   },
@@ -1509,6 +1524,7 @@ const policyTestWatches = [
   },
   ...[
     "src/agents/embedded-agent-runner/run/attempt-session-replay.test.ts",
+    "src/agents/embedded-agent-runner/run/attempt-session-replay-cohort.test.ts",
     "src/config/sessions/session-accessor.sqlite-branches.test.ts",
     "src/gateway/session-message-events.test.ts",
     "src/gateway/worker-environments/worker-turn-execution.test.ts",
@@ -1605,7 +1621,7 @@ const policyTestWatches = [
     testFile: "src/gateway/control-ui-session-prs-branch.test.ts",
     watchGlobs: [
       "src/gateway/control-ui-session-prs-git.runtime.ts",
-      "src/infra/git-read-operations.runtime.ts",
+      "src/infra/git-operation.worker.ts",
     ],
   },
   {
@@ -1737,16 +1753,9 @@ const policyTestWatches = [
     watchGlobs: ["src/infra/state-migrations.snapshot.worker.ts"],
   },
   {
-    testFile: "src/infra/state-migrations.skill-workshop.test.ts",
-    watchGlobs: ["src/state/openclaw-state.worker.ts"],
-  },
-  ...[
-    "src/infra/update-candidate-state.test.ts",
-    "src/infra/update-candidate-workspace-rehearsal.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
+    testFile: "src/infra/update-candidate-state.test.ts",
     watchGlobs: ["src/infra/update-candidate-state.worker.ts"],
-  })),
+  },
   {
     testFile: "src/state/agent-database-admission.test.ts",
     watchGlobs: [
@@ -1932,28 +1941,13 @@ const policyTestWatches = [
     ],
   },
   {
+    // Sole CI owner of the skill's node:test and Python suites: no Vitest config
+    // routes those files, so test-only skill edits must select this wrapper.
     testFile: "test/scripts/telegram-e2e-userbot-skill.test.ts",
     watchGlobs: [
-      ".agents/skills/telegram-e2e-userbot/scripts/followup-drain-control-preload.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/published-upgrade-artifact.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/published-upgrade-scenario.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/qa-credential-lease.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/run-mock-sut-user-e2e.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/run-published-upgrade-user-e2e.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/scenario.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-api-ignore-abort-preload.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-binding-checkpoint.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-binding-forum.py",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-binding-upgrade-verdict.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-run-scope.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-test-api-proxy.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-test-credential.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-test-doctor.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-test-group.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/telegram-test-recover.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/triage-mock-openai.mjs",
-      ".agents/skills/telegram-e2e-userbot/scripts/user-driver.py",
-      ".agents/skills/telegram-e2e-userbot/scripts/user-record.py",
+      ".agents/skills/telegram-e2e-userbot/agents/openai.yaml",
+      ".agents/skills/telegram-e2e-userbot/scripts/**",
+      "test/scripts/fixtures/triage-fixture-startup.mjs",
     ],
   },
   {
@@ -2031,7 +2025,6 @@ const policyTestWatches = [
     watchGlobs: ["ui/index.html", "ui/src/**/*.css", "ui/src/**/*.ts"],
   },
   ...[
-    "src/cron/service.stream-trigger.test.ts",
     "src/cron/service.stream-validation.test.ts",
     "src/cron/service/timer.timeout-watchdog.test.ts",
   ].map((testFile) => ({
@@ -2053,7 +2046,7 @@ const policyTestWatches = [
       "src/agents/sandbox/ssh-backend.ts",
     ],
   },
-] satisfies readonly PolicyTestWatch[];
+];
 
 const literalPolicyPatterns = new Set(
   policyTestWatches
@@ -2077,9 +2070,10 @@ export function resolvePolicyTestTargets(
     literal: isPlainRepoRelativePath(changedPath),
   }));
   return policyTestWatches
-    .filter(({ watchGlobs, ownerGlobs }) =>
+    .filter(({ watchGlobs, ownerGlobs, sourceOnly }) =>
       paths.some(
         ({ changedPath, literal }) =>
+          (!sourceOnly || !isTestFileTarget(changedPath)) &&
           watchGlobs.some((watchGlob) => matchesPolicyPattern(changedPath, watchGlob, literal)) &&
           (!options.completeOwnersOnly ||
             ownerGlobs?.some((ownerGlob) => matchesPolicyPattern(changedPath, ownerGlob, literal))),

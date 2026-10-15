@@ -24,13 +24,6 @@ type ParseFrame = {
   altMaxLength: number | null;
 };
 
-type PatternToken =
-  | { kind: "simple-token" }
-  | { kind: "group-open" }
-  | { kind: "group-close" }
-  | { kind: "alternation" }
-  | { kind: "quantifier"; quantifier: QuantifierRead };
-
 const SAFE_REGEX_CACHE_MAX = 256;
 const SAFE_REGEX_TEST_WINDOW = 2048;
 export type SafeRegexRejectReason = "empty" | "unsafe-nested-repetition" | "invalid-regex";
@@ -136,66 +129,9 @@ function readQuantifier(source: string, index: number): QuantifierRead | null {
   return { consumed: i - index, minRepeat, maxRepeat };
 }
 
-function tokenizePattern(source: string): PatternToken[] {
-  const tokens: PatternToken[] = [];
-  let inCharClass = false;
-
-  for (let i = 0; i < source.length; i += 1) {
-    const ch = source[i];
-
-    if (inCharClass) {
-      if (ch === "\\") {
-        i += 1;
-        continue;
-      }
-      if (ch === "]") {
-        inCharClass = false;
-      }
-      continue;
-    }
-
-    if (ch === "\\") {
-      i += 1;
-      tokens.push({ kind: "simple-token" });
-      continue;
-    }
-
-    if (ch === "[") {
-      inCharClass = true;
-      tokens.push({ kind: "simple-token" });
-      continue;
-    }
-
-    if (ch === "(") {
-      tokens.push({ kind: "group-open" });
-      continue;
-    }
-
-    if (ch === ")") {
-      tokens.push({ kind: "group-close" });
-      continue;
-    }
-
-    if (ch === "|") {
-      tokens.push({ kind: "alternation" });
-      continue;
-    }
-
-    const quantifier = readQuantifier(source, i);
-    if (quantifier) {
-      tokens.push({ kind: "quantifier", quantifier });
-      i += quantifier.consumed - 1;
-      continue;
-    }
-
-    tokens.push({ kind: "simple-token" });
-  }
-
-  return tokens;
-}
-
-function analyzeTokensForNestedRepetition(tokens: PatternToken[]): boolean {
+function hasNestedRepetition(source: string): boolean {
   const frames: ParseFrame[] = [createParseFrame()];
+  let inCharClass = false;
 
   const emitToken = (token: TokenState) => {
     const frame = expectDefined(frames[frames.length - 1], "frames entry at frames.length 1");
@@ -216,18 +152,33 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[]): boolean {
     });
   };
 
-  for (const token of tokens) {
-    if (token.kind === "simple-token") {
+  for (let i = 0; i < source.length; i += 1) {
+    const ch = source[i];
+    if (inCharClass) {
+      if (ch === "\\") {
+        i += 1;
+      } else if (ch === "]") {
+        inCharClass = false;
+      }
+      continue;
+    }
+    if (ch === "\\") {
+      i += 1;
+      emitSimpleToken();
+      continue;
+    }
+    if (ch === "[") {
+      inCharClass = true;
       emitSimpleToken();
       continue;
     }
 
-    if (token.kind === "group-open") {
+    if (ch === "(") {
       frames.push(createParseFrame());
       continue;
     }
 
-    if (token.kind === "group-close") {
+    if (ch === ")") {
       if (frames.length > 1) {
         const frame = frames.pop() as ParseFrame;
         if (frame.hasAlternation) {
@@ -253,7 +204,7 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[]): boolean {
       continue;
     }
 
-    if (token.kind === "alternation") {
+    if (ch === "|") {
       const frame = expectDefined(frames[frames.length - 1], "frames entry at frames.length 1");
       frame.hasAlternation = true;
       recordAlternative(frame);
@@ -263,6 +214,12 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[]): boolean {
       continue;
     }
 
+    const quantifier = readQuantifier(source, i);
+    if (!quantifier) {
+      emitSimpleToken();
+      continue;
+    }
+    i += quantifier.consumed - 1;
     const frame = expectDefined(frames[frames.length - 1], "frames entry at frames.length 1");
     const previousToken = frame.lastToken;
     if (!previousToken) {
@@ -271,17 +228,17 @@ function analyzeTokensForNestedRepetition(tokens: PatternToken[]): boolean {
     if (previousToken.containsRepetition) {
       return true;
     }
-    if (previousToken.hasAmbiguousAlternation && token.quantifier.maxRepeat === null) {
+    if (previousToken.hasAmbiguousAlternation && quantifier.maxRepeat === null) {
       return true;
     }
 
     const previousMinLength = previousToken.minLength;
     const previousMaxLength = previousToken.maxLength;
-    previousToken.minLength = multiplyLength(previousToken.minLength, token.quantifier.minRepeat);
+    previousToken.minLength = multiplyLength(previousToken.minLength, quantifier.minRepeat);
     previousToken.maxLength =
-      token.quantifier.maxRepeat === null
+      quantifier.maxRepeat === null
         ? Number.POSITIVE_INFINITY
-        : multiplyLength(previousToken.maxLength, token.quantifier.maxRepeat);
+        : multiplyLength(previousToken.maxLength, quantifier.maxRepeat);
     previousToken.containsRepetition = true;
     frame.containsRepetition = true;
     frame.branchMinLength = frame.branchMinLength - previousMinLength + previousToken.minLength;
@@ -317,12 +274,6 @@ export function testRegexWithBoundedInput(
     return true;
   }
   return testRegexFromStart(regex, input.slice(-maxWindow));
-}
-
-function hasNestedRepetition(source: string): boolean {
-  // Conservative parser: tokenize first, then check if repeated tokens/groups are repeated again.
-  // Non-goal: complete regex AST support; keep strict enough for config safety checks.
-  return analyzeTokensForNestedRepetition(tokenizePattern(source));
 }
 
 export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexCompileResult {

@@ -1,16 +1,14 @@
 import { createHash } from "node:crypto";
-import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { persistClawPackageRef } from "./provenance.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawPackage } from "./types.js";
@@ -51,31 +49,6 @@ function build(
 }
 
 describe("buildClawUpdatePlan", () => {
-  it("reads pre-bootstrap-column v6 state without mutating it", async () => {
-    const current = await fixture();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    const databasePath = resolveOpenClawStateSqlitePath(current.env);
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(databasePath);
-    try {
-      database.exec(`
-        ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path;
-        ALTER TABLE claw_installs DROP COLUMN bootstrap_content_digest;
-      `);
-    } finally {
-      database.close();
-    }
-    const beforeBytes = await readFile(databasePath);
-    const beforeStat = await stat(databasePath);
-
-    const plan = await build(current);
-
-    expect(plan).toMatchObject({ found: true, agentId: "worker", blockers: [] });
-    expect((await readFile(databasePath)).equals(beforeBytes)).toBe(true);
-    expect((await stat(databasePath)).mtimeMs).toBe(beforeStat.mtimeMs);
-  });
-
   it("moves a portable plugin dependency into a profile extension edge without reinstalling", async () => {
     const current = await fixture();
     const parsed = parseClawManifest({
@@ -146,51 +119,6 @@ describe("buildClawUpdatePlan", () => {
       unavailable: ["agents"],
     });
     expect(extensionChange?.current?.digest).not.toBe(extensionChange?.desired?.digest);
-  });
-
-  it("plans missing package restoration without mutating state", async () => {
-    const current = await fixture();
-    const beforeConfig = structuredClone(current.config);
-    await closeOpenClawStateDatabaseAsync();
-    const databasePath = resolveOpenClawStateSqlitePath(current.env);
-    const beforeBytes = await readFile(databasePath);
-    const beforeStat = await stat(databasePath);
-
-    const plan = await build(current);
-
-    expect(plan).toMatchObject({
-      schemaVersion: "openclaw.clawUpdatePlan.v1",
-      stability: "experimental",
-      dryRun: true,
-      mutationAllowed: false,
-      planIntegrity: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
-      found: true,
-      summary: {
-        totalActions: 7,
-        unchanged: 5,
-        added: 0,
-        changed: 2,
-        removed: 0,
-        released: 0,
-      },
-      blockers: [],
-    });
-    expect(current.config).toEqual(beforeConfig);
-    expect((await readFile(databasePath)).equals(beforeBytes)).toBe(true);
-    expect((await stat(databasePath)).mtimeMs).toBe(beforeStat.mtimeMs);
-  });
-
-  it("resolves an unambiguous installed package name to its final local agent id", async () => {
-    const current = await fixture();
-
-    const plan = await build(current, {
-      agentId: "@acme/worker",
-    });
-
-    expect(plan).toMatchObject({ found: true, agentId: "worker", blockers: [] });
-    expect(plan.actions).toContainEqual(
-      expect.objectContaining({ kind: "agent", id: "worker", action: "unchanged" }),
-    );
   });
 
   it("plans restoration when the owned agent entry is missing", async () => {

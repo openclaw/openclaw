@@ -23,6 +23,7 @@ import type {
 declare module "vitest" {
   export interface ProvidedContext {
     controlUiE2ePrebuiltAssets?: ControlUiE2ePrebuiltAssets;
+    controlUiE2eBuildRoot?: string;
     controlUiE2ePrebuiltGeneration: string;
   }
 }
@@ -90,7 +91,7 @@ export function assertPrebuiltUiE2eRuntime(repoRoot: string): string {
     deps.runtimePostBuildStampPath,
     path.join(distRoot, "build-info.json"),
     path.join(uiRoot, "index.html"),
-    path.join(uiRoot, "asset-manifest.json"),
+    path.join(uiRoot, "sw.js"),
   ]) {
     digest.update(fs.readFileSync(file));
   }

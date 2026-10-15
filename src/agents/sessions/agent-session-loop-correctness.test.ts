@@ -1,5 +1,3 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import {
   createAssistantMessageEventStream,
   type Context,
@@ -27,8 +25,8 @@ import {
   createResourceLoader,
 } from "./agent-session-loop-resource-loader.test-support.js";
 import type { AgentSessionEvent } from "./agent-session-types.js";
-import { clearExtensionCache, loadExtensionsCached } from "./extensions/loader.js";
 import type { ToolDefinition } from "./extensions/types.js";
+import { DefaultResourceLoader } from "./resource-loader.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { getSteeringMessageIdentity } from "./steering-message-identity.js";
@@ -104,9 +102,7 @@ describe("AgentSession loop correctness", () => {
       message: QueuedMessage;
     }) => Promise<void>;
     const persistenceError = new Error("SQLite transcript append failed");
-    vi.spyOn(sessionManager, "appendMessage").mockImplementation(() => {
-      throw persistenceError;
-    });
+    vi.spyOn(sessionManager, "appendMessageAsync").mockRejectedValue(persistenceError);
     const publishedUserMessages: unknown[] = [];
     session.subscribe((event) => {
       if (event.type === "message_end" && event.message.role === "user") {
@@ -343,7 +339,7 @@ describe("AgentSession loop correctness", () => {
 
   it("manually compacts a completed turn smaller than the retained-token budget", async () => {
     const sessionManager = SessionManager.inMemory();
-    appendHistory(
+    await appendHistory(
       sessionManager,
       createAssistant(testModel, [{ type: "text", text: "short answer" }]),
     );
@@ -442,7 +438,7 @@ describe("AgentSession loop correctness", () => {
   it("does not pre-prompt compact from usage before a zero unavailable marker", async () => {
     const model = { ...testModel, contextWindow: 1_000 };
     const sessionManager = SessionManager.inMemory();
-    appendHistory(
+    await appendHistory(
       sessionManager,
       createAssistant(model, [{ type: "text", text: "old cumulative turn" }], "stop", 950),
     );
@@ -551,23 +547,20 @@ describe("AgentSession loop correctness", () => {
       }),
     };
     const pluginDir = tempDirs.make("openclaw-terminate-plugin-");
-    const pluginPath = path.join(pluginDir, "extension.mjs");
-    await writeFile(
-      pluginPath,
-      `export default async function(api) {
-  api.on("tool_result", async event => ({ ...event, terminate: ${pluginTerminate} }));
-}
-`,
-    );
-    clearExtensionCache();
-    const loaded = await loadExtensionsCached([pluginPath], pluginDir);
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: pluginDir,
+      agentDir: pluginDir,
+      extensionFactories: [
+        (api) => {
+          api.on("tool_result", async (event) => ({ ...event, terminate: pluginTerminate }));
+        },
+      ],
+    });
+    await resourceLoader.reload();
+    const loaded = resourceLoader.getExtensions();
     expect(loaded.errors).toEqual([]);
     expect(loaded.extensions).toHaveLength(1);
     expect(loaded.extensions[0]?.handlers.get("tool_result")).toHaveLength(1);
-    const resourceLoader = {
-      ...createResourceLoader(),
-      getExtensions: () => loaded,
-    };
     let modelTurns = 0;
     streamMocks.streamSimple.mockImplementation((activeModel: Model) => {
       modelTurns += 1;
@@ -723,7 +716,7 @@ describe("AgentSession loop correctness", () => {
 
   it("shares invalid-summary recovery with caller-owned automatic compaction", async () => {
     const sessionManager = SessionManager.inMemory();
-    appendHistory(
+    await appendHistory(
       sessionManager,
       createAssistant(testModel, [{ type: "text", text: "historical answer to summarize" }]),
     );
@@ -746,7 +739,7 @@ describe("AgentSession loop correctness", () => {
 
   it("keeps public manual compaction one-shot for invalid summary output", async () => {
     const sessionManager = SessionManager.inMemory();
-    appendHistory(
+    await appendHistory(
       sessionManager,
       createAssistant(testModel, [{ type: "text", text: "historical answer to summarize" }]),
     );
@@ -769,7 +762,7 @@ describe("AgentSession loop correctness", () => {
   it("does not replay a length-stopped empty summary and leaves the selected route usable", async () => {
     const model: Model = { ...testModel, reasoning: true, maxTokens: 4_096 };
     const sessionManager = SessionManager.inMemory();
-    appendHistory(
+    await appendHistory(
       sessionManager,
       createAssistant(model, [{ type: "text", text: "historical answer to preserve" }]),
     );
@@ -1032,7 +1025,7 @@ describe("AgentSession loop correctness", () => {
 
   it("delivers a pending prompt immediately after pre-prompt compaction", async () => {
     const sessionManager = SessionManager.inMemory();
-    appendHistory(
+    await appendHistory(
       sessionManager,
       createAssistant(
         testModel,

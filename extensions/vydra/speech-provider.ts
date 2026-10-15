@@ -12,13 +12,6 @@ import {
   normalizeVydraBaseUrl,
 } from "./defaults.js";
 
-type VydraSpeechConfig = {
-  apiKey?: string;
-  baseUrl: string;
-  model: string;
-  voiceId: string;
-};
-
 const VYDRA_SPEECH_VOICES = [
   {
     id: DEFAULT_VYDRA_VOICE_ID,
@@ -26,7 +19,7 @@ const VYDRA_SPEECH_VOICES = [
   },
 ] as const;
 
-function normalizeVydraSpeechConfig(rawConfig: Record<string, unknown>): VydraSpeechConfig {
+function normalizeVydraSpeechConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
   const raw = asOptionalRecord(providers?.vydra) ?? asOptionalRecord(rawConfig.vydra);
   return {
@@ -48,7 +41,7 @@ function normalizeVydraSpeechConfig(rawConfig: Record<string, unknown>): VydraSp
   };
 }
 
-function readVydraSpeechConfig(config: SpeechProviderConfig): VydraSpeechConfig {
+function readVydraSpeechConfig(config: SpeechProviderConfig) {
   const normalized = normalizeVydraSpeechConfig({});
   return {
     apiKey: normalizeOptionalString(config.apiKey) ?? normalized.apiKey,
@@ -59,6 +52,13 @@ function readVydraSpeechConfig(config: SpeechProviderConfig): VydraSpeechConfig 
 }
 
 export function buildVydraSpeechProvider(): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
+    Boolean(
+      resolveSpeechProviderApiKey(
+        readVydraSpeechConfig(providerConfig).apiKey,
+        process.env.VYDRA_API_KEY,
+      ),
+    );
   return {
     id: "vydra",
     label: "Vydra",
@@ -66,13 +66,9 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
     voices: VYDRA_SPEECH_VOICES.map((voice) => voice.id),
     resolveConfig: ({ rawConfig }) => normalizeVydraSpeechConfig(rawConfig),
     listVoices: async () => VYDRA_SPEECH_VOICES.map((voice) => Object.assign({}, voice)),
-    isConfigured: ({ providerConfig }) =>
-      Boolean(
-        resolveSpeechProviderApiKey(
-          readVydraSpeechConfig(providerConfig).apiKey,
-          process.env.VYDRA_API_KEY,
-        ),
-      ),
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     synthesize: async (req) => {
       const { downloadVydraAsset, extractVydraResultUrls } = await import("./shared.js");
       const config = readVydraSpeechConfig(req.providerConfig);

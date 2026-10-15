@@ -1,11 +1,11 @@
 // Exercises ordered provider faults through the embedded runner failover boundary.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ContextEngine } from "../context-engine/types.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
@@ -57,6 +57,7 @@ type ScenarioOutcome =
     }
   | { kind: "error"; error: Error & { attempts?: unknown[] } };
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-fault-sequences-");
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const { sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
@@ -74,6 +75,7 @@ let captureRoutingDecisionWork: typeof import("./test-helpers/model-routing-deci
 let createModelRoutingTestAdmission: typeof import("./test-helpers/model-routing-decision-e2e-fixtures.js").createModelRoutingTestAdmission;
 let ensureAuthProfileStore: typeof import("./auth-profiles/store-runtime.js").ensureAuthProfileStore;
 let saveAuthProfileStore: typeof import("./auth-profiles/store-runtime.js").saveAuthProfileStore;
+let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
 
 beforeAll(async () => {
   vi.resetModules();
@@ -90,6 +92,7 @@ beforeAll(async () => {
       createResolvedEmbeddedRunnerModel(provider, modelId),
   }));
 
+  ({ setRuntimeConfigSnapshot } = await import("../config/config.js"));
   runEmbeddedAgentWithPreparedAdmission = (await import("./embedded-agent-runner/run.js"))
     .runEmbeddedAgent;
   ({ runWithModelFallback } = await import("./model-fallback-runner.js"));
@@ -100,6 +103,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({});
   runEmbeddedAttemptMock.mockReset();
   sleepWithAbortMock.mockClear();
 });
@@ -122,7 +126,7 @@ function makeProviderConfig(fallbacks: string[]): OpenClawConfig {
   return {
     agents: {
       defaults: { model: { primary: "openai/mock-1", fallbacks } },
-      list: [{ id: "test" }],
+      entries: { test: {} },
     },
     models: {
       providers: {
@@ -136,8 +140,7 @@ function makeProviderConfig(fallbacks: string[]): OpenClawConfig {
 async function withScenarioWorkspace<T>(
   run: (paths: { agentDir: string; workspaceDir: string }) => Promise<T>,
 ): Promise<T> {
-  const rawRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fault-sequences-"));
-  const root = await fs.realpath(rawRoot);
+  const root = sessionDirs.make();
   const agentDir = path.join(root, "agents", "test", "agent");
   const workspaceDir = path.join(root, "workspace");
   await Promise.all([
@@ -151,15 +154,12 @@ async function withScenarioWorkspace<T>(
     random.mockRestore();
     const { waitForSessionTranscriptIndexReconcile } =
       await import("../config/sessions/session-transcript-reconcile.js");
-    const { closeOpenClawAgentDatabaseByPath } = await import("../state/openclaw-agent-db.js");
     const { closeAuthProfileReadPool } = await import("./auth-profiles/sqlite.js");
     const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
     try {
       await waitForSessionTranscriptIndexReconcile({ agentId: "test", path: databasePath });
     } finally {
       closeAuthProfileReadPool({ kind: "database", databasePath });
-      closeOpenClawAgentDatabaseByPath(databasePath);
-      await fs.rm(root, { recursive: true, force: true });
     }
   }
 }
@@ -464,7 +464,9 @@ async function expectPreparationInvalidationToDropRoutingWork(
           await replacementAdmission.admit("embedded");
         }
         releasePreparation.resolve();
-        await expect(run).rejects.toThrow("admitted run authority is no longer active");
+        await expect(run).rejects.toThrow(
+          "embedded attempt reached dispatch without an active admitted run",
+        );
       });
 
       expect(decisionWork).toHaveLength(0);
@@ -646,7 +648,9 @@ describe("runEmbeddedAgent provider fault sequences", () => {
         { provider: "openai", model: "mock-1", profileId: "openai:p1", fault: { status: 402 } },
       ]);
       expect(error.message).toContain("returned a billing error");
-      expect(error.message).toContain("insufficient balance");
+      expect(error.message).toContain(
+        "check your account's balance and usage limits before trying again.",
+      );
       const usageStats = await readUsageStats(agentDir);
       expect(usageStats["openai:p1"]?.disabledReason).toBe("billing");
       expect(usageStats["openai:p1"]?.failureCounts?.billing).toBe(1);
@@ -675,15 +679,19 @@ describe("runEmbeddedAgent provider fault sequences", () => {
         }),
       );
 
-      // Current behavior: legacy compaction reports no compactable transcript, so the runner
-      // returns a blocked context_overflow payload instead of rotating credentials or models.
       expect(observations).toHaveLength(1);
       expect(outcome.result.meta.error).toMatchObject({ kind: "context_overflow" });
       expect(outcome.result.payloads?.[0]).toMatchObject({
         isError: true,
         text: expect.stringContaining("Context overflow: prompt too large for the model"),
       });
-      expect(outcome.attempts).toEqual([]);
+      expect(outcome.attempts).toEqual([
+        expect.objectContaining({
+          provider: "openai",
+          model: "mock-1",
+          reason: "context_overflow",
+        }),
+      ]);
       const usageStats = await readUsageStats(agentDir);
       expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
     });

@@ -28,12 +28,11 @@ describe("resolveSubagentCompletionResultText", () => {
       expect(
         resolveSubagentCompletionResultText({
           completion: {
-            required: true,
             resultText: "NO_REPLY",
             fallbackResultText: "older visible fallback",
             terminalReply,
           },
-          execution: { status: "terminal", outcome: { status: "ok" } },
+          execution: { outcome: { status: "ok" } },
         }),
       ).toBe(expected);
     },
@@ -43,26 +42,25 @@ describe("resolveSubagentCompletionResultText", () => {
     expect(
       resolveSubagentCompletionResultText({
         completion: {
-          required: true,
           resultText: "NO_REPLY",
           fallbackResultText: "legacy fallback",
         },
-        execution: { status: "terminal", outcome: { status: "ok" } },
+        execution: { outcome: { status: "ok" } },
       }),
     ).toBe("legacy fallback");
   });
 
   it.each(["error", "timeout", "unknown"] as const)(
-    "preserves a %s outcome even when its captured reply is ANNOUNCE_SKIP",
+    "preserves a %s outcome even when its captured reply is NO_REPLY",
     (status) => {
       expect(
         resolveSubagentCompletionResultText({
           completion: {
-            terminalReply: { disposition: "visible", text: "ANNOUNCE_SKIP" },
+            terminalReply: { disposition: "visible", text: "NO_REPLY" },
           },
-          execution: { status: "terminal", outcome: { status } },
+          execution: { outcome: { status } },
         }),
-      ).toBe("ANNOUNCE_SKIP");
+      ).toBe("NO_REPLY");
     },
   );
 
@@ -79,7 +77,7 @@ describe("resolveSubagentCompletionResultText", () => {
             resultText,
             fallbackResultText: "  actionable captured findings  ",
           },
-          execution: { status: "terminal", outcome: { status } },
+          execution: { outcome: { status } },
         }),
       ).toBe("actionable captured findings");
     },

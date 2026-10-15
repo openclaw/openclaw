@@ -1,9 +1,6 @@
 import type { Context, Model } from "@openclaw/llm-core";
 import { resolveOpenAIThinkingApi } from "@openclaw/model-catalog-core/model-catalog-types";
-import type {
-  ResponseFormatTextConfig,
-  ResponseInput,
-} from "openai/resources/responses/responses.js";
+import type { ResponseInput } from "openai/resources/responses/responses.js";
 import { getAiTransportHost } from "../host.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
@@ -16,9 +13,11 @@ import {
   resolveOpenAISimpleReasoningEffort,
   resolveOpenAIRequestReasoning,
 } from "../providers/openai-request-reasoning.js";
+import { resolveOpenAIResponsesTextFormat } from "../providers/openai-response-format.js";
 import { prepareResponsesTools } from "../providers/openai-responses-tools.js";
 import { reconcileOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
 import { hasResponsesWebSearchTool } from "../providers/openai-web-search-tools.js";
+import { clampMaxTokensToModel } from "../providers/simple-options.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { usesNativeOpenAICodexResponsesBackend } from "./openai-completions-compat.js";
 import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
@@ -132,11 +131,8 @@ function resolveOpenAIResponsesInstructions(
 // xAI /responses/compact needs the system prompt first in input, not instructions:
 // https://docs.x.ai/developers/advanced-api-usage/context-compaction
 export function buildOpenAIResponsesCompactSystemMessage(model: Model, instructions: string) {
-  // SAFETY: only reached from postOpenAIResponsesCompaction (Responses-API compact endpoint), so model is always OpenAI-mode here.
-  const compat = getCompat(model as OpenAIModeModel);
-  const supportsDeveloperRole =
-    typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
-  const role = model.reasoning && supportsDeveloperRole !== false ? "developer" : "system";
+  const compat = getCompat(model);
+  const role = model.reasoning && compat.supportsDeveloperRole ? "developer" : "system";
   return buildResponsesInputMessage(role, [{ type: "input_text", text: instructions }]);
 }
 
@@ -160,29 +156,13 @@ function ensureOpenAIResponsesNonEmptyInput(messages: ResponseInput, context: Co
   );
 }
 
-export function resolveOpenAIResponsesTextFormat(
-  responseFormat: Record<string, unknown>,
-): ResponseFormatTextConfig {
-  if (
-    responseFormat.type === "json_schema" &&
-    responseFormat.json_schema &&
-    typeof responseFormat.json_schema === "object" &&
-    !Array.isArray(responseFormat.json_schema)
-  ) {
-    return {
-      ...(responseFormat.json_schema as Record<string, unknown>),
-      type: "json_schema",
-    } as unknown as ResponseFormatTextConfig;
-  }
-  return responseFormat as unknown as ResponseFormatTextConfig;
-}
-
 export function buildOpenAIResponsesParams(
   model: Model,
   context: Context,
   options: OpenAIResponsesOptions | undefined,
   metadata?: Record<string, string>,
   replayMode: OpenAIResponsesReplayMode = "checkpoint",
+  retainUserProvenance = false,
 ) {
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "transport-default",
@@ -199,6 +179,7 @@ export function buildOpenAIResponsesParams(
     authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,
     replayMode,
+    retainUserProvenance,
   });
   ensureOpenAIResponsesNonEmptyInput(messages, context);
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
@@ -223,7 +204,7 @@ export function buildOpenAIResponsesParams(
   const effectiveMaxTokens = options?.maxTokens || model.maxTokens;
   if (effectiveMaxTokens) {
     // Responses rejects output budgets below 16 tokens.
-    params.max_output_tokens = Math.max(effectiveMaxTokens, 16);
+    params.max_output_tokens = clampMaxTokensToModel(model, Math.max(effectiveMaxTokens, 16));
   }
   if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     params.temperature = options.temperature;
@@ -291,9 +272,6 @@ export function buildOpenAIResponsesParams(
       }
     }
   }
-  applyOpenAIResponsesPayloadPolicy(params as Record<string, unknown>, payloadPolicy);
-  return sanitizeOpenAICodexResponsesParams(
-    model,
-    params as Record<string, unknown>,
-  ) as typeof params;
+  applyOpenAIResponsesPayloadPolicy(params, payloadPolicy);
+  return sanitizeOpenAICodexResponsesParams(model, params);
 }

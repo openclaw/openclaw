@@ -1,21 +1,23 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { removeRegistryEntry, updateRegistry } from "../agents/sandbox/registry.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
 import { assertConfiguredWorkspaceStateReady } from "../agents/workspace-state-dirs.js";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { AgentSandboxConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   detectLegacyWorkspaceState,
   migrateLegacyWorkspaceState,
@@ -26,18 +28,21 @@ const MARKER = "openclaw-workspace-state.json";
 
 describe("sandbox workspace Doctor migration", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
-      envSnapshot?.restore();
-      envSnapshot = undefined;
-      cleanup();
-    });
+  const sessionDirs = useSessionStoreTempDirs(
+    (cleanup) =>
+      afterAll(async () => {
+        await cleanup();
+        clearRuntimeConfigSnapshot();
+      }),
+    "openclaw-sandbox-workspace-migration-home-",
+  );
+  afterEach(() => {
+    envSnapshot?.restore();
+    envSnapshot = undefined;
   });
 
   function setup() {
-    const homeDir = fs.realpathSync(tempDirs.make("openclaw-sandbox-workspace-migration-home-"));
+    const homeDir = sessionDirs.make();
     const stateDir = path.join(homeDir, ".openclaw");
     const workspaceDir = path.join(homeDir, "workspace");
     fs.mkdirSync(workspaceDir, { recursive: true });
@@ -55,9 +60,9 @@ describe("sandbox workspace Doctor migration", () => {
   function config(
     context: ReturnType<typeof setup>,
     sandbox: AgentSandboxConfig = {},
-    entries: NonNullable<OpenClawConfig["agents"]>["entries"] = { main: { default: true } },
+    entries: NonNullable<OpenClawConfig["agents"]>["entries"] = { main: {} },
   ): OpenClawConfig {
-    return {
+    const cfg: OpenClawConfig = {
       agents: {
         defaults: {
           workspace: context.workspaceDir,
@@ -72,6 +77,8 @@ describe("sandbox workspace Doctor migration", () => {
         entries,
       },
     };
+    setRuntimeConfigSnapshot(cfg);
+    return cfg;
   }
 
   function marker(
@@ -199,7 +206,7 @@ describe("sandbox workspace Doctor migration", () => {
       context,
       {},
       {
-        main: { default: true, sandbox: { mode: "off" } },
+        main: { sandbox: { mode: "off" } },
         "main-telegram": {},
         writer: { sandbox: { workspaceAccess: "rw" } },
       },

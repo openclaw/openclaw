@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { withTestRunAdmission } from "../../agents/admitted-run-context.test-support.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
 import { buildCliRunResult } from "../../agents/cli-runner/cli-run-settlement.js";
 import { executeDeps } from "../../agents/cli-runner/execute-deps.js";
@@ -12,6 +13,7 @@ import { installSessionPlacementAdmissionProvider } from "../../agents/session-p
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -269,6 +271,125 @@ describe("executeAgentTurn: CLI admission", () => {
     }
   });
 
+  it.each(["success", "claim-aborted", "successor-aborted", "restore-aborted"])(
+    "honors a forked child's one-shot marker and current owner (%s)",
+    async (operation) => {
+      const sessionKey = "agent:main:cli-fork-child";
+      const storePath = makeTestSessionStorePath();
+      const parentBinding = {
+        sessionId: "parent-native-session",
+        resumeCheckpointId: "parent-checkpoint",
+        forkNextResume: true as const,
+      };
+      const controller = new AbortController();
+      const abortError = new DOMException("fork cancelled", "AbortError");
+      const successorBinding = { sessionId: "child-native-session" };
+      const entry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: 1,
+        cliSessionBindings: { "claude-cli": parentBinding },
+      };
+      await replaceSessionEntry({ sessionKey, storePath }, entry);
+      const followupRun = createFollowupRun();
+      followupRun.run.provider = "claude-cli";
+      followupRun.run.model = "claude-sonnet-4-6";
+      state.isCliProviderMock.mockImplementation((provider) => provider === "claude-cli");
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            modelProvider: "anthropic",
+            pluginId: "anthropic",
+            config: { command: "claude", forkArg: "--fork-session" },
+          },
+        ],
+      });
+      state.runWithModelFallbackMock.mockImplementationOnce(
+        async (params: FallbackRunnerParams) => ({
+          result: await params.run(
+            "claude-cli",
+            "claude-sonnet-4-6",
+            initialFallbackAttemptOptions(params),
+          ),
+          provider: "claude-cli",
+          model: "claude-sonnet-4-6",
+          attempts: [],
+        }),
+      );
+      const readBinding = () =>
+        loadSessionEntry({ sessionKey, storePath })?.cliSessionBindings?.["claude-cli"];
+      state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
+        // Mirror the CLI runtime: claim the marker, spawn with the fork flag, then
+        // rebind to the successor the CLI reports.
+        expect(params.forkCliSessionOnResume).toBe(true);
+        const claim = params.claimCliSessionFork?.();
+        if (operation === "claim-aborted") {
+          controller.abort(abortError);
+          await expect(claim).rejects.toThrow("fork cancelled");
+          return { meta: { aborted: true, stopReason: "stop" } };
+        }
+        expect(await claim).toBe(true);
+        expect(readBinding()?.forkNextResume).toBeUndefined();
+        if (operation === "restore-aborted") {
+          controller.abort(abortError);
+          await params.restoreCliSessionFork?.();
+          return { meta: { aborted: true, stopReason: "stop" } };
+        }
+        const successor = params.persistCliSessionForkSuccessor?.(successorBinding.sessionId);
+        if (operation === "successor-aborted") {
+          controller.abort(abortError);
+          await expect(successor).rejects.toThrow("fork cancelled");
+          await params.restoreCliSessionFork?.();
+          return { meta: { aborted: true, stopReason: "stop" } };
+        }
+        await successor;
+        expect(readBinding()).toEqual({
+          sessionId: successorBinding.sessionId,
+          resumeCheckpointId: parentBinding.resumeCheckpointId,
+        });
+        return {
+          payloads: [{ text: "done" }],
+          meta: {
+            agentMeta: {
+              sessionId: successorBinding.sessionId,
+              cliSessionBinding: successorBinding,
+            },
+          },
+        };
+      });
+      const uninstall = installSessionPlacementAdmissionProvider({
+        assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
+        executeLocalTurn: async (_claim, runLocal) => await runLocal(),
+        executeTurn: async (_claim, _params, runLocal) => await runLocal(),
+      });
+      try {
+        const executeAgentTurn = await getExecuteAgentTurnForTest();
+        const result = await executeAgentTurn({
+          ...createMinimalRunAgentTurnParams({
+            followupRun,
+            opts: { abortSignal: controller.signal },
+          }),
+          sessionKey,
+          storePath,
+          activeSessionStore: { [sessionKey]: entry },
+          getActiveSessionEntry: () => entry,
+        });
+        expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
+        if (operation !== "success") {
+          expect(readBinding()).toEqual(parentBinding);
+          return;
+        }
+        expect(result.kind).toBe("success");
+        expect(readBinding()).toMatchObject({ sessionId: successorBinding.sessionId });
+        expect(readBinding()?.forkNextResume).toBeUndefined();
+      } finally {
+        uninstall();
+        cliBackendsTesting.resetDepsForTest();
+      }
+    },
+  );
+
   it.each(["ordinary", "rejected-clear", "room-event"] as const)(
     "retains the %s reply after its continuity write loses ownership",
     async (kind) => {
@@ -389,7 +510,15 @@ describe("executeAgentTurn: CLI admission", () => {
         "claude-cli": { sessionId: "new-native-session", forceReuse: true },
       },
     };
-    state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
+    Object.freeze(admittedSessionEntry);
+    state.runCliAgentMock.mockImplementationOnce(async (run: RunCliAgentParams) => {
+      const candidateEntry: InternalSessionEntry | undefined = run.sessionEntry;
+      if (!candidateEntry) {
+        throw new Error("Missing admitted CLI entry");
+      }
+      candidateEntry.activeWriterRunId = "cli-writer";
+      return { payloads: [{ text: "done" }], meta: {} };
+    });
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
     followupRun.run.model = "claude-sonnet-4-6";
@@ -415,7 +544,11 @@ describe("executeAgentTurn: CLI admission", () => {
         0,
         "CLI run params",
       )[0] as RunCliAgentParams;
-      expect(run.sessionEntry).toBe(admittedSessionEntry);
+      expect(run.sessionEntry).toMatchObject({
+        ...admittedSessionEntry,
+        activeWriterRunId: "cli-writer",
+      });
+      expect(admittedSessionEntry).not.toHaveProperty("activeWriterRunId");
       expect(run.sessionEntry?.sessionRoot).toBe("/workspace/project");
       expect(run.cliSessionId).toBe("new-native-session");
       expect(run.cliSessionBinding).toMatchObject({

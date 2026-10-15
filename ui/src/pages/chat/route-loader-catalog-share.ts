@@ -88,15 +88,17 @@ export async function loadCatalogShareRouteFromLocation(
         session.threadId.length === shareRoute.fullLength &&
         session.threadId.startsWith(target.shortId),
     );
+    const pathForThread = (session: (typeof matches)[number], prefixLength: number) =>
+      buildControlUiCatalogSharePath({
+        shareRoute,
+        threadId: session.threadId,
+        displayName: session.name,
+        basePath: context.basePath,
+        prefixLength,
+      });
     if (matches.length > 1 || host.nextCursor) {
       const candidates = matches.flatMap((session) => {
-        const href = buildControlUiCatalogSharePath({
-          shareRoute,
-          threadId: session.threadId,
-          displayName: session.name,
-          basePath: context.basePath,
-          prefixLength: shareRoute.fullLength,
-        });
+        const href = pathForThread(session, shareRoute.fullLength);
         return href
           ? [
               {
@@ -120,13 +122,7 @@ export async function loadCatalogShareRouteFromLocation(
     if (!session) {
       return missingSessionRouteData(context, "chat", agentId);
     }
-    const pathname = buildControlUiCatalogSharePath({
-      shareRoute,
-      threadId: session.threadId,
-      displayName: session.name,
-      basePath: context.basePath,
-      prefixLength: target.shortId.length,
-    });
+    const pathname = pathForThread(session, target.shortId.length);
     if (!pathname) {
       return routeError(t("chat.sessionRoute.catalogShareUnavailable"));
     }

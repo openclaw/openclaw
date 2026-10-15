@@ -1,4 +1,5 @@
 // Browser tests cover pw tools core.waits next download saves it plugin behavior.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -102,6 +103,7 @@ describe("pw-tools-core", () => {
     await Promise.resolve();
     harness.trigger({
       url: () => params.downloadUrl,
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => params.suggestedFilename,
       saveAs,
     });
@@ -138,42 +140,6 @@ describe("pw-tools-core", () => {
     expect(await fs.readFile(params.targetPath, "utf8")).toBe(params.content);
     await expectPathMissing(savedPath);
   }
-
-  it("waits for the next download and atomically finalizes explicit output paths", async () => {
-    await withTempDir(async (tempDir) => {
-      const harness = createDownloadEventHarness();
-      const targetPath = path.join(tempDir, "nested", "deeper", "file.bin");
-
-      type DownloadFixture = {
-        url: () => string;
-        suggestedFilename: () => string;
-        saveAs: (outPath: string) => Promise<void>;
-      };
-      const saveAs = vi.fn(async function (this: DownloadFixture, outPath: string) {
-        expect(this).toBe(download);
-        await fs.writeFile(outPath, "file-content", "utf8");
-      });
-      const download: DownloadFixture = {
-        url: () => "https://example.com/file.bin",
-        suggestedFilename: () => "file.bin",
-        saveAs,
-      };
-
-      const p = mod.waitForDownloadViaPlaywright({
-        ...target,
-        path: targetPath,
-        timeoutMs: 1000,
-      });
-
-      await Promise.resolve();
-      harness.expectArmed();
-      harness.trigger(download);
-
-      const res = await p;
-      await expectAtomicDownloadSave({ saveAs, targetPath, content: "file-content" });
-      await expect(fs.realpath(res.path)).resolves.toBe(await fs.realpath(targetPath));
-    });
-  });
 
   it.runIf(process.platform !== "win32")(
     "does not write outside the output root when a download parent is swapped after save",
@@ -212,6 +178,7 @@ describe("pw-tools-core", () => {
         harness.expectArmed();
         harness.trigger({
           url: () => "https://example.com/file.bin",
+          cancel: vi.fn(async () => {}),
           suggestedFilename: () => "file.bin",
           saveAs,
         });
@@ -252,6 +219,7 @@ describe("pw-tools-core", () => {
     await Promise.resolve();
     harness.trigger({
       url: () => "https://example.com/successor.bin",
+      cancel: vi.fn(async () => {}),
       suggestedFilename: () => "successor.bin",
       saveAs,
     });
@@ -312,6 +280,7 @@ describe("pw-tools-core", () => {
       });
       const download = {
         url: () => "https://example.com/report.pdf",
+        cancel: vi.fn(async () => {}),
         suggestedFilename: () => "report.pdf",
         saveAs,
       };
@@ -455,6 +424,7 @@ describe("pw-tools-core", () => {
         harness.expectArmed();
         harness.trigger({
           url: () => "https://example.com/file.bin",
+          cancel: vi.fn(async () => {}),
           suggestedFilename: () => "file.bin",
           saveAs,
         });
@@ -528,6 +498,7 @@ describe("pw-tools-core", () => {
         harness.expectArmed();
         harness.trigger({
           url: () => "https://example.com/file.bin",
+          cancel: vi.fn(async () => {}),
           suggestedFilename: () => "file.bin",
           saveAs,
         });

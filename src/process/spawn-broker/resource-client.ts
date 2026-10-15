@@ -1,4 +1,4 @@
-import { connect, type Socket } from "node:net";
+import { connect } from "node:net";
 import type { MessagePort } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -6,6 +6,7 @@ import { decodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import {
   BrokerNativeResourceCloseError,
+  spawnBrokerStartupNowMs,
   type BrokerResourceAttachment,
   type BrokerResourceRequest,
   type BrokerResourceResponse,
@@ -21,7 +22,6 @@ export function attachBrokerNativeResource(
 ) {
   const initialized = createDeferredCore();
   void initialized.promise.catch(() => {});
-  let socket: Socket | undefined;
   let transport: ReturnType<typeof createBrokerResourceSocket> | undefined;
   let retryTimer: NodeJS.Timeout | undefined;
   let closeSequence = 0;
@@ -100,7 +100,6 @@ export function attachBrokerNativeResource(
       return;
     }
     const candidate = connect(attachment.endpoint);
-    socket = candidate;
     let connected = false;
     let connectionError: Error | undefined;
     candidate.once("error", (error) => {
@@ -116,7 +115,7 @@ export function attachBrokerNativeResource(
           !connected &&
           !ready &&
           attachment.startupDeadline !== undefined &&
-          Date.now() < attachment.startupDeadline
+          spawnBrokerStartupNowMs() < attachment.startupDeadline
         ) {
           // The same spawn owner's startup deadline bounds a not-yet-listening endpoint.
           retryTimer = setTimeout(start, 10);
@@ -141,7 +140,7 @@ export function attachBrokerNativeResource(
               lose(new Error("Spawn broker readiness deadline exceeded"));
             }
           },
-          Math.max(0, attachment.startupDeadline - Date.now()),
+          Math.max(0, attachment.startupDeadline - spawnBrokerStartupNowMs()),
         );
   start();
   const assertAvailable = () => {
@@ -194,7 +193,6 @@ export function attachBrokerNativeResource(
       clearTimeout(retryTimer);
       clearTimeout(startupTimer);
       transport?.close();
-      socket?.destroy();
     },
   };
 }

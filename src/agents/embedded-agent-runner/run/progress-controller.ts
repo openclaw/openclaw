@@ -1,5 +1,8 @@
 import { FAST_MODE_AUTO_PROGRESS_KIND } from "../../../auto-reply/reply-payload.js";
-import { emitAgentActivityEvent } from "../../../infra/agent-activity-events.js";
+import {
+  emitAgentActivityEvent,
+  type AgentItemEventData,
+} from "../../../infra/agent-activity-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveFastModeModelAutoOnSeconds } from "../../../shared/fast-mode.js";
 import {
@@ -50,6 +53,11 @@ export function createEmbeddedRunProgressController(params: {
     fastAutoOnSeconds?: number;
   }) => {
     const summary = formatFastModeAutoProgressText(payload);
+    const data = {
+      kind: "status",
+      title: "Fast",
+      phase: "update",
+    } satisfies Partial<AgentItemEventData>;
     try {
       emitAgentActivityEvent({
         runId: params.attempt.runId,
@@ -57,9 +65,7 @@ export function createEmbeddedRunProgressController(params: {
         stream: "item",
         data: {
           itemId: `fast-mode-auto:${payload.enabled ? "on" : "off"}`,
-          kind: "status",
-          title: "Fast",
-          phase: "update",
+          ...data,
           status: "running",
           summary,
         },
@@ -70,12 +76,7 @@ export function createEmbeddedRunProgressController(params: {
     try {
       await params.attempt.onAgentEvent?.({
         stream: "item",
-        data: {
-          kind: "status",
-          title: "Fast",
-          phase: "update",
-          summary,
-        },
+        data: { ...data, summary },
         ...(params.attempt.sessionKey ? { sessionKey: params.attempt.sessionKey } : {}),
       });
     } catch (error) {
@@ -90,15 +91,17 @@ export function createEmbeddedRunProgressController(params: {
       log.debug(`embedded run fast mode auto progress failed: ${formatErrorMessage(error)}`);
     }
   };
+  const resolveCurrentFastMode = () =>
+    resolveFastModeForElapsed({
+      mode: params.attempt.fastMode,
+      startedAtMs: fastModeStartedAtMs,
+      fastAutoOnSeconds: fastModeAutoOnSeconds,
+    });
   const maybeAnnounceFastModeAutoOff = async () => {
     if (params.attempt.fastMode !== "auto" || fastModeAutoProgressState.offAnnounced) {
       return;
     }
-    const next = resolveFastModeForElapsed({
-      mode: "auto",
-      startedAtMs: fastModeStartedAtMs,
-      fastAutoOnSeconds: fastModeAutoOnSeconds,
-    });
+    const next = resolveCurrentFastMode();
     if (next.enabled) {
       return;
     }
@@ -106,11 +109,7 @@ export function createEmbeddedRunProgressController(params: {
     await emitFastModeAutoProgress(next);
   };
   const resolveAttemptFastMode = (): boolean | undefined => {
-    const resolved = resolveFastModeForElapsed({
-      mode: params.attempt.fastMode,
-      startedAtMs: fastModeStartedAtMs,
-      fastAutoOnSeconds: fastModeAutoOnSeconds,
-    });
+    const resolved = resolveCurrentFastMode();
     return resolved.mode === undefined ? undefined : resolved.enabled;
   };
   const resolveAttemptFastModeParam = (): EmbeddedRunFastModeParam | undefined => {

@@ -3,7 +3,7 @@ import { stripVTControlCharacters } from "node:util";
 import { recordCodexAppServerSpawnFailure } from "./spawn-error.js";
 import type { CodexAppServerTransport } from "./transport.js";
 
-/** The official npm launcher prints Node's native spawn error and exits before initialization. */
+/** The official npm launcher prints the native spawn error and exits before initialization. */
 export function observeManagedCodexLauncherFailure(
   child: ChildProcessWithoutNullStreams,
   nativeCommand: string,
@@ -34,6 +34,15 @@ export function observeManagedCodexLauncherFailure(
       /Error: Missing optional dependency @openai\/codex-[\w-]+\. Reinstall Codex:/u.test(prefix)
     ) {
       launchCode = "ENOENT";
+    } else {
+      const bunError =
+        /^(ENOENT|EACCES|EBADARCH|Unknown system error -86): [^\r\n]*, (?:posix_spawn|spawn) (['"])([^\r\n]*)\2\r?$/mu.exec(
+          prefix,
+        );
+      const syscall = /^\s+syscall: (['"])([^\r\n]*)\1,\r?$/mu.exec(prefix)?.[2];
+      if (bunError?.[3] === nativeCommand && syscall === `spawn ${nativeCommand}`) {
+        launchCode = bunError[1];
+      }
     }
     if (child.exitCode !== null) {
       onExit(child.exitCode);

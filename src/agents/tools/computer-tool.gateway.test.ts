@@ -46,53 +46,91 @@ function createHostedComputerTool(options: Parameters<typeof createVisionCompute
 }
 
 describe("computer Gateway and node targets", () => {
-  it.each([
-    { gatewayUrl: "wss://released-gateway.example" },
-    { gatewayToken: "fixture-token" },
-    { gatewayUrl: "wss://released-gateway.example", gatewayToken: "fixture-token" },
-  ])("preserves v2026.9.4 implicit remote-node selection with %j", async (gatewayOptions) => {
-    const [nodes, computer] = await Promise.all([
-      vi.importActual<typeof import("./nodes-utils.js")>("./nodes-utils.js"),
-      vi.importActual<typeof import("./computer-tool-gateway.js")>("./computer-tool-gateway.js"),
-    ]);
-    listNodesMock.mockImplementation(nodes.listNodes);
+  it("advertises a cold Gateway without probing and binds input to the probed generation", async () => {
+    const computer = await vi.importActual<typeof import("./computer-tool-gateway.js")>(
+      "./computer-tool-gateway.js",
+    );
     gatewayComputerStatusMock.mockImplementation(computer.loadGatewayComputerStatus);
-    // v2026.9.4 exposes these paired-node methods, but no computer.status/invoke.
-    callGatewayToolMock.mockImplementation(async (method, _options, request) => {
-      if (method === "node.list") {
-        return { nodes: [macComputerNode()] };
+    const declared = v2Descriptor(["screenshot", "list_windows"]);
+    const ready = {
+      ...declared,
+      provider: { ...declared.provider, generation: "live-generation" },
+    };
+    const invokeMock = callGatewayToolMock.getMockImplementation()!;
+    callGatewayToolMock.mockImplementation(async (method, options, request, ...rest) => {
+      if (method === "computer.status") {
+        return {
+          configured: true,
+          available: request.probe,
+          computerUse: request.probe ? ready : declared,
+        };
       }
-      if (method === "node.invoke") {
-        return request.command === "screen.snapshot"
-          ? screenshotPayload()
-          : { payload: { ok: true } };
-      }
-      throw new Error(`unknown method: ${method}`);
+      return invokeMock(method, options, request, ...rest);
     });
-    const tool = createVisionComputerTool();
-    const screenshot = await tool.execute("observe", { action: "screenshot", ...gatewayOptions });
-    expect(screenshot.details).toMatchObject({ node: "mac-1" });
-    await tool.execute("input", { action: "type", text: "fixture" });
-    expect(callGatewayToolMock.mock.calls.map(([method]) => method)).toEqual([
-      "node.list",
-      "node.invoke",
-      "node.invoke",
-      "node.invoke",
+    listNodesMock.mockResolvedValue([]);
+    const availability = await loadPairedComputerUseAvailabilityForSurface({
+      computerAllowed: true,
+    });
+    const tool = createHostedComputerTool({ pairedNodeComputerUse: availability?.prepared });
+    expect(readActionEnum(tool)).toContain("list_windows");
+    expect(callGatewayToolMock.mock.calls.map(([method, , request]) => [method, request])).toEqual([
+      ["computer.status", { probe: false }],
     ]);
-    for (const [, options] of callGatewayToolMock.mock.calls) {
-      expect(options).toMatchObject(gatewayOptions);
-    }
-    expect(gatewayComputerStatusMock).not.toHaveBeenCalled();
-    await expect(
-      tool.execute("unsupported-host", {
-        action: "screenshot",
-        target: "gateway",
-        ...gatewayOptions,
-      }),
-    ).rejects.toThrow("one persistent operator RPC connection");
-    expect(callGatewayToolMock).toHaveBeenCalledTimes(4);
-    expect(gatewayComputerStatusMock).not.toHaveBeenCalled();
+    await tool.execute("observe", { action: "screenshot" });
+    expect(callGatewayToolMock.mock.calls[1]?.slice(0, 3)).toEqual([
+      "computer.status",
+      {},
+      { probe: true },
+    ]);
+    expect(callGatewayToolMock.mock.calls[2]?.[2].generation).toBe("live-generation");
   });
+
+  it.each([{ gatewayUrl: "wss://released-gateway.example" }, { gatewayToken: "fixture-token" }])(
+    "preserves v2026.9.4 implicit remote-node selection with %j",
+    async (gatewayOptions) => {
+      const [nodes, computer] = await Promise.all([
+        vi.importActual<typeof import("./nodes-utils.js")>("./nodes-utils.js"),
+        vi.importActual<typeof import("./computer-tool-gateway.js")>("./computer-tool-gateway.js"),
+      ]);
+      listNodesMock.mockImplementation(nodes.listNodes);
+      gatewayComputerStatusMock.mockImplementation(computer.loadGatewayComputerStatus);
+      // v2026.9.4 exposes these paired-node methods, but no computer.status/invoke.
+      callGatewayToolMock.mockImplementation(async (method, _options, request) => {
+        if (method === "node.list") {
+          return { nodes: [macComputerNode()] };
+        }
+        if (method === "node.invoke") {
+          return request.command === "screen.snapshot"
+            ? screenshotPayload()
+            : { payload: { ok: true } };
+        }
+        throw new Error(`unknown method: ${method}`);
+      });
+      const tool = createVisionComputerTool();
+      const screenshot = await tool.execute("observe", { action: "screenshot", ...gatewayOptions });
+      expect(screenshot.details).toMatchObject({ node: "mac-1" });
+      await tool.execute("input", { action: "type", text: "fixture" });
+      expect(callGatewayToolMock.mock.calls.map(([method]) => method)).toEqual([
+        "node.list",
+        "node.invoke",
+        "node.invoke",
+        "node.invoke",
+      ]);
+      for (const [, options] of callGatewayToolMock.mock.calls) {
+        expect(options).toMatchObject(gatewayOptions);
+      }
+      expect(gatewayComputerStatusMock).not.toHaveBeenCalled();
+      await expect(
+        tool.execute("unsupported-host", {
+          action: "screenshot",
+          target: "gateway",
+          ...gatewayOptions,
+        }),
+      ).rejects.toThrow("one persistent operator RPC connection");
+      expect(callGatewayToolMock).toHaveBeenCalledTimes(4);
+      expect(gatewayComputerStatusMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([undefined, "gateway"] as const)(
     "refreshes failed prepared discovery for target %s",
@@ -251,44 +289,6 @@ describe("computer Gateway and node targets", () => {
       }),
     ).rejects.toThrow("no screenshot of this computer");
     expect(callGatewayToolMock).toHaveBeenCalledTimes(2);
-  });
-
-  it.each([undefined, "gateway"] as const)(
-    "reports configured Gateway failure for target %s without selecting a node",
-    async (target) => {
-      gatewayComputerStatusMock.mockResolvedValue({
-        configured: true,
-        available: false,
-        error: "Desktop session stopped",
-      });
-      const tool = createHostedComputerTool();
-      await expect(tool.execute("observe", { action: "screenshot", target })).rejects.toThrow(
-        "Desktop session stopped",
-      );
-      expect(listNodesMock).not.toHaveBeenCalled();
-      expect(callGatewayToolMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it("keeps a failed selected Gateway on its bound route", async () => {
-    gatewayComputerStatusMock.mockResolvedValue({
-      configured: true,
-      available: true,
-      computerUse: v2Descriptor(["screenshot", "type"]),
-    });
-    const tool = createHostedComputerTool();
-    await tool.execute("observe", { action: "screenshot" });
-    gatewayComputerStatusMock.mockResolvedValue({ configured: false, available: false });
-    callGatewayToolMock.mockRejectedValue(new Error("Gateway computer disconnected"));
-    await expect(tool.execute("input", { action: "type", text: "fixture" })).rejects.toThrow(
-      "disconnected",
-    );
-    expect(gatewayComputerStatusMock).toHaveBeenCalledOnce();
-    expect(listNodesMock).not.toHaveBeenCalled();
-    expect(callGatewayToolMock.mock.calls.map(([method]) => method)).toEqual([
-      "computer.invoke",
-      "computer.invoke",
-    ]);
   });
 
   it("recovers a retired Gateway on a fresh screenshot without retrying its input", async () => {

@@ -251,6 +251,7 @@ describe("pruneSupersededSilentPairedDevices", () => {
       deviceId: anchor.deviceId,
       baseDir,
       nowMs: agedNowMs(),
+      protectedDeviceIds: ["live"],
       isDeviceConnected: (deviceId) => deviceId === "live",
     });
 
@@ -258,6 +259,29 @@ describe("pruneSupersededSilentPairedDevices", () => {
     const list = await listDevicePairing(baseDir);
     expect(list.paired.map((device) => device.deviceId).toSorted()).toEqual(["anchor", "live"]);
     expect(list.pending).toHaveLength(0);
+  });
+
+  test("keeps the prune batch when a candidate connects after the snapshot", async () => {
+    const baseDir = await makeBaseDir();
+    await pairDevice({ baseDir, deviceId: "stale", approvedVia: "silent" });
+    await pairDevice({ baseDir, deviceId: "live", approvedVia: "silent" });
+    const anchor = await pairDevice({ baseDir, deviceId: "anchor", approvedVia: "silent" });
+
+    const removed = await pruneSupersededSilentPairedDevices({
+      deviceId: anchor.deviceId,
+      baseDir,
+      nowMs: agedNowMs(),
+      protectedDeviceIds: [],
+      isDeviceConnected: (deviceId) => deviceId === "live",
+    });
+
+    expect(removed).toEqual([]);
+    const list = await listDevicePairing(baseDir);
+    expect(list.paired.map((device) => device.deviceId).toSorted()).toEqual([
+      "anchor",
+      "live",
+      "stale",
+    ]);
   });
 
   test("does not prune when the anchor was not silent-approved", async () => {

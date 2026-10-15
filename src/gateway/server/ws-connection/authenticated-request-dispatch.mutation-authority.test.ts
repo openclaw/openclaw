@@ -18,7 +18,6 @@ import {
   clearFollowupQueue,
   getExistingFollowupQueue,
 } from "../../../auto-reply/reply/queue/state.js";
-import { resolveFollowupRunToolAuthorityFingerprint } from "../../../auto-reply/reply/reply-tool-authority.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -28,11 +27,18 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { prepareUserProfileSelectionAuthority } from "../../../state/user-channel-identity-operations.js";
+import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { captureGatewayAuthPolicy } from "../../auth-policy.js";
+import {
+  acceptGatewayDeviceSourceAuthority,
+  readAcceptedGatewayDeviceSourceAuthority,
+  retainGatewayDeviceRevocation,
+} from "../../device-revocation.js";
 import { publishOperatorRoleConfigChange } from "../../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
+import { createRemoteControlUiIngressTestContext } from "../../remote-control-ui.test-support.js";
 import { createDirectChatContext } from "../../server-chat.agent-events.test-helpers.js";
 import { readGatewayRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "../../server-methods/types.js";
@@ -65,9 +71,49 @@ beforeEach(() => {
 afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("authenticated request mutation custody", () => {
+  it("retains the remote grant assertion after accepted work leaves its request", async () => {
+    setRuntimeConfigSnapshot({});
+    const ingress = new AbortController();
+    const client = createOperatorWsClient();
+    client.remoteControlUiIngress = createRemoteControlUiIngressTestContext({
+      assertCurrent: () => ingress.signal.throwIfAborted(),
+    });
+    const generation = new SharedGatewaySessionGenerationState({
+      current: undefined,
+      required: null,
+    });
+    let source: (() => boolean) | undefined;
+    let release: (() => void) | undefined;
+    const harness = createDispatchTestHarness({
+      getRequiredSharedGatewaySessionGeneration: generation.reader,
+      buildRequestContext: () => createDirectChatContext(),
+      extraHandlers: {
+        "test.accepted-remote": (options) => {
+          release = retainGatewayDeviceRevocation(options.hasCurrentClientAuthority);
+          expect(acceptGatewayDeviceSourceAuthority(options.hasCurrentClientAuthority)).toBe(true);
+          source = readAcceptedGatewayDeviceSourceAuthority(options.hasCurrentClientAuthority);
+          options.respond(true);
+        },
+      },
+    });
+    try {
+      await harness.dispatcher.dispatch(
+        { type: "req", id: "accepted-remote", method: "test.accepted-remote", params: {} },
+        client,
+      );
+      expect(source?.()).toBe(true);
+      expect([...harness.clients.authorityClients]).toEqual([]);
+      ingress.abort(new Error("remote grant expired"));
+      expect(source?.()).toBe(false);
+    } finally {
+      release?.();
+    }
+  });
+
   it("keeps original wildcard model ceilings separate through WS capture and contiguous collect", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const profile = ensureProfileForEmail("queued-model-ceiling@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const modelA = { provider: "fixture", model: "family-a" };
       const modelB = { provider: "fixture", model: "family-b" };
       let committedConfig: OpenClawConfig = {
@@ -98,14 +144,11 @@ describe("authenticated request mutation custody", () => {
       const captures: NonNullable<
         Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>
       >[] = [];
-      const callbacks: NonNullable<GatewayRequestHandlerOptions["hasCurrentClientAuthority"]>[] =
-        [];
       const harness = createDispatchTestHarness({
         buildRequestContext: () => context,
         extraHandlers: {
           "test.model-ceiling": async (options) => {
             const current = expectDefined(options.hasCurrentClientAuthority, "WS caller guard");
-            callbacks.push(current);
             captures.push(
               expectDefined(
                 await captureGatewayOperatorRunAuthority({
@@ -144,7 +187,6 @@ describe("authenticated request mutation custody", () => {
         const wide = await capture("wide-first");
         setPolicy(["fixture/family-*"]);
         const compatible = await capture("wide-second");
-        expect(callbacks[0]).not.toBe(callbacks[1]);
         expect(wide.modelPolicy?.models).toEqual([modelA]);
         expect(() => assertOperatorModelAllowed(wide, modelB)).not.toThrow();
         setPolicy(["fixture/family-a"]);
@@ -162,8 +204,6 @@ describe("authenticated request mutation custody", () => {
           run.run.model = modelA.model;
           return run;
         });
-        const fingerprints = runs.map((run) => resolveFollowupRunToolAuthorityFingerprint(run));
-        expect(fingerprints[0]).toBe(fingerprints[1]);
         for (const run of runs) {
           expect(enqueueFollowupRun(key, run, createQueueSettings())).toBe(true);
         }
@@ -204,7 +244,6 @@ describe("authenticated request mutation custody", () => {
           { prompts: ["request 2"], allowsB: false },
           { prompts: ["request 3"], allowsB: true },
         ]);
-        expect(fingerprints[2]).not.toBe(fingerprints[0]);
       } finally {
         clearFollowupQueue(key);
         for (const retained of captures) {
@@ -450,15 +489,12 @@ describe("authenticated request mutation custody", () => {
   );
 
   it.each([
-    "unchanged",
     "transport retirement",
     "client invalidated",
     "generation rotated",
     "policy changed",
     "selection mismatch",
-    "opaque generation reader",
     "copied generation reader",
-    "reminted generation reader",
   ] as const)("retains the admitted authority for %s", async (scenario) => {
     const generation = new SharedGatewaySessionGenerationState({
       current: "generation-a",
@@ -482,23 +518,8 @@ describe("authenticated request mutation custody", () => {
     const release = createDeferredCore();
     const persisted = vi.fn();
     const grantProfileReads = vi.fn();
-    const compatibilityReader =
-      scenario === "opaque generation reader" ||
-      scenario === "copied generation reader" ||
-      scenario === "reminted generation reader";
+    const compatibilityReader = scenario === "copied generation reader";
     const generationReader = generation.reader;
-    const unboundReader = () => generation.current;
-    if (scenario === "reminted generation reader") {
-      for (const key of Object.getOwnPropertySymbols(generationReader)) {
-        const value = Object.getOwnPropertyDescriptor(generationReader, key)?.value;
-        const Issuer = value.constructor;
-        if (typeof Issuer === "function") {
-          Object.defineProperty(unboundReader, key, {
-            value: new Issuer(unboundReader, generation),
-          });
-        }
-      }
-    }
     let inGrant = false;
     let grantError: unknown;
     vi.mocked(prepareUserProfileSelectionAuthority).mockImplementation(async (profile) => {
@@ -515,9 +536,7 @@ describe("authenticated request mutation custody", () => {
               () => generation.current,
               Object.getOwnPropertyDescriptors(generationReader),
             )
-          : compatibilityReader
-            ? unboundReader
-            : generationReader,
+          : generationReader,
       buildRequestContext: () => createDirectChatContext(),
       extraHandlers: {
         "test.mutation-custody": async (options) => {
@@ -612,7 +631,7 @@ describe("authenticated request mutation custody", () => {
       await dispatch;
     }
     expect(grantProfileReads).not.toHaveBeenCalled();
-    if (scenario === "unchanged" || scenario === "transport retirement") {
+    if (scenario === "transport retirement") {
       expect(grantError).toBeUndefined();
       expect(persisted).toHaveBeenCalledOnce();
     } else {

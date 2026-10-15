@@ -1,5 +1,4 @@
-import { boundSessionDiagnosticText } from "../config/sessions/session-diagnostic-text.js";
-import { withSessionDiagnosticTextInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareCronJobNameResolver } from "../cron/store/job-name.js";
 import { areDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
 import {
@@ -14,7 +13,6 @@ type SessionDiagnosticContext = {
   cronJobId?: string;
   cronRunId?: string;
   cronJobName?: string;
-  lastAssistant?: string;
 };
 
 type SessionDiagnosticTarget = {
@@ -69,31 +67,24 @@ async function withSessionDiagnosticContext(
     }
   };
   let consumed = false;
+  let resolveName: ((jobId: string) => string | undefined) | undefined;
   const publish = (value: SessionDiagnosticContext) => {
     assertCurrent();
+    if (value.cronJobId) {
+      value.cronJobName = resolveName?.(value.cronJobId);
+    }
     consumed = true;
     consume(value);
   };
   try {
     assertCurrent();
     if (context.cronJobId) {
-      const resolveName = await prepareCronJobNameResolver([context.cronJobId]).catch(
-        () => undefined,
-      );
+      resolveName = await prepareCronJobNameResolver([context.cronJobId]).catch(() => undefined);
       assertCurrent();
-      context.cronJobName = resolveName?.(context.cronJobId);
     }
-    if (sessionId) {
-      await withSessionDiagnosticTextInWorker(
-        { agentId: parsed.agentId, sessionKey, sessionId },
-        assertCurrent,
-        (lastAssistant) => publish({ ...context, lastAssistant }),
-      );
-    } else {
-      publish(context);
-    }
+    publish(context);
   } catch {
-    // Enrichment cannot delay recovery or publish a replaced session's text.
+    // Optional cron metadata cannot delay recovery or outlive its session.
     if (!consumed && isCurrent()) {
       consume(identityChanged ? {} : context);
     }
@@ -106,13 +97,15 @@ function formatSessionDiagnosticFields(
   context: SessionDiagnosticContext,
   cronNameLabel: "cronJob" | "stopped" = "cronJob",
 ): string {
-  const quote = (value: string) =>
-    `"${boundSessionDiagnosticText(value).replace(/["\\]/g, "\\$&")}"`;
+  const quote = (value: string) => {
+    const oneLine = value.replace(/\s+/g, " ").trim();
+    const bounded = oneLine.length > 140 ? `${truncateUtf16Safe(oneLine, 137)}...` : oneLine;
+    return `"${bounded.replace(/["\\]/g, "\\$&")}"`;
+  };
   return [
     context.cronJobId ? `cronJobId=${context.cronJobId}` : "",
     context.cronRunId ? `cronRunId=${context.cronRunId}` : "",
     context.cronJobName ? `${cronNameLabel}=${quote(context.cronJobName)}` : "",
-    context.lastAssistant ? `lastAssistant=${quote(context.lastAssistant)}` : "",
   ]
     .filter(Boolean)
     .join(" ");

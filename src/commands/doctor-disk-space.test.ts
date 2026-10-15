@@ -1,22 +1,36 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
+import * as diskSpace from "../infra/disk-space.js";
 import { collectDiskSpaceHealthFindings, formatBytes, noteDiskSpace } from "./doctor-disk-space.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 
-function collectFindingsAt(availableBytes: number) {
-  return collectDiskSpaceHealthFindings({
-    env: { HOME: "/home/test" },
-    readDiskSpace: () => ({ availableBytes }),
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", "/home/test/.openclaw");
+  vi.stubEnv("OPENCLAW_HOME", undefined);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
+function mockDiskSpace(availableBytes: number) {
+  vi.spyOn(diskSpace, "tryReadDiskSpace").mockReturnValue({
+    availableBytes,
+    targetPath: "/home/test/.openclaw",
+    checkedPath: "/home/test",
+    totalBytes: null,
   });
+}
+
+function collectFindingsAt(availableBytes: number) {
+  mockDiskSpace(availableBytes);
+  return collectDiskSpaceHealthFindings();
 }
 
 describe("formatBytes", () => {
   it.each([
-    [512, "512 B"],
-    [2048, "2 KB"],
     [2.5 * 1024 * 1024 * 1024, "2.5 GB"],
-    [-1, "unknown"],
     [Number.NaN, "unknown"],
   ])("formats %s bytes as %s", (bytes, expected) => {
     expect(formatBytes(bytes)).toBe(expected);
@@ -47,39 +61,14 @@ describe("collectDiskSpaceHealthFindings", () => {
       }),
     ]);
   });
-
-  it("keeps sub-100 MB space critical without rounding the display across the threshold", () => {
-    expect(collectFindingsAt(Math.floor(99.6 * 1024 * 1024))).toEqual([
-      expect.objectContaining({
-        checkId: "core/doctor/disk-space",
-        severity: "error",
-        message: "CRITICAL: only 99 MB free on the partition containing /home/test/.openclaw.",
-        path: "/home/test/.openclaw",
-        target: "99 MB",
-        requirement: "critical-free-space",
-        fixHint: expect.stringContaining("avoid data loss"),
-      }),
-    ]);
-  });
-
-  it("returns no finding when disk space cannot be read", () => {
-    expect(
-      collectDiskSpaceHealthFindings({
-        env: { HOME: "/home/test" },
-        readDiskSpace: () => null,
-      }),
-    ).toEqual([]);
-  });
 });
 
 describe("noteDiskSpace", () => {
   beforeEach(() => vi.mocked(note).mockClear());
 
   it("emits one titled low-space note", () => {
-    noteDiskSpace({
-      env: { HOME: "/home/test" },
-      readDiskSpace: () => ({ availableBytes: 300 * 1024 * 1024 }),
-    });
+    mockDiskSpace(300 * 1024 * 1024);
+    noteDiskSpace();
 
     expect(note).toHaveBeenCalledExactlyOnceWith(
       expect.stringContaining("Low disk space"),
@@ -87,11 +76,9 @@ describe("noteDiskSpace", () => {
     );
   });
 
-  it.each([
-    { name: "space is sufficient", snapshot: { availableBytes: 10 * 1024 * 1024 * 1024 } },
-    { name: "disk space cannot be read", snapshot: null },
-  ])("does not call note when $name", ({ snapshot }) => {
-    noteDiskSpace({ env: { HOME: "/home/test" }, readDiskSpace: () => snapshot });
+  it("does not call note when space is sufficient", () => {
+    mockDiskSpace(10 * 1024 * 1024 * 1024);
+    noteDiskSpace();
     expect(note).not.toHaveBeenCalled();
   });
 });

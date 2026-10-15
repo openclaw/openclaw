@@ -1,25 +1,36 @@
-/** Owns image, music, and video preflight, task admission, and detached completion. */
+import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfig } from "../../config/config.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { CapabilityProviderFor } from "../../plugins/capability-provider-runtime.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
+import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
+import {
+  captureAgentToolSourceExecutionGuard,
+  runWithAgentToolSourceExecutionScope,
+} from "../agent-tool-source-execution-guard.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import { recordRecentMediaGenerationTaskStartForSession } from "../media-generation-task-status-shared.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
+import { resolveSandboxConfigForAgent } from "../sandbox/config.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
+import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { ToolInputError, readToolStringParam } from "./common.js";
 import {
-  buildMediaGenerationStartedToolResult,
   captureMediaGenerationAdmission,
+  createDefaultMediaGenerateBackgroundScheduler,
   createMediaGenerationTaskLifecycle,
-  notifyMediaGenerationAsyncTaskStarted,
   scheduleMediaGenerationTaskCompletion,
   type MediaGenerateAsyncStartCallback,
   type MediaGenerateBackgroundScheduler,
   type MediaGenerationExecutionResult,
   type MediaGenerationTaskHandle,
 } from "./media-generate-background-shared.js";
+import type { AcquireGeneratedMediaSandbox } from "./media-generate-result-shared.js";
 import type { MediaGenerateActionResult } from "./media-generate-tool-actions-shared.js";
 import { rethrowAfterMediaCleanup } from "./media-generation-error.js";
 import {
@@ -32,6 +43,7 @@ import {
   applyAgentDefaultModelConfig,
   coerceToolModelConfig,
   hasToolModelConfig,
+  prepareToolAuthProfileStore,
   type ToolModelConfig,
 } from "./model-config.helpers.js";
 
@@ -39,12 +51,19 @@ export type MediaGenerateToolOptions = {
   config?: OpenClawConfig;
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
+  authProfileStoreSource?: boolean;
   agentSessionKey?: string;
+  sandboxSessionKey?: string;
+  sandboxAgentId?: string;
   /** Durable requester transcript key; task ownership stays on agentSessionKey. */
   requesterRunSessionKey?: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
+  inputProvenance?: InputProvenance;
   workspaceDir?: string;
+  spawnWorkspaceDir?: string;
+  skillsSnapshot?: SkillSnapshot;
+  execOverrides?: ExecPolicyOverrides;
   cwd?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: MediaToolSandbox;
@@ -61,7 +80,9 @@ const GENERATION_LABELS = {
 
 export function resolveMediaGenerateToolContext<K extends keyof typeof GENERATION_LABELS>(
   providerKey: K,
-  options?: MediaGenerateToolOptions,
+  options: MediaGenerateToolOptions | undefined,
+  logger: Pick<SubsystemLogger, "warn" | "error">,
+  preparedAvailability?: boolean,
 ) {
   const cfg = options?.config ?? getRuntimeConfig();
   const knownProviders:
@@ -70,21 +91,96 @@ export function resolveMediaGenerateToolContext<K extends keyof typeof GENERATIO
   const known = knownProviders?.[providerKey];
   const preparedProviders = known ? [...known] : undefined;
   if (
-    !hasGenerationToolAvailability({
-      cfg,
-      agentDir: options?.agentDir,
-      workspaceDir: options?.workspaceDir,
-      authStore: options?.authProfileStore,
-      modelConfig: cfg.agents?.defaults?.mediaModels?.[GENERATION_LABELS[providerKey]],
-      providerKey,
-      providers: preparedProviders,
-    })
+    !(
+      preparedAvailability ??
+      hasGenerationToolAvailability({
+        cfg,
+        agentDir: options?.agentDir,
+        workspaceDir: options?.workspaceDir,
+        authStore: options?.authProfileStore,
+        authProfileStoreSource: options?.authProfileStoreSource,
+        modelConfig: cfg.agents?.defaults?.mediaModels?.[GENERATION_LABELS[providerKey]],
+        providerKey,
+        providers: preparedProviders,
+      })
+    )
   ) {
     return null;
   }
+  const scheduleBackgroundWork =
+    options?.scheduleBackgroundWork ??
+    createDefaultMediaGenerateBackgroundScheduler({
+      toolName: `${GENERATION_LABELS[providerKey]}_generate`,
+      onCrash: (message, meta) => logger.error(message, meta),
+    });
+  const outputSandbox = options?.sandbox;
+  const sandboxSessionKey = options?.sandboxSessionKey ?? options?.agentSessionKey;
+  const readOutputPolicy = (config: OpenClawConfig) => ({
+    sandbox: resolveSandboxConfigForAgent(config, options?.sandboxAgentId),
+    workspaces: [options?.sandboxAgentId, options?.requesterAgentId].map((agentId) =>
+      agentId ? resolveAgentWorkspaceDir(config, agentId) : undefined,
+    ),
+    sessionStore: config.session?.store,
+    mediaMaxMb: config.agents?.defaults?.mediaMaxMb,
+  });
+  const admittedOutputPolicy = outputSandbox ? readOutputPolicy(cfg) : undefined;
+  const acquireOutputSandbox: AcquireGeneratedMediaSandbox | undefined = outputSandbox
+    ? async (assertCurrent) => {
+        const assertSandboxCurrent = () => {
+          assertCurrent();
+          if (!isDeepStrictEqual(readOutputPolicy(getRuntimeConfig()), admittedOutputPolicy)) {
+            throw new Error("The requesting sandbox configuration has changed");
+          }
+        };
+        assertSandboxCurrent();
+        if (!sandboxSessionKey) {
+          throw new Error("The requesting sandbox session is unavailable");
+        }
+        // Detached generation outlives the originating turn's workspace projection.
+        const { resolveSandboxContext } = await import("../sandbox/context.js");
+        const sandbox = await resolveSandboxContext({
+          config: getRuntimeConfig(),
+          sessionKey: sandboxSessionKey,
+          agentId: options?.sandboxAgentId,
+          workspaceDir: options?.spawnWorkspaceDir ?? options?.workspaceDir,
+          skillsSnapshot: options?.skillsSnapshot,
+          execOverrides: options?.execOverrides,
+          assertCurrent: assertSandboxCurrent,
+        });
+        try {
+          assertSandboxCurrent();
+          if (
+            !sandbox?.fsBridge ||
+            sandbox.workspaceDir !== outputSandbox.root ||
+            sandbox.backendId !== admittedOutputPolicy?.sandbox.backend
+          ) {
+            throw new Error("The requesting sandbox workspace is no longer available");
+          }
+          return {
+            root: sandbox.workspaceDir,
+            bridge: sandbox.fsBridge,
+            assertCurrent: assertSandboxCurrent,
+            [Symbol.dispose]: () => sandbox[Symbol.dispose]?.(),
+          };
+        } catch (error) {
+          sandbox?.[Symbol.dispose]?.();
+          throw error;
+        }
+      }
+    : undefined;
   return {
     cfg,
+    acquireOutputSandbox,
     preparedProviders,
+    workspaceReadiness: captureAgentWorkspaceReadiness(options?.agentSessionKey),
+    taskOptions: () => ({
+      sessionKey: options?.agentSessionKey,
+      requesterAgentId: options?.requesterAgentId,
+      requesterOrigin: options?.requesterOrigin,
+      scheduleBackgroundWork,
+      onAsyncTaskStarted: options?.onAsyncTaskStarted,
+      onFailure: (message: string, meta?: Record<string, unknown>) => logger.warn(message, meta),
+    }),
     sandboxConfig: resolveMediaToolSandboxConfig(
       options?.sandbox,
       options?.fsPolicy?.workspaceOnly,
@@ -93,14 +189,13 @@ export function resolveMediaGenerateToolContext<K extends keyof typeof GENERATIO
 }
 
 /** Transferred resources belong to queued work through actual generation and persistence. */
-export type MediaGenerationTaskResources = {
+type MediaGenerationTaskResources = {
   run: <T>(run: () => T | Promise<T>) => Promise<T>;
   release: () => Promise<void>;
 };
 
 /** Preflight retains resources until a duplicate result releases them or task admission takes over. */
 export async function prepareMediaGenerationTask<
-  T extends MediaGenerationExecutionResult,
   Resources extends (MediaGenerationTaskResources & { assertOpen: () => void }) | undefined,
 >(params: {
   generationLabel: "image" | "video" | "music";
@@ -127,10 +222,7 @@ export async function prepareMediaGenerationTask<
     | { kind: "result"; result: MediaGenerateActionResult }
     | {
         kind: "task";
-        params: Omit<
-          Parameters<typeof runMediaGenerationTask<T>>[0],
-          "resources" | "generationLabel"
-        >;
+        params: Omit<Parameters<typeof runMediaGenerationTask>[0], "resources" | "generationLabel">;
       }
   >;
 }) {
@@ -141,7 +233,7 @@ export async function prepareMediaGenerationTask<
   );
   const configuredModel =
     model || explicitModelConfig
-      ? resolveCapabilityModelConfigForTool({
+      ? await resolveCapabilityModelConfigForTool({
           cfg,
           modelConfig: cfg.agents?.defaults?.mediaModels?.[generationLabel],
           modelOverride: model,
@@ -169,17 +261,22 @@ export async function prepareMediaGenerationTask<
       : cfg,
   );
   const prepare = async () => {
+    const authStore = configuredModel
+      ? options?.authProfileStore
+      : await prepareToolAuthProfileStore(options);
+    signal?.throwIfAborted();
+    resources?.assertOpen();
     const modelConfig =
       configuredModel ??
-      resolveCapabilityModelConfigForTool({
+      (await resolveCapabilityModelConfigForTool({
         cfg,
         workspaceDir: options?.workspaceDir,
         agentDir: options?.agentDir,
-        authStore: options?.authProfileStore,
+        authStore,
         modelConfig: cfg.agents?.defaults?.mediaModels?.[generationLabel],
         modelOverride: model,
         providers: params.resolveProviders(resources),
-      });
+      }));
     if (!modelConfig) {
       throw new ToolInputError(`No ${generationLabel}-generation model configured.`);
     }
@@ -215,24 +312,25 @@ export async function prepareMediaGenerationTask<
   }
   return runMediaGenerationTask({
     ...prepared.params,
+    inputProvenance: options?.inputProvenance,
     requesterRunSessionKey: options?.requesterRunSessionKey,
     generationLabel: params.generationLabel,
     resources,
-    assertAdmissionCurrent: () => {
-      assertSourceCurrent();
+    assertAdmissionCurrent: composeSessionSourceAssertion([assertSourceCurrent], (assertSource) => {
+      assertSource();
       resources?.assertOpen();
-    },
+    }),
   });
 }
 
-/** Owns task admission and the shared foreground or detached generation lifecycle. */
-export async function runMediaGenerationTask<T extends MediaGenerationExecutionResult>(params: {
+export async function runMediaGenerationTask(params: {
   lifecycle: ReturnType<typeof createMediaGenerationTaskLifecycle>;
   generationLabel: "image" | "video" | "music";
   sessionKey?: string;
   requesterRunSessionKey?: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
+  inputProvenance?: InputProvenance;
   prompt: string;
   requestKey: string;
   providerId?: string;
@@ -245,7 +343,9 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
   assertAdmissionCurrent?: () => void;
   run: (
     handle: MediaGenerationTaskHandle | null,
-  ) => Promise<T & { contentText: string; details: Record<string, unknown> }>;
+  ) => Promise<
+    MediaGenerationExecutionResult & { contentText: string; details: Record<string, unknown> }
+  >;
 }) {
   const resources = params.resources;
   const assertAdmissionCurrent = captureMediaGenerationAdmission(params.assertAdmissionCurrent);
@@ -253,7 +353,7 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
   const run = resources
     ? async (handle: MediaGenerationTaskHandle | null) => {
         resourcesTransferred = true;
-        let executed: T & { contentText: string; details: Record<string, unknown> };
+        let executed: Awaited<ReturnType<typeof params.run>>;
         try {
           executed = await resources.run(() => params.run(handle));
         } catch (error) {
@@ -277,16 +377,22 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
       requesterRunSessionKey: params.requesterRunSessionKey,
       requesterAgentId: params.requesterAgentId,
       requesterOrigin: params.requesterOrigin,
+      inputProvenance: params.inputProvenance ?? { kind: "external_user" },
       prompt: params.prompt,
       providerId: params.providerId,
       assertCurrent: assertAdmissionCurrent,
     });
-    try {
-      assertAdmissionCurrent();
-    } catch (error) {
-      lifecycle.failTaskRun({ handle, error });
-      throw error;
-    }
+    const admitExecution = async <T>(start: () => T): Promise<{ execution: T }> => {
+      try {
+        return await runWithAgentToolSourceExecutionScope(assertAdmissionCurrent, async () => {
+          assertAdmissionCurrent();
+          return { execution: start() };
+        });
+      } catch (error) {
+        lifecycle.failTaskRun({ handle, error });
+        throw error;
+      }
+    };
 
     if (handle?.detach) {
       recordRecentMediaGenerationTaskStartForSession({
@@ -301,35 +407,56 @@ export async function runMediaGenerationTask<T extends MediaGenerationExecutionR
         providerId: params.providerId,
         progressSummary,
       });
-      scheduleMediaGenerationTaskCompletion({
-        lifecycle,
-        handle,
-        scheduleBackgroundWork: params.scheduleBackgroundWork,
-        progressSummary,
-        toolName: `${title} generation`,
-        onWakeFailure: params.onFailure,
-        run: () => run(handle),
-      });
+      await admitExecution(() =>
+        scheduleMediaGenerationTaskCompletion({
+          lifecycle,
+          handle,
+          scheduleBackgroundWork: params.scheduleBackgroundWork,
+          progressSummary,
+          toolName: `${title} generation`,
+          onWakeFailure: params.onFailure,
+          run: () => run(handle),
+        }),
+      );
       resourcesTransferred = true;
-      await notifyMediaGenerationAsyncTaskStarted({
-        callback: params.onAsyncTaskStarted,
-        message: `${title} generation started; wait for the generated ${generationLabel} completion event.`,
-        toolName,
-        handle,
-        onFailure: params.onFailure,
-      });
-      return buildMediaGenerationStartedToolResult({
-        toolName,
-        generationLabel,
-        completionLabel: generationLabel,
-        taskHandle: handle,
-        detailExtras: params.detailExtras,
-        messages: params.messages,
-      });
+      try {
+        await params.onAsyncTaskStarted?.(
+          `${title} generation started; wait for the generated ${generationLabel} completion event.`,
+        );
+      } catch (error) {
+        params.onFailure("Media generation async-start callback failed", {
+          toolName,
+          taskId: handle.taskId,
+          runId: handle.runId,
+          error,
+        });
+      }
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: [
+              `Background task started for ${generationLabel} generation (${handle.taskId}). Do not call ${toolName} again for this request. Do not wait, poll, or yield for it: end this turn (a short acknowledgement at most); the completion arrives as a later turn and sends the finished ${generationLabel} here.`,
+              ...(params.messages ?? []),
+            ]
+              .filter((entry): entry is string => Boolean(entry))
+              .join("\n"),
+          },
+        ],
+        details: {
+          async: true,
+          status: "started",
+          taskId: handle.taskId,
+          runId: handle.runId,
+          task: { taskId: handle.taskId, runId: handle.runId },
+          ...params.detailExtras,
+        },
+      };
     }
 
     try {
-      const executed = await run(handle);
+      const { execution } = await admitExecution(() => run(handle));
+      const executed = await execution;
       lifecycle.completeTaskRun({
         handle,
         provider: executed.provider,

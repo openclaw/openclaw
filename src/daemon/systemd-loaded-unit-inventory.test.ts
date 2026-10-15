@@ -31,45 +31,36 @@ beforeEach(() => {
   userctl.mockReset();
 });
 
-it("finds a running Gateway whose system unit file is gone", async () => {
-  systemctl.mockImplementation(async (args) =>
-    args.includes("list-units")
-      ? success("custom-rescue.service loaded active running custom Gateway\n")
-      : success(
-          "Id=custom-rescue.service\n" +
-            "FragmentPath=/etc/systemd/system/custom-rescue.service\n" +
-            "ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /opt/openclaw/dist/entry.js gateway ; }\n" +
-            "ActiveState=active\n",
-        ),
-  );
-
-  await expect(
-    listLoadedSystemdUnits("system", { DBUS_SYSTEM_BUS_ADDRESS: "unix:path=/fixture/bus" }),
-  ).resolves.toEqual([
-    {
-      name: "custom-rescue.service",
-      fragmentPath: "/etc/systemd/system/custom-rescue.service",
-      execStart:
-        "{ path=/usr/bin/node ; argv[]=/usr/bin/node /opt/openclaw/dist/entry.js gateway ; }",
-    },
-  ]);
-  expect(systemctl).toHaveBeenCalledTimes(2);
-  expect(systemctl.mock.calls[1]?.[0]).toContain(
-    "--property=Id,FragmentPath,ExecStart,ActiveState",
-  );
-});
-
-it("refuses a partial loaded-unit reply", async () => {
-  systemctl.mockImplementation(async (args) =>
-    args.includes("list-units")
-      ? success("custom-rescue.service loaded active running custom Gateway\n")
-      : success("Id=unrelated.service\nFragmentPath=\nActiveState=active\n"),
-  );
-
-  await expect(
-    listLoadedSystemdUnits("system", { DBUS_SYSTEM_BUS_ADDRESS: "unix:path=/fixture/bus" }),
-  ).rejects.toThrow("properties could not be inspected");
-});
+it.each([false, true])(
+  "inspects removed system units and refuses partial replies (partial=%s)",
+  async (partial) => {
+    const name = "custom-rescue.service";
+    const fragmentPath = "/etc/systemd/system/custom-rescue.service";
+    const execStart =
+      "{ path=/usr/bin/node ; argv[]=/usr/bin/node /opt/openclaw/dist/entry.js gateway ; }";
+    systemctl.mockImplementation(async (args) =>
+      args.includes("list-units")
+        ? success(`${name} loaded active running custom Gateway\n`)
+        : success(
+            partial
+              ? "Id=unrelated.service\nFragmentPath=\nActiveState=active\n"
+              : `Id=${name}\nFragmentPath=${fragmentPath}\nExecStart=${execStart}\nActiveState=active\n`,
+          ),
+    );
+    const inventory = listLoadedSystemdUnits("system", {
+      DBUS_SYSTEM_BUS_ADDRESS: "unix:path=/fixture/bus",
+    });
+    if (partial) {
+      await expect(inventory).rejects.toThrow("properties could not be inspected");
+    } else {
+      await expect(inventory).resolves.toEqual([{ name, fragmentPath, execStart }]);
+      expect(systemctl).toHaveBeenCalledTimes(2);
+      expect(systemctl.mock.calls[1]?.[0]).toContain(
+        "--property=Id,FragmentPath,ExecStart,ActiveState",
+      );
+    }
+  },
+);
 
 it.each(
   (["user", "system"] as const).flatMap((scope) =>
@@ -205,4 +196,34 @@ it.skipIf(process.platform !== "linux")(
       }
     });
   },
+);
+
+// Manager socket absence is native evidence, while an advertised but unreadable
+// manager must continue to fence test builds. No service lifecycle calls occur.
+it.each([false, true])(
+  "fences test preparation only when a manager may exist (present=%s)",
+  (present) =>
+    withMockedPlatform("linux", () =>
+      withTestDir({ prefix: "openclaw-manager-absence-" }, async (home) => {
+        const lstat = vi
+          .spyOn(fs, "lstat")
+          .mockRejectedValue(Object.assign(new Error("Synthetic path absent"), { code: "ENOENT" }));
+        const directories = vi.spyOn(fs, "readdir").mockResolvedValue([]);
+        userctl.mockRejectedValue(new Error("Synthetic advertised manager inaccessible"));
+        systemctl.mockRejectedValue(new Error("Synthetic advertised manager inaccessible"));
+        const env = {
+          HOME: home,
+          XDG_RUNTIME_DIR: home,
+          ...(present ? { DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/user-bus" } : {}),
+        };
+        try {
+          await expect(
+            resolveLiveManagedGatewayDistFence(home, { env, requireVerified: true }),
+          ).resolves.toMatchObject({ refuse: present });
+        } finally {
+          directories.mockRestore();
+          lstat.mockRestore();
+        }
+      }),
+    ),
 );

@@ -33,12 +33,40 @@ import {
   setupWorkerTurnLauncherTest,
   turn,
 } from "./worker-turn-launcher.test-support.js";
+import { withWorkerTurnTranscriptDatabase } from "./worker-turn-transcript-target.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
-import { executeRemoteExecTurn, reconcileWorkspaceAfterTurn } from "./workspace-result-finalize.js";
+import {
+  executeRemoteExecTurn as executeRemoteExecTurnCore,
+  reconcileWorkspaceAfterTurn as reconcileWorkspaceAfterTurnCore,
+} from "./workspace-result-finalize.js";
 import { workerWorkspaceResultStaging } from "./workspace-result-staging.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
+
+function executeRemoteExecTurn(params: Parameters<typeof executeRemoteExecTurnCore>[0]) {
+  return withWorkerTurnTranscriptDatabase(
+    params.turn,
+    {
+      assertCurrent() {},
+      prepareAuthority: () => params.placements.prepareTurnClaimAuthority(params.turnClaim),
+    },
+    () => executeRemoteExecTurnCore(params),
+  );
+}
+
+function reconcileWorkspaceAfterTurn(
+  params: Parameters<typeof reconcileWorkspaceAfterTurnCore>[0],
+) {
+  return withWorkerTurnTranscriptDatabase(
+    { ...params.transcriptTarget, sessionTarget: params.transcriptTarget },
+    {
+      assertCurrent() {},
+      prepareAuthority: () => params.placements.prepareTurnClaimAuthority(params.turnClaim),
+    },
+    (transcriptTarget) => reconcileWorkspaceAfterTurnCore({ ...params, transcriptTarget }),
+  );
+}
 
 vi.mock("../../node-host/node-worker-transfer-client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../node-host/node-worker-transfer-client.js")>()),
@@ -73,7 +101,7 @@ describe("concurrent worker workspace results", () => {
         claimId: `hydrate-${phase}-${change}`,
         runId: `hydrate-${phase}-${change}`,
       });
-      placements.markWorkspaceResultPending(claim);
+      await placements.markWorkspaceResultPending(claim);
       const entered = createDeferred();
       const release = createDeferred();
       const open = SessionManager.openAsync.bind(SessionManager);
@@ -137,13 +165,13 @@ describe("concurrent worker workspace results", () => {
           "hydrated",
         );
         if (change === "draining") {
-          placements.startWorkspaceResultDrain(claim);
+          await placements.startWorkspaceResultDrain(claim);
         } else if (change === "claim") {
-          const pending = placements.listPendingWorkspaceResults(SESSION_ID)[0];
+          const pending = (await placements.listPendingWorkspaceResultsAsync(SESSION_ID))[0];
           if (!pending) {
             throw new Error("expected retained result");
           }
-          placements.failWorkspaceResultAndReleaseTurn(
+          await placements.failWorkspaceResultAndReleaseTurn(
             pending,
             new Error("fixture replaced result"),
           );
@@ -155,7 +183,7 @@ describe("concurrent worker workspace results", () => {
         if (change === "current" || change === "draining") {
           expect(outcome).toMatchObject({ value: { paths: ["src/retained.ts"] } });
           expect(publish).toHaveBeenCalledOnce();
-          expect(placements.listPendingWorkspaceResults()).toEqual([]);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
           const after = SessionManager.open(sessionTarget).getPersistedEntries();
           expect(after.slice(0, before.length)).toEqual(before);
           expect(readWorkerTurnTranscriptStorageRows().slice(0, beforeRows.length)).toEqual(
@@ -263,7 +291,7 @@ describe("concurrent worker workspace results", () => {
         runLocal: async () => ({ meta: { durationMs: 1 } }),
       }),
     ).rejects.toThrow("Skill resource cleanup failed");
-    expect(placements.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
 
     const leftovers = await fs.readdir(remote);
@@ -386,7 +414,7 @@ describe("concurrent worker workspace results", () => {
           },
           { from: "starting", to: "active", patch: { activeOwnerEpoch: 1 } },
         ] as const) {
-          placement = placements.transition({
+          placement = await placements.transition({
             ...transition,
             sessionId,
             expectedGeneration: placement.generation,
@@ -401,7 +429,7 @@ describe("concurrent worker workspace results", () => {
           claimId: `claim-${index}`,
           runId: `run-${index}`,
         });
-        placements.markWorkspaceResultPending(turnClaim);
+        await placements.markWorkspaceResultPending(turnClaim);
         const nodeIdentity = {
           gatewayNamespace: "gateway-test",
           environmentId,
@@ -512,7 +540,7 @@ describe("concurrent worker workspace results", () => {
         ),
       );
       expect(outcomes.find((outcome) => outcome.status === "rejected")).toBeUndefined();
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       for (const job of jobs) {
         expect(await fs.readFile(path.join(job.workspace.path, "result.bin"))).toEqual(bytes);
         expect(placements.get(job.placement.sessionId)?.turnClaim).toBeNull();

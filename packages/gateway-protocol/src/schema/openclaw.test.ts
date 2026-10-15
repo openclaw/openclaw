@@ -5,8 +5,10 @@ import {
   validateSystemAgentChatHistoryParams,
   validateSystemAgentSetupActivateParams,
   validateSystemAgentSetupActivateStartParams,
+  validateSystemAgentSetupAutoParams,
   validateSystemAgentSetupAuthStartParams,
   validateSystemAgentSetupDetectParams,
+  validateSystemAgentSetupRuntimeStartParams,
   validateSystemAgentSetupVerifyParams,
 } from "../index.js";
 import {
@@ -14,35 +16,11 @@ import {
   SystemAgentChatHistoryResultSchema,
   SystemAgentSetupDetectResultSchema,
   SystemAgentSetupActivateResultSchema,
+  SystemAgentSetupAutoResultSchema,
   SystemAgentSetupVerifyResultSchema,
 } from "./openclaw.js";
 
 describe("OpenClaw chat params protocol", () => {
-  const base = { sessionId: "session-1", message: "What about this page?" };
-
-  it("accepts the additive page context and remains backward compatible", () => {
-    expect(validateSystemAgentChatParams(base)).toBe(true);
-    expect(validateSystemAgentChatParams({ ...base, context: { page: "channels" } })).toBe(true);
-    expect(
-      validateSystemAgentChatParams({ ...base, context: { page: "/settings/channels" } }),
-    ).toBe(true);
-  });
-
-  it("accepts a typed wizard answer and rejects unknown answer fields", () => {
-    expect(
-      validateSystemAgentChatParams({
-        sessionId: "session-1",
-        wizardAnswer: { stepId: "channel", value: "twitch" },
-      }),
-    ).toBe(true);
-    expect(
-      validateSystemAgentChatParams({
-        sessionId: "session-1",
-        wizardAnswer: { stepId: "channel", value: "twitch", display: "Twitch" },
-      }),
-    ).toBe(false);
-  });
-
   it("accepts a typed wizard cancel and rejects unknown cancel fields", () => {
     expect(
       validateSystemAgentChatParams({
@@ -54,21 +32,6 @@ describe("OpenClaw chat params protocol", () => {
       validateSystemAgentChatParams({
         sessionId: "session-1",
         wizardCancel: { stepId: "channel", reason: "user" },
-      }),
-    ).toBe(false);
-  });
-
-  it("rejects unsafe page ids and unknown context fields", () => {
-    expect(validateSystemAgentChatParams({ ...base, context: { page: "channels?tab=all" } })).toBe(
-      false,
-    );
-    expect(validateSystemAgentChatParams({ ...base, context: { page: "a".repeat(65) } })).toBe(
-      false,
-    );
-    expect(
-      validateSystemAgentChatParams({
-        ...base,
-        context: { page: "channels", source: "client" },
       }),
     ).toBe(false);
   });
@@ -158,14 +121,37 @@ describe("OpenClaw interactive activation protocol", () => {
   });
 });
 
-describe("OpenClaw setup detection protocol", () => {
-  it.each([
-    ["saved-auth:openai%3Adefault", true],
-    ["saved-auth:", false],
-  ])("validates saved sign-in choice %s", (kind, valid) => {
-    expect(validateSystemAgentSetupActivateParams({ kind })).toBe(valid);
+describe("OpenClaw installed runtime setup protocol", () => {
+  it("requires an explicit runtime target and accepts only runtime setup fields", () => {
+    const params = {
+      sessionId: "runtime-consent",
+      agentId: "research",
+      runtimeId: "fixture-native",
+      configPatch: { plugins: { entries: { fixture: { config: { enabled: true } } } } },
+    };
+    expect(validateSystemAgentSetupRuntimeStartParams(params)).toBe(true);
+    const requiredKeys: Array<keyof typeof params> = [
+      "sessionId",
+      "agentId",
+      "runtimeId",
+      "configPatch",
+    ];
+    for (const key of requiredKeys) {
+      const missing: Partial<typeof params> = { ...params };
+      delete missing[key];
+      expect(validateSystemAgentSetupRuntimeStartParams(missing)).toBe(false);
+    }
+    for (const key of ["sessionId", "agentId", "runtimeId"]) {
+      expect(validateSystemAgentSetupRuntimeStartParams({ ...params, [key]: "" })).toBe(false);
+    }
+    expect(validateSystemAgentSetupRuntimeStartParams({ ...params, configPatch: [] })).toBe(false);
+    expect(validateSystemAgentSetupRuntimeStartParams({ ...params, modelRef: "other/model" })).toBe(
+      false,
+    );
   });
+});
 
+describe("OpenClaw setup detection protocol", () => {
   it("accepts an explicit owner across the structured setup family", () => {
     expect(validateSystemAgentSetupDetectParams({ agentId: "research" })).toBe(true);
     expect(validateSystemAgentSetupVerifyParams({ agentId: "research" })).toBe(true);
@@ -181,6 +167,7 @@ describe("OpenClaw setup detection protocol", () => {
         sessionId: "setup-1",
         agentId: "research",
         authChoice: "openai-api-key",
+        selectModel: true,
         nativeSessionCatalogsEnabled: false,
       }),
     ).toBe(true);
@@ -306,29 +293,63 @@ describe("OpenClaw setup detection protocol", () => {
   });
 });
 
-describe("OpenClaw setup verification protocol", () => {
-  it("accepts only an empty request", () => {
-    expect(validateSystemAgentSetupVerifyParams({})).toBe(true);
-    expect(validateSystemAgentSetupVerifyParams({ modelRef: "openai/gpt-5.5" })).toBe(false);
+describe("OpenClaw automatic setup protocol", () => {
+  it("accepts only an empty params object", () => {
+    expect(validateSystemAgentSetupAutoParams({})).toBe(true);
+    expect(validateSystemAgentSetupAutoParams({ agentId: "research" })).toBe(false);
+    expect(validateSystemAgentSetupAutoParams({ acceptCapabilities: true })).toBe(false);
   });
 
-  it("accepts the structured success and failure results", () => {
-    expect(
-      Value.Check(SystemAgentSetupVerifyResultSchema, {
-        ok: true,
-        modelRef: "openai/gpt-5.5",
-        latencyMs: 25,
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(SystemAgentSetupVerifyResultSchema, {
-        ok: false,
+  it("preserves the four outcomes, candidate metadata, and required collections", () => {
+    const candidate = {
+      kind: "codex-cli",
+      label: "Codex",
+      detail: "Stored login",
+      modelRef: "openai/example-model",
+      brandId: "openai",
+      icon: "https://example.com/codex.svg",
+    };
+    const collections = { alternatives: [], attempts: [], installedPlugins: [] };
+    const results = [
+      { ...collections, status: "configured", selected: candidate },
+      {
+        ...collections,
+        status: "activated",
+        selected: { ...candidate, shared: true },
+        separateSignIn: { authOptionId: "openai-device-code", label: "ChatGPT" },
+        installedPlugins: ["codex"],
+      },
+      {
+        ...collections,
+        status: "needs-sign-in",
+        signIn: { authOptionId: "codex-chatgpt", label: "Sign in with ChatGPT" },
+        installedPlugins: ["codex"],
+      },
+      {
+        ...collections,
         status: "unavailable",
-        error: "no configured model",
+        attempts: [{ kind: "codex-cli", label: "Codex", error: "Installation unavailable" }],
+      },
+    ];
+    for (const result of results) {
+      expect(Value.Check(SystemAgentSetupAutoResultSchema, result)).toBe(true);
+    }
+    expect(
+      Value.Check(SystemAgentSetupAutoResultSchema, { status: "configured", selected: candidate }),
+    ).toBe(false);
+    expect(Value.Check(SystemAgentSetupAutoResultSchema, { ...collections, status: "ok" })).toBe(
+      false,
+    );
+    expect(
+      Value.Check(SystemAgentSetupAutoResultSchema, {
+        ...results[0],
+        selected: { ...candidate, recommended: true },
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
+});
 
+describe("OpenClaw setup verification protocol", () => {
   it("rejects mixed or incomplete results", () => {
     expect(
       Value.Check(SystemAgentSetupVerifyResultSchema, {

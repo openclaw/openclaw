@@ -48,15 +48,6 @@ export function buildColdStartStatusSummary() {
   };
 }
 
-function shouldSkipStatusScanNetworkChecks(params: {
-  coldStart: boolean;
-  hasConfiguredChannels: boolean;
-  all?: boolean;
-}): boolean {
-  // First-run users without channels should get instant status instead of waiting on network probes.
-  return params.coldStart && !params.hasConfiguredChannels && params.all !== true;
-}
-
 type StatusScanCoreBootstrapParams<TAgentStatus> = {
   coldStart: boolean;
   cfg: OpenClawConfig;
@@ -64,7 +55,6 @@ type StatusScanCoreBootstrapParams<TAgentStatus> = {
   env: NodeJS.ProcessEnv;
   hasConfiguredChannels: boolean;
   opts: StatusGatewayProbeBudget & { all?: boolean };
-  skipUpdateCheck?: boolean;
   fetchGitUpdate?: boolean;
   includeRegistryUpdate?: boolean;
   includeLocalStatusRpcFallback?: boolean;
@@ -79,24 +69,24 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
   params: StatusScanCoreBootstrapParams<TAgentStatus>,
 ) {
   const tailscaleMode = params.cfg.gateway?.tailscale?.mode ?? "off";
-  const skipColdStartNetworkChecks = shouldSkipStatusScanNetworkChecks({
-    coldStart: params.coldStart,
-    hasConfiguredChannels: params.hasConfiguredChannels,
-    all: params.opts.all,
-  });
+  // First-run users without channels should get instant status instead of waiting on network probes.
+  const skipColdStartNetworkChecks =
+    params.coldStart && !params.hasConfiguredChannels && params.opts.all !== true;
   const statusTimeoutMs = params.opts.timeoutMs ?? 10_000;
   const tailscaleTimeoutMs = Math.min(1200, statusTimeoutMs);
   const tailscaleDnsPromise =
     tailscaleMode === "off"
       ? Promise.resolve<string | null>(null)
       : params
-          .getTailnetHostname((cmd, args) =>
-            runExec(cmd, args, { timeoutMs: tailscaleTimeoutMs, maxBuffer: 200_000 }),
+          .getTailnetHostname((cmd, args, options) =>
+            runExec(cmd, args, {
+              ...(typeof options === "object" ? options : {}),
+              timeoutMs: tailscaleTimeoutMs,
+            }),
           )
           .catch(() => null);
-  const skipNetworkUpdate = skipColdStartNetworkChecks || params.skipUpdateCheck === true;
   // Update checks can hit git/registry, so cold-start status uses a synthetic unknown result.
-  const updatePromise = skipNetworkUpdate
+  const updatePromise = skipColdStartNetworkChecks
     ? Promise.resolve(buildColdStartUpdateResult())
     : params.getUpdateCheckResult({
         timeoutMs: statusTimeoutMs,

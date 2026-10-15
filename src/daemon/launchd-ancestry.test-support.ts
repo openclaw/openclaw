@@ -55,7 +55,8 @@ const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
   vi.fn<(port?: number, options?: CleanStaleGatewayProcessesOptions) => number[]>(() => []),
 );
 const nativeServiceMembership = vi.hoisted(() => vi.fn<() => "inside" | "outside" | "unknown">());
-vi.mock("./service-process-membership.js", () => ({
+vi.mock("./service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./service-process-membership.js")>()),
   inspectServiceProcessMembershipSync: nativeServiceMembership,
 }));
 const getSelfAndAncestorPidsSync = vi.hoisted(() => vi.fn<() => Set<number>>());
@@ -143,6 +144,11 @@ function executeLaunchctlMock(file: string, args: string[]) {
     };
   }
   if (call[0] === "print") {
+    const printed = (fields: string) => ({
+      stdout: [`${call[1]} = {`, ...fields.split("\n").map((line) => `\t${line}`), "}"].join("\n"),
+      stderr: "",
+      code: 0,
+    });
     if (state.printNotLoadedRemaining > 0) {
       state.printNotLoadedRemaining -= 1;
       return { stdout: "", stderr: "Could not find service", code: 113 };
@@ -156,21 +162,21 @@ function executeLaunchctlMock(file: string, args: string[]) {
       return { stdout: "", stderr: "Could not find service", code: 113 };
     }
     if (serviceState === "stopped") {
-      return { stdout: ["state = waiting", "pid = 0"].join("\n"), stderr: "", code: 0 };
+      return printed("state = waiting\npid = 0");
     }
     if (serviceState === "running") {
-      return { stdout: ["state = running", "pid = 4242"].join("\n"), stderr: "", code: 0 };
+      return printed("state = running\npid = 4242");
     }
     if (!state.serviceLoaded) {
       return { stdout: "", stderr: "Could not find service", code: 113 };
     }
     if (state.printOutput) {
-      return { stdout: state.printOutput, stderr: "", code: 0 };
+      return printed(state.printOutput);
     }
     if (!state.serviceRunning) {
-      return { stdout: ["state = waiting", "pid = 0"].join("\n"), stderr: "", code: 0 };
+      return printed("state = waiting\npid = 0");
     }
-    return { stdout: ["state = running", "pid = 4242"].join("\n"), stderr: "", code: 0 };
+    return printed("state = running\npid = 4242");
   }
   if (call[0] === "disable" && state.disableError) {
     return { stdout: "", stderr: state.disableError, code: state.disableCode };

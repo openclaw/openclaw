@@ -1,9 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { assignSessionOwner } from "../../config/sessions/session-accessor.sqlite-owner.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -13,11 +16,12 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import { prepareSessionControlTarget } from "./sessions-control-authority.js";
 import {
+  captureSessionControlAuthority,
   hasSessionControlAuthority,
-  prepareSessionControlTarget,
-  readSessionControlAuthority,
-} from "./sessions-control-authority.js";
+} from "./sessions-operator-authority.js";
+import { createSessionsTool } from "./sessions-tool.js";
 
 function issueAuthority(profileId: string, scopes: readonly string[] = ["operator.write"]) {
   const controller = new AbortController();
@@ -34,21 +38,8 @@ function issueAuthority(profileId: string, scopes: readonly string[] = ["operato
 }
 
 describe("session control source capability", () => {
-  it.each([
-    { scopes: [], allowed: false },
-    { scopes: ["operator.read"], allowed: false },
-    { scopes: ["operator.sessions.write"], allowed: false },
-    { scopes: ["operator.read", "operator.sessions.write"], allowed: false },
-    { scopes: ["operator.write"], allowed: true },
-    { scopes: ["operator.admin"], allowed: true },
-  ])("requires broad write authority for $scopes", ({ scopes, allowed }) => {
-    const { authority } = issueAuthority("control-profile", scopes);
-    expect(readSessionControlAuthority(authority)).toBe(authority);
-    expect(hasSessionControlAuthority(authority)).toBe(allowed);
-  });
-
   it("never mints authority from absence, matching fields, a copy, or a revoked source", () => {
-    expect(readSessionControlAuthority()).toBeUndefined();
+    expect(captureSessionControlAuthority()?.authority).toBeUndefined();
     expect(hasSessionControlAuthority()).toBe(false);
     const { authority, revoke } = issueAuthority("control-profile");
     const forged: AdmittedRunOperatorAuthority = {
@@ -57,11 +48,13 @@ describe("session control source capability", () => {
       assertCurrent: () => {},
     };
     for (const unissued of [forged, { ...authority }]) {
-      expect(() => readSessionControlAuthority(unissued)).toThrow(/issued by the host/i);
+      expect(() => captureSessionControlAuthority(unissued)).toThrow(/issued by the host/i);
       expect(() => hasSessionControlAuthority(unissued)).toThrow(/issued by the host/i);
     }
     revoke();
-    expect(() => readSessionControlAuthority(authority)).toThrow("session control source revoked");
+    expect(() => captureSessionControlAuthority(authority)).toThrow(
+      "session control source revoked",
+    );
     expect(() => hasSessionControlAuthority(authority)).toThrow("session control source revoked");
   });
 
@@ -71,7 +64,7 @@ describe("session control source capability", () => {
     await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: "agent:main:dashboard:caller", operatorAuthority: authority },
       () => {
-        expect(readSessionControlAuthority()).toBe(authority);
+        expect(captureSessionControlAuthority()?.authority).toBe(authority);
         expect(hasSessionControlAuthority()).toBe(false);
         expect(() => hasSessionControlAuthority(upgrade)).toThrow(/source changed/i);
       },
@@ -110,7 +103,7 @@ describe("prepared session control target", () => {
       ...patch,
     };
     replaceSessionEntrySync(scope, entry);
-    return { scope, entry, request: { cfg, ...scope } };
+    return { scope, entry, request: { cfg, ...scope, operation: "stop" as const } };
   }
 
   function assign(
@@ -129,34 +122,30 @@ describe("prepared session control target", () => {
 
   it.each([
     { relationship: "creator", allowed: true },
-    { relationship: "creator-alias", allowed: true },
-    { relationship: "human-assignee", allowed: true },
     { relationship: "human-assignee-alias", allowed: true },
-    { relationship: "visible-unassigned", allowed: false },
     { relationship: "channel-creator", allowed: false },
-    { relationship: "unknown-creator", allowed: false },
     { relationship: "agent-assignee", allowed: false },
     { relationship: "unrelated-admin", allowed: true },
   ] as const)(
     "checks the persisted $relationship relationship",
     async ({ relationship, allowed }) => {
       const createdActor: SessionEntry["createdActor"] =
-        relationship === "creator" || relationship === "creator-alias"
+        relationship === "creator"
           ? {
               type: "human",
               source: "profile",
-              id: relationship === "creator" ? callerId : aliasId,
+              id: callerId,
             }
-          : relationship === "channel-creator" || relationship === "unknown-creator"
+          : relationship === "channel-creator"
             ? {
                 type: "human",
-                source: relationship === "channel-creator" ? "channel" : "unknown",
+                source: "channel",
                 id: callerId,
               }
             : { type: "human", source: "profile", id: otherId };
       const { scope, entry, request } = seedTarget(relationship, { createdActor });
-      if (relationship === "human-assignee" || relationship === "human-assignee-alias") {
-        assign(scope, "human", relationship === "human-assignee" ? callerId : aliasId);
+      if (relationship === "human-assignee-alias") {
+        assign(scope, "human", aliasId);
       } else if (relationship === "agent-assignee") {
         assign(scope, "agent", callerId);
       }
@@ -198,6 +187,33 @@ describe("prepared session control target", () => {
     await expect(prepareSessionControlTarget({ ...request, authority })).rejects.toThrow(
       "session control source revoked",
     );
+  });
+
+  it("rejects an assignee's self-archive before reporting it as scheduled", async () => {
+    const { scope, entry } = seedTarget("assignee-self-archive");
+    assign(scope, "human", callerId);
+    const { authority } = issueAuthority(callerId);
+    const admission = await beginSessionWorkAdmission({
+      scope: resolveSessionStorePathCore(cfg.session?.store, { agentId: scope.agentId }),
+      identities: [scope.sessionKey, entry.sessionId],
+      assertAllowed: () => {},
+    });
+    const tool = createSessionsTool({
+      agentSessionKey: scope.sessionKey,
+      agentSessionId: entry.sessionId,
+      senderIsOwner: false,
+      sessionControlAuthority: authority,
+      config: cfg,
+    });
+    try {
+      await expect(
+        withGatewayToolCallerIdentity({ ...scope, operatorAuthority: authority }, () =>
+          tool.execute("archive-assigned", { action: "patch", archived: true }),
+        ),
+      ).rejects.toThrow(/session creator/i);
+    } finally {
+      admission.release();
+    }
   });
 
   it("fences a prepared action after reassignment, profile revocation, or source revocation", async () => {

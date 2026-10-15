@@ -8,6 +8,7 @@ import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-t
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as providerPolicy from "../plugins/provider-policy-surface.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   type ModelCatalogRoutePolicy,
   projectModelCatalogEntryForRoute,
@@ -154,9 +155,21 @@ describe("configured catalog route overlays", () => {
       prepareModelCatalogThinkingPolicies({
         catalog,
         metadataSnapshot,
-        providers: [
-          { provider: { id: "fixture-thinking-owner", resolveThinkingProfile: preparedPolicy } },
-        ],
+        pluginRegistry: {
+          ...createEmptyPluginRegistry(),
+          providers: [
+            {
+              pluginId: "fixture-thinking-owner",
+              source: "test",
+              provider: {
+                id: "fixture-thinking-owner",
+                label: "Thinking owner",
+                auth: [],
+                resolveThinkingProfile: preparedPolicy,
+              },
+            },
+          ],
+        },
       });
       const allowed = buildAllowedModelSet({
         cfg: source.config,

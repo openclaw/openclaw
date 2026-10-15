@@ -78,7 +78,6 @@ export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
     allowCurrent?: boolean;
   };
 
-// Shared with plugin-registry-refresh.ts.
 export function resolveControlPlaneRegistryParams<T extends LoadInstalledPluginIndexParams>(
   params: T,
 ): T {
@@ -234,9 +233,6 @@ function hasStalePersistedPluginMetadataFiles(index: InstalledPluginIndex): bool
     if (!fs.existsSync(packageJsonPath)) {
       return plugin.enabled;
     }
-    if (!isRealPathInside(plugin.rootDir, packageJsonPath, realpathCache)) {
-      return true;
-    }
     return !fileContentMatches(
       packageJsonPath,
       plugin.packageJson.hash,
@@ -358,8 +354,10 @@ function requiresDerivedRegistryValidation(
     normalizePluginsConfig(params.config?.plugins).loadPaths.length > 0 ||
     hasMissingConfigPathActivationMetadata(index) ||
     hasMissingInstalledPluginOwnerMetadata(index, env) ||
-    index.diagnostics.some(({ pluginId, source }) =>
-      Boolean(pluginId && source && path.isAbsolute(source) && !fs.existsSync(source)),
+    index.diagnostics.some(
+      ({ code, pluginId, source }) =>
+        (params.config !== undefined && code === "configured-plugin-path-unavailable") ||
+        Boolean(pluginId && source && path.isAbsolute(source) && !fs.existsSync(source)),
     ) ||
     hasMismatchedBundledRoot() ||
     hasRecoveredInstallRecordsMissingFromPersistedIndex(index, params, env) ||

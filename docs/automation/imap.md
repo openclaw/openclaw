@@ -167,7 +167,7 @@ Existing messages are baselined without dispatch when the plugin first starts. N
 
 **Messages from a self-hosted sender are rejected.** Check logs for the sender domain and failing gate. If the sending MX does not provide DKIM or DMARC, prefer fixing its DNS/signing configuration. Otherwise explicitly lower `senderAuth.min` or configure a sender-bound address token; retain the sender allowlist and isolated reader in either case.
 
-**No messages are dispatched.** Verify the account has a nonempty `allowedSenders` list, the message arrived after the initial baseline, the sender matches `From`, the reader agent exists, and the model probe succeeds. Rejections are logged without message subjects or bodies.
+**No messages are dispatched.** Verify the account has a nonempty `allowedSenders` list, the message arrived after the initial baseline, the sender matches `From`, the reader agent exists, and the model check succeeds. Rejections are logged without message subjects or bodies.
 
 ## Related
 

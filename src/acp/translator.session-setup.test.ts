@@ -4,6 +4,8 @@ import type { GatewayClient } from "../gateway/client.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import {
   createNewSessionRequest,
+  createSetSessionModeRequest,
+  createSetSessionConfigOptionRequest,
   createLoadSessionRequest,
   createPromptRequest,
   createToolEvent,
@@ -66,12 +68,16 @@ function harness(
       return new Promise<never>(() => {});
     }
     return { ok: true };
-  }) as GatewayClient["request"];
-  const agent = createAcpGatewayAgent(connection, createAcpGateway(request), {
-    sessionStore,
-    sessionCreateRateLimit: options.sessionCreateRateLimit,
   });
-  return { agent, sessionStore, sessionUpdate: connection["__sessionUpdateMock"] };
+  const agent = createAcpGatewayAgent(
+    connection,
+    createAcpGateway(request as GatewayClient["request"]),
+    {
+      sessionStore,
+      sessionCreateRateLimit: options.sessionCreateRateLimit,
+    },
+  );
+  return { agent, request, sessionStore, sessionUpdate: connection["__sessionUpdateMock"] };
 }
 
 describe("ACP session bridge", () => {
@@ -262,5 +268,100 @@ describe("ACP session bridge", () => {
         },
       });
     }
+  });
+});
+
+async function configFixture() {
+  const { agent, request, sessionUpdate } = harness({
+    row: {
+      key: "session",
+      kind: "direct",
+      updatedAt: 1,
+      thinkingLevel: "minimal",
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      reasoningLevel: "stream",
+      responseUsage: "tokens",
+    },
+  });
+  await agent.loadSession(createLoadSessionRequest("session"));
+  sessionUpdate.mockClear();
+  request.mockClear();
+  return { agent, request, sessionUpdate };
+}
+
+describe("acp session configuration", () => {
+  it("surfaces gateway mode patch failures instead of succeeding silently", async () => {
+    const { agent, request } = await configFixture();
+    request.mockRejectedValueOnce(new Error("gateway rejected mode"));
+    await expect(
+      agent.setSessionMode(createSetSessionModeRequest("session", "high")),
+    ).rejects.toThrow(/gateway rejected mode/i);
+  });
+
+  it("emits current mode and thought-level config updates after a successful mode change", async () => {
+    const { agent, request, sessionUpdate } = await configFixture();
+    await expect(
+      agent.setSessionMode(createSetSessionModeRequest("session", "high")),
+    ).resolves.toEqual({});
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "session",
+      thinkingLevel: "high",
+    });
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "session",
+      update: { sessionUpdate: "current_mode_update", currentModeId: "high" },
+    });
+    expectConfigOption(
+      expectSessionUpdate(sessionUpdate, "session", "config_option_update").configOptions,
+      "thought_level",
+      { currentValue: "high" },
+    );
+  });
+
+  it.each([
+    { id: "thought_level", value: "minimal", patch: { thinkingLevel: "minimal" } },
+    { id: "fast_mode", value: "on", patch: { fastMode: true } },
+    { id: "response_usage", value: "inherit", patch: { responseUsage: null } },
+    { id: "response_usage", value: "off", patch: { responseUsage: "off" } },
+  ])("patches $id=$value and returns refreshed controls", async ({ id, value, patch }) => {
+    const { agent, request, sessionUpdate } = await configFixture();
+    const result = await agent.setSessionConfigOption(
+      createSetSessionConfigOptionRequest("session", id, value),
+    );
+    expect(request).toHaveBeenCalledWith("sessions.patch", { key: "session", ...patch });
+    expectConfigOption(result.configOptions, id, { currentValue: value });
+    expectConfigOption(
+      expectSessionUpdate(sessionUpdate, "session", "config_option_update").configOptions,
+      id,
+      { currentValue: value },
+    );
+    if (id === "thought_level") {
+      expect(sessionUpdate).toHaveBeenCalledWith({
+        sessionId: "session",
+        update: { sessionUpdate: "current_mode_update", currentModeId: "minimal" },
+      });
+    }
+  });
+
+  it("accepts forwarded timeout config options without patching Gateway sessions", async () => {
+    const { agent, request } = await configFixture();
+    const result = await agent.setSessionConfigOption(
+      createSetSessionConfigOptionRequest("session", "timeout", "180"),
+    );
+    expect(Array.isArray(result.configOptions)).toBe(true);
+    expect(request.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
+  });
+
+  it("rejects non-string ACP config option values", async () => {
+    const { agent, request } = await configFixture();
+    await expect(
+      agent.setSessionConfigOption(
+        createSetSessionConfigOptionRequest("session", "thought_level", false),
+      ),
+    ).rejects.toThrow(
+      'ACP bridge does not support non-string session config option values for "thought_level".',
+    );
+    expect(request.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
   });
 });

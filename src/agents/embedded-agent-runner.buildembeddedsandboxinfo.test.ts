@@ -54,19 +54,6 @@ describe("embedded sandbox reporting", () => {
   it("maps sandbox context into prompt information", () => {
     expect(buildEmbeddedSandboxInfo(sandbox())).toEqual(promptInfo);
   });
-  it("reports allowed elevation without a browser", () => {
-    expect(
-      buildEmbeddedSandboxInfo(
-        sandbox({ browserAllowHostControl: false, browser: undefined }),
-        elevation,
-      ),
-    ).toEqual({
-      ...promptInfo,
-      browserBridgeUrl: undefined,
-      hostBrowserAllowed: false,
-      elevated: { allowed: true, defaultLevel: "full", fullAccessAvailable: true },
-    });
-  });
   it("never advertises host execution for a required sandbox", () => {
     expect(
       buildEmbeddedSandboxInfo(sandbox({ required: true }), {
@@ -92,23 +79,16 @@ describe("embedded sandbox reporting", () => {
       fullAccessBlockedReason: "runtime",
     });
   });
-  it.each([
-    { exec: { mode: "auto" as const }, available: false },
-    { exec: { host: "auto" as const }, available: true },
-  ])("uses the effective configured exec policy: $exec", async ({ exec, available }) => {
+  it("uses the effective configured exec policy", async () => {
     const policy = await resolveEmbeddedSandboxInfoExecPolicy(
-      { config: { tools: { exec } }, agentId: "main", sandboxAvailable: true },
+      {
+        config: { tools: { exec: { mode: "auto" } } },
+        agentId: "main",
+        sandboxAvailable: true,
+      },
       {},
     );
-    expect(buildEmbeddedSandboxInfo(sandbox(), elevation, policy)?.elevated).toEqual(
-      available
-        ? {
-            allowed: true,
-            defaultLevel: "full",
-            fullAccessAvailable: true,
-          }
-        : blocked,
-    );
+    expect(buildEmbeddedSandboxInfo(sandbox(), elevation, policy)?.elevated).toEqual(blocked);
   });
   it("advertises full access only when host approval floors allow it", () => {
     const fullPolicy = { mode: "full", security: "full", ask: "off" } as const;

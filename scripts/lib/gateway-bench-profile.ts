@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import type { HeapProfiler, Profiler } from "node:inspector";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { WorkerMessageMetric } from "../../src/infra/worker-message-metrics.ts";
 import type { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
 
 export const GATEWAY_PROFILE_CHANNEL = "openclaw-gateway-bench-profile";
@@ -50,46 +51,28 @@ type GatewayProfileReply = {
   resources?: GatewayResourceSnapshot;
 };
 
-type CpuUsageMilliseconds = { userMs: number; systemMs: number; totalMs: number };
-
-export type GatewayCpuUsage = {
-  pid: number;
-  cpuEnvironment?: { availableParallelism: number; affinity?: string };
-  startMonotonicMicros: number;
-  endMonotonicMicros: number;
-  wallMs: number;
-  process: CpuUsageMilliseconds;
-  mainThread: CpuUsageMilliseconds;
-};
-
-export type GatewayHeapProfile = {
-  profilePath: string;
-  samplingIntervalBytes: number;
-  includesCollectedObjects: true;
-  sampledAllocatedBytes: number;
-  topAllocationSites: Array<{
-    sampledBytes: number;
-    stack: string[];
-  }>;
-} & GatewayProfileArtifacts;
-
-export type GatewayCpuProfile = {
-  profilePath: string;
-  samplingIntervalMicros: number;
-  durationMs: number;
-  sampleCount: number;
-} & GatewayProfileArtifacts;
+export type GatewayCpuUsage = Omit<ReturnType<typeof measureGatewayCpuUsage>, "cpuEnvironment"> &
+  Pick<GatewayCpuUsageSnapshot, "cpuEnvironment">;
+export type GatewayHeapProfile = ReturnType<typeof readGatewayHeapProfile>;
+export type GatewayCpuProfile = ReturnType<typeof readGatewayCpuProfile>;
 
 type GatewayProfileArtifacts = {
   diagnosticsPath?: string;
   diagnostics?: ReturnType<ReturnType<typeof startGatewayBenchDiagnostics>>;
+  workerMessages?: WorkerMessageMetric[];
 };
 
 function readProfileArtifacts(profilePath: string): GatewayProfileArtifacts {
   const diagnosticsPath = `${profilePath}.diagnostics.json`;
-  return existsSync(diagnosticsPath)
-    ? { diagnosticsPath, diagnostics: JSON.parse(readFileSync(diagnosticsPath, "utf8")) }
-    : {};
+  const workerMessagesPath = `${profilePath}.worker-messages.json`;
+  return {
+    ...(existsSync(diagnosticsPath)
+      ? { diagnosticsPath, diagnostics: JSON.parse(readFileSync(diagnosticsPath, "utf8")) }
+      : {}),
+    ...(existsSync(workerMessagesPath)
+      ? { workerMessages: JSON.parse(readFileSync(workerMessagesPath, "utf8")) }
+      : {}),
+  };
 }
 
 export async function controlGatewayProfile(
@@ -140,7 +123,7 @@ export async function readGatewayResources(
 export function measureGatewayCpuUsage(
   before: GatewayCpuUsageSnapshot,
   after: GatewayCpuUsageSnapshot,
-): GatewayCpuUsage {
+) {
   if (before.pid !== after.pid || after.atMonotonicMicros <= before.atMonotonicMicros) {
     throw new Error("Gateway CPU samples must span one process and a positive interval");
   }
@@ -150,7 +133,7 @@ export function measureGatewayCpuUsage(
   ) {
     throw new Error("Gateway CPU affinity or available parallelism changed during measurement");
   }
-  const delta = (start: NodeJS.CpuUsage, end: NodeJS.CpuUsage): CpuUsageMilliseconds => {
+  const delta = (start: NodeJS.CpuUsage, end: NodeJS.CpuUsage) => {
     const userMs = (end.user - start.user) / 1_000;
     const systemMs = (end.system - start.system) / 1_000;
     if (userMs < 0 || systemMs < 0) {
@@ -220,7 +203,7 @@ async function sendGatewayBenchCommand(
   });
 }
 
-export function readGatewayCpuProfile(profilePath: string): GatewayCpuProfile {
+export function readGatewayCpuProfile(profilePath: string) {
   const profile: Profiler.Profile = JSON.parse(readFileSync(profilePath, "utf8"));
   return {
     ...readProfileArtifacts(profilePath),
@@ -231,9 +214,9 @@ export function readGatewayCpuProfile(profilePath: string): GatewayCpuProfile {
   };
 }
 
-export function readGatewayHeapProfile(profilePath: string): GatewayHeapProfile {
+export function readGatewayHeapProfile(profilePath: string) {
   const profile: HeapProfiler.SamplingHeapProfile = JSON.parse(readFileSync(profilePath, "utf8"));
-  const sites: GatewayHeapProfile["topAllocationSites"] = [];
+  const sites: Array<{ sampledBytes: number; stack: string[] }> = [];
   let sampledAllocatedBytes = 0;
   const formatFrame = (frame: HeapProfiler.SamplingHeapProfileNode["callFrame"]): string => {
     const filePath = frame.url.startsWith("file://") ? fileURLToPath(frame.url) : frame.url;
@@ -255,8 +238,47 @@ export function readGatewayHeapProfile(profilePath: string): GatewayHeapProfile 
     ...readProfileArtifacts(profilePath),
     profilePath,
     samplingIntervalBytes: GATEWAY_HEAP_SAMPLE_INTERVAL,
-    includesCollectedObjects: true,
+    includesCollectedObjects: true as const,
     sampledAllocatedBytes,
     topAllocationSites: sites.toSorted((a, b) => b.sampledBytes - a.sampledBytes).slice(0, 20),
+  };
+}
+
+/** Brackets completed operations; sampling and GC accounting run only in the owned child. */
+export async function measureGatewayAllocations(
+  child: ChildProcess,
+  profilePath: string,
+  operationCount: number,
+  workload: () => Promise<void>,
+) {
+  if (!Number.isSafeInteger(operationCount) || operationCount < 1) {
+    throw new Error("Allocation measurement needs a positive operation count");
+  }
+  const before = await readGatewayResources(child);
+  await controlGatewayProfile(child, "heap", "start", profilePath);
+  try {
+    await workload();
+  } finally {
+    await controlGatewayProfile(child, "heap", "stop", profilePath);
+  }
+  const after = await readGatewayResources(child);
+  const heap = readGatewayHeapProfile(profilePath);
+  if (!heap.diagnostics || heap.diagnostics.collectionErrors > 0) {
+    throw new Error("Allocation measurement has incomplete diagnostic accounting");
+  }
+  const gcMs = heap.diagnostics.gc.durationMs?.total ?? 0;
+  return {
+    scope: "main-isolate",
+    runtime: after.runtime,
+    operationCount,
+    ...heap,
+    estimatedAllocatedBytesPerOperation: heap.sampledAllocatedBytes / operationCount,
+    gcMs,
+    gcMsPerOperation: gcMs / operationCount,
+    gcCount: heap.diagnostics.gc.durationMs?.count ?? 0,
+    // Live heap and RSS deltas are context, never an allocation estimate.
+    heapUsedDeltaBytes: after.memory.heapUsed - before.memory.heapUsed,
+    rssDeltaBytes: after.memory.rss - before.memory.rss,
+    cpu: measureGatewayCpuUsage(before, after),
   };
 }

@@ -74,17 +74,6 @@ export function resolveNormalizedRouteBindingMatch(
   };
 }
 
-function scopeIdMatches(params: {
-  constraint: string | null | undefined;
-  exact: string;
-  groupSpace: string;
-}): boolean {
-  if (!params.constraint) {
-    return true;
-  }
-  return params.constraint === params.exact || params.constraint === params.groupSpace;
-}
-
 function hasRoleLookup(
   memberRoleIds: Iterable<string>,
 ): memberRoleIds is Iterable<string> & { has(roleId: string): boolean } {
@@ -114,10 +103,10 @@ export function routeBindingScopeMatches(
   const guildId = normalizeRouteBindingId(scope.guildId);
   const teamId = normalizeRouteBindingId(scope.teamId);
   const groupSpace = normalizeRouteBindingId(scope.groupSpace);
-  if (!scopeIdMatches({ constraint: constraint.guildId, exact: guildId, groupSpace })) {
+  if (constraint.guildId && constraint.guildId !== guildId && constraint.guildId !== groupSpace) {
     return false;
   }
-  if (!scopeIdMatches({ constraint: constraint.teamId, exact: teamId, groupSpace })) {
+  if (constraint.teamId && constraint.teamId !== teamId && constraint.teamId !== groupSpace) {
     return false;
   }
 

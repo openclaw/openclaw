@@ -32,6 +32,8 @@ export type SessionVisibilityDecisionMode = "self" | "tree" | "agent" | "all";
 export type SessionVisibilityDecisionPolicy = {
   enabled: boolean;
   isAllowed: (requesterAgentId: string, targetAgentId: string) => boolean;
+  /** Undefined inherits visibility; true/false is an explicit outbound-only decision. */
+  resolveSendAccess?: (requesterAgentId: string, targetAgentId: string) => boolean | undefined;
 };
 export type SessionVisibilityDecisionRow = {
   key: string;
@@ -43,6 +45,7 @@ export type SessionVisibilityDecisionRow = {
 export type SessionVisibilityDenialReason =
   | "agent_to_agent_disabled"
   | "agent_to_agent_not_allowed"
+  | "agent_to_agent_send_not_allowed"
   | "cross_agent_visibility_restricted"
   | "incognito_session"
   | "session_ownership_lookup_failed_credentials"
@@ -50,7 +53,8 @@ export type SessionVisibilityDenialReason =
   | "session_ownership_lookup_failed_unknown"
   | "self_visibility_restricted"
   | "target_agent_ownership_unavailable"
-  | "tree_visibility_restricted";
+  | "tree_visibility_restricted"
+  | "watch_visibility_required";
 type SessionVisibilityDenied = {
   allowed: false;
   status: "forbidden";
@@ -70,6 +74,7 @@ type SessionVisibilityDecisionParams = {
   requesterSessionKey: string;
   mainSessionKey?: string;
   explicitTargetAgentOwnership?: boolean;
+  watch?: boolean;
   visibility: SessionVisibilityDecisionMode;
   a2aPolicy: SessionVisibilityDecisionPolicy;
 };
@@ -182,9 +187,21 @@ export function createSessionVisibilityDecisionChecker(params: SessionVisibility
         if (params.action === "status" && params.explicitTargetAgentOwnership && a2aDenial) {
           return a2aDenial;
         }
-        if (params.visibility !== "all") {
+        const sendAccess =
+          params.action === "send"
+            ? params.a2aPolicy.resolveSendAccess?.(requesterAgentId, targetAgentId)
+            : undefined;
+        if (sendAccess === false) {
           return denied(
-            "cross_agent_visibility_restricted",
+            "agent_to_agent_send_not_allowed",
+            [`agents.entries.${requesterAgentId}.tools.agentToAgent.send`],
+            ["requesterAgentId", "targetAgentId"],
+          );
+        }
+        // A send edge grants its reply, never observation of unrelated future turns.
+        if (params.visibility !== "all" && (sendAccess !== true || params.watch)) {
+          return denied(
+            sendAccess === true ? "watch_visibility_required" : "cross_agent_visibility_restricted",
             ["tools.sessions.visibility"],
             ["requesterAgentId", "targetAgentId", "visibility"],
           );
@@ -240,6 +257,9 @@ export function renderSessionVisibilityDenial(
     case "target_agent_ownership_unavailable":
       return `${actionPrefix(params.action)} denied because target agent ownership is unavailable.`;
     case "cross_agent_visibility_restricted":
+      if (params.action === "send") {
+        return "Session send visibility is restricted. Configure agents.entries.<id>.tools.agentToAgent.send for explicit send-only destinations, or tools.sessions.visibility=all for shared access. Global agent-to-agent and sandbox limits still apply.";
+      }
       return `${actionPrefix(params.action)} visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access; use tools.agentToAgent to restrict permitted agent pairs.`;
     case "agent_to_agent_disabled":
       if (params.action === "send") {
@@ -249,8 +269,12 @@ export function renderSessionVisibilityDenial(
         return "Agent-to-agent listing is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent visibility.";
       }
       return `Agent-to-agent ${params.action} is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.`;
+    case "agent_to_agent_send_not_allowed":
+      return "Agent-to-agent messaging denied by the requester agent tools.agentToAgent.send allowlist. Ask the operator to add this destination if intended.";
     case "agent_to_agent_not_allowed":
       return `Agent-to-agent ${params.action === "send" ? "messaging" : params.action === "list" ? "listing" : params.action} denied by tools.agentToAgent.allow.`;
+    case "watch_visibility_required":
+      return "watch:true requires session status visibility, not only send access. Omit watch to send without subscribing to future session changes.";
     case "self_visibility_restricted":
       return `${actionPrefix(params.action)} visibility is restricted to the current session (tools.sessions.visibility=self).`;
     case "tree_visibility_restricted":

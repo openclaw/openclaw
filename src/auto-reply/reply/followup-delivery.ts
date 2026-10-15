@@ -33,6 +33,7 @@ import {
 } from "./agent-runner-failure-reply.js";
 import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
+import { deliverBlockReply } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
@@ -42,7 +43,7 @@ import { enqueueFollowupRun, resolveQueueSettings, type FollowupRun } from "./qu
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import {
-  resolveSourceReplyExpectation,
+  resolveFollowupReplyExpectation,
   resolveSourceReplyVisibilityPolicy,
 } from "./source-reply-delivery-mode.js";
 import {
@@ -72,6 +73,19 @@ type FollowupDeliveryDecision =
       finalTextLength: number;
       resolved: { provider: string; model: string };
     };
+
+function resolveFollowupPayloadContext(turn: AdmittedFollowupTurn) {
+  return {
+    cfg: turn.config,
+    messageProvider: turn.queued.run.messageProvider,
+    originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
+    originatingChannel: turn.queued.originatingChannel,
+    originatingChatType: turn.queued.originatingChatType,
+    originatingReplyToMode: turn.queued.originatingReplyToMode,
+    originatingTo: turn.queued.originatingTo,
+    originatingThreadId: turn.queued.originatingThreadId,
+  };
+}
 
 /** Resolves one final queued delivery action without performing transport I/O. */
 export async function resolveFollowupDeliveryDecision(params: {
@@ -104,15 +118,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     requested: turn.queued.run.sourceReplyDeliveryMode ?? opts?.sourceReplyDeliveryMode,
     sendPolicy: turn.sendPolicy,
   });
-  const terminalReplyExpectation =
-    turn.queued.run.terminalReplyExpectation ??
-    resolveSourceReplyExpectation({
-      ctx: {
-        InboundEventKind: turn.queued.currentInboundEventKind,
-        InputProvenance: turn.queued.run.inputProvenance,
-      },
-      cfg: turn.config,
-    });
+  const terminalReplyExpectation = resolveFollowupReplyExpectation(turn.queued, turn.config);
   const isInteractive =
     terminalReplyExpectation === "required" ||
     (!isSyntheticSourceReplyTurn({ inputProvenance: turn.queued.run.inputProvenance }) &&
@@ -124,16 +130,7 @@ export async function resolveFollowupDeliveryDecision(params: {
         opts?.onBlockReply ||
         turn.queued.queuedFollowupReplyDisposition?.kind === "deliver",
       ));
-  const deliveryContext = {
-    cfg: turn.config,
-    messageProvider: turn.queued.run.messageProvider,
-    originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
-    originatingChannel: turn.queued.originatingChannel,
-    originatingChatType: turn.queued.originatingChatType,
-    originatingReplyToMode: turn.queued.originatingReplyToMode,
-    originatingTo: turn.queued.originatingTo,
-    originatingThreadId: turn.queued.originatingThreadId,
-  };
+  const deliveryContext = resolveFollowupPayloadContext(turn);
   const preparePayloads = (
     payloads: ReplyPayload[],
     options: Omit<
@@ -358,7 +355,8 @@ async function sendFollowupPayloads(params: {
   kind: ReplyDispatchKind;
   mirror?: boolean;
   resolved?: { provider: string; model: string };
-}): Promise<ReplyPayload[]> {
+  onObservedReplyDelivery?: () => Promise<void> | void;
+}): Promise<FollowupDeliveryResult> {
   const { turn, defaults } = params;
   const { originatingChannel, originatingTo } = turn.queued;
   const originRoutable = Boolean(isRoutableChannel(originatingChannel) && originatingTo);
@@ -376,21 +374,36 @@ async function sendFollowupPayloads(params: {
         getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
   );
   if (payloads.length === 0) {
-    return [];
+    return { kind: "completed", payloads: [] };
   }
   const sourceDisposition = turn.queued.queuedFollowupReplyDisposition;
   if (sourceDisposition?.kind === "drop") {
     logVerbose(`followup queue: source delivery dropped (${sourceDisposition.reason})`);
-    return [];
+    return { kind: "completed", payloads: [] };
   }
   const deliverQueuedBatch = sourceDisposition?.deliver;
+  if (turn.queued.run.internalEventExecution) {
+    if (!deliverQueuedBatch) {
+      throw new Error("Internal event lost its originating delivery owner");
+    }
+    if (params.kind !== "final") {
+      await deliverQueuedBatch({
+        kind: "queued-followup",
+        runId: params.runId,
+        originatingChannel,
+        payloads,
+        completion: { kind: "progress" },
+      });
+    }
+    return { kind: "completed", payloads };
+  }
   const fallbackDispatcher = sourceDisposition ? undefined : defaults.opts?.onBlockReply;
   const dispatcherAvailable = Boolean(deliverQueuedBatch || fallbackDispatcher);
   if (!originRoutable && !dispatcherAvailable) {
     defaultRuntime.error?.(
       "followup queue: completed with payloads but no origin route or visible dispatcher is available",
     );
-    return [];
+    return { kind: "completed", payloads: [] };
   }
   const typing = createTypingSignaler({
     typing: defaults.typing,
@@ -399,11 +412,20 @@ async function sendFollowupPayloads(params: {
   });
   const crossChannelFailures: ReplyPayload[] = [];
   const queuedPayloads: ReplyPayload[] = [];
+  let pending = false;
   const dispatchPayload = async (payload: ReplyPayload) => {
     if (deliverQueuedBatch) {
       queuedPayloads.push(payload);
-    } else {
-      await fallbackDispatcher?.(payload);
+    } else if (fallbackDispatcher) {
+      const delivery = await deliverBlockReply(() => fallbackDispatcher(payload));
+      pending ||= delivery.pending === true || delivery.outcome === "recovery-owned";
+      if (
+        delivery.outcome === "delivered" &&
+        !delivery.pending &&
+        (!originRoutable || sameChannelOrigin)
+      ) {
+        await params.onObservedReplyDelivery?.();
+      }
     }
   };
   let deliveredCrossChannelOrigin = false;
@@ -465,6 +487,7 @@ async function sendFollowupPayloads(params: {
         runId: params.runId,
       });
       if (!result.delivered && (result.queueCustody === "held" || result.ambiguous)) {
+        pending = true;
         logVerbose(
           `followup queue: route-reply remains pending: ${result.error ?? "unconfirmed delivery"}`,
         );
@@ -481,6 +504,7 @@ async function sendFollowupPayloads(params: {
           defaultRuntime.error?.(`followup queue: route-reply failed: ${routeError}`);
         }
       } else if (result.delivered) {
+        await params.onObservedReplyDelivery?.();
         if (!result.ok) {
           logVerbose(
             `followup queue: route-reply partially failed after delivery: ${
@@ -515,12 +539,11 @@ async function sendFollowupPayloads(params: {
       completion: { kind: "progress" },
     });
   }
-  return queuedPayloads;
+  return { kind: pending ? "pending" : "completed", payloads: queuedPayloads };
 }
 
-/** Performs the already-resolved follow-up delivery action. */
 export type FollowupDeliveryResult =
-  | { kind: "completed"; payloads: ReplyPayload[] }
+  | { kind: "completed" | "pending"; payloads: ReplyPayload[] }
   | { kind: "source-retry" };
 
 export async function deliverFollowupDecision(params: {
@@ -530,9 +553,11 @@ export async function deliverFollowupDecision(params: {
   runId: string;
   runFollowup: (run: FollowupRun) => Promise<void>;
   kind?: ReplyDispatchKind;
+  onObservedReplyDelivery?: () => Promise<void> | void;
 }): Promise<FollowupDeliveryResult> {
   const { decision, turn, defaults } = params;
   if (decision.kind === "suppress") {
+    turn.queued.run.internalEventExecution?.onSuppressed?.(decision.reason);
     logVerbose(`followup queue: delivery suppressed (${decision.reason})`);
     return { kind: "completed", payloads: [] };
   }
@@ -577,20 +602,13 @@ export async function deliverFollowupDecision(params: {
       return { kind: "source-retry" };
     }
     payloads = resolveFollowupDeliveryPayloads({
-      cfg: turn.config,
+      ...resolveFollowupPayloadContext(turn),
       payloads: [buildStrandedReplyDeliveryFailurePayload()],
-      messageProvider: turn.queued.run.messageProvider,
-      originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
-      originatingChannel: turn.queued.originatingChannel,
-      originatingChatType: turn.queued.originatingChatType,
-      originatingReplyToMode: turn.queued.originatingReplyToMode,
-      originatingTo: turn.queued.originatingTo,
-      originatingThreadId: turn.queued.originatingThreadId,
     });
   } else {
     payloads = decision.payloads;
   }
-  const delivered = await sendFollowupPayloads({
+  return await sendFollowupPayloads({
     payloads,
     turn,
     defaults,
@@ -599,6 +617,6 @@ export async function deliverFollowupDecision(params: {
     mirror:
       decision.kind === "deliver" && params.kind && params.kind !== "final" ? false : undefined,
     resolved: decision.resolved,
+    onObservedReplyDelivery: params.onObservedReplyDelivery,
   });
-  return { kind: "completed", payloads: delivered };
 }

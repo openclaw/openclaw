@@ -66,11 +66,6 @@ struct ChatMarkdownRenderer: View {
     let typography: Typography
     let textColor: Color
 
-    static func styledText(_ content: String, font: Font) -> SwiftUI.Text {
-        SwiftUI.Text(content)
-            .font(font)
-    }
-
     var reveal: ChatMarkdownProseReveal?
 
     @ScaledMetric private var inlineMathFontSize: CGFloat
@@ -406,16 +401,6 @@ struct ChatMarkdownProse {
         }
     }
 
-    // periphery:ignore - package tests inspect parsed math spans without exposing renderer internals.
-    var inlineMathLatex: [String] {
-        self.inlineContent?.compactMap { content in
-            if case let .math(span) = content {
-                return span.latex
-            }
-            return nil
-        } ?? []
-    }
-
     var inlineAccessibilityText: String? {
         guard let inlineContent else { return nil }
         return inlineContent.reduce(into: "") { text, content in
@@ -653,25 +638,14 @@ enum ChatMarkdownDisplayPreprocessor {
         guard lines.count > 1 else { return normalized }
         let codeLines = self.codeLineIndices(in: normalized)
 
-        var output = ""
-        for index in lines.indices {
-            output += lines[index]
-
-            guard index < lines.index(before: lines.endIndex) else {
-                continue
-            }
-
-            if !codeLines.contains(index),
-               !codeLines.contains(index + 1),
-               self.shouldPreserveSoftBreak(after: lines[index], before: lines[index + 1])
-            {
-                output += "  \n"
-            } else {
-                output += "\n"
-            }
-        }
-
-        return output
+        return lines.indices.map { index in
+            guard index < lines.index(before: lines.endIndex),
+                  !codeLines.contains(index),
+                  !codeLines.contains(index + 1),
+                  self.shouldPreserveSoftBreak(after: lines[index], before: lines[index + 1])
+            else { return lines[index] }
+            return lines[index] + "  "
+        }.joined(separator: "\n")
     }
 
     private static func codeLineIndices(in markdown: String) -> Set<Int> {

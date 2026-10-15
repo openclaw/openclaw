@@ -1,9 +1,12 @@
-// Enforces the package runtime contract, then warns for non-pnpm lifecycle installs.
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, readFileSync, realpathSync, rmSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
-import { isNodeVersionAtLeast, parseNodeReleaseVersion } from "../node-version.mjs";
+import {
+  isNodeVersionAtLeast,
+  MINIMUM_BUN_VERSION,
+  parseNodeReleaseVersion,
+} from "../node-version.mjs";
 import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "./lib/package-lifecycle-marker.mjs";
 
 const allowedLifecyclePackageManagers = new Set(["pnpm", "npm", "yarn", "bun"]);
@@ -83,7 +86,6 @@ export function nodeVersionSatisfiesPackageEngine(version, engine) {
 }
 
 /**
- * Reads the Node runtime contract from the package being installed.
  * @param {URL} [packageJsonUrl]
  * @returns {string | null}
  */
@@ -299,16 +301,12 @@ export function enforceSupportedNodeRuntime(
     : { version, execPath };
   if (detectedRuntime?.bunVersion) {
     if (
-      isNodeVersionAtLeast(parseNodeReleaseVersion(detectedRuntime.bunVersion), {
-        major: 1,
-        minor: 4,
-        patch: 0,
-      })
+      isNodeVersionAtLeast(parseNodeReleaseVersion(detectedRuntime.bunVersion), MINIMUM_BUN_VERSION)
     ) {
       return true;
     }
     reportError(
-      `[openclaw] error: Bun launcher ${detectedRuntime.execPath ?? execPath} requires Bun 1.4+ (detected ${detectedRuntime.bunVersion}).`,
+      `[openclaw] error: Bun launcher ${detectedRuntime.execPath ?? execPath} requires Bun 1.4.3+ (detected ${detectedRuntime.bunVersion}).`,
     );
     return false;
   }
@@ -361,9 +359,6 @@ export function removeLegacyPackageInstallGuard(
 
 function normalizeLifecyclePackageManagerName(value) {
   const normalized = normalizeEnvValue(value).toLowerCase();
-  if (!/^[a-z0-9][a-z0-9._-]*$/u.test(normalized)) {
-    return null;
-  }
   return allowedLifecyclePackageManagers.has(normalized) ? normalized : null;
 }
 
@@ -393,7 +388,6 @@ function detectLifecyclePackageManagerFromExecPath(value) {
 }
 
 /**
- * Detects the package manager running the current lifecycle script.
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {string | null}
  */
@@ -408,35 +402,22 @@ export function detectLifecyclePackageManager(env = process.env) {
 }
 
 /**
- * Builds the warning shown for non-pnpm lifecycle installs.
- * @param {unknown} packageManager
- * @returns {string | null}
- */
-function createPackageManagerWarningMessage(packageManager) {
-  const normalizedPackageManager = normalizeEnvValue(packageManager);
-  if (!normalizedPackageManager || normalizedPackageManager === "pnpm") {
-    return null;
-  }
-
-  return [
-    `[openclaw] warning: detected ${normalizedPackageManager} for install lifecycle.`,
-    "[openclaw] this repo works best with pnpm; npm-compatible installs are slower and much larger here.",
-    "[openclaw] prefer: corepack pnpm install",
-  ].join("\n");
-}
-
-/**
- * Emits the non-pnpm lifecycle warning when needed.
  * @param {NodeJS.ProcessEnv} [env]
  * @param {(...data: unknown[]) => void} [warn]
  * @returns {boolean}
  */
 export function warnIfNonPnpmLifecycle(env = process.env, warn = console.warn) {
-  const message = createPackageManagerWarningMessage(detectLifecyclePackageManager(env));
-  if (!message) {
+  const packageManager = detectLifecyclePackageManager(env);
+  if (!packageManager || packageManager === "pnpm") {
     return false;
   }
-  warn(message);
+  warn(
+    [
+      `[openclaw] warning: detected ${packageManager} for install lifecycle.`,
+      "[openclaw] this repo works best with pnpm; npm-compatible installs are slower and much larger here.",
+      "[openclaw] prefer: corepack pnpm install",
+    ].join("\n"),
+  );
   return true;
 }
 

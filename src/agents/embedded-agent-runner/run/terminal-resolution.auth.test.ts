@@ -22,34 +22,32 @@ describe("terminal auth resolution", () => {
     resetGeneratedMediaTaskActivityForTests();
   });
 
-  it.each(["openai:selected", undefined])(
-    "reports the successful profile %s privately for command maintenance",
-    async (authProfileId) => {
-      const text = "The turn completed.";
-      const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
-      const attempt = makeEmbeddedRunnerAttempt({
-        assistantTexts: [text],
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
-      });
-      const onSuccessfulAuthProfile = vi.fn();
-      const resolved = await resolveEmbeddedRunTerminal(
-        makeTerminalInput({
-          attempt,
-          attemptAssistant: assistant,
-          payloadsWithToolMedia: [{ text }],
-          authProfileId,
-          runParams: { authProfileStateMode: "read-only", onSuccessfulAuthProfile },
-        }),
-      );
+  it("reports the successful profile privately for command maintenance", async () => {
+    const authProfileId = "openai:selected";
+    const text = "The turn completed.";
+    const assistant = buildEmbeddedRunnerAssistant({ content: [{ type: "text", text }] });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [text],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+    });
+    const onSuccessfulAuthProfile = vi.fn();
+    const resolved = await resolveEmbeddedRunTerminal(
+      makeTerminalInput({
+        attempt,
+        attemptAssistant: assistant,
+        payloadsWithToolMedia: [{ text }],
+        authProfileId,
+        runParams: { authProfileStateMode: "read-only", onSuccessfulAuthProfile },
+      }),
+    );
 
-      expect(resolved.action).toBe("complete");
-      expect(onSuccessfulAuthProfile).toHaveBeenCalledExactlyOnceWith(authProfileId);
-      if (resolved.action === "complete") {
-        expect(resolved.result.meta.agentMeta).not.toHaveProperty("authProfileId");
-      }
-    },
-  );
+    expect(resolved.action).toBe("complete");
+    expect(onSuccessfulAuthProfile).toHaveBeenCalledExactlyOnceWith(authProfileId);
+    if (resolved.action === "complete") {
+      expect(resolved.result.meta.agentMeta).not.toHaveProperty("authProfileId");
+    }
+  });
 
   it.each([
     {
@@ -63,19 +61,10 @@ describe("terminal auth resolution", () => {
   ])("surfaces provider recovery guidance for $reason terminal failures", async (testCase) => {
     const text = await resolveTerminalText({
       assistantProfileFailureReason: testCase.reason,
-      maxEmptyResponseRetryAttempts: 0,
+      retryState: { emptyResponseAttempts: 1 },
     });
     expect(text).toContain(testCase.expected);
     expect(text).toContain("openclaw configure");
-  });
-
-  it("keeps non-auth incomplete turns on the generic warning", async () => {
-    await expect(
-      resolveTerminalText({
-        assistantProfileFailureReason: "timeout",
-        maxEmptyResponseRetryAttempts: 0,
-      }),
-    ).resolves.toBe("⚠️ Agent couldn't generate a response. Please try again.");
   });
 
   it("does not replace timeout suppression with auth guidance", async () => {

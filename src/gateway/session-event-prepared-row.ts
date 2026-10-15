@@ -1,5 +1,8 @@
 import { performance } from "node:perf_hooks";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveSessionEventAgentScope } from "./session-request-agent.js";
 import {
   type SessionRowPreparationOptions,
@@ -86,11 +89,8 @@ function createPublicationOwner(projection: SessionRowProjection) {
               },
               options,
             );
-            if (prepared.kind === "pending") {
+            if (prepared !== deferred) {
               return prepared;
-            }
-            if (prepared.value !== deferred) {
-              return { kind: "complete" as const, value: prepared.value };
             }
             // Prepared views expire synchronously; reacquire facts and authority after yielding.
             await yieldUntil;
@@ -139,15 +139,38 @@ export async function drainSessionEventPublications(projection: SessionRowProjec
 export async function withPreparedEventRow(
   projection: SessionRowProjection | undefined,
   query: { key: string; agentId: string; storePath?: string } | undefined,
-  publish: (read?: SessionRowReadView) => void,
+  publish: (
+    read?: SessionRowReadView,
+    ancestors?: ReturnType<SessionRowProjection["ancestorRows"]>,
+  ) => void,
 ) {
   if (!projection || !query) {
     publish();
     return;
   }
-  await sessionEventPublicationRows(projection).withReadyRows(() => [query], publish, {
-    includeAncestors: true,
-  });
+  await sessionEventPublicationRows(projection).withReadyRows(
+    () => [query],
+    (read) => {
+      const record = read.describe(query);
+      const ancestors = record ? projection.ancestorRows(record, read) : undefined;
+      const rows = record ? [record, ...(ancestors ?? [])] : [];
+      const children = new Set<string>();
+      for (const row of rows) {
+        for (const group of row.materialized.row.swarm?.groups ?? []) {
+          for (const child of group.children ?? []) {
+            children.add(child.sessionKey);
+          }
+        }
+      }
+      // Resolve child metadata before the transport catches serialization errors.
+      // Pending worker facts must reach the preparation owner's existing retry.
+      for (const key of children) {
+        read.selectEntries({ key });
+      }
+      publish(read, ancestors);
+    },
+    { includeAncestors: true },
+  );
 }
 
 export async function withPreparedSessionEventRow(
@@ -173,4 +196,37 @@ export async function withPreparedSessionEventRow(
     await projection.ensureMaterialized();
   } while (projection.needsMaterialization);
   publish();
+}
+
+export function readTranscriptUpdateLifecycleOwner(
+  update: InternalSessionTranscriptUpdate,
+  projection: SessionRowProjection | undefined,
+): { sessionId: string; lifecycleRevision?: string } | undefined {
+  const marker = parseSqliteSessionFileMarker(update.sessionFile);
+  const sessionKey =
+    normalizeOptionalString(update.target?.sessionKey) ??
+    normalizeOptionalString(update.sessionKey) ??
+    (marker ? projection?.findBySessionId(marker)[0]?.key : undefined);
+  if (!sessionKey) {
+    return undefined;
+  }
+  const agentId =
+    normalizeOptionalString(update.target?.agentId) ??
+    normalizeOptionalString(update.agentId) ??
+    marker?.agentId;
+  const sessionId =
+    normalizeOptionalString(update.target?.sessionId) ??
+    normalizeOptionalString(update.sessionId) ??
+    marker?.sessionId;
+  const storePath = normalizeOptionalString(update.target?.storePath) ?? marker?.storePath;
+  const ownerAgentId =
+    agentId ?? resolveSessionEventAgentScope(getRuntimeConfig(), sessionKey)?.[1];
+  const entry = ownerAgentId
+    ? projection?.capture({ agentId: ownerAgentId, key: sessionKey, storePath })?.entry
+    : undefined;
+  if (!entry || (sessionId && entry.sessionId !== sessionId)) {
+    return undefined;
+  }
+  const lifecycleRevision = normalizeOptionalString(entry.lifecycleRevision);
+  return { sessionId: entry.sessionId, ...(lifecycleRevision ? { lifecycleRevision } : {}) };
 }

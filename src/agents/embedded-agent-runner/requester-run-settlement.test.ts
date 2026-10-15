@@ -27,22 +27,31 @@ describe("logical requester settlement", () => {
     registry.settle.mockReset().mockResolvedValue(true);
   });
 
-  it.each([true, false])(
-    "acknowledges only a committed explicit yield (settled: %s)",
-    async (settled) => {
-      registry.settle.mockResolvedValue(settled);
-      const result = makeResult({ yielded: true });
-      if (settled) {
-        await settleRequesterRun(requester, result, assertCurrent);
-        expect(result.requesterContinuationSettled).toBe(true);
-      } else {
-        await expect(settleRequesterRun(requester, result, assertCurrent)).rejects.toThrow(
-          "could not transfer",
-        );
-        expect(result.requesterContinuationSettled).toBeUndefined();
-      }
-    },
-  );
+  it.each([
+    ["committed", undefined],
+    ["refused", "could not transfer"],
+    ["storage failure", "storage unavailable"],
+    ["revoked", "requester replaced"],
+  ] as const)("acknowledges only a committed explicit yield: %s", async (outcome, error) => {
+    registry.settle.mockResolvedValue(outcome !== "refused");
+    if (outcome === "storage failure" || outcome === "revoked") {
+      (outcome === "revoked" ? assertCurrent : registry.settle).mockImplementation(() => {
+        throw new Error(error);
+      });
+    }
+    const result = makeResult({ yielded: true });
+    if (error === undefined) {
+      await settleRequesterRun(requester, result, assertCurrent);
+      expect(result.requesterContinuationSettled).toBe(true);
+    } else {
+      await expect(settleRequesterRun(requester, result, assertCurrent)).rejects.toThrow(error);
+      expect(result.requesterContinuationSettled).toBeUndefined();
+    }
+    if (outcome === "revoked") {
+      expect(registry.markYielded).not.toHaveBeenCalled();
+      expect(registry.settle).not.toHaveBeenCalled();
+    }
+  });
 
   it("leaves implicit continuation gated on outbox status delivery", async () => {
     const result = makeResult({ continuationPending: true });
@@ -80,30 +89,6 @@ describe("logical requester settlement", () => {
     } finally {
       admission.close();
     }
-  });
-
-  it("surfaces failed persistence without acknowledging a successor", async () => {
-    registry.settle.mockImplementation(() => {
-      throw new Error("storage unavailable");
-    });
-    const result = makeResult({ yielded: true });
-    await expect(settleRequesterRun(requester, result, assertCurrent)).rejects.toThrow(
-      "storage unavailable",
-    );
-    expect(result.requesterContinuationSettled).toBeUndefined();
-  });
-
-  it("fences a revoked requester before handoff", async () => {
-    assertCurrent.mockImplementation(() => {
-      throw new Error("requester replaced");
-    });
-    const result = makeResult({ yielded: true });
-    await expect(settleRequesterRun(requester, result, assertCurrent)).rejects.toThrow(
-      "requester replaced",
-    );
-    expect(registry.markYielded).not.toHaveBeenCalled();
-    expect(registry.settle).not.toHaveBeenCalled();
-    expect(result.requesterContinuationSettled).toBeUndefined();
   });
 
   it.each(["cancelled", "aborted"] as const)("does not transfer %s ownership", async (kind) => {

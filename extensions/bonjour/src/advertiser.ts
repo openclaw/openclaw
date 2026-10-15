@@ -54,12 +54,8 @@ function isContainerEnvironment() {
   }
 
   for (const sentinelPath of ["/.dockerenv", "/run/.containerenv", "/var/run/.containerenv"]) {
-    try {
-      if (fs.existsSync(sentinelPath)) {
-        return true;
-      }
-    } catch {
-      // ignore
+    if (fs.existsSync(sentinelPath)) {
+      return true;
     }
   }
 
@@ -90,12 +86,9 @@ function resolveSystemMdnsHostname(): string | null {
   } catch {
     return null;
   }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
   const firstLabel =
-    trimmed
+    raw
+      .trim()
       .replace(/\.local$/i, "")
       .split(".")[0]
       ?.trim() ?? "";
@@ -179,13 +172,8 @@ export async function startGatewayBonjourAdvertiser(
   let restoreConsoleLog: () => void = () => {};
   let cleanupUnhandledRejection: (() => void) | undefined;
   let cleanupUncaughtException: (() => void) | undefined;
-  let processHandlersCleaned = false;
 
   function cleanupProcessHandlers() {
-    if (processHandlersCleaned) {
-      return;
-    }
-    processHandlersCleaned = true;
     cleanupUncaughtException?.();
     cleanupUnhandledRejection?.();
   }
@@ -294,18 +282,14 @@ export async function startGatewayBonjourAdvertiser(
       hostname,
       txt: gatewayTxt,
     });
-    try {
-      gateway.on("name-change", (name) => {
-        logger.warn(`bonjour: gateway name conflict resolved; newName=${JSON.stringify(name)}`);
-      });
-      gateway.on("hostname-change", (nextHostname) => {
-        logger.warn(
-          `bonjour: gateway hostname conflict resolved; newHostname=${JSON.stringify(nextHostname)}`,
-        );
-      });
-    } catch (err) {
-      logger.debug(`bonjour: failed to attach listeners for gateway: ${String(err)}`);
-    }
+    gateway.on("name-change", (name) => {
+      logger.warn(`bonjour: gateway name conflict resolved; newName=${JSON.stringify(name)}`);
+    });
+    gateway.on("hostname-change", (nextHostname) => {
+      logger.warn(
+        `bonjour: gateway hostname conflict resolved; newHostname=${JSON.stringify(nextHostname)}`,
+      );
+    });
     try {
       void gateway
         .advertise()

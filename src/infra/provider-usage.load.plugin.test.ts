@@ -1,9 +1,11 @@
 // Tests provider usage loading from plugin-provided sources.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadProviderUsageSummary } from "./provider-usage.load.js";
 import type { ProviderUsageSnapshot } from "./provider-usage.types.js";
 
-const resolveProviderUsageSnapshotWithPluginMock =
-  vi.fn<typeof import("../plugins/provider-runtime.js").resolveProviderUsageSnapshotWithPlugin>();
+const resolveProviderUsageSnapshotWithPluginMock = vi.hoisted(() =>
+  vi.fn<typeof import("../plugins/provider-runtime.js").resolveProviderUsageSnapshotWithPlugin>(),
+);
 const { envDispatcher, createHttp1EnvHttpProxyAgent, loadUndiciRuntimeDeps, undiciFetch } =
   vi.hoisted(() => {
     const envDispatcherLocal = { dispatch: () => true };
@@ -40,8 +42,6 @@ vi.mock("../plugins/provider-runtime.js", async () => {
   };
 });
 
-let loadProviderUsageSummary: typeof import("./provider-usage.load.js").loadProviderUsageSummary;
-
 const usageNow = Date.UTC(2026, 0, 7);
 const snapshot: ProviderUsageSnapshot = {
   provider: "openai",
@@ -58,9 +58,6 @@ const options = {
 };
 
 describe("provider usage plugin routing", () => {
-  beforeAll(async () => {
-    ({ loadProviderUsageSummary } = await import("./provider-usage.load.js"));
-  });
   beforeEach(() => {
     createHttp1EnvHttpProxyAgent.mockClear();
     loadUndiciRuntimeDeps.mockClear();

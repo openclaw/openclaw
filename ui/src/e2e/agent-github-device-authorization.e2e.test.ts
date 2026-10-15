@@ -116,7 +116,7 @@ const device = {
   expiresInMs: 60_000,
   pollAfterMs: 1_000,
 } as const;
-const config = { agents: { entries: { main: { default: true } } } };
+const config = { agents: { entries: { main: {} } } };
 const configResponse = {
   config,
   sourceConfig: config,

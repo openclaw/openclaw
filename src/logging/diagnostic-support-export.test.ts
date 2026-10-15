@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   uninstallDiagnosticStabilityFatalHook,
-  writeDiagnosticStabilityBundleSync,
+  writeDiagnosticStabilityBundleForFailureSync,
 } from "./diagnostic-stability-bundle.js";
 import {
   resetDiagnosticStabilityRecorderForTest,
@@ -215,11 +215,11 @@ describe("diagnostic support export", () => {
       limitBytes: 1024,
       reason: "json_body_limit",
     });
-    const bundle = writeDiagnosticStabilityBundleSync({
-      reason: "gateway.restart_startup_failed",
-      stateDir: tempDir,
-      now: new Date("2026-04-22T12:00:00.000Z"),
-    });
+    const bundle = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.restart_startup_failed",
+      undefined,
+      { stateDir: tempDir, now: new Date("2026-04-22T12:00:00.000Z") },
+    );
     expect(bundle.status).toBe("written");
 
     const logTail: LogTailPayload = {
@@ -545,12 +545,12 @@ describe("diagnostic support export", () => {
   });
 
   it.each([
-    { agents: { list: [{ id: "legacy" }] }, expected: undefined },
+    { agents: { entries: { main: {} } }, expected: { count: 1 } },
     { agents: { defaults: {} }, expected: undefined },
     { agents: { entries: [] }, expected: undefined },
     { agents: { entries: {} }, expected: { count: 0 } },
   ])(
-    "distinguishes an absent canonical agent roster from an empty one: $agents",
+    "distinguishes absent, empty, and populated canonical agent rosters: $agents",
     async ({ agents, expected }) => {
       const configPath = path.join(tempDir, "openclaw.json");
       fs.writeFileSync(configPath, JSON.stringify({ agents }));

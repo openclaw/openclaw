@@ -1,6 +1,7 @@
 import { logDebug } from "openclaw/plugin-sdk/logging-core";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
+  hasConfiguredDiscordChannels,
   isDiscordGroupAllowedByPolicy,
   resolveGroupDmAllow,
   type DiscordChannelConfigResolved,
@@ -39,8 +40,7 @@ export function resolveDiscordPreflightChannelAccess(params: {
     return false;
   }
 
-  const channelAllowlistConfigured =
-    Boolean(params.guildInfo?.channels) && Object.keys(params.guildInfo?.channels ?? {}).length > 0;
+  const channelAllowlistConfigured = hasConfiguredDiscordChannels(params.guildInfo?.channels);
   const channelAllowed = params.channelConfig?.allowed !== false;
   if (
     params.isGuildMessage &&

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sqlite from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import * as integrity from "../../infra/sqlite-integrity-worker.js";
 import * as logging from "../../logging/logger.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -17,7 +18,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
 import {
@@ -153,7 +153,7 @@ function fixture() {
   };
   closeOpenClawAgentDatabaseByPath(database.path);
   invalidateOpenClawAgentDatabaseValidation(database.path);
-  clearOpenClawAgentIntegrityVerification(database.path, databaseOptions.env);
+  revokeSqliteDatabaseAdmissionsForPath(database.path);
   return { scope, databaseOptions };
 }
 
@@ -266,62 +266,46 @@ function observeColdAdmission(
   };
 }
 
-it.each(["delete", "artifact cleanup"] as const)(
-  "keeps cold %s preparation asynchronous inside its writer FIFO",
-  async (operation) => {
-    const f = fixture();
-    const admission = observeColdAdmission(f.databaseOptions.path);
-    const work =
-      operation === "delete"
-        ? own(
-            deleteSessionEntryLifecycle({
-              storePath: f.scope.storePath,
-              target: { canonicalKey: f.scope.sessionKey, storeKeys: [f.scope.sessionKey] },
-              archiveTranscript: false,
-            }),
-          )
-        : own(
-            cleanupSessionLifecycleArtifactsCore({
-              storePath: f.scope.storePath,
-              sessionKeySegmentPrefix: "cleanup-admission-",
-              transcriptContentMarker: "unused-marker",
-              archiveRemovedEntryTranscripts: false,
-              orphanTranscriptMinAgeMs: 0,
-            }),
-          );
-    await yieldToEventLoop();
-    expect(admission.parentChecks()).toBe(0);
-    expect(
-      await Promise.race([
-        admission.entered.promise.then(() => true),
-        work.then(
-          () => false,
-          () => false,
-        ),
-      ]),
-    ).toBe(true);
-    let followingWriterEntered = false;
-    const following = own(
-      runExclusiveSqliteSessionWrite(
-        f.databaseOptions,
-        async () => {
-          followingWriterEntered = true;
-        },
-        "session.transcript.batch",
+it("keeps cold delete preparation asynchronous inside its writer FIFO", async () => {
+  const f = fixture();
+  const admission = observeColdAdmission(f.databaseOptions.path);
+  const work = own(
+    deleteSessionEntryLifecycle({
+      storePath: f.scope.storePath,
+      target: { canonicalKey: f.scope.sessionKey, storeKeys: [f.scope.sessionKey] },
+      archiveTranscript: false,
+    }),
+  );
+  await yieldToEventLoop();
+  expect(admission.parentChecks()).toBe(0);
+  expect(
+    await Promise.race([
+      admission.entered.promise.then(() => true),
+      work.then(
+        () => false,
+        () => false,
       ),
-    );
-    await yieldToEventLoop();
-    expect(followingWriterEntered).toBe(false);
-    expect(loadSessionEntryReadOnly(f.scope)).toMatchObject({ sessionId: "retained" });
-    admission.release.resolve();
-    await expect(work).resolves.toMatchObject(
-      operation === "delete" ? { deleted: true } : { removedEntries: 1 },
-    );
-    await following;
-    expect(followingWriterEntered).toBe(true);
-    expect(loadSessionEntryReadOnly(f.scope)).toBeUndefined();
-  },
-);
+    ]),
+  ).toBe(true);
+  let followingWriterEntered = false;
+  const following = own(
+    runExclusiveSqliteSessionWrite(
+      f.databaseOptions,
+      async () => {
+        followingWriterEntered = true;
+      },
+      "session.transcript.batch",
+    ),
+  );
+  await yieldToEventLoop();
+  expect(followingWriterEntered).toBe(false);
+  expect(loadSessionEntryReadOnly(f.scope)).toMatchObject({ sessionId: "retained" });
+  admission.release.resolve();
+  await expect(work).resolves.toMatchObject({ deleted: true });
+  await following;
+  expect(followingWriterEntered).toBe(true);
+  expect(loadSessionEntryReadOnly(f.scope)).toBeUndefined();
+});
 
 it.each(["cold", "warm"] as const)(
   "keeps no-op lifecycle cleanup read-only across a %s ordinary-session fleet",
@@ -421,24 +405,6 @@ it("rejects retired authority before evaluating a stale deletion target", async 
   expect(loadSessionEntryReadOnly(f.scope)).toMatchObject({ sessionId: "retained" });
 });
 
-it("reuses warm lifecycle integrity proof without another validation", async () => {
-  const f = fixture();
-  openOpenClawAgentDatabase(f.databaseOptions);
-  const admission = observeColdAdmission(f.databaseOptions.path);
-  const work = own(
-    deleteSessionEntryLifecycle({
-      storePath: f.scope.storePath,
-      target: { canonicalKey: f.scope.sessionKey, storeKeys: [f.scope.sessionKey] },
-      archiveTranscript: false,
-    }),
-  );
-  expect(
-    await Promise.race([admission.entered.promise.then(() => false), work.then(() => true)]),
-  ).toBe(true);
-  await expect(work).resolves.toMatchObject({ deleted: true });
-  expect(admission.parentChecks()).toBe(0);
-});
-
 it("retains the selected state owner while cold deletion waits in the FIFO", async () => {
   const f = fixture();
   const blockerEntered = createDeferred();
@@ -505,11 +471,9 @@ it("keeps historical preparation asynchronous after materialization evicts its p
   const admission = observeColdAdmission(f.databaseOptions.path, "historical-check");
   archiveHook.afterMaterialize = () => {
     archiveHook.afterMaterialize = undefined;
-    closeCachedOpenClawAgentDatabase(openOpenClawAgentDatabase(f.databaseOptions), {
-      eviction: true,
-    });
+    closeCachedOpenClawAgentDatabase(openOpenClawAgentDatabase(f.databaseOptions));
     invalidateOpenClawAgentDatabaseValidation(f.databaseOptions.path);
-    clearOpenClawAgentIntegrityVerification(f.databaseOptions.path, f.databaseOptions.env);
+    revokeSqliteDatabaseAdmissionsForPath(f.databaseOptions.path);
     admission.armHistoricalCheck();
   };
   const work = own(

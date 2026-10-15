@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
+import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -22,6 +23,7 @@ it.each([
   "keeps imported sibling source files private ($syntax, file locator=$fileLocator)",
   async ({ syntax, fileLocator }) => {
     const root = await fs.realpath(dirs.make("candidate-plugin-sources-"));
+    await materializeUpdateCandidateStateWorker(root);
     const repository = path.join(root, "repository");
     const plugin = path.join(repository, "plugin");
     const shared = path.join(repository, "shared");

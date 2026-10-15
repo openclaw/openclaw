@@ -39,19 +39,7 @@ export function isDiscordThreadChannelMessage(params: {
   message: Message;
   channelInfo: DiscordChannelInfo | null;
 }): boolean {
-  if (!params.isGuildMessage) {
-    return false;
-  }
-  const channel =
-    "channel" in params.message ? (params.message as { channel?: unknown }).channel : undefined;
-  return Boolean(
-    (channel &&
-      typeof channel === "object" &&
-      "isThread" in channel &&
-      typeof (channel as { isThread?: unknown }).isThread === "function" &&
-      (channel as { isThread: () => boolean }).isThread()) ||
-    isDiscordThreadChannelType(params.channelInfo?.type),
-  );
+  return params.isGuildMessage && isDiscordThreadChannelType(params.channelInfo?.type);
 }
 
 export function resolveInjectedBoundThreadLookupRecord(params: {

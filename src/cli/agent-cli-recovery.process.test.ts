@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, describe, expect, it } from "vitest";
 import { setCliSessionBinding } from "../agents/cli-session.js";
 import {
   loadSessionEntryReadOnly,
@@ -10,20 +9,15 @@ import {
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-});
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cli-fork-recovery-");
 
 describe("CLI fork recovery process", () => {
   it("keeps a concurrent durable rebind when a stale fork reports its successor", async () => {
-    const root = tempDirs.make("openclaw-cli-fork-recovery-");
+    const root = sessionDirs.make();
     const stateDir = path.join(root, "state");
     const tmpDir = path.join(root, "tmp");
     const workspaceDir = path.join(root, "workspace");

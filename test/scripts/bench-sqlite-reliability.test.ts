@@ -26,6 +26,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../src/state/openclaw-state-db.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
@@ -63,16 +64,8 @@ function runProof(args: string[], env: NodeJS.ProcessEnv = {}) {
 
 async function waitForChildReady(child: ChildProcess): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("writer child did not become ready"));
-    }, 10_000);
     const onMessage = (message: unknown) => {
-      if (
-        message &&
-        typeof message === "object" &&
-        (message as { kind?: unknown }).kind === "ready"
-      ) {
+      if (message && typeof message === "object" && "kind" in message && message.kind === "ready") {
         cleanup();
         resolve();
       }
@@ -86,7 +79,6 @@ async function waitForChildReady(child: ChildProcess): Promise<void> {
       reject(new Error("writer child exited before ready"));
     };
     const cleanup = () => {
-      clearTimeout(timeout);
       child.off("message", onMessage);
       child.off("error", onError);
       child.off("exit", onExit);
@@ -102,10 +94,6 @@ async function waitForChildExit(child: ChildProcess): Promise<{
   signal: NodeJS.Signals | null;
 }> {
   return await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("writer child did not exit after IPC disconnect"));
-    }, 10_000);
     const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
       cleanup();
       resolve({ code, signal });
@@ -115,7 +103,6 @@ async function waitForChildExit(child: ChildProcess): Promise<{
       reject(error);
     };
     const cleanup = () => {
-      clearTimeout(timeout);
       child.off("exit", onExit);
       child.off("error", onError);
     };
@@ -493,7 +480,7 @@ if (isMainThread && !process.execArgv.includes("--no-concurrent-sparkplug")) {
     );
   });
 
-  it("stops the writer when its parent IPC channel disconnects", async () => {
+  it("stops the writer when its parent IPC channel disconnects", async ({ signal }) => {
     const databasePath = path.join(
       tempDirs.make("openclaw-sqlite-reliability-test-"),
       "writer.sqlite",
@@ -510,15 +497,18 @@ if (isMainThread && !process.execArgv.includes("--no-concurrent-sparkplug")) {
         stdio: ["ignore", "ignore", "pipe", "ipc"],
       },
     );
+    const exitPromise = waitForChildExit(child);
+    // Readiness and exit are both owned by this child; the test signal owns the deadline.
+    void exitPromise.catch(() => {});
     try {
-      await waitForChildReady(child);
-      const exitPromise = waitForChildExit(child);
+      await withinTest(waitForChildReady(child), signal);
       child.disconnect();
-      await expect(exitPromise).resolves.toEqual({ code: 0, signal: null });
+      await expect(withinTest(exitPromise, signal)).resolves.toEqual({ code: 0, signal: null });
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
-        child.kill();
+        child.kill("SIGKILL");
       }
+      await exitPromise;
     }
   });
 });

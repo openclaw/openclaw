@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { collectCheckoutDiffBaseline } from "./session-diff.runtime.js";
+import { collectCheckoutDiff, collectCheckoutDiffBaseline } from "./session-diff.runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -138,5 +138,29 @@ describe("session diff baseline file capture", () => {
     expect(baseline?.files.map((entry) => entry.path)).toEqual([...included, "30-empty.txt"]);
     expect(baseline?.truncated).toBe(true);
     await expect(fs.readFile(outside, "utf8")).resolves.toBe("outside bytes\n");
+  });
+
+  it("ignores pre-session edits to branch-added files in the uncommitted view", async () => {
+    const root = repository();
+    await fs.writeFile(path.join(root, "base.txt"), "base\n");
+    git(root, "add", ".");
+    git(root, "commit", "-qm", "base");
+    git(root, "checkout", "-qb", "feature");
+    await fs.writeFile(path.join(root, "feature.txt"), "added on branch\n");
+    git(root, "add", ".");
+    git(root, "commit", "-qm", "feature");
+    await fs.appendFile(path.join(root, "feature.txt"), "pre-session edit\n");
+    const captured = await collectCheckoutDiffBaseline({ cwd: root });
+    const baseline = captured && { ...captured, sessionId: "s1" };
+    const sessionPaths = async () =>
+      (
+        await collectCheckoutDiff({ cwd: root, scope: "uncommitted", baseline, sessionId: "s1" })
+      ).files.map((file) => file.path);
+
+    await expect(sessionPaths()).resolves.toEqual([]);
+
+    await fs.appendFile(path.join(root, "feature.txt"), "session edit\n");
+
+    await expect(sessionPaths()).resolves.toEqual(["feature.txt"]);
   });
 });

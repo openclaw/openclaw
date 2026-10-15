@@ -4,15 +4,14 @@ import {
 } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
+import type { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
   readProviderJsonResponse,
-  resolveProviderHttpRequestConfig,
-  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
+import { resolveMinimaxMediaRequestConfig } from "./media-provider-runtime.js";
 
 const DEFAULT_MINIMAX_IMAGE_BASE_URL = "https://api.minimax.io";
 const CN_MINIMAX_IMAGE_BASE_URL = "https://api.minimaxi.com";
@@ -51,12 +50,8 @@ function isMinimaxCnHost(value: string | undefined): boolean {
     return false;
   }
   const candidate = /^[a-z][a-z\d+.-]*:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`;
-  try {
-    const hostname = new URL(candidate).hostname.toLowerCase();
-    return hostname === "minimaxi.com" || hostname.endsWith(".minimaxi.com");
-  } catch {
-    return false;
-  }
+  const hostname = URL.parse(candidate)?.hostname.toLowerCase();
+  return hostname === "minimaxi.com" || (hostname?.endsWith(".minimaxi.com") ?? false);
 }
 
 function resolveMinimaxImageBaseUrl(
@@ -78,13 +73,15 @@ function resolveMinimaxImageBaseUrl(
   return DEFAULT_MINIMAX_IMAGE_BASE_URL;
 }
 
-function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider {
+export function buildMinimaxImageGenerationProvider(
+  providerId = "minimax",
+): ImageGenerationProvider {
   return {
     id: providerId,
     label: "MiniMax",
     defaultModel: DEFAULT_MODEL,
     models: [DEFAULT_MODEL],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: providerId, ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: providerId, ...ctx }),
     capabilities: {
       generate: {
         maxCount: MINIMAX_MAX_IMAGE_RESULTS,
@@ -105,35 +102,19 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
       },
     },
     async generateImage(req) {
-      const auth = await resolveApiKeyForProvider({
-        provider: providerId,
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("MiniMax API key missing");
-      }
-
       const baseUrl = resolveMinimaxImageBaseUrl(req.cfg, providerId);
       const {
         baseUrl: resolvedBaseUrl,
         allowPrivateNetwork,
         headers,
         dispatcherPolicy,
-      } = resolveProviderHttpRequestConfig({
+      } = await resolveMinimaxMediaRequestConfig({
+        cfg: req.cfg,
+        providerId,
+        agentDir: req.agentDir,
+        authStore: req.authStore,
         baseUrl,
-        defaultBaseUrl: DEFAULT_MINIMAX_IMAGE_BASE_URL,
-        defaultHeaders: {
-          Authorization: `Bearer ${auth.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        provider: providerId,
         capability: "image",
-        transport: "http",
-        request: sanitizeConfiguredModelProviderRequest(
-          req.cfg.models?.providers?.[providerId]?.request,
-        ),
       });
 
       const body: Record<string, unknown> = {
@@ -147,7 +128,6 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
         body.aspect_ratio = req.aspectRatio.trim();
       }
 
-      // Map input images to subject_reference for image-to-image generation
       const ref = req.inputImages?.at(0);
       if (ref) {
         const mime = ref.mimeType || "image/jpeg";
@@ -219,12 +199,4 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
       }
     },
   };
-}
-
-export function buildMinimaxImageGenerationProvider(): ImageGenerationProvider {
-  return buildMinimaxImageProvider("minimax");
-}
-
-export function buildMinimaxPortalImageGenerationProvider(): ImageGenerationProvider {
-  return buildMinimaxImageProvider("minimax-portal");
 }

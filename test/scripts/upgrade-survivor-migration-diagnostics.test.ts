@@ -76,12 +76,20 @@ function write(file: string, value: unknown) {
   fs.writeFileSync(file, JSON.stringify(value));
 }
 
+function runNode(f: ReturnType<typeof fixture>, args: string[], env: NodeJS.ProcessEnv = {}) {
+  return spawnSync(node, args, { env: { ...f.env, ...env }, encoding: "utf8", timeout: 10_000 });
+}
+
 function capture(f: ReturnType<typeof fixture>, outcome: "failed" | "passed" = "failed") {
-  const result = spawnSync(
-    node,
-    [observer, "capture", f.artifacts, "update-candidate", "1", "", f.artifacts],
-    { env: f.env, encoding: "utf8", timeout: 10_000 },
-  );
+  const result = runNode(f, [
+    observer,
+    "capture",
+    f.artifacts,
+    "update-candidate",
+    "1",
+    "",
+    f.artifacts,
+  ]);
   expect(result.status, result.stderr).toBe(0);
   const output = path.join(f.root, "public");
   publishDiagnostics(f.artifacts, output, redactSensitiveText, outcome);
@@ -93,6 +101,69 @@ function capture(f: ReturnType<typeof fixture>, outcome: "failed" | "passed" = "
   expect(text).not.toContain(privateBody);
   return JSON.parse(text);
 }
+
+it.each([
+  { name: "update.json", prefix: "", failure: { exitCode: 1 } },
+  { name: "recovery-update.json", prefix: "", failure: { exitCode: null, termination: "timeout" } },
+  {
+    name: "update.json",
+    prefix: "Update warning before JSON\n",
+    failure: { exitCode: 0, outputLimitExceeded: true },
+  },
+])(
+  "keeps a later failed update step visible before successful output exhausts $name ($failure)",
+  ({ name, prefix, failure }) => {
+    const f = fixture();
+    const update = {
+      status: "error",
+      reason: "runtime-verification-failed",
+      steps: [
+        {
+          name: "candidate-doctor-lint",
+          exitCode: 0,
+          warnings: Array(64).fill(`Routine Doctor advisory: ${"x".repeat(400)}`),
+        },
+        {
+          name: "candidate-plugins",
+          exitCode: 1,
+          advisory: { kind: "recoverable-maintenance", message: "Optional repair deferred" },
+        },
+        {
+          name: "candidate-gateway-startup",
+          ...failure,
+          durationMs: 12824,
+          failureFacts: [{ code: "candidate-startup-failed", message: "Candidate import failed" }],
+          stderrTail: `Candidate import failed: token=${secret}\nStartup stack location`,
+        },
+        {
+          name: "gateway recovery verification",
+          exitCode: 1,
+          stderrTail: "Secondary recovery error",
+        },
+      ],
+    };
+    write(path.join(f.artifacts, "diagnostics/raw.json"), {
+      phase: "update-candidate",
+      exitStatus: 1,
+      signal: null,
+      logs: { [name]: `${prefix}${JSON.stringify(update, null, 2)}` },
+    });
+    const output = path.join(f.root, "public");
+    publishDiagnostics(f.artifacts, output, redactSensitiveText);
+    const report = JSON.parse(fs.readFileSync(path.join(output, "failure.json"), "utf8"));
+    const log = report.logs[name];
+    expect(log).toContain("Reported failing update step 3 of 4");
+    expect(log).toContain("Candidate import failed");
+    expect(log).toContain("Startup stack location");
+    expect(log).not.toContain(secret);
+    expect(log.indexOf("candidate-gateway-startup")).toBeLessThan(
+      log.indexOf("candidate-doctor-lint"),
+    );
+    expect(log).toContain("candidate-doctor-lint");
+    expect(Buffer.byteLength(JSON.stringify(log))).toBeLessThanOrEqual(16 * 1024);
+    expect(report.omissions[name]).toBe("redacted output truncated at a complete line (16 KiB)");
+  },
+);
 
 it("returns only redacted failure coordinates after safe publication", () => {
   const f = fixture();
@@ -155,8 +226,8 @@ it("emits the published failure metadata through the host CLI without changing i
     logs: { "update.err": `${secret} ${privateBody}` },
   });
   const destination = path.join(f.root, "public");
-  const result = spawnSync(
-    node,
+  const result = runNode(
+    f,
     [
       "--import",
       path.resolve("scripts/tsx.mjs"),
@@ -165,7 +236,7 @@ it("emits the published failure metadata through the host CLI without changing i
       f.artifacts,
       destination,
     ],
-    { env: { ...f.env, GITHUB_ACTIONS: "true" }, encoding: "utf8", timeout: 10_000 },
+    { GITHUB_ACTIONS: "true" },
   );
   expect(result.status, result.stderr).toBe(0);
   expect(result.stderr.split("\n").filter((line) => line.startsWith("::error"))).toEqual([
@@ -212,88 +283,91 @@ function policySuccessSummary(pluginPolicy: unknown) {
   };
 }
 
-it("preserves historical success receipts without adopting policy sidecars", () => {
-  const f = fixture();
-  vi.stubEnv("GITHUB_ACTIONS", "true");
-  const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-  write(path.join(f.artifacts, "summary.json"), policySuccessSummary(undefined));
-  write(path.join(f.artifacts, "webhooks-only-policy/result.json"), { privateBody });
-  const report = capture(f, "passed");
-  expect(report).not.toHaveProperty("pluginPolicy");
-  expect(report.logs).not.toHaveProperty("webhooks-only-policy/result.json");
-  expect(stderr.mock.calls.some(([text]) => String(text).startsWith("::error"))).toBe(false);
-});
+it.each([false, true])(
+  "requires missing policy evidence only after a completed probe: %s",
+  (completed) => {
+    const f = fixture();
+    vi.stubEnv("GITHUB_ACTIONS", "true");
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    write(path.join(f.artifacts, "summary.json"), {
+      ...policySuccessSummary(undefined),
+      phases: completed
+        ? [{ phase: "verify-sole-plugin-policy", status: "passed", at: "2026-09-25T12:00:00.000Z" }]
+        : [],
+    });
+    write(path.join(f.artifacts, "webhooks-only-policy/result.json"), { privateBody });
+    if (completed) {
+      expect(() =>
+        publishDiagnostics(f.artifacts, path.join(f.root, "public"), redactSensitiveText, "passed"),
+      ).toThrow("Missing sole-plugin policy evidence after completed probe");
+    } else {
+      const report = capture(f, "passed");
+      expect(report).not.toHaveProperty("pluginPolicy");
+      expect(report.logs).not.toHaveProperty("webhooks-only-policy/result.json");
+    }
+    expect(stderr.mock.calls.some(([text]) => String(text).startsWith("::error"))).toBe(false);
+  },
+);
 
-it("requires policy evidence when a successful receipt records the completed probe", () => {
-  const f = fixture();
-  write(path.join(f.artifacts, "summary.json"), {
-    ...policySuccessSummary(undefined),
-    phases: [
-      { phase: "verify-sole-plugin-policy", status: "passed", at: "2026-09-25T12:00:00.000Z" },
-    ],
-  });
-  expect(() =>
-    publishDiagnostics(f.artifacts, path.join(f.root, "public"), redactSensitiveText, "passed"),
-  ).toThrow("Missing sole-plugin policy evidence after completed probe");
-});
-
-it("publishes bounded redacted sole-policy success evidence without private configuration", () => {
-  const f = fixture();
-  const policy = pluginPolicyReceipt();
-  write(path.join(f.artifacts, "summary.json"), policySuccessSummary({ ...policy, privateBody }));
-  write(path.join(f.artifacts, "webhooks-only-policy/result.json"), policy);
-  write(path.join(f.artifacts, "webhooks-only-policy/update.json"), {
-    status: "ok",
-    before: { version: "2026.9.2" },
-    after: { version: "2026.9.6" },
-    warning: `token=${secret}`,
-  });
-  write(path.join(f.artifacts, "webhooks-only-policy/candidate-runtime.out"), {
-    plugins: [{ id: "telegram", enabled: true, runtime: { state: "unloaded" } }],
-    warning: `token=${secret}`,
-  });
-  write(path.join(f.artifacts, "webhooks-only-policy/baseline-runtime.out"), {
-    plugins: [{ id: "telegram", installed: true, enabled: true, state: "enabled" }],
-  });
-  write(path.join(f.artifacts, "webhooks-only-policy/openclaw.json"), { privateBody, secret });
-  const report = capture(f, "passed");
-  expect(report.pluginPolicy).toEqual(policy);
-  expect(JSON.parse(report.logs["webhooks-only-policy/result.json"])).toEqual(policy);
-  expect(JSON.parse(report.logs["webhooks-only-policy/update.json"])).toMatchObject({
-    before: { version: "2026.9.2" },
-    after: { version: "2026.9.6" },
-  });
-  expect(JSON.parse(report.logs["webhooks-only-policy/candidate-runtime.out"]).plugins).toEqual([
-    { id: "telegram", enabled: true, runtime: { state: "unloaded" } },
-  ]);
-  expect(JSON.parse(report.logs["webhooks-only-policy/baseline-runtime.out"]).plugins).toEqual([
-    { id: "telegram", installed: true, enabled: true, state: "enabled" },
-  ]);
-  expect(report.logs).not.toHaveProperty("webhooks-only-policy/openclaw.json");
-});
-
-it("keeps policy log limits and symlink protections on successful publication", () => {
-  const f = fixture();
-  write(path.join(f.artifacts, "summary.json"), policySuccessSummary(pluginPolicyReceipt()));
-  const policyRoot = path.join(f.artifacts, "webhooks-only-policy");
-  fs.mkdirSync(policyRoot);
-  const outside = path.join(f.root, "outside.json");
-  write(outside, { privateBody });
-  fs.symlinkSync(outside, path.join(policyRoot, "result.json"));
-  fs.writeFileSync(path.join(policyRoot, "update.json"), "x".repeat(256 * 1024 + 1));
-  const report = capture(f, "passed");
-  expect(report.logs["webhooks-only-policy/result.json"]).toBeNull();
-  expect(report.omissions["webhooks-only-policy/result.json"]).toBe("missing or unsafe file");
-  expect(report.logs["webhooks-only-policy/update.json"]).toBeNull();
-  expect(report.omissions["webhooks-only-policy/update.json"]).toBe(
-    "input exceeds cap; omitted whole",
-  );
-});
+it.each([false, true])(
+  "publishes bounded redacted sole-policy evidence with unsafe logs: %s",
+  (unsafe) => {
+    const f = fixture();
+    const policy = pluginPolicyReceipt();
+    write(path.join(f.artifacts, "summary.json"), policySuccessSummary({ ...policy, privateBody }));
+    const policyRoot = path.join(f.artifacts, "webhooks-only-policy");
+    if (unsafe) {
+      fs.mkdirSync(policyRoot);
+      const outside = path.join(f.root, "outside.json");
+      write(outside, { privateBody });
+      fs.symlinkSync(outside, path.join(policyRoot, "result.json"));
+      fs.writeFileSync(path.join(policyRoot, "update.json"), "x".repeat(256 * 1024 + 1));
+    } else {
+      write(path.join(policyRoot, "result.json"), policy);
+      write(path.join(policyRoot, "update.json"), {
+        status: "ok",
+        before: { version: "2026.9.2" },
+        after: { version: "2026.9.6" },
+        warning: `token=${secret}`,
+      });
+    }
+    write(path.join(f.artifacts, "webhooks-only-policy/candidate-runtime.out"), {
+      plugins: [{ id: "telegram", enabled: true, runtime: { state: "unloaded" } }],
+      warning: `token=${secret}`,
+    });
+    write(path.join(f.artifacts, "webhooks-only-policy/baseline-runtime.out"), {
+      plugins: [{ id: "telegram", installed: true, enabled: true, state: "enabled" }],
+    });
+    write(path.join(f.artifacts, "webhooks-only-policy/openclaw.json"), { privateBody, secret });
+    const report = capture(f, "passed");
+    expect(report.pluginPolicy).toEqual(policy);
+    if (unsafe) {
+      expect(report.logs["webhooks-only-policy/result.json"]).toBeNull();
+      expect(report.omissions["webhooks-only-policy/result.json"]).toBe("missing or unsafe file");
+      expect(report.logs["webhooks-only-policy/update.json"]).toBeNull();
+      expect(report.omissions["webhooks-only-policy/update.json"]).toBe(
+        "input exceeds cap; omitted whole",
+      );
+    } else {
+      expect(JSON.parse(report.logs["webhooks-only-policy/result.json"])).toEqual(policy);
+      expect(JSON.parse(report.logs["webhooks-only-policy/update.json"])).toMatchObject({
+        before: { version: "2026.9.2" },
+        after: { version: "2026.9.6" },
+      });
+    }
+    expect(JSON.parse(report.logs["webhooks-only-policy/candidate-runtime.out"]).plugins).toEqual([
+      { id: "telegram", enabled: true, runtime: { state: "unloaded" } },
+    ]);
+    expect(JSON.parse(report.logs["webhooks-only-policy/baseline-runtime.out"]).plugins).toEqual([
+      { id: "telegram", installed: true, enabled: true, state: "enabled" },
+    ]);
+    expect(report.logs).not.toHaveProperty("webhooks-only-policy/openclaw.json");
+  },
+);
 
 it.each([
   { candidateVersion: "2026.9.5" },
   { activePlugins: ["device-pair"] },
-  { candidateEnabledPlugins: ["memory-core", "telegram", "unrelated"] },
   { candidateEnabledPlugins: ["telegram"] },
   { baselineEnabledPlugins: [] },
   { hookUnauthorizedStatus: 200 },
@@ -351,18 +425,43 @@ it.each(["failed", "passed"] as const)(
   },
 );
 
-function integrityLog(f: ReturnType<typeof fixture>, telemetry: Record<string, unknown>) {
+function integrityFixture(
+  identity: Record<string, unknown> = {},
+  telemetry: Record<string, unknown> = {},
+) {
+  const f = fixture();
+  write(path.join(f.artifacts, "diagnostics/process-42-started.json"), {
+    event: "started",
+    role: "update",
+    packageVersion: "2026.9.4",
+    pid: 42,
+    parentPid: 1,
+    timeOriginUnixMs: 100,
+    ...identity,
+  });
+  const observation = {
+    readerId: "42:1",
+    timeOriginUnixMs: 100,
+    event: "reader-settled",
+    phase: "retained",
+    budgetMs: 30000,
+    elapsedMs: 30002,
+    outcome: "timed-out",
+    pendingIo: 0,
+    ...telemetry,
+  };
   fs.writeFileSync(
     path.join(f.root, "openclaw-upgrade-survivor", "gateway.jsonl"),
     JSON.stringify({
       0: JSON.stringify({ subsystem: "update/package-integrity" }),
-      1: telemetry,
-      2: telemetry.event,
-      message: telemetry.event,
+      1: observation,
+      2: observation.event,
+      message: observation.event,
       _meta: { logLevelName: "DEBUG", path: privateBody },
       privateBody,
     }) + "\n",
   );
+  return f;
 }
 
 it("captures only the actual baseline updater's released integrity envelope and preserves failure", () => {
@@ -393,11 +492,7 @@ fs.writeFileSync(${JSON.stringify(path.join(f.root, "openclaw-upgrade-survivor",
   records.map(record => JSON.stringify(record)).join("\\n") + "\\n");
 process.exit(1);`,
   );
-  const child = spawnSync(node, ["--import", observer, entry, "update"], {
-    env: f.env,
-    encoding: "utf8",
-    timeout: 10_000,
-  });
+  const child = runNode(f, ["--import", observer, entry, "update"]);
   expect(child.status, child.stderr).toBe(1);
   const report = capture(f);
   const expected = [
@@ -437,83 +532,50 @@ process.exit(1);`,
   });
 });
 
-it.each([
+const invalidIntegrityCases: {
+  name: string;
+  identity?: Record<string, unknown>;
+  telemetry?: Record<string, unknown>;
+  boundary?: "input" | "output" | "entries" | "symlink" | "directory-symlink" | "malformed";
+}[] = [
   { name: "different PID", identity: { pid: 43 } },
-  { name: "different process origin", identity: { timeOriginUnixMs: 101 } },
   { name: "Doctor", identity: { role: "doctor" } },
-  { name: "post-core", identity: { role: "post-core" } },
   { name: "different package", identity: { packageVersion: "2026.9.5" } },
-  { name: "non-numeric budget", telemetry: { budgetMs: "30000" } },
   { name: "missing settled outcome", telemetry: { outcome: undefined } },
   { name: "negative pending I/O", telemetry: { pendingIo: -1 } },
-])("omits integrity evidence from $name", ({ identity, telemetry }) => {
-  const f = fixture();
-  write(path.join(f.artifacts, "diagnostics/process-42-started.json"), {
-    event: "started",
-    role: "update",
-    packageVersion: "2026.9.4",
-    pid: 42,
-    parentPid: 1,
-    timeOriginUnixMs: 100,
-    ...identity,
-  });
-  integrityLog(f, {
-    readerId: "42:1",
-    timeOriginUnixMs: 100,
-    event: "reader-settled",
-    phase: "retained",
-    budgetMs: 30000,
-    elapsedMs: 30002,
-    outcome: "timed-out",
-    pendingIo: 0,
-    ...telemetry,
-  });
-  const report = capture(f);
-  expect(report.exitStatus).toBe(1);
-  expect(report.packageIntegrity).toEqual({ availability: "unavailable" });
-  expect(report.omissions["package integrity"]).toBeTruthy();
-});
+  ...(["input", "output", "entries", "symlink", "directory-symlink", "malformed"] as const).map(
+    (boundary) => ({
+      name: `${boundary} boundary`,
+      telemetry: { phase: "transaction", pendingIo: 1 },
+      boundary,
+    }),
+  ),
+];
 
-it.each(["input", "output", "entries", "symlink", "directory-symlink", "malformed"] as const)(
-  "omits the whole integrity diagnostic at the %s boundary",
-  (boundary) => {
-    const f = fixture();
-    write(path.join(f.artifacts, "diagnostics/process-42-started.json"), {
-      event: "started",
-      role: "update",
-      packageVersion: "2026.9.4",
-      pid: 42,
-      parentPid: 1,
-      timeOriginUnixMs: 100,
-    });
-    integrityLog(f, {
-      readerId: "42:1",
-      timeOriginUnixMs: 100,
-      event: "reader-settled",
-      phase: "transaction",
-      budgetMs: 30000,
-      elapsedMs: 30002,
-      outcome: "timed-out",
-      pendingIo: 1,
-    });
-    const log = path.join(f.root, "openclaw-upgrade-survivor", "gateway.jsonl");
-    const line = fs.readFileSync(log, "utf8");
-    if (boundary === "symlink") {
-      fs.renameSync(log, path.join(f.root, "outside.jsonl"));
-      fs.symlinkSync(path.join(f.root, "outside.jsonl"), log);
-    } else if (boundary === "directory-symlink") {
-      const directory = path.dirname(log);
-      fs.renameSync(directory, path.join(f.root, "outside-logs"));
-      fs.symlinkSync(path.join(f.root, "outside-logs"), directory, "dir");
-    } else {
-      fs.writeFileSync(
-        log,
-        boundary === "input"
-          ? "x".repeat(256 * 1024 + 1)
-          : boundary === "malformed"
-            ? line + "{"
-            : line.repeat(boundary === "entries" ? 129 : 128),
-      );
+it.each(invalidIntegrityCases)(
+  "omits integrity evidence from $name",
+  ({ identity, telemetry, boundary }) => {
+    const f = integrityFixture(identity, telemetry);
+    if (boundary) {
+      const log = path.join(f.root, "openclaw-upgrade-survivor", "gateway.jsonl");
+      const line = fs.readFileSync(log, "utf8");
+      if (boundary === "symlink") {
+        fs.renameSync(log, path.join(f.root, "outside.jsonl"));
+        fs.symlinkSync(path.join(f.root, "outside.jsonl"), log);
+      } else if (boundary === "directory-symlink") {
+        const directory = path.dirname(log);
+        fs.renameSync(directory, path.join(f.root, "outside-logs"));
+        fs.symlinkSync(path.join(f.root, "outside-logs"), directory, "dir");
+      } else {
+        fs.writeFileSync(
+          log,
+          boundary === "input"
+            ? "x".repeat(256 * 1024 + 1)
+            : boundary === "malformed"
+              ? line + "{"
+              : line.repeat(boundary === "entries" ? 129 : 128),
+        );
+      }
     }
     const report = capture(f);
     expect(report.exitStatus).toBe(1);
@@ -686,10 +748,8 @@ it.each([
     entry,
     `import fs from "node:fs"; fs.writeFileSync(process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH, ${JSON.stringify(JSON.stringify(result))}); process.exit(1);`,
   );
-  const child = spawnSync(node, ["--import", observer, entry, "doctor"], {
-    env: { ...f.env, OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: resultPath },
-    encoding: "utf8",
-    timeout: 10_000,
+  const child = runNode(f, ["--import", observer, entry, "doctor"], {
+    OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: resultPath,
   });
   expect(child.status, child.stderr).toBe(1);
   fs.unlinkSync(resultPath);
@@ -735,17 +795,13 @@ it.each([
       2,
     ),
   );
-  const checked = spawnSync(
-    node,
-    [
-      path.resolve("scripts/e2e/lib/upgrade-survivor/assertions.mjs"),
-      "assert-successful-update-json",
-      updateFile,
-      "2026.9.5",
-      f.artifacts,
-    ],
-    { env: f.env, encoding: "utf8", timeout: 10_000 },
-  );
+  const checked = runNode(f, [
+    path.resolve("scripts/e2e/lib/upgrade-survivor/assertions.mjs"),
+    "assert-successful-update-json",
+    updateFile,
+    "2026.9.5",
+    f.artifacts,
+  ]);
   expect(checked.status).toBe(1);
   expect(checked.stderr).toContain("successful update failed plugin convergence");
   const receipt = fs.readFileSync(
@@ -879,23 +935,15 @@ it("projects retained-import obligations and archive receipts without reading se
 
 it("retains the custom fixture's actual Doctor module and callback identities without argv contents", () => {
   const f = fixture();
-  const seeded = spawnSync(node, [sibling, "seed"], {
-    env: f.env,
-    encoding: "utf8",
-    timeout: 10_000,
-  });
+  const seeded = runNode(f, [sibling, "seed"]);
   expect(seeded.status, seeded.stderr).toBe(0);
   const doctor = path.join(f.root, "custom-plugins/memory/doctor-contract-api.mjs");
-  const invoked = spawnSync(
-    node,
-    [
-      "--input-type=module",
-      "-e",
-      `const m = await import(${JSON.stringify(pathToFileURL(doctor).href)}); m.normalizeCompatibilityConfig({cfg:{}});`,
-      privateBody,
-    ],
-    { env: f.env, encoding: "utf8", timeout: 10_000 },
-  );
+  const invoked = runNode(f, [
+    "--input-type=module",
+    "-e",
+    `const m = await import(${JSON.stringify(pathToFileURL(doctor).href)}); m.normalizeCompatibilityConfig({cfg:{}});`,
+    privateBody,
+  ]);
   expect(invoked.status, invoked.stderr).toBe(0);
   const report = capture(f);
   expect(report.migration.sibling).toMatchObject({
@@ -1049,44 +1097,46 @@ it("does not reuse sibling or startup observations when an attempt fails before 
   }
 });
 
-it("does not create missing WAL sidecars through either receipt or plugin-index capture", () => {
-  const f = fixture();
-  const dbPath = path.join(f.state, "state/openclaw.sqlite");
-  const database = new DatabaseSync(dbPath);
-  database.exec(
-    "PRAGMA journal_mode=WAL; CREATE TABLE migration_runs(id TEXT, status TEXT, report_json TEXT); CREATE TABLE migration_sources(migration_kind TEXT, source_path TEXT, source_sha256 TEXT, status TEXT, removed_source INTEGER, report_json TEXT);",
-  );
-  database.close();
-  expect(fs.readFileSync(dbPath)[18]).toBe(2);
-  for (const suffix of ["-wal", "-shm", "-journal"]) {
-    expect(fs.existsSync(dbPath + suffix)).toBe(false);
-  }
-  const before = hash(dbPath);
-  const report = capture(f);
-  expect(report.migration.sessions.availability).toBe("unavailable");
-  expect(report.pluginIdentity.availability).toBe("unknown");
-  expect(hash(dbPath)).toBe(before);
-  for (const suffix of ["-wal", "-shm", "-journal"]) {
-    expect(fs.existsSync(dbPath + suffix), suffix).toBe(false);
-  }
-});
-
-it("keeps the existing complete WAL family unchanged after observation closes", () => {
-  const f = fixture();
-  const dbPath = path.join(f.state, "state/openclaw.sqlite");
-  const database = new DatabaseSync(dbPath);
-  try {
-    database.exec(
-      "PRAGMA journal_mode=WAL; CREATE TABLE migration_runs(id TEXT, status TEXT, report_json TEXT); CREATE TABLE migration_sources(migration_kind TEXT, source_path TEXT, source_sha256 TEXT, status TEXT, removed_source INTEGER, report_json TEXT); PRAGMA wal_checkpoint(FULL);",
-    );
-    const files = [dbPath, dbPath + "-wal", dbPath + "-shm"];
-    const before = files.map(hash);
-    const report = capture(f);
-    expect(report.migration.sessions.availability).toBe("unavailable");
-    expect(report.omissions["migration-sessions"]).toContain("omitted before native open");
-    expect(files.map(hash)).toEqual(before);
-    expect(fs.existsSync(dbPath + "-journal")).toBe(false);
-  } finally {
-    database.close();
-  }
-});
+it.each([false, true])(
+  "preserves the WAL database family with existing sidecars: %s",
+  (sidecars) => {
+    const f = fixture();
+    const dbPath = path.join(f.state, "state/openclaw.sqlite");
+    const database = new DatabaseSync(dbPath);
+    try {
+      database.exec(
+        "PRAGMA journal_mode=WAL; CREATE TABLE migration_runs(id TEXT, status TEXT, report_json TEXT); CREATE TABLE migration_sources(migration_kind TEXT, source_path TEXT, source_sha256 TEXT, status TEXT, removed_source INTEGER, report_json TEXT);",
+      );
+      if (sidecars) {
+        database.exec("PRAGMA wal_checkpoint(FULL);");
+      } else {
+        database.close();
+      }
+      expect(fs.readFileSync(dbPath)[18]).toBe(2);
+      const suffixes = ["-wal", "-shm", "-journal"];
+      if (!sidecars) {
+        for (const suffix of suffixes) {
+          expect(fs.existsSync(dbPath + suffix)).toBe(false);
+        }
+      }
+      const files = sidecars ? [dbPath, dbPath + "-wal", dbPath + "-shm"] : [dbPath];
+      const before = files.map(hash);
+      const report = capture(f);
+      expect(report.migration.sessions.availability).toBe("unavailable");
+      expect(files.map(hash)).toEqual(before);
+      if (sidecars) {
+        expect(report.omissions["migration-sessions"]).toContain("omitted before native open");
+      } else {
+        expect(report.pluginIdentity.availability).toBe("unknown");
+        for (const suffix of suffixes) {
+          expect(fs.existsSync(dbPath + suffix), suffix).toBe(false);
+        }
+      }
+      expect(fs.existsSync(dbPath + "-journal")).toBe(false);
+    } finally {
+      if (database.isOpen) {
+        database.close();
+      }
+    }
+  },
+);

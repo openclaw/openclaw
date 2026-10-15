@@ -264,7 +264,13 @@ export async function createRepositoryPublicationFixture(
       );
     }
     if (endpoint.includes("/compare/")) {
-      expect(endpoint).toContain("/compare/" + baseCommit + "..." + runtime.baseHead);
+      const source = endpoint.split("/compare/")[1]!.split("...")[0]!;
+      expect(endpoint).toContain("..." + runtime.baseHead);
+      if (source !== baseCommit) {
+        return commandResult(
+          JSON.stringify({ sha: git(["merge-base", source, runtime.baseHead]) }),
+        );
+      }
       return commandResult(
         JSON.stringify({ sha: runtime.commonHistory ? runtime.mergeBase : null }),
       );

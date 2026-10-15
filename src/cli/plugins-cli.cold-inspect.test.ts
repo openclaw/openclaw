@@ -71,28 +71,25 @@ async function runPluginsCommand(args: string[]): Promise<unknown> {
   return JSON.parse(output);
 }
 
-it.each([false, true])(
-  "registered plugins list/info/inspect retain cold CLI capabilities when enabled=%s",
-  async (enabled) => {
-    const fixture = createFixture(enabled);
-    const plugin = {
-      id: pluginId,
-      enabled,
-      status: enabled ? "loaded" : "disabled",
-      cliBackendIds,
-    };
-    expect(await runPluginsCommand(["list"])).toMatchObject({
-      plugins: [expect.objectContaining(plugin)],
+it("registered plugins list/info/inspect retain disabled cold CLI capabilities", async () => {
+  const fixture = createFixture(false);
+  const plugin = {
+    id: pluginId,
+    enabled: false,
+    status: "disabled",
+    cliBackendIds,
+  };
+  expect(await runPluginsCommand(["list"])).toMatchObject({
+    plugins: [expect.objectContaining(plugin)],
+  });
+  for (const command of ["info", "inspect"]) {
+    expect(await runPluginsCommand([command, pluginId])).toMatchObject({
+      plugin: { ...plugin, imported: false },
+      capabilities: [{ kind: "cli-backend", ids: cliBackendIds }],
     });
-    for (const command of ["info", "inspect"]) {
-      expect(await runPluginsCommand([command, pluginId])).toMatchObject({
-        plugin: { ...plugin, imported: false },
-        capabilities: [{ kind: "cli-backend", ids: cliBackendIds }],
-      });
-    }
-    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
-  },
-);
+  }
+  expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+});
 
 it.each([false, true])(
   "registered plugins inspect --runtime preserves activation and executable capabilities when enabled=%s",
@@ -112,47 +109,65 @@ it.each([false, true])(
   },
 );
 
-it("registered plugins inspect --all reports the selected duplicate without importing either entry", async () => {
-  const selected = createFixture(true);
-  const duplicateRoot = path.join(path.dirname(selected.rootDir), "state", "extensions", pluginId);
-  fs.mkdirSync(duplicateRoot, { recursive: true });
-  const duplicate = createColdPluginFixture({
-    rootDir: duplicateRoot,
-    pluginId,
-    manifest: { cliBackends: ["overridden-cli"] },
-  });
-  expect(await runPluginsCommand(["inspect", "--all"])).toMatchObject([
-    {
+it.each([false, true])(
+  "registered inspect preserves incompatible runtime diagnostics and healthy siblings (runtime=%s)",
+  async (runtime) => {
+    const healthy = createFixture(true);
+    fs.writeFileSync(
+      healthy.runtimeSource,
+      `module.exports = { id: "${pluginId}", register() {} };\n`,
+    );
+    const root = path.dirname(healthy.rootDir);
+    const incompatibleRoot = path.join(root, "codex");
+    fs.mkdirSync(incompatibleRoot);
+    const incompatible = createColdPluginFixture({
+      rootDir: incompatibleRoot,
+      pluginId: "codex",
+      packageName: "@openclaw/codex",
+      packageVersion: "2026.9.6",
+      manifest: { providers: [], channels: [], providerAuthChoices: [] },
+    });
+    fs.writeFileSync(
+      path.join(root, "openclaw.json"),
+      JSON.stringify({
+        plugins: {
+          load: { paths: [healthy.rootDir, incompatibleRoot] },
+          entries: { [pluginId]: { enabled: true }, codex: { enabled: true } },
+        },
+      }),
+    );
+    resetConfigRuntimeState();
+    const runtimeArgs = runtime ? ["--runtime"] : [];
+    const incompatibleReport = {
       plugin: {
-        id: pluginId,
-        source: fs.realpathSync(selected.runtimeSource),
-        enabled: true,
-        status: "loaded",
+        id: "codex",
+        status: "error",
+        activated: false,
         imported: false,
-        cliBackendIds,
+        error: expect.stringContaining("openclaw plugins update codex"),
       },
-    },
-  ]);
-  expect(isColdPluginRuntimeLoaded(selected)).toBe(false);
-  expect(isColdPluginRuntimeLoaded(duplicate)).toBe(false);
-});
-
-it("registered plugins inspect --runtime reports registrations rather than unregistered declarations", async () => {
-  const fixture = createFixture(true);
-  fs.writeFileSync(
-    fixture.runtimeSource,
-    `module.exports = { register(api) {
-      api.registerCliBackend({ id: "runtime-cli", config: { command: "fixture-cli" } });
-    } };`,
-  );
-  expect(await runPluginsCommand(["inspect", pluginId, "--runtime"])).toMatchObject({
-    plugin: {
-      id: pluginId,
-      enabled: true,
-      status: "loaded",
-      imported: true,
-      cliBackendIds: ["runtime-cli"],
-    },
-    capabilities: [{ kind: "cli-backend", ids: ["runtime-cli"] }],
-  });
-});
+      diagnostics: [
+        expect.objectContaining({
+          level: "error",
+          pluginId: "codex",
+          message: expect.stringContaining("minimum compatible plugin version is 2026.9.7"),
+        }),
+      ],
+    };
+    expect(await runPluginsCommand(["inspect", "codex", ...runtimeArgs])).toMatchObject(
+      incompatibleReport,
+    );
+    expect(await runPluginsCommand(["inspect", pluginId, ...runtimeArgs])).toMatchObject({
+      plugin: { id: pluginId, status: "loaded", imported: runtime },
+    });
+    expect(await runPluginsCommand(["inspect", "--all", ...runtimeArgs])).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ...incompatibleReport,
+          plugin: expect.objectContaining(incompatibleReport.plugin),
+        }),
+      ]),
+    );
+    expect(isColdPluginRuntimeLoaded(incompatible)).toBe(false);
+  },
+);

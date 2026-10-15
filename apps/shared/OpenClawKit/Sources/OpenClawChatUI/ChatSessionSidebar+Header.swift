@@ -50,40 +50,40 @@ extension ChatSessionSidebar {
         .disabled(self.viewModel.isCreatingSession)
     }
 
-    var threadsHeading: some View {
+    func threadsHeading(ownership: ChatSidebarOwnership) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Text("Threads")
                 .font(OpenClawChatTypography.body(size: 12, weight: .semibold, relativeTo: .body))
             Spacer(minLength: 8)
-            Text(verbatim: self.viewModel.selectedAgent?.displayName ?? self.viewModel.selectedAgentID ?? "")
+            Text(verbatim: self.showsAllAgents ? String(localized: "All agents") :
+                self.viewModel.selectedAgent?.displayName ?? self.viewModel.selectedAgentID ?? "")
                 .font(OpenClawChatTypography.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            Menu {
-                Picker("Sort", selection: self.$sessionSort) {
-                    Text("Created").tag(ChatSessionSidebarModel.Sort.created)
-                    Text("Last updated").tag(ChatSessionSidebarModel.Sort.updated)
+            Button { self.isPresentingFilters.toggle() } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "line.3.horizontal.decrease")
+                    if self.filterOptions.filterCount > 0 {
+                        Text(self.filterOptions.filterCount, format: .number).monospacedDigit()
+                    }
                 }
-                .pickerStyle(.inline)
-                Divider()
-                Toggle("Show message preview", isOn: self.$showMessagePreview)
-                Toggle("Show automation sessions", isOn: self.$showAutomationSessions)
-                Toggle("Show system sessions", isOn: self.$showSystemSessions)
-            } label: {
-                Image(systemName: "line.3.horizontal.decrease")
-                    .font(OpenClawChatTypography.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 22, height: 22)
-                    .contentShape(Rectangle())
+                .font(OpenClawChatTypography.caption)
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 22, minHeight: 22)
+                .contentShape(Rectangle())
             }
-            // Keep the custom label visible when the sidebar's window is inactive.
-            .menuStyle(.button)
             .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
             .help(String(localized: "View options"))
             .accessibilityLabel(String(localized: "View options"))
             .accessibilityIdentifier("chat-sidebar-view-options")
+            .popover(isPresented: self.$isPresentingFilters) {
+                VStack(spacing: 0) {
+                    ChatSessionSidebarFilters(options: self.filterBinding, ownership: ownership)
+                    ChatSidebarCatalogVisibilityOptions(data: self.catalogData, ownerFilter: self.$sessionOwnerFilter)
+                        .padding(16)
+                }
+                .onExitCommand { self.isPresentingFilters = false }
+            }
         }
         .padding(.top, 14)
         .padding(.bottom, 2)
@@ -170,46 +170,50 @@ extension ChatSessionSidebar {
         }
         return activity.text
     }
-
-    var connectionFooter: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(self.viewModel.healthOK ? .green : .orange)
-                .frame(width: 7, height: 7)
-            Text(self.viewModel.healthOK
-                ? String(localized: "Gateway connected")
-                : String(localized: "Connecting…"))
-                .font(OpenClawChatTypography.caption)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 0)
-            if self.groupLoadFailed {
-                Button {
-                    self.groupRefreshNonce += 1
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .help(String(localized: "Retry thread groups"))
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 12)
-        .background(.bar)
-    }
 }
 
 struct ChatSidebarAgentAvatar: View {
     let agent: OpenClawChatAgentChoice
     var size: CGFloat = 28
+    @Environment(\.sidebarAgentAvatarProvider) private var provider
+    @State private var image: NSImage?
+    @State private var loadedRequest: Request?
+
+    private struct Request: Equatable {
+        let scope: ChatSidebarAgentAvatarProvider.Scope?
+        let agentID: String
+        let source: String?
+    }
 
     var body: some View {
-        Text(verbatim: self.agent.avatarText)
-            .font(OpenClawChatTypography.navigationAvatar(size: self.size * 0.5))
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
-            .frame(width: self.size, height: self.size)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: self.size * 0.3))
-            .accessibilityHidden(true)
+        let request = Request(scope: self.provider?.scope, agentID: self.agent.id, source: self.agent.avatar)
+        ZStack {
+            if self.loadedRequest == request, let image {
+                Image(nsImage: image).resizable().scaledToFill()
+            } else {
+                Text(verbatim: self.agent.avatarText)
+                    .font(OpenClawChatTypography.navigationAvatar(size: self.size * 0.5))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+        }
+        .frame(width: self.size, height: self.size)
+        .background(.quaternary)
+        .clipShape(RoundedRectangle(cornerRadius: self.size * 0.3))
+        .accessibilityHidden(true)
+        .task(id: request) {
+            self.image = nil
+            self.loadedRequest = nil
+            guard let provider, let source = request.source else { return }
+            let data: Data? = if let inline = OpenClawSidebarAgentAvatarSource.inlineData(source) {
+                inline
+            } else {
+                await provider.transport.loadSidebarAgentAvatar(source)
+            }
+            guard let data, !Task.isCancelled else { return }
+            self.image = NSImage(data: data)
+            self.loadedRequest = request
+        }
     }
 }
 #endif

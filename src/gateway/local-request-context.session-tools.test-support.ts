@@ -13,6 +13,7 @@ import { setSteeringMessageIdentity } from "../agents/sessions/steering-message-
 import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { withPersonalToolTurn } from "../auto-reply/reply/personal-tool-turn.test-support.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
@@ -21,6 +22,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../sessions/user-turn-transcript-runtime-context.js";
 import type {
   PersistedUserTurnMessage,
@@ -40,6 +42,30 @@ export const PARTICIPANT_DRAFT = "agent:main:dashboard:participant-draft";
 export const PARTICIPANT_DRAFT_ID = "participant-draft-id";
 let fixtureRun: Promise<void> | undefined;
 
+export async function seedSessionToolsFixtureSession({
+  agentId = "main",
+  sessionKey,
+  sessionId,
+  creatorId = "other-person",
+}: {
+  agentId?: string;
+  sessionKey: string;
+  sessionId: string;
+  creatorId?: string;
+}) {
+  await upsertSessionEntryCore(
+    { agentId, sessionKey },
+    {
+      sessionId,
+      updatedAt: 1,
+      visibility: "shared",
+      createdVia: "operator",
+      createdActor: { type: "human", source: "profile", id: creatorId },
+    },
+  );
+  return { sessionKey, sessionId };
+}
+
 export function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<void>) {
   return (fixtureRun = withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
@@ -55,28 +81,25 @@ export function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<vo
       tools: { sessions: { visibility: "all" } },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     for (const [agentId, sessionKey, sessionId] of [
       ["main", REQUESTER, "session-tools-requester-id"],
       ["main", TARGET, TARGET_ID],
       ["main", INCOGNITO, "session-tools-incognito-id"],
       ["other", "agent:other:dashboard:session-tools-other", "session-tools-other-id"],
     ] as const) {
-      await upsertSessionEntryCore(
-        { agentId, sessionKey },
-        {
-          sessionId,
-          updatedAt: 1,
-          visibility: "shared",
-          createdVia: "operator",
-          createdActor: { type: "human", source: "profile", id: "other-person" },
-        },
-      );
+      await seedSessionToolsFixtureSession({ agentId, sessionKey, sessionId });
     }
     const resources = new LegacyPluginSdkResourceHost();
     try {
       await resources.run(() =>
-        withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
-          run(cfg),
+        withLocalGatewayRequestScope(
+          { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
+          async () => {
+            // Fixture startup must finish before a tool's request deadline begins.
+            await getPluginRuntimeGatewayRequestScope()?.context?.ensureSessionRowProjection?.();
+            return run(cfg);
+          },
         ),
       );
     } finally {

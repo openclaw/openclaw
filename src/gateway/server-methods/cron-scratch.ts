@@ -2,6 +2,7 @@ import {
   validateCronScratchGetParams,
   validateCronScratchSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { cronScratchReadView } from "../../cron/job-read-view.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -15,21 +16,6 @@ import {
   scopedCronJobHandler,
 } from "./cron-job-access.js";
 import type { GatewayRequestHandlers } from "./types.js";
-
-// Migration provenance (sourceSha256) stays internal; the closed result schema
-// exposes only content/revision/updatedAtMs.
-function publicCronScratch(
-  scratch: { content: string; revision: number; updatedAtMs: number } | undefined,
-) {
-  if (!scratch) {
-    return null;
-  }
-  return {
-    content: scratch.content,
-    revision: scratch.revision,
-    updatedAtMs: scratch.updatedAtMs,
-  };
-}
 
 export const cronScratchHandlers: GatewayRequestHandlers = {
   "cron.scratch.get": scopedCronJobHandler(
@@ -60,7 +46,7 @@ export const cronScratchHandlers: GatewayRequestHandlers = {
       respond(
         true,
         {
-          scratch: publicCronScratch(state.scratch),
+          scratch: cronScratchReadView(state.scratch),
           currentRevision: state.currentRevision,
           maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
         },
@@ -96,7 +82,7 @@ export const cronScratchHandlers: GatewayRequestHandlers = {
           true,
           {
             ok: true,
-            scratch: publicCronScratch(result.scratch),
+            scratch: cronScratchReadView(result.scratch),
             currentRevision: result.currentRevision,
             maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
           },

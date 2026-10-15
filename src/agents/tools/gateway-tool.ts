@@ -29,18 +29,6 @@ import { callInProcessGatewayTool, getInProcessGatewayToolContext } from "./in-p
 const MAX_GATEWAY_CONFIG_GET_TEXT_CHARS = 12_000;
 const CONFIG_SCHEMA_PATH_NOT_FOUND_MESSAGE = "config schema path not found";
 
-function getSnapshotConfig(snapshot: unknown): Record<string, unknown> {
-  const record = asOptionalObjectRecord(snapshot);
-  if (!record) {
-    throw new Error("config.get response is not an object.");
-  }
-  const config = asOptionalRecord(record.config);
-  if (!config) {
-    throw new Error("config.get response is missing a config object.");
-  }
-  return config;
-}
-
 function resolveGatewayConfigGetPath(config: Record<string, unknown>, path: string): unknown {
   const parts = path
     .trim()
@@ -69,33 +57,6 @@ function resolveGatewayConfigGetPath(config: Record<string, unknown>, path: stri
     current = (current as Record<string, unknown>)[part];
   }
   return current;
-}
-
-function selectGatewayConfigGetResult(snapshot: unknown, path: string | undefined): unknown {
-  if (!path) {
-    return snapshot;
-  }
-  const value = resolveGatewayConfigGetPath(getSnapshotConfig(snapshot), path);
-  if (value === undefined) {
-    throw new ToolInputError(`config path not found: ${path}`);
-  }
-  const hash = readStringValue((snapshot as { hash?: unknown }).hash);
-  return {
-    ...(hash ? { hash } : {}),
-    path,
-    config: value,
-  };
-}
-
-function createGatewayConfigGetToolResult(result: unknown) {
-  const payload = { ok: true, result };
-  const text = JSON.stringify(payload, null, 2);
-  if (text.length > MAX_GATEWAY_CONFIG_GET_TEXT_CHARS) {
-    throw new ToolInputError(
-      "config.get response is too large; use path to request a narrower config subtree",
-    );
-  }
-  return textResult(text, payload);
 }
 
 function isConfigSchemaPathNotFoundError(error: unknown): boolean {
@@ -202,8 +163,31 @@ export function createGatewayTool(options?: {
       if (action === "config.get") {
         const path = readToolStringParam(params, "path");
         const snapshot = await callConfigGateway("config.get", {});
-        const result = selectGatewayConfigGetResult(snapshot, path);
-        return createGatewayConfigGetToolResult(result);
+        let result = snapshot;
+        if (path) {
+          const record = asOptionalObjectRecord(snapshot);
+          if (!record) {
+            throw new Error("config.get response is not an object.");
+          }
+          const config = asOptionalRecord(record.config);
+          if (!config) {
+            throw new Error("config.get response is missing a config object.");
+          }
+          const value = resolveGatewayConfigGetPath(config, path);
+          if (value === undefined) {
+            throw new ToolInputError(`config path not found: ${path}`);
+          }
+          const hash = readStringValue(record.hash);
+          result = { ...(hash ? { hash } : {}), path, config: value };
+        }
+        const payload = { ok: true, result };
+        const text = JSON.stringify(payload, null, 2);
+        if (text.length > MAX_GATEWAY_CONFIG_GET_TEXT_CHARS) {
+          throw new ToolInputError(
+            "config.get response is too large; use path to request a narrower config subtree",
+          );
+        }
+        return textResult(text, payload);
       }
       if (action === "config.schema.lookup") {
         const path = readToolStringParam(params, "path", {

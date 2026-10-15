@@ -2,13 +2,17 @@ import { etc, getPublicKeyAsync, hashes, signAsync, utils } from "@noble/ed25519
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  DEVICE_AUTH_STORAGE_KEY_PREFIX,
+  LEGACY_DEVICE_AUTH_STORAGE_KEY,
+} from "../../../../src/shared/control-ui-storage.js";
+import {
   type DeviceAuthEntry,
   type DeviceAuthStore,
   normalizeDeviceAuthRole,
   normalizeDeviceAuthScopes,
 } from "../../../../src/shared/device-auth.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { bytesToBase64 } from "../bytes-base64.ts";
+import { base64ToBytes, bytesToBase64 } from "../bytes-base64.ts";
 
 export type {
   DevicePairingList,
@@ -30,11 +34,8 @@ hashes.sha512Async = async (message: Uint8Array) => {
   return Uint8Array.from((await loadPureSha2()).sha512(message));
 };
 
-type StoredIdentity = {
+type StoredIdentity = DeviceIdentity & {
   version: 1;
-  deviceId: string;
-  publicKey: string;
-  privateKey: string;
   createdAtMs: number;
 };
 
@@ -44,8 +45,6 @@ type DeviceIdentity = {
   privateKey: string;
 };
 
-const LEGACY_DEVICE_AUTH_STORAGE_KEY = "openclaw.device.auth.v1";
-const DEVICE_AUTH_STORAGE_KEY_PREFIX = `${LEGACY_DEVICE_AUTH_STORAGE_KEY}:`;
 const DEVICE_IDENTITY_STORAGE_KEY = "openclaw-device-identity-v1";
 
 function deviceAuthStorageKey(gatewayUrl: string): string {
@@ -219,12 +218,7 @@ function base64UrlEncode(bytes: Uint8Array): string {
 function base64UrlDecode(input: string): Uint8Array {
   const normalized = input.replaceAll("-", "+").replaceAll("_", "/");
   const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
-  const binary = atob(padded);
-  const out = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    out[i] = binary.charCodeAt(i);
-  }
-  return out;
+  return base64ToBytes(padded);
 }
 
 async function fingerprintPublicKey(publicKey: Uint8Array): Promise<string> {
@@ -326,9 +320,7 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
   const identity = await generateIdentity();
   const stored: StoredIdentity = {
     version: 1,
-    deviceId: identity.deviceId,
-    publicKey: identity.publicKey,
-    privateKey: identity.privateKey,
+    ...identity,
     createdAtMs: Date.now(),
   };
   try {

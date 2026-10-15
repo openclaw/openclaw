@@ -1,9 +1,6 @@
-import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import {
-  countActiveDescendantRunsFromRuns,
-  hasDescendantRunAwaitingSettleFromRuns,
-} from "../registry/subagent-registry-queries.js";
-import { listSubagentRunsForRequester } from "../registry/subagent-registry-read.js";
+import { resolveRecordedRequester } from "../registry/subagent-child-owner-match.js";
+import { getCurrentSubagentRunOwner, subagentRuns } from "../registry/subagent-registry-memory.js";
+import { buildScopedSubagentRunReadIndexFromRuns } from "../registry/subagent-registry-queries.js";
 import { withSubagentRunReadSnapshot } from "../registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { collectSubagentSessionReadKeys } from "../registry/subagent-session-read-scope.js";
@@ -18,20 +15,18 @@ export function createRequesterDescendantReader(params: {
   signal?: AbortSignal;
   isSourceCurrent: () => boolean;
 }) {
-  const generation = params.settledEntry.generation;
   const rearmGeneration = params.settledEntry.requesterSettleWake?.rearmGeneration;
   const isCurrent = () => {
-    const wake = params.settledEntry.requesterSettleWake;
+    if (params.signal?.aborted || !params.isSourceCurrent()) {
+      return false;
+    }
+    const current = getCurrentSubagentRunOwner(subagentRuns, params.settledEntry);
     return (
-      !params.signal?.aborted &&
-      params.isSourceCurrent() &&
-      params.settledEntry.generation === generation &&
-      wake !== undefined &&
-      wake.rearmGeneration === rearmGeneration &&
-      listSubagentRunsForRequester(params.requesterSessionKey, {
-        requesterAgentId: params.requesterAgentId,
-        requesterStorePath: params.requesterStorePath,
-      }).includes(params.settledEntry)
+      current?.requesterSettleWake !== undefined &&
+      current.requesterSessionKey === params.requesterSessionKey.trim() &&
+      (!params.requesterAgentId || resolveRecordedRequester(current) === params.requesterAgentId) &&
+      (current.requesterStorePath ?? null) === params.requesterStorePath &&
+      current.requesterSettleWake.rearmGeneration === rearmGeneration
     );
   };
   return async () => {
@@ -59,24 +54,20 @@ export function createRequesterDescendantReader(params: {
         if (!isCurrent()) {
           return undefined;
         }
-        const snapshot = new Map(runs);
+        const index = buildScopedSubagentRunReadIndexFromRuns(
+          new Map(runs),
+          params.requesterSessionKey,
+          params.requesterAgentId,
+          params.requesterStorePath,
+          params.rootRunIds,
+        );
         return {
-          unsettled: hasDescendantRunAwaitingSettleFromRuns(
-            snapshot,
+          unsettled: index.hasDescendantRunAwaitingSettle(
             params.requesterSessionKey,
             params.settledEntry.runId,
-            params.requesterAgentId,
-            params.requesterStorePath,
             params.settledBefore,
-            params.rootRunIds,
           ),
-          active: countActiveDescendantRunsFromRuns(
-            snapshot,
-            params.requesterSessionKey,
-            params.requesterAgentId,
-            params.requesterStorePath,
-            params.rootRunIds,
-          ),
+          active: index.countActiveDescendantRuns(params.requesterSessionKey),
         };
       },
       { sessionKeys: [params.requesterSessionKey], descendants: true },

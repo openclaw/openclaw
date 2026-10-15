@@ -11,7 +11,7 @@ This page covers the shared secret store, the default-off secret egress proxy an
 
 ## Shared secret store
 
-The shared secret store is a Gateway-wide, team-scoped place for secrets and environment values that should be available to every Gateway process using the same state database. Manage it from **Settings → Secrets** in the Control UI or locally with `openclaw secrets store`. The CLI commands operate on the local state database and do not accept Gateway URL or token options.
+The shared secret store is a Gateway-wide, team-scoped place for secrets and environment values for the Gateway that owns the state directory. Manage it from **Settings → Secrets** in the Control UI or locally with `openclaw secrets store`. CLI writes route through that local Gateway, or take exclusive offline ownership when it is stopped. The commands do not accept Gateway URL or token options.
 
 Entries have two explicit access modes. Both retain the existing `secret` and `env` storage kinds, and either kind can back a SecretRef:
 
@@ -23,6 +23,8 @@ Agent-readable environment values do not reach Codex native shell, the Codex san
 By default, `secret` entries are never injected into subprocess environments. When the default-off [secret egress proxy](#secret-egress-proxy) is enabled, Gateway-hosted exec commands receive process-local sentinels instead of plaintext values.
 
 Names use the same uppercase grammar as env SecretRefs, and each UTF-8 value is limited to 64 KiB (65,536 bytes). The store preserves submitted whitespace and newlines. A `secret` entry must carry a value; empty secrets are rejected because they would surface only as a confusing downstream auth failure. `env` entries may be empty. This supports PEM keys and service-account JSON without inheriting the smaller limits of ordinary environment variables.
+
+Exec captures its snapshot through the shared-state read worker. The selected entries, names, and host metadata have a 32 MiB read budget; an oversized snapshot fails visibly instead of injecting a partial environment. Store-backed SecretRefs also read through that worker. Neither reader creates a missing store or table.
 
 Reference an entry from `openclaw.json` with the `store` source:
 
@@ -38,7 +40,7 @@ Reference an entry from `openclaw.json` with the `store` source:
 }
 ```
 
-Control UI set/delete operations automatically refresh the active secrets runtime when the changed name is referenced by a `store` SecretRef in the active source config or auth-profile snapshot. Names that are not referenced skip that work. Direct CLI writes remain an offline/local path; after changing a referenced value with the CLI, run `openclaw secrets reload` so the active in-memory snapshot picks it up.
+Control UI mutations and routed CLI writes automatically refresh the active secrets runtime when a changed name is referenced by a `store` SecretRef in the active source config or auth-profile snapshot. Names that are not referenced skip that work. Offline CLI changes are loaded when the Gateway starts. If an online write succeeds but runtime refresh fails, the error reports the saved change; resolve the provider error and run `openclaw secrets reload`.
 
 The agent can also ask you to add an entry with the [`secrets` tool](/tools/secrets): it names the entry and the reason, you type the value into a masked prompt, and the Gateway writes it directly into the store. The value never enters the chat, the transcript, or the model's context, and the same automatic runtime refresh applies.
 
@@ -107,6 +109,16 @@ When enabled, OpenClaw adds these values to Gateway-hosted exec environments:
 
 Proxy authentication uses standard Basic proxy auth with username `openclaw` and a random password for each managed exec process. OpenClaw creates the grant after approval and launch checks. A background command retains its grant when the originating agent turn ends; its process supervisor owns both execution and proxy access. Base64 is not treated as encryption: the listener binds only to loopback, and a process that can read the proxy token from the agent environment can already read the sentinels in that environment. Missing, wrong, or revoked credentials receive `407 Proxy Authentication Required` and are never forwarded.
 
+Origin HTTP Basic authentication is supported too: a client can encode a sentinel
+in its username or password, for example `curl --user "user:$REGISTRY_TOKEN"`.
+The proxy validates and decodes only the origin `Authorization: Basic ...`
+credentials, checks each sentinel's registered destination binding, substitutes,
+and re-encodes them. Ordinary Basic headers are forwarded unchanged. It does not
+decode other base64 headers or bodies, and `Proxy-Authorization` remains proxy
+authentication only and is removed before forwarding. Unknown, tampered, or
+destination-denied sentinels fail closed. The proxy does not follow redirects;
+each redirected request must independently pass destination authorization.
+
 Process exit, failed startup, cancellation, and timeout revoke that process's grant and tear down its proxy connections, upstream requests, and bypass tunnels. Cancellation revokes access before native process termination. Stopping one command does not revoke a sibling command's grant. Gateway shutdown revokes every grant; restarting requires starting new commands. New grants cannot revive revoked connections or bindings. Bytes already handed to the upstream transport before revocation cannot be recalled.
 
 Each process receives a fixed copy of the owning run's secret snapshot, including each sentinel's secret name and allowed hosts. Later commands cannot change an existing process's grant. After proxy authentication, the proxy looks up the matched sentinel in that process's registration and authorizes the normalized destination hostname before decrypting the sentinel. A sentinel that is unregistered, unresolved, unbound, or bound to another host is refused before its plaintext is forwarded.
@@ -115,9 +127,11 @@ Each process receives a fixed copy of the owning run's secret snapshot, includin
 Destination binding does not make an allowed host trustworthy. A bound service that reflects request credentials can still return the plaintext to the agent. DNS-level compromise can redirect a permitted hostname because policy is hostname-based, not an IP pin. Non-HTTPS requests are refused rather than protected, except plain-HTTP requests to literal loopback destinations, which the proxy forwards under its traffic policy without substituting secrets. HTTPS interception still has the protocol limits below. Use external network policy or process isolation when those threats are in scope.
 </Warning>
 
-The CA is generated once per Gateway start under the state directory with a ten-year certificate validity window. Its key is still process-owned, not retained for ten years. One-day leaf certificates renew on demand within their final hour without replacing the CA or interrupting established TLS connections. This keeps already-running subprocesses trusting the same issuer across renewal. Its directory is mode `0700`, its private keys are mode `0600`, it is removed during Gateway shutdown, and OpenClaw never installs it in a system trust store. Requests fail closed when a sentinel cannot be authenticated or resolved; the proxy never forwards or silently strips an unresolved sentinel. Request bodies are scanned as a stream with a bounded carry window, so substitution also works when a sentinel crosses chunk boundaries or appears in a large upload.
+The CA is generated once per Gateway start under the state directory with a ten-year certificate validity window. Its key is still process-owned, not retained for ten years. The proxy reuses up to 128 hostname certificates across commands while keeping each command's TLS connections and secret bindings separate. This cache belongs to the process CA and is cleared at shutdown. One-day leaf certificates renew on demand within their final hour without replacing the CA or interrupting established TLS connections. This keeps already-running subprocesses trusting the same issuer across renewal. Its directory is mode `0700`, its private keys are mode `0600`, it is removed during Gateway shutdown, and OpenClaw never installs it in a system trust store. Requests are rejected when a sentinel cannot be authenticated or resolved; the proxy never forwards or silently strips an unresolved sentinel. Request bodies are scanned as a stream with a bounded carry window, so substitution also works when a sentinel crosses chunk boundaries or appears in a large upload.
 
-`openclaw status` and `openclaw doctor` report certificate preparation failures and warn when the process CA is within seven days of expiry. Failed preparation refuses the new CONNECT request with an actionable error; the next request can retry after OpenSSL, filesystem access, or clock problems are corrected. An expired or not-yet-valid CA requires checking the system clock and restarting the Gateway, not disabling TLS verification. Gateway RPC can remain reachable while protected egress is degraded. For a read-only, machine-readable probe, run `openclaw doctor --lint --only core/doctor/gateway-health --json`; the default JSON checks do not probe the running Gateway.
+`openclaw status` and `openclaw doctor` report certificate preparation failures and warn when the process CA is within seven days of expiry. Failed preparation refuses the new CONNECT request with an actionable error; the next request can retry after OpenSSL, filesystem access, or clock problems are corrected. An expired or not-yet-valid CA requires checking the system clock and restarting the Gateway, not disabling TLS verification. Gateway RPC can remain reachable while protected egress is degraded. For a read-only, machine-readable check, run `openclaw doctor --lint --only core/doctor/gateway-health --json`; the default JSON checks do not check the running Gateway.
+
+Generated certificates include the key identifiers required by strict TLS clients, including Python 3.13 and later, with either OpenSSL or macOS LibreSSL. After updating, restart the Gateway to generate its new process CA and start a new command to load the new trust bundle.
 
 For an HTTP request with a valid `Content-Length` of at most 100 MiB, the proxy collects the original bytes in one process-memory buffer. It then checks current destination and sentinel bindings, substitutes in place, and sends the measured byte length upstream. This preserves fixed-length binary uploads without retaining one object per incoming chunk. Sentinel replacements cannot expand the body; no MIME type is exempt from scanning and no request-body temporary files are written.
 
@@ -150,6 +164,51 @@ Current limits:
 - Plain HTTP is refused except for direct proxy requests to literal loopback destinations (`localhost`, `127.0.0.0/8`, or `::1`). These requests stay under proxy authentication, traffic allowlist, audit, and upload limits. DNS answers do not qualify other hostnames for this exception. Loopback HTTP requests carrying a secret sentinel are still refused; secrets are never substituted onto cleartext HTTP.
 - Automatic shared-store secret egress applies only to Gateway-hosted exec. Sandbox and remote `node` exec receive neither proxy variables nor sentinels, so shared-store `secret` entries are unavailable there. Provider-native harness subprocesses also do not use this proxy. The explicit Crabbox command below grants a configured model credential separately.
 - Background subprocesses retain their original secret snapshot until they exit or are stopped. Changes to stored credentials or destination bindings require a new run and a new command; stop existing commands to revoke their older grants immediately.
+
+## Job-scoped setup grants
+
+Official plugins can prepare one job with an explicit selection of shared-store
+SecretRefs through `withSetupSecretEgress` in
+`openclaw/plugin-sdk/secret-egress-runtime`. This capability reads only the named
+`kind: "secret"` entries and their allowed-host bindings in one coherent
+read-worker snapshot. Unrelated secrets and agent-readable `env` entries are not
+loaded or registered. A missing or non-secret selection fails before launching
+the job; changes to the store apply to the next job's snapshot.
+
+Cloud worker profiles select these jobs with `settings.setupSecrets`, a bounded
+map of POSIX environment names to store SecretRefs. Only protected entries with
+exact destination bindings qualify. A committed devcontainer `secrets` property
+requests names from this approved map; it cannot select another store entry or
+grant destinations. Missing mappings are reported together before repository
+commands run. See [cloud environment files](/gateway/cloud-workers/environment-file).
+
+Profile setup, preparation, and post-create/start use Crabbox native `egress run`
+on the worker's owned coordinator Linux lease. Crabbox 0.77.0 or newer permits
+public destinations for ordinary HTTPS package downloads, while the Gateway
+substitutes each sentinel only at that secret's bound host. This job does not
+require `secrets.egressProxy.enabled`. Unsupported leases, unavailable helpers or
+proxy service, and old CLIs fail with repair guidance before repository code.
+No-secret jobs retain their existing transport.
+Protected setup exports only HTTPS proxy settings and unsets inherited
+`HTTP_PROXY` and `http_proxy` values. Plain HTTP downloads go directly from the
+lease and never receive substituted secrets.
+
+The job receives remote sentinel environment values and public CA bundle
+contents. Its authenticated upstream proxy environment belongs only on the
+credential-owning host, never in the remote environment or a snapshot. The host
+bridge supplies remote proxy and CA settings. Setup and model jobs share the
+same worker-owned grant lifecycle: cancellation revokes access synchronously
+before process termination, and completion or failure revokes the grant, stops
+the proxy, and removes temporary CA files. See the
+[SDK runtime contract](/plugins/sdk-runtime#setup-secret-egress).
+
+Setup secrets no longer disable snapshots. Compatibility records use sorted
+environment names and store references with a protected-egress identity, never
+values or sentinel bytes. Capture removes runner-owned CA files and Crabbox
+command staging. No runner-generated credential config is retained; repository
+configuration stays owned by the repository. Legacy `setupEnv` requires Doctor
+repair against existing bound store entries; values are never forwarded or
+rewritten by that migration.
 
 ## Model credentials for Crabbox commands
 

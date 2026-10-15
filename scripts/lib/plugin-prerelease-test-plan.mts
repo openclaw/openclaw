@@ -2,8 +2,6 @@
 import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "./docker-e2e-scenarios.mts";
 import type { ExtensionTestPlanGroup } from "./extension-test-plan.mts";
 
-type PrereleaseSurfaceEntry = { surfaces: readonly string[] };
-
 /** Required behavioral surfaces that plugin prerelease validation must cover. */
 const PLUGIN_PRERELEASE_REQUIRED_SURFACES = Object.freeze([
   "package-artifact",
@@ -135,16 +133,6 @@ const staticChecks = Object.freeze([
   },
 ]);
 
-function coveredSurfaces(entries: readonly PrereleaseSurfaceEntry[]): string[] {
-  return [
-    ...new Set(
-      entries
-        .flatMap((entry) => entry.surfaces)
-        .filter((surface) => typeof surface === "string" && surface.length > 0),
-    ),
-  ].toSorted((a, b) => a.localeCompare(b));
-}
-
 /** Keep each release batch on Node and add only its qualified Bun groups. */
 export async function resolvePluginPrereleaseExtensionRuntime({
   planGroups,
@@ -187,7 +175,9 @@ export function createPluginPrereleaseTestPlan() {
       command: entry.command,
       surfaces: entry.surfaces.slice(),
     })),
-    surfaces: coveredSurfaces(allEntries),
+    surfaces: [...new Set(allEntries.flatMap((entry) => entry.surfaces))].toSorted((a, b) =>
+      a.localeCompare(b),
+    ),
   };
 }
 

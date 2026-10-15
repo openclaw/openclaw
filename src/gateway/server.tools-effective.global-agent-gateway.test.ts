@@ -25,7 +25,14 @@ test("tools.effective rejects a mismatched configured agent for a non-global ses
   await fs.writeFile(
     configPath,
     JSON.stringify({
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          systemAgent: { agentId: "main" },
+          sessionStore: { agentId: "main" },
+        },
+        entries: { main: {}, work: {} },
+      },
       session: { store: storePath },
     }),
     "utf-8",

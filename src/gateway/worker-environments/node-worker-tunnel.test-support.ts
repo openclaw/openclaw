@@ -11,7 +11,9 @@ import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner
 import type { SpawnResult } from "../../process/exec.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../../worker/node-workspace-protocol.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
-import type { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
+// Keep this static: the tunnel graph reaches compiled-subprocess declarations, whose one-time
+// invocation-wide preparation must happen at collection, not inside a test deadline.
+import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { NodeWorkspaceTransferSnapshot } from "./node-workspace-transfer-snapshot.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
@@ -113,11 +115,10 @@ export function startRequest() {
   };
 }
 
-export async function createManager(
+export function createManager(
   record: ReturnType<typeof environment>,
   overrides: Partial<Parameters<typeof createNodeWorkerTunnelManager>[0]> = {},
 ) {
-  const { createNodeWorkerTunnelManager } = await import("./node-worker-tunnel.js");
   return createNodeWorkerTunnelManager({
     gatewayDeviceId: "gateway-device-1",
     getEnvironment: () => record,

@@ -1,0 +1,18 @@
+import { describe, expect, it } from "vitest";
+import { listDatabaseEngineStores, selectDatabaseEngine } from "./registry.js";
+
+describe("database engine selection", () => {
+  it("honors explicit SQLite selection for PostgreSQL-capable stores", () => {
+    expect(selectDatabaseEngine({ postgres: true }, { database: { engine: "sqlite" } })).toBe(
+      "sqlite",
+    );
+  });
+
+  it("registers PostgreSQL support for shared state and completed plugin families", () => {
+    expect(
+      listDatabaseEngineStores()
+        .filter((store) => store.postgres)
+        .map((store) => store.id),
+    ).toEqual(["state", "workboard", "logbook", "team-reports"]);
+  });
+});

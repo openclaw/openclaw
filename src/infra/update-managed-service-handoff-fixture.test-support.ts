@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import {
+  createManagedHandoffTempDirTracker,
+  readManagedHandoffArtifacts,
+} from "./update-managed-service-handoff-artifacts.test-support.js";
 import { createManagedServiceManagerBoundary } from "./update-managed-service-handoff-boundary.test-support.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
@@ -61,7 +65,7 @@ vi.mock("./tmp-openclaw-dir.js", async (importOriginal) => ({
 }));
 
 export function useManagedServiceHandoffLifecycleFixture() {
-  const tempDirs = new Set<string>();
+  const tempDirs = createManagedHandoffTempDirTracker();
   const managedProcessCleanups = new Set<() => Promise<void>>();
   const mockedHandoffLeaseCleanups = new Set<() => void>();
   const mockedHandoffs = new Map<string, { handoffId: string }>();
@@ -77,7 +81,8 @@ export function useManagedServiceHandoffLifecycleFixture() {
     spawnMock.mockReset();
     spawnMock.mockImplementation((_command: string, args: string[]) => {
       const child = createSpawnMock();
-      const params = JSON.parse(readFileSync(args.at(-1) ?? "", "utf8")) as {
+      const { paramsPath } = readManagedHandoffArtifacts(args);
+      const params = JSON.parse(readFileSync(paramsPath, "utf8")) as {
         updateLeaseKey: string;
         handoffId: string;
       };
@@ -85,7 +90,7 @@ export function useManagedServiceHandoffLifecycleFixture() {
       process.nextTick(() => {
         signalMockManagedUpdateHandoffReady({
           child,
-          paramsPath: args.at(-1) ?? "",
+          paramsPath,
           cleanups: mockedHandoffLeaseCleanups,
         });
       });
@@ -125,9 +130,8 @@ export function useManagedServiceHandoffLifecycleFixture() {
         child.stdout.destroy();
       }
       mockedChildren.clear();
-      closeOpenClawStateDatabaseForTest();
-      await Promise.all([...tempDirs].map((dir) => fs.rm(dir, { recursive: true, force: true })));
-      tempDirs.clear();
+      await closeStateDatabaseForTest();
+      await tempDirs.cleanup();
     }
   });
 

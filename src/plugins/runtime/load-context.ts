@@ -1,4 +1,3 @@
-// Prepared plugin runtime load facts and registry-owned context access.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { createSubsystemLogger } from "../../logging.js";
@@ -21,7 +20,6 @@ import {
 
 const log = createSubsystemLogger("plugins");
 
-/** Resolved plugin runtime load context shared by runtime loader callers. */
 export type PluginRuntimeLoadContext = {
   rawConfig: OpenClawConfig;
   config: OpenClawConfig;
@@ -52,7 +50,7 @@ function activationValueFingerprint(value: unknown): string {
   return fingerprint;
 }
 
-function activationConfigFingerprint(config: OpenClawConfig): string {
+export function activationConfigFingerprint(config: OpenClawConfig): string {
   // Auto-enable replaces the plugin policy but carries the immutable fleet/model trees.
   return hashStableJson(
     Object.fromEntries(
@@ -63,15 +61,6 @@ function activationConfigFingerprint(config: OpenClawConfig): string {
 
 function activationInputFingerprint(config: OpenClawConfig, env: NodeJS.ProcessEnv): string {
   return hashStableJson({ config: activationConfigFingerprint(config), env });
-}
-
-function activationResultFingerprint(context: PluginRuntimeLoadContext): string {
-  return hashStableJson({
-    config: activationConfigFingerprint(context.config),
-    activationSourceConfig: activationConfigFingerprint(context.activationSourceConfig),
-    autoEnabledReasons: context.autoEnabledReasons,
-    env: context.env,
-  });
 }
 
 export function setPluginRuntimeLoadContext(
@@ -85,7 +74,6 @@ export function setPluginRuntimeLoadContext(
   const bound = {
     ...context,
     activationInputFingerprint: activationInputFingerprint(context.rawConfig, context.env),
-    activationResultFingerprint: activationResultFingerprint(context),
     ...(capturedIdentity ? { loaderCacheIdentity: capturedIdentity } : {}),
     // Host preparation may rebind metadata, but it cannot change already-registered closures.
     registrationConfigKey:
@@ -119,7 +107,7 @@ export const getPluginRuntimeLoadContext = (
     | (PluginRuntimeLoadContext & PluginRuntimeLoadContextState)
     | undefined;
 
-/** Reuses activation decisions only within the exact metadata generation and unchanged inputs. */
+/** Reuses captured activation decisions for matching metadata and requested inputs. */
 export function getReusablePluginRuntimeActivation(
   registry: object | undefined,
   params: {
@@ -135,8 +123,7 @@ export function getReusablePluginRuntimeActivation(
   if (
     !context ||
     context.metadataSnapshot !== params.metadataSnapshot ||
-    context.workspaceDir !== params.workspaceDir ||
-    context.activationResultFingerprint !== activationResultFingerprint(context)
+    context.workspaceDir !== params.workspaceDir
   ) {
     return undefined;
   }
@@ -156,7 +143,6 @@ export function getReusablePluginRuntimeActivation(
   };
 }
 
-/** Runtime load option values that can be passed directly to plugin loading. */
 type PluginRuntimeResolvedLoadValues = Pick<
   PluginLoadOptions,
   | "config"
@@ -171,7 +157,6 @@ type PluginRuntimeResolvedLoadValues = Pick<
   | "expectedSourceDigests"
 >;
 
-/** Creates the default plugin runtime loader logger. */
 export function createPluginRuntimeLoaderLogger(): PluginLogger {
   return {
     info: (message) => log.info(message),
@@ -181,7 +166,6 @@ export function createPluginRuntimeLoaderLogger(): PluginLogger {
   };
 }
 
-/** Projects explicit runtime load fields from prepared contexts or resolved values. */
 export function buildPluginRuntimeLoadOptions(
   values: PluginRuntimeResolvedLoadValues,
   overrides?: Partial<PluginLoadOptions>,

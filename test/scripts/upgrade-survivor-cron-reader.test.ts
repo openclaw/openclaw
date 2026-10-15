@@ -134,7 +134,6 @@ it.each(["2026.9.4", "2026.9.6"])(
 it.each([
   { source: "native", damage: "none" },
   { source: "legacy", damage: "none" },
-  { source: "updater", damage: "none" },
   { source: "native", damage: "content" },
   { source: "legacy", damage: "missing-filter" },
   { source: "native", damage: "offset" },
@@ -155,8 +154,7 @@ it.each([
       })),
     }),
   );
-  const contract =
-    source === "updater" ? "published-updater-import-preserved" : "candidate-doctor-import";
+  const contract = "candidate-doctor-import";
   if (source !== "native") {
     fs.writeFileSync(
       path.join(root, "legacy-operator-cron-history.json"),

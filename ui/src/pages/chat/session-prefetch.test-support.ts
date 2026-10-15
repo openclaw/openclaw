@@ -9,7 +9,13 @@ import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
 export const PREFETCH_TEST_NOW = 1_000_000;
-export const prefetchSnapshotHost = { assistantAgentId: "main", agentsList: null, hello: null };
+export const prefetchSnapshotHost = {
+  settings: { gatewayUrl: "ws://test.invalid" },
+  client: { recoveryScope: "test-recovery-scope", recoveryScopeReady: true },
+  assistantAgentId: "main",
+  agentsList: null,
+  hello: null,
+};
 
 export type SessionPrefetchUpdate = {
   client: GatewayBrowserClient | null;
@@ -60,12 +66,10 @@ export function createSessionPrefetchFixture() {
   vi.stubGlobal("indexedDB", new IDBFactory());
   let visibility: DocumentVisibilityState = "visible";
   vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
-  const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
   vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) =>
     window.setTimeout(() => callback({ didTimeout: false, timeRemaining: () => 50 }), 0),
   );
   vi.stubGlobal("cancelIdleCallback", (handle: number) => window.clearTimeout(handle));
-  Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
   const cache: ChatMessageCache = new Map();
   const store = new SessionSnapshotStore(cache);
   store.connect();
@@ -80,7 +84,10 @@ export function createSessionPrefetchFixture() {
   const context = {
     agents: { state: { agentsList: null } },
     gateway: {
-      snapshot: { assistantAgentId: "main", hello: null },
+      connection: { gatewayUrl: "ws://test.invalid" },
+      get snapshot() {
+        return { assistantAgentId: "main", hello: null, client: current.client };
+      },
       subscribe: () => () => undefined,
     },
     sessions: {
@@ -128,6 +135,7 @@ export function createSessionPrefetchFixture() {
 
   return {
     cache,
+    controller,
     store,
     host,
     shell,
@@ -142,11 +150,6 @@ export function createSessionPrefetchFixture() {
       store.disconnect();
       await store.whenIdle();
       await clearStoredChatSnapshots();
-      if (originalLocks) {
-        Object.defineProperty(navigator, "locks", originalLocks);
-      } else {
-        Reflect.deleteProperty(navigator, "locks");
-      }
       vi.useRealTimers();
       vi.restoreAllMocks();
       vi.unstubAllGlobals();

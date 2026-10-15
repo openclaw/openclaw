@@ -1,6 +1,6 @@
 import {
   buildChannelInboundEventContext,
-  createChannelInboundEnvelopeBuilder,
+  createChannelInboundEnvelopeBuilderAsync,
   recordChannelBotPairLoopAndCheckSuppression,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -204,10 +204,11 @@ export async function handleClickClackInbound(params: {
   const senderName = message.author?.display_name || message.author_id;
   // Preserve both normalized channel fields and ClickClack-native ids so reply
   // routing, session recovery, and command authorization see the same message.
-  const body = createChannelInboundEnvelopeBuilder({
+  const buildEnvelope = await createChannelInboundEnvelopeBuilderAsync({
     cfg: params.config as OpenClawConfig,
     route,
-  })({
+  });
+  const body = buildEnvelope({
     channel: "ClickClack",
     from: senderName,
     timestamp: new Date(message.created_at),

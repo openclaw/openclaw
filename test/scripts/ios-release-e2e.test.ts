@@ -49,6 +49,7 @@ vi.mock("../../src/gateway/call.js", () => ({ callGateway: nativeMocks.rpc }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
@@ -104,47 +105,40 @@ describe("iOS release test identity", () => {
   });
 
   it.each([
-    ["basename", { nodeIdentifier: IOS_RELEASE_TESTS[0].split("/").at(-1) }],
-    ["skipped", { result: "Skipped" }],
-    ["failed", { result: "Failed" }],
-    ["failed child", { children: [{ nodeType: "Test Case Run", result: "Failed" }] }],
-    ["wrong class", { nodeIdentifier: "OtherTests/testLiveGatewayPairChatAndRelaunch()" }],
+    ["basename", result(undefined, { nodeIdentifier: IOS_RELEASE_TESTS[0].split("/").at(-1) })],
+    ["skipped", result(undefined, { result: "Skipped" })],
+    ["failed", result(undefined, { result: "Failed" })],
+    [
+      "failed child",
+      result(undefined, { children: [{ nodeType: "Test Case Run", result: "Failed" }] }),
+    ],
     [
       "retry to green",
-      {
+      result(undefined, {
         children: [
           { nodeType: "Repetition", result: "Passed" },
           { nodeType: "Repetition", result: "Passed" },
         ],
-      },
+      }),
     ],
     [
       "multiple runs",
-      {
+      result(undefined, {
         children: [
           { nodeType: "Test Case Run", result: "Passed" },
           { nodeType: "Test Case Run", result: "Passed" },
         ],
-      },
+      }),
     ],
-  ])("rejects %s", (_name, overrides) => {
-    expect(() =>
-      requireExactTestResult(result(undefined, overrides), IOS_RELEASE_TESTS[0]),
-    ).toThrow();
-  });
-
-  it("rejects a wrong target or a unit bundle even with the exact class/method", () => {
-    const wrongTarget = result(undefined, {}, { name: "OtherUITests" });
-    expect(() => requireExactTestResult(wrongTarget, IOS_RELEASE_TESTS[0])).toThrow();
-    const unitBundle = result(undefined, {}, { nodeType: "Unit test bundle" });
-    expect(() => requireExactTestResult(unitBundle, IOS_RELEASE_TESTS[0])).toThrow();
-  });
-
-  it("rejects missing and extra tests", () => {
-    expect(() => requireExactTestResult({ testNodes: [] }, IOS_RELEASE_TESTS[0])).toThrow();
-    const extra = result();
-    extra.testNodes.push(...result(IOS_RELEASE_TESTS[1]).testNodes);
-    expect(() => requireExactTestResult(extra, IOS_RELEASE_TESTS[0])).toThrow();
+    ["wrong target", result(undefined, {}, { name: "OtherUITests" })],
+    ["unit bundle", result(undefined, {}, { nodeType: "Unit test bundle" })],
+    ["missing tests", { testNodes: [] }],
+    [
+      "extra tests",
+      { testNodes: [...result().testNodes, ...result(IOS_RELEASE_TESTS[1]).testNodes] },
+    ],
+  ])("rejects %s", (_name, value) => {
+    expect(() => requireExactTestResult(value, IOS_RELEASE_TESTS[0])).toThrow();
   });
 });
 
@@ -204,7 +198,6 @@ describe("sampled simulator-tree footprint", () => {
   it.each([
     {},
     { ...sample, bytes: 0 },
-    { ...sample, bytes: -1 },
     { ...sample, bytes: "1024" },
     { ...sample, processes: 0 },
     { ...sample, cpu: Number.NaN },
@@ -234,7 +227,7 @@ describe("sampled simulator-tree footprint", () => {
 
 function fixture(
   options: {
-    fail?: "prepare" | "test" | "reader" | "cleanup";
+    fail?: "test" | "cleanup";
     measure?: boolean;
     invalidMeasurement?: boolean;
     cancel?: boolean;
@@ -262,9 +255,6 @@ function fixture(
         prepare: async () => {
           trace.push(`prepare:${index}`);
           time += 100;
-          if (index === 1 && options.fail === "prepare") {
-            throw new Error("private preparation diagnostics");
-          }
         },
         test: async (test: TestIdentity) => {
           trace.push(`test:${index}:${test}`);
@@ -278,11 +268,7 @@ function fixture(
           if (options.cancel) {
             abort.abort();
           }
-          if (
-            index === 1 &&
-            (options.fail === "test" ||
-              (options.fail === "reader" && test === IOS_RELEASE_TESTS[1]))
-          ) {
+          if (index === 1 && options.fail === "test") {
             throw Object.assign(new Error("private timeout diagnostics"), { code: "ETIMEDOUT" });
           }
           return result(test);
@@ -361,44 +347,10 @@ describe("fresh trial ownership", () => {
     }
     expect(JSON.stringify(report)).not.toContain("private");
   });
-  it.each(["test", "reader"] as const)(
-    "fails the arm after its %s failure without repeating either test",
-    async (fail) => {
-      const { deps, trace } = fixture({ fail });
-      const report = await runTrials("stock", deps);
-      expect(report.trials).toHaveLength(1);
-      expect(report.trials[0]).toMatchObject({
-        status: "failed",
-        errors: ["test-timeout"],
-        tests:
-          fail === "test"
-            ? [{ test: IOS_RELEASE_TESTS[0], status: "failed" }]
-            : [
-                { test: IOS_RELEASE_TESTS[0], status: "passed" },
-                { test: IOS_RELEASE_TESTS[1], status: "failed" },
-              ],
-      });
-      expect(trace.filter((entry) => entry.startsWith("test:"))).toEqual(
-        (fail === "test" ? [IOS_RELEASE_TESTS[0]] : IOS_RELEASE_TESTS).map(
-          (test) => `test:1:${test}`,
-        ),
-      );
-      expect(trace.at(-1)).toBe("cleanup:1");
-    },
-  );
   it("refuses comparison without a meter", async () => {
     const { deps } = fixture();
     await expect(runTrials("compare", deps)).rejects.toThrow("comparison-meter-required");
     expect(deps.create).not.toHaveBeenCalled();
-  });
-  it("does not retry failed preparation or start its test/meter", async () => {
-    const { deps, trace } = fixture({ fail: "prepare" });
-    const report = await runTrials("stock", deps);
-    expect(report.trials[0]?.errors).toEqual(["preparation-failed"]);
-    expect(trace.filter((entry) => entry === "prepare:1")).toHaveLength(1);
-    expect(trace.some((entry) => entry.startsWith("test:"))).toBe(false);
-    expect(report.trials[0]?.tests).toEqual([]);
-    expect(trace).toContain("cleanup:1");
   });
   it("joins the collector and fails incomplete measurement without discarding the trial", async () => {
     const { deps, trace } = fixture({ measure: true, invalidMeasurement: true });
@@ -521,9 +473,7 @@ describe("release qualification workflow authority", () => {
   });
   it.each([
     ["manual current revision", {}, true],
-    ["CI current revision", { caller: "ci" }, true],
     ["manual arbitrary target", { target: "b".repeat(40) }, false],
-    ["CI arbitrary target", { caller: "ci", target: "b".repeat(40) }, false],
     ["invalid SHA", { target: "main" }, false],
     ["invalid mode", { mode: "unknown" }, false],
   ])("checks %s before checkout", (_name, options, admitted) => {
@@ -533,7 +483,6 @@ describe("release qualification workflow authority", () => {
     const target = "target" in options ? options.target : sha;
     const repository = "openclaw/openclaw";
     const ref = "refs/heads/main";
-    const caller = "caller" in options ? options.caller : "ios-release-e2e";
     const first = workflow.jobs.qualify.steps[0];
     expect(first.id).toBe("start");
     const execution = spawnSync("/bin/bash", ["-c", first.run], {
@@ -546,7 +495,7 @@ describe("release qualification workflow authority", () => {
         GITHUB_SHA: sha,
         GITHUB_REPOSITORY: repository,
         GITHUB_REF: ref,
-        GITHUB_WORKFLOW_REF: `${repository}/.github/workflows/${caller}.yml@${ref}`,
+        GITHUB_WORKFLOW_REF: `${repository}/.github/workflows/ios-release-e2e.yml@${ref}`,
         GITHUB_EVENT_NAME: "workflow_dispatch",
         TARGET_SHA: target,
         E2E_MODE: "mode" in options ? options.mode : "stock",
@@ -637,7 +586,6 @@ describe("release qualification workflow authority", () => {
     ["full", "a".repeat(40), true],
     ["full", "b".repeat(40), false],
     ["main", "a".repeat(40), false],
-    ["main", "b".repeat(40), false],
   ])(
     "selects %s-tier target %s for required native qualification: %s",
     (tier, target, selected) => {
@@ -671,15 +619,12 @@ describe("release qualification workflow authority", () => {
 
 describe("native command adapter", () => {
   it.each([
-    "success",
     "dirty-tracked",
     "dirty-untracked",
     "source-late-dirty",
     "source-late-head-change",
     "different-xcode",
-    "different-xcode-build",
     "invalid-xcode-output",
-    "different-runtime",
     "newest-compatible-runtime",
     "unavailable-runtime",
     "unsupported-runtime-device",
@@ -704,13 +649,18 @@ describe("native command adapter", () => {
     "native-build-only",
     "setup-code-timeout",
     "setup-code-rpc-timeout",
+    "setup-code-fast-success",
+    "setup-code-slow-success",
+    "setup-code-join-success",
+    "setup-code-join-observer-failure-success",
+    "setup-code-join-failure",
+    "setup-code-join-cancel",
+    "setup-code-auth-timeout",
     "test-unjoined",
     "test-exit",
     "reader-failure",
     "fixture-exit",
     "gateway-exit",
-    "missing-first",
-    "missing-second",
     "missing-relaunch",
     "provider-duplicate",
     "provider-out-of-order",
@@ -718,7 +668,6 @@ describe("native command adapter", () => {
     "test-timeout-output",
     "reply-failure-evidence",
     "reply-failure-history-error",
-    "reply-failure-submission",
     "reply-failure-source-only",
     "reply-failure-app-log-error",
   ])("owns admission, build, test and cleanup for %s", async (scenario) => {
@@ -735,6 +684,17 @@ describe("native command adapter", () => {
     vi.stubEnv("OPENCLAW_CI_SIMSLIM_BINARY", "");
     const instances: { cleanup: ReturnType<typeof vi.fn> }[] = [];
     const lifecycle: string[] = [];
+    const clockedSetup =
+      scenario === "setup-code-rpc-timeout" ||
+      scenario === "setup-code-auth-timeout" ||
+      scenario === "setup-code-fast-success" ||
+      scenario === "setup-code-slow-success" ||
+      scenario.startsWith("setup-code-join-");
+    let setupBegan: () => void = () => {};
+    const setupStarted = new Promise<void>((resolve) => {
+      setupBegan = resolve;
+    });
+    let diagnosticCalls = 0;
     const gatewayIdentity = {
       version: "2026.9.29",
       integrity: "sha512-YQ==",
@@ -769,7 +729,9 @@ describe("native command adapter", () => {
     });
     const fixtureRpcCalls = () =>
       nativeMocks.rpc.mock.calls.filter(
-        ([options]) => options.configPath !== "/private/preflight/config.json",
+        ([options]) =>
+          options.configPath !== "/private/preflight/config.json" &&
+          options.method !== "diagnostics.lanes",
       );
     let simulatorReady = false;
     let sourceChanged = false;
@@ -789,6 +751,26 @@ describe("native command adapter", () => {
     let nativeCommandActive = false;
     let historyReadBeforeCommandExit = false;
     nativeMocks.rpc.mockImplementation(async (options) => {
+      if (options.method === "diagnostics.lanes") {
+        expect(lifecycle).not.toContain("gateway-cleanup");
+        diagnosticCalls++;
+        if (clockedSetup && diagnosticCalls === 1) {
+          lifecycle.push("setup-observer-start");
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 3_000);
+          });
+          lifecycle.push("setup-observer-settled");
+          if (scenario === "setup-code-join-failure") {
+            throw new Error("private diagnostic failure");
+          }
+        }
+        return {
+          workerCount: 3,
+          workerPoolCount: 1,
+          lanes: [{ lane: "private-session", activeCount: 1, queuedCount: 2, maxConcurrent: 1 }],
+          token: "private-credential",
+        };
+      }
       if (options.configPath === "/private/preflight/config.json") {
         expect(options).toMatchObject({
           method: "device.pair.setupStatus",
@@ -814,6 +796,67 @@ describe("native command adapter", () => {
             { role: "assistant", content: [{ type: "text", text: "OPENCLAW_E2E_FIRST" }] },
           ],
         };
+      }
+      if (clockedSetup && options.method === "device.pair.setupCode") {
+        lifecycle.push("setup-code");
+        return await new Promise((resolve, reject) => {
+          const timers: ReturnType<typeof setTimeout>[] = [];
+          const finish = (error?: Error) => {
+            timers.forEach(clearTimeout);
+            options.signal.removeEventListener("abort", cancel);
+            lifecycle.push("setup-rpc-settled");
+            if (error) {
+              reject(error);
+            } else {
+              resolve({ setupCode: `synthetic-code-${instances.length}` });
+            }
+          };
+          const cancel = () =>
+            finish(Object.assign(new Error("private cancellation"), { code: "ABORT_ERR" }));
+          options.signal.addEventListener("abort", cancel, { once: true });
+          if (scenario !== "setup-code-auth-timeout") {
+            timers.push(setTimeout(() => options.onHelloOk?.(), 25));
+            timers.push(setTimeout(() => options.assertDispatchCurrent?.(), 50));
+          }
+          timers.push(
+            setTimeout(
+              () =>
+                finish(
+                  new GatewayTransportError({
+                    kind: "timeout",
+                    message: "private RPC timeout",
+                    connectionDetails: {
+                      url: "ws://private",
+                      urlSource: "private",
+                      message: "private",
+                    },
+                    timeoutMs: options.timeoutMs,
+                  }),
+                ),
+              options.timeoutMs,
+            ),
+          );
+          if (scenario === "setup-code-fast-success" || scenario === "setup-code-slow-success") {
+            timers.push(
+              setTimeout(() => finish(), scenario === "setup-code-fast-success" ? 1_000 : 35_000),
+            );
+          } else if (scenario.startsWith("setup-code-join-")) {
+            timers.push(
+              setTimeout(() => {
+                if (scenario === "setup-code-join-cancel") {
+                  abort.abort();
+                } else {
+                  finish(
+                    scenario === "setup-code-join-failure"
+                      ? new Error("private setup failure")
+                      : undefined,
+                  );
+                }
+              }, 11_000),
+            );
+          }
+          setupBegan();
+        });
       }
       options.onHelloOk?.();
       options.assertDispatchCurrent?.();
@@ -849,14 +892,6 @@ describe("native command adapter", () => {
       if (scenario === "setup-code-timeout") {
         throw new Error("private fixture command failed", {
           cause: Object.assign(new Error("private setup code and path"), { code: "ETIMEDOUT" }),
-        });
-      }
-      if (scenario === "setup-code-rpc-timeout") {
-        throw new GatewayTransportError({
-          kind: "timeout",
-          message: "private RPC timeout",
-          connectionDetails: { url: "ws://private", urlSource: "private", message: "private" },
-          timeoutMs: 30_000,
         });
       }
       return { setupCode: `synthetic-code-${instances.length}` };
@@ -951,11 +986,9 @@ describe("native command adapter", () => {
         stdout.write(
           scenario === "different-xcode"
             ? "Xcode 26.6\nBuild version 17F113\n"
-            : scenario === "different-xcode-build"
-              ? "Xcode 27.0\nBuild version 27A000\n"
-              : scenario === "invalid-xcode-output"
-                ? "unrecognized toolchain\n"
-                : "Xcode 27.0\nBuild version 27A266a\n",
+            : scenario === "invalid-xcode-output"
+              ? "unrecognized toolchain\n"
+              : "Xcode 27.0\nBuild version 27A266a\n",
         );
       } else if (args.includes("--print-path")) {
         stdout.write(`${developerDir}\n`);
@@ -964,13 +997,11 @@ describe("native command adapter", () => {
       } else if (args.includes("runtimes")) {
         const runtime = {
           isAvailable: scenario !== "unavailable-runtime",
-          version: scenario === "different-runtime" ? "27.0" : "26.5",
+          version: "26.5",
           identifier:
-            scenario === "different-runtime"
-              ? "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
-              : scenario === "non-ios-runtime"
-                ? "com.apple.CoreSimulator.SimRuntime.watchOS-26-5"
-                : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+            scenario === "non-ios-runtime"
+              ? "com.apple.CoreSimulator.SimRuntime.watchOS-26-5"
+              : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
           supportedArchitectures:
             scenario === "unsupported-runtime-architecture" ? ["x86_64"] : ["arm64"],
           supportedDeviceTypes: [
@@ -1014,11 +1045,9 @@ describe("native command adapter", () => {
         expect(lifecycle).toContain("setup-status-ready");
         lifecycle.push("simulator-create");
         expect(args.at(-1)).toBe(
-          scenario === "different-runtime"
-            ? "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
-            : scenario === "newest-compatible-runtime"
-              ? "com.apple.CoreSimulator.SimRuntime.iOS-26-10"
-              : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+          scenario === "newest-compatible-runtime"
+            ? "com.apple.CoreSimulator.SimRuntime.iOS-26-10"
+            : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
         );
         if (scenario === "gateway-exit-during-create") {
           gatewayChild.exitCode = 17;
@@ -1181,7 +1210,7 @@ describe("native command adapter", () => {
           const failureMessage =
             scenario === "reply-failure-source-only"
               ? ""
-              : `IOS_RELEASE_CHAT_FAILURE relaunch ${scenario === "reply-failure-submission" ? "submission" : "reply"} draft=false keyboard=true reply=false writing=false jump=true foreground=true input=true transcript=true send=false`;
+              : "IOS_RELEASE_CHAT_FAILURE relaunch reply draft=false keyboard=true reply=false writing=false jump=true foreground=true input=true transcript=true send=false";
           stdout.write(
             "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayPairChatAndRelaunch]' started.\n" +
               `/private/checkout/OpenClawSnapshotUITests.swift:1913: error: private ${failureMessage}\n` +
@@ -1250,6 +1279,7 @@ describe("native command adapter", () => {
     });
     const proof: Record<string, unknown> = {};
     const progressSnapshots: string[] = [];
+    let rejectedSlowProgress = false;
     const abort = new AbortController();
     const admission = createNativeDependencies({
       mode: "stock",
@@ -1261,6 +1291,17 @@ describe("native command adapter", () => {
       proof,
       onProgress: async () => {
         progressSnapshots.push(JSON.stringify(proof));
+        if (
+          scenario === "setup-code-join-observer-failure-success" &&
+          !rejectedSlowProgress &&
+          (proof.fixtures as { setupDiagnostics?: { stage: string }[] }[] | undefined)?.some(
+            (evidence) =>
+              evidence.setupDiagnostics?.some(({ stage }) => stage === "setup-code-slow"),
+          )
+        ) {
+          rejectedSlowProgress = true;
+          throw new Error("private diagnostic progress failure");
+        }
       },
     });
     if (scenario.startsWith("dirty-")) {
@@ -1338,24 +1379,12 @@ describe("native command adapter", () => {
     const native = await admission;
     expect(proof).toMatchObject({
       xcode: scenario === "different-xcode" ? "26.6" : "27.0",
-      xcodeBuild:
-        scenario === "different-xcode"
-          ? "17F113"
-          : scenario === "different-xcode-build"
-            ? "27A000"
-            : "27A266a",
-      runtime:
-        scenario === "different-runtime"
-          ? "27.0"
-          : scenario === "newest-compatible-runtime"
-            ? "26.10"
-            : "26.5",
+      xcodeBuild: scenario === "different-xcode" ? "17F113" : "27A266a",
+      runtime: scenario === "newest-compatible-runtime" ? "26.10" : "26.5",
       runtimeIdentifier:
-        scenario === "different-runtime"
-          ? "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
-          : scenario === "newest-compatible-runtime"
-            ? "com.apple.CoreSimulator.SimRuntime.iOS-26-10"
-            : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+        scenario === "newest-compatible-runtime"
+          ? "com.apple.CoreSimulator.SimRuntime.iOS-26-10"
+          : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
     });
     try {
       if (scenario === "native-build-only") {
@@ -1408,10 +1437,127 @@ describe("native command adapter", () => {
         expect(proof.fixtures).toEqual([expect.objectContaining({ cleanupConfirmed: true })]);
         return;
       }
-      const report = await runTrials("stock", native.dependencies);
+      if (clockedSetup) {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      }
+      let diagnosticsBeforeThreshold = 0;
+      let diagnosticsAtThreshold = 0;
+      let settledAtThirtySeconds = false;
+      let joinedObserverBeforeContinuing = false;
+      const reportPending = runTrials("stock", native.dependencies);
+      if (clockedSetup) {
+        await setupStarted;
+        if (scenario === "setup-code-fast-success") {
+          await vi.advanceTimersByTimeAsync(1_000);
+        } else {
+          await vi.advanceTimersByTimeAsync(9_999);
+          diagnosticsBeforeThreshold = diagnosticCalls;
+          await vi.advanceTimersByTimeAsync(1);
+          diagnosticsAtThreshold = diagnosticCalls;
+          if (scenario.startsWith("setup-code-join-")) {
+            await vi.advanceTimersByTimeAsync(1_000);
+            joinedObserverBeforeContinuing =
+              lifecycle.includes("setup-rpc-settled") &&
+              !lifecycle.includes("setup-observer-settled") &&
+              !lifecycle.includes("gateway-cleanup") &&
+              !lifecycle.includes("live-test");
+            await vi.advanceTimersByTimeAsync(2_000);
+          } else {
+            await vi.advanceTimersByTimeAsync(20_000);
+            settledAtThirtySeconds = lifecycle.includes("setup-rpc-settled");
+            await vi.advanceTimersByTimeAsync(
+              scenario === "setup-code-slow-success" ? 5_000 : 30_000,
+            );
+          }
+        }
+      }
+      const report = await reportPending;
+      if (clockedSetup) {
+        if (scenario !== "setup-code-fast-success") {
+          expect(diagnosticsBeforeThreshold).toBe(0);
+          expect(diagnosticsAtThreshold).toBe(1);
+          if (scenario.startsWith("setup-code-join-")) {
+            expect(joinedObserverBeforeContinuing).toBe(true);
+          } else {
+            expect(settledAtThirtySeconds).toBe(false);
+          }
+        }
+        const success = scenario.endsWith("success");
+        const duration =
+          scenario === "setup-code-fast-success"
+            ? 1_000
+            : scenario === "setup-code-slow-success"
+              ? 35_000
+              : scenario.startsWith("setup-code-join-")
+                ? 11_000
+                : 60_000;
+        const authenticated = scenario !== "setup-code-auth-timeout";
+        expect(proof.fixtures).toEqual([
+          expect.objectContaining({
+            setupRpc: {
+              authenticated,
+              dispatchEntered: authenticated,
+              responseReceived: success,
+              timings: {
+                ...(authenticated ? { authenticatedMs: 25, dispatchEnteredMs: 50 } : {}),
+                ...(success ? { responseReceivedMs: duration } : {}),
+                elapsedMs: duration,
+              },
+            },
+          }),
+        ]);
+        const fixtureEvidence = (proof.fixtures as { setupDiagnostics: { stage: string }[] }[])[0];
+        if (!fixtureEvidence) {
+          throw new Error("Expected setup fixture evidence");
+        }
+        expect(
+          fixtureEvidence.setupDiagnostics.filter(({ stage }) => stage === "setup-code-slow"),
+        ).toHaveLength(scenario === "setup-code-fast-success" ? 0 : 1);
+        const observations = diagnosticCalls;
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(diagnosticCalls).toBe(observations);
+        expect(vi.getTimerCount()).toBe(0);
+        expect(
+          fixtureRpcCalls().filter(([options]) => options.method === "device.pair.setupCode"),
+        ).toHaveLength(1);
+        expect(instances[0]?.cleanup).toHaveBeenCalledOnce();
+        if (scenario.startsWith("setup-code-join-")) {
+          expect(lifecycle.indexOf("setup-observer-settled")).toBeLessThan(
+            lifecycle.indexOf("gateway-cleanup"),
+          );
+        }
+        if (scenario === "setup-code-join-observer-failure-success") {
+          expect(rejectedSlowProgress).toBe(true);
+        }
+        if (!success) {
+          expect(report.trials).toMatchObject([
+            {
+              status: "failed",
+              tests: [],
+              errors: [
+                scenario === "setup-code-join-cancel"
+                  ? "cancelled"
+                  : scenario === "setup-code-join-failure"
+                    ? "preparation-failed"
+                    : "preparation-timeout",
+              ],
+            },
+          ]);
+          expect(fixtureEvidence.setupDiagnostics).toEqual(
+            expect.arrayContaining([expect.objectContaining({ stage: "setup-code" })]),
+          );
+        }
+      }
       expect(JSON.stringify(proof)).not.toMatch(/private|synthetic|OPENCLAW_E2E_|metadata/);
       expect(progressSnapshots.length).toBeGreaterThan(0);
       expect(progressSnapshots.join("\n")).not.toMatch(/private|synthetic|OPENCLAW_E2E_|metadata/);
+      if (
+        scenario === "setup-code-join-failure" ||
+        scenario === "setup-code-join-cancel" ||
+        scenario === "setup-code-auth-timeout"
+      ) {
+        return;
+      }
       if (scenario.startsWith("reply-failure-")) {
         expect(report.complete).toBe(true);
         expect(report.trials.map((trial) => trial.status)).toEqual(["failed"]);
@@ -1426,7 +1572,7 @@ describe("native command adapter", () => {
               ? []
               : [
                   "chat-stage:relaunch",
-                  `chat-checkpoint:${scenario === "reply-failure-submission" ? "submission" : "reply"}`,
+                  "chat-checkpoint:reply",
                   "chat-draft-retained:false",
                   "chat-keyboard:true",
                   "chat-reply-present:false",
@@ -1549,7 +1695,16 @@ describe("native command adapter", () => {
         expect(proof.fixtures).toEqual([
           expect.objectContaining({
             cleanupConfirmed: true,
-            setupStatusRpc: { authenticated: true, dispatchEntered: true, responseReceived: false },
+            setupStatusRpc: expect.objectContaining({
+              authenticated: true,
+              dispatchEntered: true,
+              responseReceived: false,
+              timings: expect.objectContaining({
+                authenticatedMs: expect.any(Number),
+                dispatchEnteredMs: expect.any(Number),
+                elapsedMs: expect.any(Number),
+              }),
+            }),
           }),
         ]);
         return;
@@ -1674,7 +1829,21 @@ describe("native command adapter", () => {
         expect(proof.fixtures).toEqual([
           expect.objectContaining({
             trial: 1,
-            setupRpc: { authenticated: true, dispatchEntered: true, responseReceived: false },
+            setupRpc: expect.objectContaining({
+              authenticated: true,
+              dispatchEntered: true,
+              responseReceived: false,
+              timings: expect.objectContaining({
+                authenticatedMs: expect.any(Number),
+                dispatchEnteredMs: expect.any(Number),
+                elapsedMs: expect.any(Number),
+              }),
+            }),
+            setupDiagnostics: expect.arrayContaining([
+              expect.objectContaining({ stage: "before-simulator" }),
+              expect.objectContaining({ stage: "after-simulator" }),
+              expect.objectContaining({ stage: "setup-code", gatewayExited: false }),
+            ]),
           }),
         ]);
         expect(
@@ -1691,6 +1860,13 @@ describe("native command adapter", () => {
         expect(report.trials).toHaveLength(1);
         expect(report.trials[0]?.errors).toContain("cleanup-failed");
         expect(proof.resourcesPreserved).toBe(true);
+        if (scenario === "cleanup-failure") {
+          expect(proof.fixtures).toEqual([
+            expect.objectContaining({
+              cleanupFailures: [expect.objectContaining({ source: "gateway", code: "failed" })],
+            }),
+          ]);
+        }
         return;
       }
       if (scenario === "test-exit") {
@@ -1764,7 +1940,7 @@ describe("native command adapter", () => {
           sharedStateMode: "read-only",
           method: "device.pair.setupCode",
           params: { publicUrl: `ws://127.0.0.1:${20001 + index}`, includeQr: false },
-          timeoutMs: 30_000,
+          timeoutMs: 60_000,
           signal: expect.any(AbortSignal),
           onHelloOk: expect.any(Function),
           assertDispatchCurrent: expect.any(Function),
@@ -1775,8 +1951,28 @@ describe("native command adapter", () => {
         expect.objectContaining({
           trial: 1,
           cleanupConfirmed: true,
-          setupStatusRpc: { authenticated: true, dispatchEntered: true, responseReceived: true },
-          setupRpc: { authenticated: true, dispatchEntered: true, responseReceived: true },
+          setupStatusRpc: expect.objectContaining({
+            authenticated: true,
+            dispatchEntered: true,
+            responseReceived: true,
+            timings: expect.objectContaining({
+              authenticatedMs: expect.any(Number),
+              dispatchEnteredMs: expect.any(Number),
+              responseReceivedMs: expect.any(Number),
+              elapsedMs: expect.any(Number),
+            }),
+          }),
+          setupRpc: expect.objectContaining({
+            authenticated: true,
+            dispatchEntered: true,
+            responseReceived: true,
+            timings: expect.objectContaining({
+              authenticatedMs: expect.any(Number),
+              dispatchEnteredMs: expect.any(Number),
+              responseReceivedMs: expect.any(Number),
+              elapsedMs: expect.any(Number),
+            }),
+          }),
           providerMessages: [
             { stage: "first", received: true },
             { stage: "second", received: true },

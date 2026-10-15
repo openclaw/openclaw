@@ -67,38 +67,33 @@ const HERMES_STATE_MARKERS = [
   ...HERMES_ARCHIVE_FILES,
 ] as const;
 
-function resolveOpenCodeXdgAuthPath(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const xdgDataHome = env.XDG_DATA_HOME?.trim();
-  return xdgDataHome ? path.join(resolveHomePath(xdgDataHome), "opencode", "auth.json") : undefined;
-}
-
 async function discoverOpenCodeAuthPath(params: {
   root: string;
-  includeGlobalFallback: boolean;
-  includeHomeFallback: boolean;
+  includeFallback: boolean;
   env: NodeJS.ProcessEnv;
 }): Promise<string | undefined> {
   const rootParent = path.dirname(params.root);
-  const xdgAuthPath = resolveOpenCodeXdgAuthPath(params.env);
+  const xdgDataHome = params.env.XDG_DATA_HOME?.trim();
+  const xdgAuthPath = xdgDataHome
+    ? path.join(resolveHomePath(xdgDataHome), "opencode", "auth.json")
+    : undefined;
   const candidates = Array.from(
-    new Set(
-      [
-        ...(xdgAuthPath && (params.includeGlobalFallback || isPathInside(rootParent, xdgAuthPath))
-          ? [xdgAuthPath]
-          : []),
-        path.join(rootParent, OPENCODE_AUTH_RELATIVE_PATH),
-        ...(params.includeHomeFallback
-          ? [
-              path.join(
-                path.resolve(
-                  params.env.HOME?.trim() || params.env.USERPROFILE?.trim() || resolveHomePath("~"),
-                ),
-                OPENCODE_AUTH_RELATIVE_PATH,
+    new Set([
+      ...(xdgAuthPath && (params.includeFallback || isPathInside(rootParent, xdgAuthPath))
+        ? [xdgAuthPath]
+        : []),
+      path.join(rootParent, OPENCODE_AUTH_RELATIVE_PATH),
+      ...(params.includeFallback
+        ? [
+            path.join(
+              path.resolve(
+                params.env.HOME?.trim() || params.env.USERPROFILE?.trim() || resolveHomePath("~"),
               ),
-            ]
-          : []),
-      ].filter((candidate): candidate is string => Boolean(candidate)),
-    ),
+              OPENCODE_AUTH_RELATIVE_PATH,
+            ),
+          ]
+        : []),
+    ]),
   );
   for (const candidate of candidates) {
     if (await exists(candidate)) {
@@ -123,8 +118,7 @@ export async function discoverHermesSource(
     : await resolveImplicitHermesRoot(env, platform);
   const opencodeAuthPath = await discoverOpenCodeAuthPath({
     root,
-    includeGlobalFallback: !explicitInput,
-    includeHomeFallback: !explicitInput,
+    includeFallback: !explicitInput,
     env,
   });
   const profileParent = path.dirname(root);

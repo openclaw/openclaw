@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -42,16 +43,6 @@ const history = [
   },
   { role: "assistant", content: "The first answer.", __openclaw: { id: "answer-one" } },
   { role: "assistant", content: "The second answer.", __openclaw: { id: "answer-two" } },
-  ...Array.from({ length: 8 }, (_, index) => ({
-    role: index % 2 ? "assistant" : "user",
-    content: "Conversation entry " + index,
-    __openclaw: { id: "filler-" + index },
-  })),
-  {
-    role: "assistant",
-    content: "Returning to the checklist.",
-    __openclaw: { id: "explicit-answer", replyToId: "peer-reply" },
-  },
 ].map((message, index) =>
   Object.assign(message, {
     timestamp: 1_800_000_000_000 + index * 1000,
@@ -65,36 +56,102 @@ const viewports = [
 ];
 
 suite.define(() => {
-  // Mobile targets and keyboard activation are owned by chat-reply-attribution.browser.
-  it("navigates grouped and explicit agent replies through the pane", async () => {
+  it("keeps the reply line above completed work across an automatic resumption", async () => {
+    const resumedSession = "agent:main:dashboard:reply-strip-resumed-work";
+    const messages = [
+      {
+        role: "user",
+        content: "Please review the release checklist.",
+        __openclaw: { id: "earlier-prompt", ...self },
+      },
+      {
+        role: "user",
+        content: "Check the release notes and test results before we share it.",
+        __openclaw: { id: "review-prompt", idempotencyKey: "review-run:user", ...peer },
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "read-release-notes",
+        content: "The release notes describe the updated controls.",
+        __openclaw: { id: "first-run-work", runId: "review-run" },
+      },
+      {
+        role: "toolResult",
+        toolName: "exec",
+        toolCallId: "check-test-results",
+        content: "The focused tests passed.",
+        __openclaw: { id: "resumed-work", runId: "announce:review-complete" },
+      },
+      {
+        role: "assistant",
+        content:
+          "The release checklist is ready. I checked the notes and test results; the controls are consistent across desktop and mobile.",
+        phase: "final_answer",
+        stopReason: "stop",
+        __openclaw: { id: "resumed-answer", runId: "announce:review-complete" },
+      },
+    ].map((message, index) =>
+      Object.assign(message, {
+        timestamp: 1_800_000_000_000 + index * 1000,
+        __openclaw: Object.assign({}, message["__openclaw"], { seq: index + 1 }),
+      }),
+    );
     await suite.withPage(
       { viewport: { width: 1440, height: 900 }, locale: "en-US" },
       async ({ page }) => {
-        await installMockGateway(page, { sessionKey, historyMessages: history });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const thread = page.locator(".chat-thread");
-        const grouped = page.locator('.chat-group:has([data-entry-id="answer-one"])');
-        await grouped.waitFor();
-        expect(await grouped.locator(".chat-bubble").count()).toBe(2);
-        expect(await grouped.locator(".chat-reply-attribution--reply").count()).toBe(1);
-        expect(await grouped.locator(".chat-reply-attribution__name").textContent()).toBe(
-          "Jordan Lee",
+        await installMockGateway(page, {
+          sessionKey: resumedSession,
+          historyMessages: messages,
+          presenceUsers: [
+            {
+              self: true,
+              id: "alice",
+              identity: { type: "profile", id: "alice" },
+              name: "Alice Chen",
+            },
+            { id: "jordan", identity: { type: "profile", id: "jordan" }, name: "Jordan Lee" },
+          ],
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, resumedSession));
+        await page.locator('[data-entry-id="resumed-answer"]').waitFor();
+        await page.evaluate(async () => {
+          document.documentElement.dataset.theme = "dark";
+          document.documentElement.dataset.themeMode = "dark";
+          await document.fonts.ready;
+        });
+        const answerGroup = page.locator(
+          '.chat-group.assistant:has([data-entry-id="resumed-answer"])',
         );
-        const target = page
-          .locator(
-            '.chat-group:has([data-entry-id="explicit-answer"]) .chat-reply-attribution--reply',
-          )
-          .getByRole("button", { name: "Replying to Jordan Lee", exact: true });
-        await thread.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
-        await target.scrollIntoViewIfNeeded();
-        const before = await thread.evaluate((element) => element.scrollTop);
-        await target.click();
-        await expect
-          .poll(() => page.locator('[data-entry-id="peer-reply"]').getAttribute("class"))
-          .toContain("chat-bubble--reply-target");
-        await expect
-          .poll(() => thread.evaluate((element) => element.scrollTop))
-          .toBeLessThan(before);
+        const line = answerGroup.getByRole("button", {
+          name: "Replying to Jordan Lee",
+          exact: true,
+        });
+        const work = page.locator(".chat-work-group");
+        await line.waitFor();
+        await work.waitFor();
+        await answerGroup.locator(".chat-avatar:visible").waitFor();
+        await page
+          .locator('.chat-group--peer:has([data-entry-id="review-prompt"]) .chat-avatar:visible')
+          .waitFor();
+        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        if (artifactRoot) {
+          const artifactDir = createControlUiE2eArtifactDir(
+            "reply-strip-resumed-work",
+            artifactRoot,
+          );
+          await page.screenshot({ path: `${artifactDir}/reply-strip.png`, animations: "disabled" });
+        }
+        expect(await answerGroup.locator(".chat-work-group").count()).toBe(1);
+        const lineBounds = await line.boundingBox();
+        const workBounds = await work.boundingBox();
+        expect(lineBounds).not.toBeNull();
+        expect(workBounds).not.toBeNull();
+        expect(lineBounds!.y + lineBounds!.height).toBeLessThanOrEqual(workBounds!.y);
+        await work.getByRole("button").click();
+        await answerGroup.locator(".chat-tool-msg-summary").filter({ hasText: "exec" }).click();
+        await page.getByText("The focused tests passed.", { exact: true }).waitFor();
+        expect(await answerGroup.locator(".chat-reply-attribution--reply").count()).toBe(1);
       },
     );
   });
@@ -107,7 +164,7 @@ suite.define(() => {
         async ({ page }) => {
           await installMockGateway(page, {
             sessionKey,
-            historyMessages: history.slice(0, 7),
+            historyMessages: history,
             presenceUsers: [
               {
                 self: true,

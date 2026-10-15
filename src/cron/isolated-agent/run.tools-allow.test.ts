@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import "../../agents/test-helpers/fast-coding-tools.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearActiveRuntimeWebToolsMetadata,
   setActiveRuntimeWebToolsMetadata,
@@ -8,6 +9,7 @@ import type { CronStoredJob } from "../types.js";
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
+  callGatewayMock,
   hasUsableWebSearchProviderMock,
   loadModelCatalogMock,
   loadRunCronIsolatedAgentTurn,
@@ -31,8 +33,10 @@ function makeParams(
   toolsAllow: string[],
   payload: Partial<Extract<CronStoredJob["payload"], { kind: "agentTurn" }>> = {},
   job: Partial<CronStoredJob> = {},
+  cfg: OpenClawConfig = {},
 ) {
   return makeIsolatedAgentParamsFixture({
+    cfg,
     message: "check allowed tools",
     sessionKey: "cron:tools-allow",
     job: {
@@ -92,6 +96,34 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
     });
   });
 
+  it("runs a command prompt from an automatic snapshot without shell tools", options, async () => {
+    const result = await runCronIsolatedAgentTurn(
+      makeParams(["message", "read"], { toolsAllowIsDefault: true, message: command }),
+    );
+    expect(result.status).toBe("ok");
+    expect(runEmbeddedAgentMock.mock.calls[0]?.[0]?.toolsAllow).toEqual(["*"]);
+  });
+
+  it.each([
+    { label: "runs with its owner's tools", job: {}, expected: ["*"] },
+    {
+      label: "keeps its list without a valid owner policy",
+      job: { owner: { agentId: "main", sessionKey: policy.ownerSessionKey } },
+      expected: ["message", "read"],
+    },
+    {
+      label: "keeps its list behind a condition trigger",
+      job: { trigger: { script: "return { fire: true }" } },
+      expected: ["message", "read"],
+    },
+  ])("an automatic creator snapshot $label", options, async ({ job, expected }) => {
+    // Older builds saved this snapshot without the creator's native shell.
+    await runCronIsolatedAgentTurn(
+      makeParams(["message", "read"], { toolsAllowIsDefault: true }, job),
+    );
+    expect(runEmbeddedAgentMock.mock.calls[0]?.[0]?.toolsAllow).toEqual(expected);
+  });
+
   it.each([
     ["unavailable shell tools", ["terminal", "node_exec", "node_process"]],
     ["a blank entry", [" "]],
@@ -149,16 +181,20 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
       fetch: { providerSource: "none", diagnostics: [] },
       diagnostics: [],
     });
-    const result = await runCronIsolatedAgentTurn({
-      ...makeParams(["web_search"]),
-      cfg: {
-        plugins: {
-          entries: {
-            brave: { enabled: true, config: { webSearch: { apiKey: "token-oversized" } } },
+    const result = await runCronIsolatedAgentTurn(
+      makeParams(
+        ["web_search"],
+        {},
+        {},
+        {
+          plugins: {
+            entries: {
+              brave: { enabled: true, config: { webSearch: { apiKey: "token-oversized" } } },
+            },
           },
         },
-      },
-    });
+      ),
+    );
     expect(result.status).toBe("ok");
     expect(result.diagnostics).toBeUndefined();
     expect(hasUsableWebSearchProviderMock).toHaveBeenCalledWith(
@@ -175,14 +211,30 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
     loadModelCatalogMock.mockResolvedValue([
       { id: "gpt-5.5", name: "GPT-5.5", provider: "gateway", api: "openai-chatgpt-responses" },
     ]);
-    const result = await runCronIsolatedAgentTurn({
-      ...makeParams(["web_search"]),
-      cfg: {
-        tools: {
-          web: { search: { enabled: true, openaiCodex: { enabled: true, mode: "cached" } } },
+    const result = await runCronIsolatedAgentTurn(
+      makeParams(
+        ["web_search"],
+        {},
+        {},
+        {
+          tools: {
+            web: { search: { enabled: true, openaiCodex: { enabled: true, mode: "cached" } } },
+          },
         },
-      },
-    });
+      ),
+    );
+    expect(result.status).toBe("ok");
+    expect(result.diagnostics).toBeUndefined();
+  });
+
+  it("does not warn about web_search recorded in an automatic snapshot", options, async () => {
+    const result = await runCronIsolatedAgentTurn(
+      makeParams(
+        ["read", "web_search"],
+        { toolsAllowIsDefault: true },
+        { trigger: { script: "return { fire: true }" } },
+      ),
+    );
     expect(result.status).toBe("ok");
     expect(result.diagnostics).toBeUndefined();
   });
@@ -194,8 +246,12 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
       model: "gpt-5.4",
       attempts: [],
     });
-    const result = await runCronIsolatedAgentTurn(makeParams(["web_search"]));
+    const result = await runCronIsolatedAgentTurn(
+      makeParams(["web_search"], {}, { deleteAfterRun: true }),
+    );
     expect(result.status).toBe("error");
+    expect(result.error).toBe("cron isolated agent run aborted");
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(result.diagnostics?.entries.map((entry) => entry.message)).toEqual([
       "web_search tool requested in toolsAllow but no web search provider is selected. Configure one with: openclaw configure --section web, or set tools.web.search.provider.",
       "cron isolated agent run aborted",

@@ -12,7 +12,6 @@ import {
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
-/** Register node location lookup commands. */
 export function registerNodesLocationCommands(nodes: Command) {
   const location = nodes.command("location").description("Fetch location from a paired node");
 

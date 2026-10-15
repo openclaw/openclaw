@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { buildConfigSetOperations, readConfigPatchOperations } from "./config-cli-input.js";
 import { parseConfigSetPath } from "./config-cli-path.js";
@@ -26,7 +27,38 @@ async function withPatchFile<T>(
 }
 
 describe("readConfigPatchOperations", () => {
-  it.each(['{ "channels": { "custom": { "timeout": 1e999 } } }', nestedConfigRaw("1e999")])(
+  it.each([
+    {
+      label: "malformed bytes",
+      chunks: [Buffer.from('{name:"'), Buffer.from([0xff]), Buffer.from('"}')],
+      error: "--stdin must be valid UTF-8",
+    },
+    {
+      label: "valid split Unicode",
+      chunks: [
+        Buffer.from('{name:"中文 😀 \uFFFD"}').subarray(0, 9),
+        Buffer.from('{name:"中文 😀 \uFFFD"}').subarray(9),
+      ],
+      value: "中文 😀 \uFFFD",
+    },
+  ])("reads stdin as bytes for $label", async ({ chunks, error, value }) => {
+    const original = Object.getOwnPropertyDescriptor(process, "stdin");
+    Object.defineProperty(process, "stdin", { configurable: true, value: Readable.from(chunks) });
+    try {
+      const result = readConfigPatchOperations({ stdin: true });
+      if (error) {
+        await expect(result).rejects.toThrow(error);
+      } else {
+        await expect(result).resolves.toMatchObject([{ setPath: ["name"], value }]);
+      }
+    } finally {
+      if (original) {
+        Object.defineProperty(process, "stdin", original);
+      }
+    }
+  });
+
+  it.each(['{ "channels": { "custom": { "timeout": 1e999 } } }'])(
     "rejects patch files containing non-finite numbers",
     async (contents) => {
       await withPatchFile(contents, async (patchPath) => {
@@ -48,64 +80,65 @@ describe("readConfigPatchOperations", () => {
   });
 });
 
+// The replacement guard tells the user to retry with the path it printed; that retry has to
+// survive the shell and still match the leaf it named.
+describe("copied --replace-path retry", () => {
+  const patch = '{"models":{"providers":{"local]service":{"models":[{"id":"qwen3:8b"}]}}}}';
+  const leaf = ["models", "providers", "local]service", "models"];
+
+  it("replaces the leaf the refusal named", async () => {
+    await withPatchFile(patch, async (patchPath) => {
+      const operations = await readConfigPatchOperations({
+        file: patchPath,
+        replacePath: ['models.providers["local]service"].models'],
+      });
+
+      expect(operations).toHaveLength(1);
+      expect(operations[0]?.setPath).toEqual(leaf);
+      expect(operations[0]?.mutation).toBe("replace");
+    });
+  });
+});
+
 describe("exec provider config inputs", () => {
-  it.each(["builder", "batch"] as const)("preserves NUL in %s config input", (mode) => {
+  it("preserves NUL in batch config input", () => {
     // Config permits NUL even though native process argv cannot carry it.
     const args = ["before\0after"];
     const command = path.resolve("synthetic-exec-provider");
-    const operations = buildConfigSetOperations(
-      mode === "builder"
-        ? {
-            path: "secrets.providers.runner",
-            opts: { providerSource: "exec", providerCommand: command, providerArg: args },
-          }
-        : {
-            opts: {
-              batchJson: JSON.stringify([
-                { path: "secrets.providers.runner", provider: { source: "exec", command, args } },
-              ]),
-            },
-          },
-    );
+    const operations = buildConfigSetOperations({
+      opts: {
+        batchJson: JSON.stringify([
+          { path: "secrets.providers.runner", provider: { source: "exec", command, args } },
+        ]),
+      },
+    });
 
     expect(operations[0]?.value).toEqual({ source: "exec", command, args });
   });
 
-  it.each([
-    { name: "non-string argument", args: [42] },
-    { name: "oversized argument", args: ["x".repeat(1025)] },
-    { name: "too many arguments", args: Array.from({ length: 129 }, () => "x") },
-  ])("rejects a $name in batch provider input", ({ args }) => {
-    expect(() =>
-      buildConfigSetOperations({
-        opts: {
-          batchJson: JSON.stringify([
-            {
-              path: "secrets.providers.runner",
-              provider: { source: "exec", command: path.resolve("synthetic-exec-provider"), args },
-            },
-          ]),
-        },
-      }),
-    ).toThrow("batch[0].provider invalid");
-  });
+  it.each([{ name: "too many arguments", args: Array.from({ length: 129 }, () => "x") }])(
+    "rejects a $name in batch provider input",
+    ({ args }) => {
+      expect(() =>
+        buildConfigSetOperations({
+          opts: {
+            batchJson: JSON.stringify([
+              {
+                path: "secrets.providers.runner",
+                provider: {
+                  source: "exec",
+                  command: path.resolve("synthetic-exec-provider"),
+                  args,
+                },
+              },
+            ]),
+          },
+        }),
+      ).toThrow("batch[0].provider invalid");
+    },
+  );
 
   it.each([
-    {
-      name: "oversized argument",
-      providerArg: ["x".repeat(1025)],
-      error: "Provider builder config invalid",
-    },
-    {
-      name: "too many arguments",
-      providerArg: Array.from({ length: 129 }, () => "x"),
-      error: "Provider builder config invalid",
-    },
-    {
-      name: "relative command",
-      providerCommand: "relative-provider",
-      error: "Provider builder config invalid",
-    },
     {
       name: "unsafe command",
       providerCommand: `${path.resolve("synthetic-provider")};echo`,
@@ -123,7 +156,7 @@ describe("exec provider config inputs", () => {
         opts: {
           providerSource: "exec",
           providerCommand: testCase.providerCommand ?? path.resolve("synthetic-exec-provider"),
-          providerArg: testCase.providerArg ?? ["  literal argument  "],
+          providerArg: ["  literal argument  "],
         },
       }),
     ).toThrow(testCase.error);
@@ -155,12 +188,6 @@ describe("unused --replace-path echo", () => {
       replacePath: 'models.providers["local.service"].modals',
       echo: 'models.providers["local.service"].modals',
       segments: ["models", "providers", "local.service", "modals"],
-    },
-    {
-      name: "array index",
-      replacePath: "models.providers.openai.models.5.id",
-      echo: 'models.providers.openai.models["5"].id',
-      segments: ["models", "providers", "openai", "models", "5", "id"],
     },
   ])("prints a retry that re-parses for a $name", async ({ replacePath, echo, segments }) => {
     await withPatchFile(patch, async (patchPath) => {

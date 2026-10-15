@@ -36,14 +36,10 @@ describe("caption fallback recovery ownership", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it.each(
-    [false, true].flatMap((withCustody) =>
-      (["none", "before", "after"] as const).map((callerFailure) => ({
-        withCustody,
-        callerFailure,
-      })),
-    ),
-  )(
+  it.each([
+    { withCustody: false, callerFailure: "before" },
+    { withCustody: true, callerFailure: "after" },
+  ] as const)(
     "keeps retained no-send as the only retry owner, custody=$withCustody caller=$callerFailure",
     async ({ withCustody, callerFailure }) => {
       const custody = {

@@ -38,12 +38,17 @@ export function parseMd(raw: string): ParseResult {
   const { preamble, blocks } = walkBlocks(tokens, bodyLines, bodyFileLine);
 
   return {
-    ast: { kind: "md", raw, frontmatter: fm?.entries ?? [], preamble, blocks },
+    ast: {
+      kind: "md",
+      raw,
+      frontmatter: fm?.entries ?? [],
+      ...(fm === null ? {} : { frontmatterEndLine: fm.endLine + 1 }),
+      preamble,
+      blocks,
+    },
     diagnostics,
   };
 }
-
-// ---------- Frontmatter ---------------------------------------------------
 
 interface FrontmatterRange {
   readonly entries: readonly FrontmatterEntry[];
@@ -97,8 +102,6 @@ function unquote(value: string): string {
   return value;
 }
 
-// ---------- H2 block walker -----------------------------------------------
-
 function walkBlocks(
   tokens: readonly Token[],
   bodyLines: readonly string[],
@@ -145,8 +148,6 @@ function walkBlocks(
 
   return { preamble, blocks };
 }
-
-// ---------- Item extraction ----------------------------------------------
 
 // Every list_item_open becomes an item (bullets, numbered, nested
 // sub-bullets); lint rules flag depth / duplicate-slug collisions.

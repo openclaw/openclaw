@@ -8,6 +8,11 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
 import type { ManagedServiceBoundaryOptions } from "./update-managed-service-handoff-boundary-contract.test-support.js";
+import { prepareManagedServiceRecoveryClockPreload } from "./update-managed-service-handoff-command.test-support.js";
+import {
+  prepareManagedServiceTriageClockPreload,
+  type ManagedServiceManagerBoundaryResult,
+} from "./update-managed-service-handoff-lifecycle.test-support.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
 import type { UpdateRequester } from "./update-requester-authority.js";
 
@@ -100,7 +105,18 @@ export async function prepareManagedServiceSpawn(
   root: string,
   scriptPath: string,
   childEnv: NodeJS.ProcessEnv,
-  options?: Pick<ManagedServiceBoundaryOptions, "beforeParkNotice" | "finalizationWorkMs">,
+  options:
+    | Pick<
+        ManagedServiceBoundaryOptions,
+        "beforeParkNotice" | "finalizationWorkMs" | "recoveryHang" | "triageHang"
+      >
+    | undefined,
+  commandClocks: {
+    recoveryCommandArgv: string[];
+    recoveryTimeoutMs: number;
+    triageCommandArgv: string[];
+    triageInputPath: string;
+  },
 ) {
   let env = childEnv;
   if (options?.finalizationWorkMs !== undefined) {
@@ -119,9 +135,9 @@ export async function prepareManagedServiceSpawn(
       children.spawn = (command, args, options) => {
         const child = spawn(command, args, options);
         try {
-          let payload = JSON.parse(args.at(-1));
-          if (Array.isArray(payload) && payload[0] !== ${JSON.stringify(modulePath)})
-            payload = JSON.parse(payload.at(-1));
+          let input = args.at(-1);
+          if (input.startsWith("[")) input = JSON.parse(input).at(-1);
+          const payload = JSON.parse(fs.readFileSync(input, "utf8"));
           if (Array.isArray(payload) && payload[0] === ${JSON.stringify(modulePath)}) {
             finalizer = child;
             child.once("close", () => { if (finalizer === child) finalizer = undefined; });
@@ -177,8 +193,48 @@ export async function prepareManagedServiceSpawn(
     await fs.writeFile(preloadPath, source);
     env = { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require ${preloadPath}`.trim() };
   }
+  if (options?.recoveryHang) {
+    env = await prepareManagedServiceRecoveryClockPreload(
+      {
+        root,
+        scriptPath,
+        statePath: path.join(root, "manager-state.json"),
+        timeoutMs: commandClocks.recoveryTimeoutMs,
+      },
+      commandClocks.recoveryCommandArgv,
+      env,
+    );
+  }
+  if (options?.triageHang) {
+    env = await prepareManagedServiceTriageClockPreload(
+      { root, scriptPath, statePath: path.join(root, "manager-state.json") },
+      commandClocks.triageCommandArgv,
+      commandClocks.triageInputPath,
+      env,
+    );
+  }
   return {
     env,
+    async readCommandDeadlines(): Promise<
+      Pick<ManagedServiceManagerBoundaryResult, "recoveryDeadline" | "triageDeadline">
+    > {
+      return {
+        ...(options?.recoveryHang
+          ? {
+              recoveryDeadline: JSON.parse(
+                await fs.readFile(path.join(root, "recovery-deadline.json"), "utf8"),
+              ),
+            }
+          : {}),
+        ...(options?.triageHang
+          ? {
+              triageDeadline: JSON.parse(
+                await fs.readFile(path.join(root, "triage-deadline.json"), "utf8"),
+              ),
+            }
+          : {}),
+      };
+    },
     releaseNoticeDeadline: async (parentSignal: NodeJS.Signals | null) => {
       expect(parentSignal).toBeNull();
       await expect(

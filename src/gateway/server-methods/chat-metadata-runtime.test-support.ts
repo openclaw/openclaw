@@ -6,6 +6,7 @@ import {
   type AgentCredentialMap,
 } from "../../agents/agent-auth-credentials.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../../agents/auth-profiles/path-resolve.native.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolvePublishedModelCatalogOwner } from "../../agents/prepared-model-catalog-owner.js";
 import type { GetPublishedPreparedModelCatalogOwnerParams } from "../../agents/prepared-model-catalog.js";
@@ -15,8 +16,9 @@ import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-r
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
-import { ensureProfileForEmail, setDisplayName } from "../../state/user-profiles.js";
-import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { setDisplayName } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import type { ChatMetadataRuntimeDeps } from "./chat-metadata-facts.js";
 import { createGatewayChatMetadataRuntime } from "./chat-metadata-runtime.js";
 import type { ChatMetadataProjectionFacts } from "./chat-metadata-session-projection.js";
@@ -40,7 +42,7 @@ export async function createPersonalChatMetadataFixture() {
   const config = {
     agents: {
       defaults: { model: { primary: "openai/gpt-5.6-luna" } },
-      list: [{ id: "main", default: true }],
+      entries: { main: {} },
     },
   } satisfies OpenClawConfig;
   const harness = createChatMetadataHarness(config, { useDefaultProjection: true });
@@ -100,7 +102,7 @@ export function createOpenAIChatMetadataConfig(modelIds = ["gpt-5.6-luna"]): Ope
         model: { primary: "openai/gpt-5.6-luna" },
         models: Object.fromEntries(modelIds.map((id) => [`openai/${id}`, {}])),
       },
-      list: [{ id: "main", default: true }],
+      entries: { main: {} },
     },
   };
 }
@@ -112,6 +114,7 @@ export function createChatMetadataOwner(
   provider = "test",
   api?: ModelCatalogEntry["api"],
 ): PreparedModelRuntimeSnapshot {
+  prepareSharedAuthStoreOwnershipForNative();
   const model = { id, name: id, provider, ...(api ? { api } : {}) };
   const authStore: AuthProfileStore = {
     version: 1,
@@ -150,10 +153,8 @@ export function createChatMetadataOwner(
 }
 
 export function createChatMetadataHarness(
-  initialConfig: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } },
+  initialConfig: OpenClawConfig = { agents: { entries: { main: {} } } },
   runtimeOptions: {
-    beforeRefresh?: () => Promise<void>;
-    refreshOnRead?: boolean;
     useDefaultProjection?: boolean;
     onChanged?: () => void;
   } = {},

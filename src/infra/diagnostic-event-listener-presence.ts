@@ -1,4 +1,6 @@
 /** Process-wide listener counts used to avoid telemetry work without consumers. */
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners } from "../shared/listeners.js";
 
 const DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY = Symbol.for(
   "openclaw.diagnosticEventListenerPresence.v1",
@@ -7,40 +9,23 @@ const DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY = Symbol.for(
 type DiagnosticEventListenerPresence = {
   broadInterestCount: number;
   eventInterestDeltas: Map<string, number>;
+  interestListeners: Map<string, Set<() => void>>;
   marker: symbol;
   internalCount: number;
   trustedCount: number;
 };
 
-function getDiagnosticEventListenerPresence(): DiagnosticEventListenerPresence {
-  const globalRecord = globalThis as Record<PropertyKey, unknown>;
-  const existing = globalRecord[DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY];
-  if (
-    existing &&
-    typeof existing === "object" &&
-    (existing as Partial<DiagnosticEventListenerPresence>).marker ===
-      DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY
-  ) {
-    const state = existing as DiagnosticEventListenerPresence;
-    state.broadInterestCount ??= 0;
-    state.eventInterestDeltas ??= new Map();
-    return state;
-  }
-  const state: DiagnosticEventListenerPresence = {
+const listenerPresence = resolveGlobalSingleton<DiagnosticEventListenerPresence>(
+  DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY,
+  () => ({
     broadInterestCount: 0,
     eventInterestDeltas: new Map(),
+    interestListeners: new Map(),
     marker: DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY,
     internalCount: 0,
     trustedCount: 0,
-  };
-  Object.defineProperty(globalThis, DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY, {
-    configurable: true,
-    enumerable: false,
-    value: state,
-    writable: false,
-  });
-  return state;
-}
+  }),
+);
 
 export type InternalDiagnosticEventInterest<EventType extends string = string> = Readonly<{
   include?: readonly EventType[];
@@ -78,28 +63,46 @@ export function updateInternalDiagnosticEventInterest(
   interest: InternalDiagnosticEventInterest | undefined,
   delta: 1 | -1,
 ): void {
-  const state = getDiagnosticEventListenerPresence();
-  if (interest?.include) {
-    for (const type of new Set(interest.include)) {
-      if (!interest.exclude?.includes(type)) {
-        updateEventInterestDelta(state, type, delta);
-      }
-    }
-    return;
+  const state = listenerPresence;
+  const previouslyUninterested = [...state.interestListeners].filter(
+    ([type]) => !hasInternalDiagnosticEventInterest(type),
+  );
+  const usesIncludeList = Boolean(interest?.include);
+  if (!usesIncludeList) {
+    state.broadInterestCount += delta;
   }
-  state.broadInterestCount += delta;
-  for (const type of new Set(interest?.exclude ?? [])) {
-    updateEventInterestDelta(state, type, -delta);
+  const types = usesIncludeList ? interest?.include : (interest?.exclude ?? []);
+  for (const type of new Set(types)) {
+    if (!usesIncludeList || !interest?.exclude?.includes(type)) {
+      updateEventInterestDelta(state, type, usesIncludeList ? delta : -delta);
+    }
+  }
+  for (const [type, listeners] of previouslyUninterested) {
+    if (hasInternalDiagnosticEventInterest(type)) {
+      notifyListeners(listeners, undefined);
+    }
   }
 }
 
+export function onInternalDiagnosticEventInterest(type: string, listener: () => void): () => void {
+  const state = listenerPresence;
+  const listeners = state.interestListeners.get(type) ?? new Set<() => void>();
+  state.interestListeners.set(type, listeners);
+  listeners.add(listener);
+  return () => {
+    if (listeners.delete(listener) && listeners.size === 0) {
+      state.interestListeners.delete(type);
+    }
+  };
+}
+
 export function hasInternalDiagnosticEventInterest(type: string): boolean {
-  const state = getDiagnosticEventListenerPresence();
+  const state = listenerPresence;
   return state.broadInterestCount + (state.eventInterestDeltas.get(type) ?? 0) > 0;
 }
 
 export function resetInternalDiagnosticEventListenerPresence(): void {
-  const state = getDiagnosticEventListenerPresence();
+  const state = listenerPresence;
   state.internalCount = 0;
   state.trustedCount = 0;
   state.broadInterestCount = 0;
@@ -110,12 +113,12 @@ export function setInternalDiagnosticEventListenerCounts(
   internalCount: number,
   trustedCount: number,
 ): void {
-  const state = getDiagnosticEventListenerPresence();
+  const state = listenerPresence;
   state.internalCount = internalCount;
   state.trustedCount = trustedCount;
 }
 
 export function hasInternalDiagnosticEventListeners(): boolean {
-  const state = getDiagnosticEventListenerPresence();
+  const state = listenerPresence;
   return state.internalCount > 0 || state.trustedCount > 0;
 }

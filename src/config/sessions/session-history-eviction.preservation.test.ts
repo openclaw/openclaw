@@ -3,7 +3,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
+import {
+  registerAgentRunContext,
+  resetAgentRunRegistryForTest,
+} from "../../infra/agent-run-registry.js";
 import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -57,15 +60,7 @@ describe("SQLite historical session preservation", () => {
     closeOpenClawAgentDatabasesForTest();
     await testState.cleanup();
   });
-  it.each([
-    "recent",
-    "archived",
-    "pinned",
-    "manual",
-    "age-retention",
-    "stale-dashboard",
-    "restart-recovery",
-  ] as const)(
+  it.each(["registry", "recent", "pinned", "manual"] as const)(
     "preserves every generation of a %s session under physical pressure",
     async (protection) => {
       async function inspectHistoryReads<T>(operation: () => Promise<T>): Promise<T> {
@@ -117,9 +112,9 @@ describe("SQLite historical session preservation", () => {
           ...(protection === "recent"
             ? { skillsSnapshot: { prompt: "p".repeat(64 * 1024), skills: [] } }
             : {}),
-          ...(protection !== "recent" && protection !== "pinned" ? { archivedAt: now } : {}),
-          ...(protection !== "recent" && protection !== "pinned" && protection !== "archived"
-            ? { archiveReason: protection }
+          ...(protection === "manual" ? { archivedAt: now, archiveReason: protection } : {}),
+          ...(protection === "registry"
+            ? { archivedAt: now, archiveReason: "active-session-cap" as const }
             : {}),
           ...(protection === "pinned" ? { pinnedAt: now } : {}),
         },
@@ -132,6 +127,13 @@ describe("SQLite historical session preservation", () => {
         updatedAt: now - 8 * dayMs,
       });
       settlePhysicalUsage();
+      if (protection === "registry") {
+        registerAgentRunContext("history-live-run", {
+          agentId: "main",
+          sessionKey: recentKey,
+          projectSessionActive: true,
+        });
+      }
       const before = await measureSessionPhysicalDiskUsage(storePath);
 
       const result = await inspectHistoryReads(() =>

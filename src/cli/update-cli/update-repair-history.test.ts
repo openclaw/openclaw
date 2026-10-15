@@ -175,7 +175,7 @@ describe("public repair historical acknowledgment", () => {
     },
   );
 
-  it.each(["doctor", "convergence", "error"])(
+  it.each(["doctor", "convergence", "error", "retained recovery"])(
     "preserves history when repair fails in %s",
     async (phase) => {
       const old = seedHistory(4 * ABANDONED_UPDATE_RUN_MS);
@@ -184,13 +184,22 @@ describe("public repair historical acknowledgment", () => {
         mocks.doctor.mockRejectedValueOnce(new Error("Doctor failed"));
       } else if (phase === "convergence") {
         mocks.convergence.mockRejectedValueOnce(new Error("Convergence failed"));
-      } else {
+      } else if (phase === "error") {
         mocks.plugins.mockResolvedValueOnce({ ...pluginResult, status: "error" });
+      } else {
+        await fs.mkdir(path.join(resolveOpenClawStateSqliteDir(), ".openclaw-restore-retained"));
       }
-      await expect(repair()).rejects.toThrow();
+      await expect(repair()).rejects.toThrow(
+        phase === "retained recovery" ? "full-state recovery is deferred" : undefined,
+      );
+      if (phase === "retained recovery") {
+        expect(mocks.doctor).not.toHaveBeenCalled();
+      }
       expect(getUpdateRun(old.runId)).toEqual(old);
       expect(getUpdateRun(recent.runId)).toEqual(recent);
-      expect(await abandonedWarnings()).toHaveLength(2);
+      if (phase !== "retained recovery") {
+        expect(await abandonedWarnings()).toHaveLength(2);
+      }
     },
   );
 
@@ -226,16 +235,6 @@ describe("public repair historical acknowledgment", () => {
       expect.objectContaining({ status: "ok", reconciledRuns: [old.runId] }),
     );
     expect(await abandonedWarnings()).toEqual([]);
-  });
-
-  it("preserves historical rows when retained recovery blocks finalization", async () => {
-    const old = seedHistory(4 * ABANDONED_UPDATE_RUN_MS);
-    await fs.mkdir(path.join(resolveOpenClawStateSqliteDir(), ".openclaw-restore-retained"));
-
-    await expect(repair()).rejects.toThrow("full-state recovery is deferred");
-
-    expect(getUpdateRun(old.runId)).toEqual(old);
-    expect(mocks.doctor).not.toHaveBeenCalled();
   });
 
   it("does not acknowledge terminal history if a captured active run remains unresolved", async () => {

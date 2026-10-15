@@ -7,7 +7,6 @@ import {
 } from "../../agents/failover/user-copy.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
 import { resolveSourceReplyPolicy } from "./agent-runner-core.js";
@@ -115,7 +114,7 @@ export async function settleAgentFallbackCycle(params: {
           activeSessionEntry: turn.getActiveSessionEntry(),
         })
       : cycle.shouldSurfaceToControlUi
-        ? renderControlUiAgentFailureCopy(formatErrorMessage(embeddedError))
+        ? renderControlUiAgentFailureCopy()
         : PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE;
     return {
       kind: "final",

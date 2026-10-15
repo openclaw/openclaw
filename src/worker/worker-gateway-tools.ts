@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { bindBeforeToolCallMetadata } from "../agents/before-tool-call-metadata.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { WorkerConnection } from "./worker-connection.js";
 
 export function createWorkerGatewayToolProxies(
@@ -56,6 +57,9 @@ export function createWorkerGatewayToolProxies(
         }
       },
     };
+    if (entry.plugin) {
+      setPluginToolMeta(tool, entry.plugin);
+    }
     // The retained Gateway implementation owns before/after hooks for this call.
     bindBeforeToolCallMetadata(tool, {
       sourceTool: { ...tool },

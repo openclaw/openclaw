@@ -53,45 +53,47 @@ describe("workspace Memory file client", () => {
     });
   });
 
-  it.each(["disconnect", "truncated reply"])(
-    "keeps a conditional write outcome uncertain after %s",
-    async (failure) => {
-      const f = fixture();
-      if (failure === "disconnect") {
-        f.request.mockRejectedValue(new Error("transport disconnected"));
-      } else {
-        f.request.mockResolvedValue('{"result":');
-      }
-      await expect(
-        f.files.maintenance!.commitContent({
-          filePath: "/gateway/memory/note.md",
-          tempPrefix: "note",
-          content: "update",
-          expectedHash: "old",
-        }),
-      ).rejects.toMatchObject({ publication: "uncertain" });
+  it.each([
+    {
+      failure: "disconnect",
+      reply: undefined,
+      expected: { publication: "uncertain" },
+      expectedHash: "old",
     },
-  );
-
-  it("preserves the native worker's conflict and publication errors", async () => {
-    const f = fixture();
-    for (const error of [
+    {
+      failure: "truncated reply",
+      reply: '{"result":',
+      expected: { publication: "uncertain" },
+      expectedHash: "old",
+    },
+    ...[
       { message: "content changed", name: "MemoryWriteConflictError", code: "CONFLICT" },
       {
         message: "directory sync failed",
         name: "MemoryAtomicPublicationError",
         publication: "committed",
       },
-    ]) {
-      f.request.mockResolvedValue(JSON.stringify({ error }));
-      await expect(
-        f.files.maintenance!.commitContent({
-          filePath: "/gateway/memory/note.md",
-          tempPrefix: "note",
-          content: "update",
-        }),
-      ).rejects.toMatchObject(error);
+    ].map((error) => ({
+      failure: error.name,
+      reply: JSON.stringify({ error }),
+      expected: error,
+      expectedHash: undefined,
+    })),
+  ])("preserves the write outcome after $failure", async ({ reply, expected, expectedHash }) => {
+    const f = fixture();
+    if (reply === undefined) {
+      f.request.mockRejectedValue(new Error("transport disconnected"));
+    } else {
+      f.request.mockResolvedValue(reply);
     }
+    await expect(
+      f.files.maintenance!.commitContent({
+        filePath: "/gateway/memory/note.md",
+        tempPrefix: "note",
+        content: "update",
+        expectedHash,
+      }),
+    ).rejects.toMatchObject(expected);
   });
 
   it("does not return stale reads or start new requests after its lifetime ends", async () => {

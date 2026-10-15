@@ -130,7 +130,7 @@ struct ChatSessionSidebarDataTests {
         }
     }
 
-    @Test func `failed pending edits reveal current observer and settings facts without committing the overlay`() throws {
+    @Test func `failed edits reveal observer and settings facts without committing the overlay`() throws {
         let owner = OpenClawChatSessionSidebarData()
         let references = try owner.receive(self.rows(self.original), read: owner.beginRead(), replacingAgent: "main")
         let target = try #require(owner.project(references).first)
@@ -150,7 +150,7 @@ struct ChatSessionSidebarDataTests {
         #expect(row.observerDigest?.health == "waiting-on-user")
     }
 
-    @Test func `acknowledged fields survive an older read while failed newer intent reveals the acknowledgement`() throws {
+    @Test func `older reads and failed newer intents preserve acknowledged fields`() throws {
         let owner = OpenClawChatSessionSidebarData()
         let initial = try self.rows(self.original)
         let ids = owner.receive(initial, read: owner.beginRead(), replacingAgent: "main")
@@ -172,6 +172,122 @@ struct ChatSessionSidebarDataTests {
         {"key":"agent:main:thread","sessionId":"thread","label":"External rename","updatedAt":30}
         """#), read: owner.beginRead())
         #expect(owner.project(ids).first?.label == "External rename")
+    }
+
+    @Test func `snooze preserves a pin and failed wake reveals the acknowledgement despite a stale read`() throws {
+        let owner = OpenClawChatSessionSidebarData()
+        let initial = try self.rows(#"""
+        {"key":"agent:main:thread","sessionId":"thread","pinned":true,"pinnedAt":5,"updatedAt":10}
+        """#)
+        let ids = owner.receive(initial, read: owner.beginRead(), replacingAgent: "main")
+        let target = try #require(owner.project(ids).first)
+        let snooze = owner.beginMutation(target: target, field: .snoozed) {
+            $0.snoozedUntil = 101_000
+            $0.snoozedAt = 100_000
+        }
+        #expect(owner.project(ids).first?.snoozedUntil == 101_000)
+        #expect(owner.project(ids).first?.snoozedAt == 100_000)
+        #expect(owner.project(ids).first?.pinned == true)
+        #expect(owner.project(ids).first?.pinnedAt == 5)
+        let wake = owner.beginMutation(target: target, field: .snoozed) {
+            $0.snoozedUntil = nil
+            $0.snoozedAt = nil
+        }
+        #expect(owner.project(ids).first?.snoozedUntil == nil)
+        #expect(owner.project(ids).first?.snoozedAt == nil)
+        let delayedRead = owner.beginRead()
+        try owner.finishMutation(snooze, receipt: self.receipt(#"""
+        {"key":"agent:main:thread","entry":{"sessionId":"thread","snoozedUntil":102000,\#
+        "snoozedAt":100500,"updatedAt":20}}
+        """#))
+        owner.receive(initial, read: delayedRead)
+        #expect(owner.project(ids).first?.snoozedUntil == nil)
+        owner.finishMutation(wake, receipt: nil)
+        let current = try #require(owner.project(ids).first)
+        #expect(current.snoozedUntil == 102_000)
+        #expect(current.snoozedAt == 100_500)
+        #expect(current.pinned == true)
+        #expect(current.pinnedAt == 5)
+    }
+
+    @Test(arguments: [ChatSessionBatchAction.archive, .pin])
+    func `archive and pin clear snooze optimistically and on acknowledgement`(action: ChatSessionBatchAction) throws {
+        let owner = OpenClawChatSessionSidebarData()
+        let initial = try self.rows(#"""
+        {"key":"agent:main:thread","sessionId":"thread","snoozedUntil":101000,"snoozedAt":100000,"updatedAt":10}
+        """#)
+        let ids = owner.receive(initial, read: owner.beginRead(), replacingAgent: "main")
+        let target = try #require(owner.project(ids).first)
+        let failed = owner.beginBatchMutation(target: target, action: action)
+        #expect(owner.project(ids).first?.snoozedUntil == nil)
+        #expect(owner.project(ids).first?.snoozedAt == nil)
+        owner.finishMutation(failed, receipt: nil)
+        #expect(owner.project(ids).first?.snoozedUntil == 101_000)
+        #expect(owner.project(ids).first?.snoozedAt == 100_000)
+
+        let succeeded = owner.beginBatchMutation(target: target, action: action)
+        let delayedRead = owner.beginRead()
+        let field = action == .archive ? "archivedAt" : "pinnedAt"
+        try owner.finishMutation(succeeded, receipt: self.receipt(#"""
+        {"key":"agent:main:thread","entry":{"sessionId":"thread","\#(field)":20,"updatedAt":20}}
+        """#))
+        owner.receive(initial, read: delayedRead)
+        let current = try #require(owner.project(ids).first)
+        #expect(current.snoozedUntil == nil)
+        #expect(current.snoozedAt == nil)
+        #expect(action == .archive ? current.isArchived : current.pinned == true)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func `pin and snooze reconcile overlapping fields in either acknowledgement order`(
+        snoozeFirst: Bool, newerAckFirst: Bool) throws
+    {
+        let owner = OpenClawChatSessionSidebarData()
+        let ids = try owner.receive(
+            self.rows(#"""
+            {"key":"agent:main:thread","sessionId":"thread","pinned":false,"updatedAt":10}
+            """#),
+            read: owner.beginRead(),
+            replacingAgent: "main")
+        let target = try #require(owner.project(ids).first)
+        let startSnooze = {
+            owner.beginMutation(target: target, field: .snoozed) {
+                $0.snoozedUntil = 101_000
+                $0.snoozedAt = 100_000
+            }
+        }
+        let startPin = { owner.beginBatchMutation(target: target, action: .pin) }
+        let first = snoozeFirst ? startSnooze() : startPin()
+        let second = snoozeFirst ? startPin() : startSnooze()
+        let pinDate = snoozeFirst ? 30 : 20
+        let snoozeDate = snoozeFirst ? 20 : 30
+        let snoozePin = snoozeFirst ? "" : #", "pinnedAt":20"#
+        let snoozeReceipt = try self.receipt(#"""
+        {"key":"agent:main:thread","entry":{"sessionId":"thread","snoozedUntil":101000,
+         "snoozedAt":100000,"updatedAt":\#(snoozeDate)\#(snoozePin)}}
+        """#)
+        let pinReceipt = try self.receipt(#"""
+        {"key":"agent:main:thread","entry":{"sessionId":"thread","pinnedAt":\#(pinDate),"updatedAt":\#(pinDate)}}
+        """#)
+        let firstReceipt = snoozeFirst ? snoozeReceipt : pinReceipt
+        let secondReceipt = snoozeFirst ? pinReceipt : snoozeReceipt
+        let expectedUntil: Double? = snoozeFirst ? nil : 101_000
+        let expectedAt: Double? = snoozeFirst ? nil : 100_000
+        #expect(owner.project(ids).first?.snoozedUntil == expectedUntil)
+        #expect(owner.project(ids).first?.pinned == true)
+
+        owner.finishMutation(newerAckFirst ? second : first, receipt: newerAckFirst ? secondReceipt : firstReceipt)
+        let intermediate = try #require(owner.project(ids).first)
+        #expect(intermediate.snoozedUntil == expectedUntil)
+        #expect(intermediate.snoozedAt == expectedAt)
+        #expect(intermediate.pinned == true)
+
+        owner.finishMutation(newerAckFirst ? first : second, receipt: newerAckFirst ? firstReceipt : secondReceipt)
+        let final = try #require(owner.project(ids).first)
+        #expect(final.snoozedUntil == expectedUntil)
+        #expect(final.snoozedAt == expectedAt)
+        #expect(final.pinned == true)
+        #expect(final.pinnedAt == Double(pinDate))
     }
 
     @Test func `delayed rename acknowledgement changes only its field after a newer lifecycle update`() throws {
@@ -246,13 +362,19 @@ struct ChatSessionSidebarDataTests {
 
     @Test func `ordinary reads preserve omitted enrichment only for the same incarnation`() throws {
         let owner = OpenClawChatSessionSidebarData()
-        let ids = try owner.receive(self.rows(#"""
-        {"key":"agent:main:thread","sessionId":"thread","derivedTitle":"Derived before",
-         "lastMessagePreview":"Preview before","updatedAt":10}
-        """#), read: owner.beginRead(), replacingAgent: "main")
-        try owner.receive(self.rows(#"""
-        {"key":"agent:main:thread","sessionId":"thread","label":"Renamed","updatedAt":20}
-        """#), read: owner.beginRead(), replacingAgent: "main")
+        let ids = try owner.receive(
+            self.rows(#"""
+            {"key":"agent:main:thread","sessionId":"thread","derivedTitle":"Derived before",
+             "lastMessagePreview":"Preview before","updatedAt":10}
+            """#),
+            read: owner.beginRead(),
+            replacingAgent: "main")
+        try owner.receive(
+            self.rows(#"""
+            {"key":"agent:main:thread","sessionId":"thread","label":"Renamed","updatedAt":20}
+            """#),
+            read: owner.beginRead(),
+            replacingAgent: "main")
         #expect(owner.project(ids).first?.label == "Renamed")
         #expect(owner.project(ids).first?.derivedTitle == "Derived before")
         #expect(owner.project(ids).first?.lastMessagePreview == "Preview before")

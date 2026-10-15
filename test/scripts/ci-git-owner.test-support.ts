@@ -114,6 +114,7 @@ function readWorkflowStep({ file, job, step: name }: WorkflowTarget): Step & { r
 }
 
 export async function runCiGitStep(options: {
+  signal: AbortSignal;
   workflow?: "workflow-sanity" | WorkflowTarget;
   job?: string;
   action?:
@@ -241,6 +242,7 @@ export async function runCiGitStep(options: {
   let publisherFixture: ReturnType<typeof prepareGeneratedPublisherFixture> | undefined;
   return withCiCheckoutFixture(
     `linux:${options.scenario ?? "configured"}`,
+    options.signal,
     (root) => {
       const actions = path.join(root, "trusted-actions");
       if (options.performance) {
@@ -335,6 +337,13 @@ export async function runCiGitStep(options: {
         );
         if (
           action === "git-owner" &&
+          options.cancelDuringCleanup &&
+          !source.includes("cleanup-cancelled.json")
+        ) {
+          throw new Error("Missing copied Git owner cleanup cancellation boundary");
+        }
+        if (
+          action === "git-owner" &&
           (publisher || maturity || pluginRelease || releaseAdmission || options.performance)
         ) {
           source = source.replace(
@@ -365,15 +374,26 @@ def main():`,
           if (!options.realClock || options.virtualBackoff) {
             throw new Error("Backoff cancellation requires the real owner clock");
           }
+          // Existing callers exec Python into the supervised shell's PID.
+          // A non-exec caller would require separate shell propagation proof.
+          if (!step.run.includes('exec python3 -I -S "$CI_GIT_OWNER" --policy')) {
+            throw new Error("Backoff cancellation requires an exec-owned Python policy");
+          }
           const boundary = "    while time.monotonic() < retry_at:\n        check_cancelled()";
           if (source.split(boundary).length !== 2) {
             throw new Error("Missing unique Git owner backoff cancellation boundary");
           }
+          // Claim before acknowledgment so a dropped first signal cannot be retried.
           source = source.replace(
             boundary,
             `${boundary}
-        subprocess.run([${JSON.stringify(process.execPath)}, ${JSON.stringify(ciCheckoutFixture)},
-                        "observe", os.environ["TMPDIR"], "linux:configured", "backoff-ready"], check=True)`,
+        fixture_cancel = os.path.join(os.environ["TMPDIR"], "backoff-cancel-claimed.json")
+        if not os.path.exists(fixture_cancel):
+            with open(fixture_cancel, "x") as receipt:
+                json.dump(os.getpid(), receipt)
+            subprocess.run([${JSON.stringify(process.execPath)}, ${JSON.stringify(ciCheckoutFixture)},
+                            "observe", os.environ["TMPDIR"], "linux:configured", "backoff-cancel"], check=True)
+            os.kill(os.getpid(), signal.SIGTERM)`,
           );
         }
         writeFileSync(path.join(actions, action, name), source);
@@ -450,7 +470,6 @@ def main():`,
           lsRemoteResults: options.lsRemoteResults,
           objects: options.objects,
           cooperativeTrees: options.cooperativeTrees,
-          cancelDuringBackoff: options.cancelDuringBackoff,
           setupFailure: options.setupFailure,
         }),
       );

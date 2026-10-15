@@ -15,6 +15,7 @@ import {
   releaseSubagentRun,
   releaseSubagentRunKillClaim,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { isSameSubagentRunOwner } from "../agents/subagents/registry/subagent-run-generation.js";
 import * as nativeSpawn from "../agents/subagents/spawn/subagent-spawn.js";
 import {
   activateSwarmRun,
@@ -31,6 +32,8 @@ import {
 import { onAgentEvent } from "../infra/agent-events.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { captureAsyncWorkTracker } from "../shared/async-work-scope.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
 import { handleChatSend } from "./server-methods/chat-send-handler.js";
 import { prepareAndAdmitChatSend } from "./server-methods/chat-send-setup.js";
@@ -41,7 +44,7 @@ import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import * as sessionStoreWorker from "./session-utils-store-worker.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 
 const {
   parentKey,
@@ -76,33 +79,12 @@ function expectAborted(respond: ReturnType<typeof vi.fn>, runId: string | undefi
 }
 
 describe("queued collector session projection", () => {
-  it("rejects an already-cancelled collector before starting spawn effects", async () => {
-    const effectsStarted = vi.fn();
-    await expect(
-      nativeSpawn.spawnSubagentDirect(
-        { task: "cancelled collector", collect: true, context: "isolated" },
-        {
-          agentSessionKey: parentKey,
-          requesterRunId: "parent-turn",
-          assertActive: () => {
-            throw new Error("requester already cancelled");
-          },
-          onSpawnEffectsStart: effectsStarted,
-        },
-      ),
-    ).resolves.toEqual({
-      status: "error",
-      error: "sessions_spawn could not read the requester session: requester already cancelled",
-    });
-    expect(effectsStarted).not.toHaveBeenCalled();
-    expect(launchedRunIds).toEqual([]);
-  });
-
   it("lists both labeled collectors before the second launches without inventing its runtime", async () => {
     const context = requestContext();
     const broadcast = vi.fn();
     const publications: Promise<void>[] = [];
     const reservationReleases: Promise<void>[] = [];
+    const trackPublication = captureAsyncWorkTracker();
     const publishLifecycle = createLifecycleEventBroadcastHandler({
       broadcastToConnIds: broadcast,
       sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
@@ -110,7 +92,8 @@ describe("queued collector session projection", () => {
       getSessionRowProjection: () => getSessionRowProjection(context),
     });
     const unsubscribe = onSessionLifecycleEvent((event) => {
-      publications.push(publishLifecycle(event));
+      // The observer is joined by this fixture, not the short-lived launch that emits the event.
+      publications.push(trackPublication(() => publishLifecycle(event)));
     });
     try {
       const results = await spawnCollectors();
@@ -421,7 +404,7 @@ describe("queued collector session projection", () => {
         onStartFailure: () => true,
       });
       const session = expectDefined(
-        loadGatewaySessionEntryReadOnly(entry.childSessionKey).entry,
+        (await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey)).entry,
         "created session",
       );
       const claim = expectDefined(
@@ -449,7 +432,10 @@ describe("queued collector session projection", () => {
   it("rejects stale copies, replaced owners, and lost reservations without losing compact status", async () => {
     const { entry, registration } = await createQueuedReservation();
     await replaceSessionEntry(
-      { sessionKey: parentKey, storePath: loadGatewaySessionEntryReadOnly(parentKey).storePath },
+      {
+        sessionKey: parentKey,
+        storePath: (await loadGatewaySessionEntryReadOnlyAsync(parentKey)).storePath,
+      },
       { sessionId: "parent-session", updatedAt: Date.now() },
     );
     const afterStaleGrace = Date.now() + 3 * 60 * 60_000;
@@ -463,7 +449,9 @@ describe("queued collector session projection", () => {
     expect(await exactChild()).toMatchObject({ status: "queued", hasActiveSubagentRun: true });
     expect((await exactParent())?.hasActiveSubagentRun).toBe(true);
     const compact = expectDefined(
-      loadSubagentSessionListRunsFromSqlite().get(entry.runId),
+      loadSubagentSessionListRunsFromSqlite(undefined, openOpenClawStateDatabase()).get(
+        entry.runId,
+      ),
       "compact queued record",
     );
     expect(compact.execution).toEqual({ status: "queued" });
@@ -515,8 +503,8 @@ describe("queued collector session projection", () => {
       respond,
     });
     expectAborted(respond, entry.runId);
-    expect(entry.collectorCompletion?.status).toBe("killed");
-    expect(entry.execution.startedAt).toBeUndefined();
+    expect(subagentRuns.get(entry.runId)?.collectorCompletion?.status).toBe("killed");
+    expect(subagentRuns.get(entry.runId)?.execution.startedAt).toBeUndefined();
     expect(isSubagentRunQueued(unrelated.entry)).toBe(true);
     expect(launchedRunIds).toEqual([]);
   });
@@ -526,7 +514,8 @@ describe("queued collector session projection", () => {
     const context = requestContext();
     const order: string[] = [];
     vi.mocked(context.broadcastToConnIds).mockImplementation(() => {
-      expect(subagentRuns.get(entry.runId)).toBe(entry);
+      expect(isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry)).toBe(true);
+      expect(subagentRuns.get(entry.runId)?.collectorCompletion?.status).toBe("killed");
       order.push("published");
     });
     const kill = subagentKill.killSubagentRunAdmin;
@@ -536,7 +525,7 @@ describe("queued collector session projection", () => {
         const result = await kill(...args);
         // Real cancellation is complete; an awaited consumer can now observe
         // another owner before it consumes the predecessor's result.
-        releaseSubagentRun(entry.runId);
+        await releaseSubagentRun(entry.runId);
         {
           reserveSwarmRun({
             runId: entry.runId,
@@ -734,7 +723,7 @@ describe("queued collector session projection", () => {
       respond,
     });
     expectAborted(respond, entry.runId);
-    expect(entry.collectorCompletion?.status).toBe("killed");
+    expect(subagentRuns.get(entry.runId)?.collectorCompletion?.status).toBe("killed");
   });
 
   it.each([
@@ -766,7 +755,7 @@ describe("queued collector session projection", () => {
           }),
           "ordinary chat admission while collector is queued",
         );
-        return prepared.admitted.value;
+        return prepared.admission;
       };
       const admission = await admitOrdinaryChat(
         extraRunId,
@@ -850,7 +839,7 @@ describe("queued collector session projection", () => {
         expect
           .soft(admission.activeRunAbort.entry?.abortStopReason)
           .toBe(stopped ? (method === "chat.send" ? "stop" : "rpc") : undefined);
-        const session = loadGatewaySessionEntryReadOnly(entry.childSessionKey);
+        const session = await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey);
         const events = await loadTranscriptEvents({
           agentId: "main",
           storePath: session.storePath,

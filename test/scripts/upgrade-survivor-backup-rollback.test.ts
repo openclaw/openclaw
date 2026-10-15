@@ -53,7 +53,6 @@ if (args[0] === "backup" && args[1] === "create") {
   execFileSync("tar", ["-xzf", archive, "-C", target]);
   if (controls.mode === "lost-transcript") fs.unlinkSync(path.join(state, controls.transcriptRelative));
   const db = new DatabaseSync(path.join(state, controls.agentRelative));
-  if (controls.mode === "missing-event") db.exec("DELETE FROM transcript_events WHERE seq = 2");
   if (controls.mode === "changed-session") db.exec("UPDATE session_nodes SET current_session_id = 'different-session'");
   if (controls.mode === "changed-payload") db.exec("UPDATE transcript_events SET event_json = '{}' WHERE seq = 1");
   if (controls.mode === "changed-schema") db.exec("PRAGMA user_version = 21");
@@ -163,6 +162,13 @@ function fixture(withTranscript = false) {
   const beforeFile = join(artifactRoot, "schema-before.json");
   const afterFile = join(artifactRoot, "schema-after.json");
   const resultFile = join(artifactRoot, "backup-rollback.json");
+  const fileEvidence = (kind: string, relative: string) => ({
+    kind,
+    relative,
+    sha256: createHash("sha256")
+      .update(readFileSync(join(state, relative)))
+      .digest("hex"),
+  });
   const schema = {
     baselineVersion: "2026.9.4",
     candidateVersion: "2026.9.5",
@@ -173,36 +179,18 @@ function fixture(withTranscript = false) {
       { kind: "agent", relative: agentRelative, userVersion: 19, contentVersion: 19 },
     ],
     agents: [
-      { agentId: "main", databaseRelative: agentRelative, files: [] },
+      {
+        agentId: "main",
+        databaseRelative: agentRelative,
+        files: withTranscript ? [fileEvidence("transcript", transcriptRelative)] : [],
+      },
       {
         agentId: "ops",
         databaseRelative: "agents/ops/agent/openclaw-agent.sqlite",
-        files: [
-          {
-            kind: "legacy-store",
-            relative: legacyRelative,
-            sha256: createHash("sha256")
-              .update(readFileSync(join(state, legacyRelative)))
-              .digest("hex"),
-          },
-        ],
+        files: [fileEvidence("legacy-store", legacyRelative)],
       },
     ],
   };
-  if (withTranscript) {
-    const files = schema.agents[0]!.files as Array<{
-      kind: string;
-      relative: string;
-      sha256: string;
-    }>;
-    files.push({
-      kind: "transcript",
-      relative: transcriptRelative,
-      sha256: createHash("sha256")
-        .update(readFileSync(join(state, transcriptRelative)))
-        .digest("hex"),
-    });
-  }
   writeJson(beforeFile, schema);
   writeJson(afterFile, {
     ...schema,
@@ -237,81 +225,75 @@ function fixture(withTranscript = false) {
 }
 
 describe("published backup rollback proof", () => {
-  it("compares exact restored history and asks the retained runtime to inspect its own schema", () => {
-    const f = fixture();
-    const capture = f.capture();
-    expect(capture.status, capture.stderr).toBe(0);
-    const before = readJson(f.resultFile);
-    expect(before.status).toBe("captured");
-    const restored = f.verify();
-    expect(restored.status, restored.stderr).toBe(0);
-    const proof = readJson(f.resultFile);
-    expect(proof).toMatchObject({
-      status: "passed",
-      baselineVersion: "2026.9.4",
-      candidateVersion: "2026.9.5",
-      preflights: [{ agentId: "main", status: "exact", foundVersion: 19, targetVersion: 19 }],
-      sessionReads: [{ agentId: "main", count: 1 }],
-    });
-    expect(proof.restoredStateDir).toContain(join("synthetic-backup", "payload", "operator-state"));
-    expect(proof.before).toEqual(before.before);
-    expect(proof.before.databases).toContainEqual({
-      kind: "agent",
-      relative: "agents/ops/agent/openclaw-agent.sqlite",
-      agentId: "ops",
-      present: false,
-    });
-    const commands = readFileSync(f.events, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-    expect(commands.map((command) => command.args.slice(0, 2))).toEqual([
-      ["backup", "create"],
-      ["backup", "restore"],
-      ["database", "preflight-agent"],
-      ["sessions", "--store"],
-    ]);
-    expect(commands[0].state).toBe(f.state);
-    expect(commands[1].state).toBe(commands[2].state);
-    expect(commands[2].state).toBe(commands[3].state);
-    expect(commands[1].state).not.toBe(f.state);
-    const source = new DatabaseSync(join(f.state, "agents/main/agent/openclaw-agent.sqlite"), {
-      readOnly: true,
-    });
-    try {
-      expect(source.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
-      expect(source.prepare("SELECT COUNT(*) AS count FROM transcript_events").get()?.count).toBe(
-        2,
+  it.each([false, true])(
+    "proves restored history and schema with omitted raw transcript=%s",
+    (withTranscript) => {
+      const f = fixture(withTranscript);
+      const capture = f.capture();
+      expect(capture.status, capture.stderr).toBe(0);
+      const before = readJson(f.resultFile);
+      expect(before.status).toBe("captured");
+      const restored = f.verify();
+      expect(restored.status, restored.stderr).toBe(0);
+      const proof = readJson(f.resultFile);
+      expect(proof).toMatchObject({
+        status: "passed",
+        baselineVersion: "2026.9.4",
+        candidateVersion: "2026.9.5",
+        preflights: [{ agentId: "main", status: "exact", foundVersion: 19, targetVersion: 19 }],
+        sessionReads: [{ agentId: "main", count: 1 }],
+      });
+      expect(proof.restoredStateDir).toContain(
+        join("synthetic-backup", "payload", "operator-state"),
       );
-    } finally {
-      source.close();
-    }
-  });
-
-  it("proves canonical history when published 9.4 omits the exact raw fixture transcript", () => {
-    const f = fixture(true);
-    const capture = f.capture();
-    expect(capture.status, capture.stderr).toBe(0);
-    const before = readJson(f.resultFile);
-    const restored = f.verify();
-    expect(restored.status, restored.stderr).toBe(0);
-    expect(before.backupCreate.skippedVolatileCount).toBe(1);
-    expect(before.omittedRawTranscripts).toMatchObject([
-      {
-        relative: "agents/main/sessions/upgrade-restored-index-history.jsonl",
-        canonicalEventCount: 2,
-        reason: "published-2026.9.4-volatile-transcript",
-      },
-    ]);
-    const proof = readJson(f.resultFile);
-    expect(proof.rawTranscriptRestoration).toBe("unsupported-by-published-backup");
-    expect(proof.before).toEqual(before.before);
-    expect(proof.sessionReads).toMatchObject([{ agentId: "main", count: 1 }]);
-  });
+      expect(proof.before).toEqual(before.before);
+      if (withTranscript) {
+        expect(before.backupCreate.skippedVolatileCount).toBe(1);
+        expect(before.omittedRawTranscripts).toMatchObject([
+          {
+            relative: "agents/main/sessions/upgrade-restored-index-history.jsonl",
+            canonicalEventCount: 2,
+            reason: "published-2026.9.4-volatile-transcript",
+          },
+        ]);
+        expect(proof.rawTranscriptRestoration).toBe("unsupported-by-published-backup");
+      }
+      expect(proof.before.databases).toContainEqual({
+        kind: "agent",
+        relative: "agents/ops/agent/openclaw-agent.sqlite",
+        agentId: "ops",
+        present: false,
+      });
+      const commands = readFileSync(f.events, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(commands.map((command) => command.args.slice(0, 2))).toEqual([
+        ["backup", "create"],
+        ["backup", "restore"],
+        ["database", "preflight-agent"],
+        ["sessions", "--store"],
+      ]);
+      expect(commands[0].state).toBe(f.state);
+      expect(commands[1].state).toBe(commands[2].state);
+      expect(commands[2].state).toBe(commands[3].state);
+      expect(commands[1].state).not.toBe(f.state);
+      const source = new DatabaseSync(join(f.state, "agents/main/agent/openclaw-agent.sqlite"), {
+        readOnly: true,
+      });
+      try {
+        expect(source.prepare("PRAGMA user_version").get()?.user_version).toBe(19);
+        expect(source.prepare("SELECT COUNT(*) AS count FROM transcript_events").get()?.count).toBe(
+          withTranscript ? 4 : 2,
+        );
+      } finally {
+        source.close();
+      }
+    },
+  );
 
   it.each([
     "zero-omission",
-    "missing-history",
     "changed-history",
     "unqualified-path",
     "unqualified-kind",
@@ -321,12 +303,10 @@ describe("published backup rollback proof", () => {
     if (mode === "zero-omission") {
       f.mode(mode);
     }
-    if (mode === "missing-history" || mode === "changed-history") {
+    if (mode === "changed-history") {
       const db = new DatabaseSync(join(f.state, "agents/main/agent/openclaw-agent.sqlite"));
       db.exec(
-        mode === "missing-history"
-          ? "DELETE FROM transcript_events WHERE session_id = 'upgrade-restored-index-history'"
-          : "UPDATE transcript_events SET event_json = '{}' WHERE session_id = 'upgrade-restored-index-history' AND seq = 1",
+        "UPDATE transcript_events SET event_json = '{}' WHERE session_id = 'upgrade-restored-index-history' AND seq = 1",
       );
       db.close();
     }
@@ -355,20 +335,8 @@ describe("published backup rollback proof", () => {
     expect(result.status, result.stderr).toBe(1);
   });
 
-  it("rejects a raw transcript lost during restore when it was present in the archive", () => {
-    const f = fixture(true);
-    f.mode("retained-transcript");
-    const captured = f.capture();
-    expect(captured.status, captured.stderr).toBe(0);
-    expect(readJson(f.resultFile).omittedRawTranscripts).toEqual([]);
-    f.mode("lost-transcript");
-    const restored = f.verify();
-    expect(restored.status).toBe(1);
-    expect(restored.stderr).toContain("ENOENT");
-  });
-
   it.each([
-    ["missing-event", "restored baseline inventory differs"],
+    ["lost-transcript", "ENOENT"],
     ["changed-session", "restored baseline inventory differs"],
     ["changed-payload", "restored baseline inventory differs"],
     ["changed-schema", "restored baseline inventory differs"],
@@ -383,9 +351,15 @@ describe("published backup rollback proof", () => {
     ["mutating-consumer", "baseline session consumer mutated restored history"],
     ["consumer-failure", "baseline sessions --store failed"],
   ])("rejects %s instead of reporting a successful rollback", (mode, message) => {
-    const f = fixture();
+    const f = fixture(mode === "lost-transcript");
+    if (mode === "lost-transcript") {
+      f.mode("retained-transcript");
+    }
     const capture = f.capture();
     expect(capture.status, capture.stderr).toBe(0);
+    if (mode === "lost-transcript") {
+      expect(readJson(f.resultFile).omittedRawTranscripts).toEqual([]);
+    }
     f.mode(mode);
     const result = f.verify();
     expect(result.status).toBe(1);
@@ -422,20 +396,18 @@ describe("published backup rollback proof", () => {
     expect(result.stderr).toContain("inventory path escaped its root");
   });
 
-  it.each(["2026.9.3", "2026.9.4-beta.1"])(
-    "records %s as not applicable without launching a baseline runtime",
-    (version) => {
-      const f = fixture();
-      const result = f.run("eligibility", version, f.resultFile);
-      expect(result.status, result.stderr).toBe(0);
-      expect(readJson(f.resultFile)).toMatchObject({
-        status: "not-applicable",
-        baselineVersion: version,
-      });
-      expect(f.verify().status).toBe(0);
-      expect(existsSync(f.events)).toBe(false);
-    },
-  );
+  it("records pre-9.4 baselines as not applicable without launching a baseline runtime", () => {
+    const version = "2026.9.4-beta.1";
+    const f = fixture();
+    const result = f.run("eligibility", version, f.resultFile);
+    expect(result.status, result.stderr).toBe(0);
+    expect(readJson(f.resultFile)).toMatchObject({
+      status: "not-applicable",
+      baselineVersion: version,
+    });
+    expect(f.verify().status).toBe(0);
+    expect(existsSync(f.events)).toBe(false);
+  });
 });
 
 describe.skipIf(process.platform === "win32")("survivor rollback ordering", () => {

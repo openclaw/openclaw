@@ -1,13 +1,14 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
+import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
 import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
 import type {
   CronRunReceipt,
@@ -66,7 +67,7 @@ export function receiptHandle(receipt: CronRunReceipt): CronRunReceiptHandle {
   };
 }
 
-export function matchesCronRunReceiptOwner(
+function matchesCronRunReceiptOwner(
   current: CronRunReceiptHandle | undefined,
   expected: CronRunReceiptCurrentReadCommand["handle"],
 ): boolean {
@@ -80,7 +81,7 @@ export function matchesCronRunReceiptOwner(
 
 /** Current receipt, definition and deletion facts share one native read snapshot. */
 export function readCronRunReceiptCurrentFactsInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   command: CronRunReceiptCurrentReadCommand,
 ): CronRunReceiptCurrentFacts {
   return runSqliteDeferredTransactionSync(database, () => {
@@ -103,7 +104,13 @@ export function readCronRunReceiptCurrentFactsInDatabase(
         : undefined;
     return {
       receipt,
-      job: job ? { agentId: job.agentId, sessionKey: job.sessionKey } : undefined,
+      job: job
+        ? {
+            agentId: job.agentId,
+            sessionKey: job.sessionKey,
+            hasCanonicalDeliveryMode: hasCanonicalCronDeliveryMode(job.delivery),
+          }
+        : undefined,
       deletionBlocked,
     };
   });
@@ -111,7 +118,7 @@ export function readCronRunReceiptCurrentFactsInDatabase(
 
 /** Observe existing receipts without the writable owner's first-use initialization. */
 export function readActiveCronRunReceiptsInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   storeKey: string | undefined,
   jobIds: readonly string[],
 ): CronRunReceiptRecoveryCandidate[] {
@@ -132,7 +139,7 @@ export function readActiveCronRunReceiptsInDatabase(
 
 /** Drainage needs receipt ownership even after its scheduled job has been removed. */
 export function readActiveCronRunReceiptOwnersInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   agentId: string,
 ): CronRunReceiptOwnerObservation[] {
   try {

@@ -1,10 +1,14 @@
+import { prependSystemPromptAdditionAfterCacheBoundary } from "@openclaw/ai/internal/shared";
 import type { OpenClawConfig } from "../../config/config.js";
+import { readActiveTranscriptEntryAnchorAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
+import { boundContextEngineAssembly } from "../../context-engine/bounded-context.js";
 import {
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
   type ContextEngineHostSupport,
 } from "../../context-engine/host-compat.js";
+import { resolveContextEngineTranscriptByteLimit } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type {
   AssembleResult,
@@ -16,9 +20,22 @@ import type {
 import { runWithPreparedMemoryPromptSection } from "../../plugins/memory-state.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import {
+  runWithPreparedRunSourceScope,
+  type AdmittedRunContext,
+  type PreparedAgentRunAdmission,
+} from "../admitted-run-context.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
+import { estimateRenderedLlmBoundaryTokenPressure } from "../embedded-agent-runner/run/preemptive-compaction.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { sanitizeToolUseResultPairingForModel } from "../session-transcript-repair.js";
+import {
+  completedTurnMessageAnchor,
+  type CompletedTurnMessageAnchor,
+} from "../sessions/session-manager-message-anchor.js";
+import type { ContextEngineTurnAttemptFacts } from "./context-engine-turn-attempt.js";
 
 export {
   buildAfterTurnRuntimeContext as buildHarnessContextEngineRuntimeContext,
@@ -35,7 +52,7 @@ function preparePreTurnRuntimeContext(
   return fenced;
 }
 
-type HarnessRuntimeSettingsParams = {
+type HarnessRuntimeSettingsParams = HarnessSourceScope & {
   runtimeSettings?: ContextEngineRuntimeSettings;
   contextEngineHostSupport?: ContextEngineHostSupport;
   harnessId?: string | null;
@@ -50,6 +67,20 @@ type HarnessRuntimeSettingsParams = {
   degradedReason?: string | null;
   contextEngine?: ContextEngine;
 };
+
+type HarnessSourceScope = {
+  admittedRunContext?: AdmittedRunContext;
+  preparedRunAdmission?: PreparedAgentRunAdmission;
+};
+
+function runWithHarnessSourceFence<T>(
+  params: HarnessSourceScope & { transcriptReadFence?: UserTurnTranscriptAdmissionReceipt },
+  run: () => Promise<T>,
+): Promise<T> {
+  return runWithSessionTranscriptReadFence(params.transcriptReadFence, () =>
+    runWithPreparedRunSourceScope(params, run),
+  );
+}
 
 function buildHarnessContextEngineRuntimeSettings(
   params: HarnessRuntimeSettingsParams,
@@ -98,10 +129,10 @@ export async function bootstrapHarnessContextEngine(
   ) {
     return;
   }
-  try {
-    const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
-    const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
-    await runWithSessionTranscriptReadFence(params.transcriptReadFence, async () => {
+  await runWithHarnessSourceFence(params, async () => {
+    try {
+      const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
+      const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
       if (typeof params.contextEngine?.bootstrap === "function") {
         await params.contextEngine.bootstrap({
           sessionId: params.sessionId,
@@ -124,33 +155,73 @@ export async function bootstrapHarnessContextEngine(
         runtimeSettings,
         config: params.config,
       });
-    });
-  } catch (bootstrapErr) {
-    params.warn(`context engine bootstrap failed: ${String(bootstrapErr)}`);
-  }
+    } catch (bootstrapErr) {
+      params.warn(`context engine bootstrap failed: ${String(bootstrapErr)}`);
+    }
+  });
 }
 
-export async function assembleHarnessContextEngine(
-  params: Omit<HarnessRuntimeSettingsParams, "modelId" | "tokenBudget"> & {
-    sessionId: string;
-    sessionKey?: string;
-    agentId?: string;
-    appendOnlyRuntimeContext?: boolean;
-    messages: AgentMessage[];
-    tokenBudget?: number;
-    availableTools?: Set<string>;
-    citationsMode?: MemoryCitationsMode;
-    sandboxed?: boolean;
-    modelId: string;
-    prompt?: string;
-    runtimeContext?: ContextEngineRuntimeContext;
-    transcriptReadFence?: UserTurnTranscriptAdmissionReceipt;
-  },
-) {
-  if (!params.contextEngine) {
+type HarnessContextEngineAssemblyParams = Omit<
+  HarnessRuntimeSettingsParams,
+  "modelId" | "tokenBudget"
+> & {
+  sessionId: string;
+  sessionKey?: string;
+  agentId?: string;
+  appendOnlyRuntimeContext?: boolean;
+  messages: AgentMessage[];
+  tokenBudget?: number;
+  availableTools?: Set<string>;
+  citationsMode?: MemoryCitationsMode;
+  sandboxed?: boolean;
+  modelId: string;
+  prompt?: string;
+  runtimeContext?: ContextEngineRuntimeContext;
+  transcriptReadFence?: UserTurnTranscriptAdmissionReceipt;
+  promptBudget?: {
+    contextTokens?: number;
+    reserveTokens: number;
+    systemPrompt: string;
+    prompt: string;
+  };
+};
+
+export async function assembleHarnessContextEngine(params: HarnessContextEngineAssemblyParams) {
+  const contextEngine = params.contextEngine;
+  if (!contextEngine) {
     return undefined;
   }
-  const contextEngine = params.contextEngine;
+  return runWithHarnessSourceFence(params, async () => {
+    const assembled = await assembleHarnessContextEngineWithinSourceScope(params, contextEngine);
+    return boundContextEngineAssembly(
+      assembled,
+      resolveContextEngineTranscriptByteLimit(contextEngine),
+      resolveAssemblyHistoryTokenBudget(params),
+    );
+  });
+}
+
+function resolveAssemblyHistoryTokenBudget(params: HarnessContextEngineAssemblyParams) {
+  if (!params.promptBudget) {
+    return params.tokenBudget;
+  }
+  const { contextTokens, reserveTokens, systemPrompt, prompt } = params.promptBudget;
+  const budget = Math.max(1, Math.floor(contextTokens ?? DEFAULT_CONTEXT_TOKENS));
+  return Math.max(
+    1,
+    Math.max(1, budget - Math.max(0, Math.floor(reserveTokens))) -
+      estimateRenderedLlmBoundaryTokenPressure({ systemPrompt, prompt }),
+  );
+}
+
+async function assembleHarnessContextEngineWithinSourceScope(
+  params: HarnessContextEngineAssemblyParams,
+  contextEngine: ContextEngine,
+) {
+  const tokenBudget = resolveAssemblyHistoryTokenBudget(params);
+  const maxOutputTokens = params.promptBudget
+    ? Math.max(0, Math.floor(params.promptBudget.reserveTokens))
+    : params.maxOutputTokens;
   // Append-only replay policies keep persisted carriers in the assembled window;
   // dropping one here would change the prefix bound to later thinking signatures.
   const messages = (
@@ -158,14 +229,18 @@ export async function assembleHarnessContextEngine(
       ? params.messages
       : stripRuntimeContextCustomMessages(params.messages)
   ).slice();
-  const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
+  const runtimeSettings = buildHarnessContextEngineRuntimeSettings({
+    ...params,
+    maxOutputTokens,
+    tokenBudget,
+  });
   const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
   const assemble = () =>
     contextEngine.assemble({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       messages,
-      tokenBudget: params.tokenBudget,
+      tokenBudget,
       ...(params.availableTools ? { availableTools: params.availableTools } : {}),
       ...(params.citationsMode ? { citationsMode: params.citationsMode } : {}),
       model: params.modelId,
@@ -173,7 +248,7 @@ export async function assembleHarnessContextEngine(
       runtimeContext,
       ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
     });
-  const result = await runWithSessionTranscriptReadFence(params.transcriptReadFence, async () =>
+  const result =
     contextEngine.info.id === "legacy"
       ? await assemble()
       : await runWithPreparedMemoryPromptSection(
@@ -185,9 +260,85 @@ export async function assembleHarnessContextEngine(
             sandboxed: params.sandboxed,
           },
           assemble,
-        ),
-  );
+        );
   return ensureAssembleResultShape(result, contextEngine.info.id);
+}
+
+type PreparedHarnessContextEnginePrompt = {
+  messages: AgentMessage[];
+  systemPrompt: string;
+  contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
+  unwindowedContextEngineMessagesForPrecheck?: AgentMessage[];
+};
+
+export async function prepareHarnessContextEnginePrompt(
+  params: Parameters<typeof assembleHarnessContextEngine>[0] & {
+    promptBudget: NonNullable<Parameters<typeof assembleHarnessContextEngine>[0]["promptBudget"]>;
+    repairToolUseResultPairing: boolean;
+    isOpenAIResponsesApi: boolean;
+    warn: (message: string) => void;
+  },
+): Promise<PreparedHarnessContextEnginePrompt> {
+  const initial: PreparedHarnessContextEnginePrompt = {
+    messages: params.messages,
+    systemPrompt: params.promptBudget.systemPrompt,
+    contextEnginePromptAuthority: "assembled",
+  };
+  const contextEngine = params.contextEngine;
+  if (!contextEngine) {
+    return {
+      ...initial,
+      messages: params.repairToolUseResultPairing
+        ? sanitizeToolUseResultPairingForModel(initial.messages, params.isOpenAIResponsesApi)
+        : initial.messages,
+    };
+  }
+  return runWithHarnessSourceFence(params, async () => {
+    // Windowing and replay hooks can leave orphaned results before assembly.
+    const pipelineMessages = params.repairToolUseResultPairing
+      ? sanitizeToolUseResultPairingForModel(params.messages, params.isOpenAIResponsesApi)
+      : params.messages;
+    const preassemblyMessages = pipelineMessages.slice();
+    // Repair before the final byte bound: synthetic results also consume budget.
+    // Keep both operations inside the retained source-authority fence.
+    const prepareAssembly = (assembled: AssembleResult) =>
+      boundContextEngineAssembly(
+        {
+          ...assembled,
+          messages: params.repairToolUseResultPairing
+            ? sanitizeToolUseResultPairingForModel(assembled.messages, params.isOpenAIResponsesApi)
+            : assembled.messages,
+        },
+        resolveContextEngineTranscriptByteLimit(contextEngine),
+        resolveAssemblyHistoryTokenBudget(params),
+      );
+    let bounded: AssembleResult;
+    try {
+      bounded = prepareAssembly(
+        await assembleHarnessContextEngineWithinSourceScope(
+          { ...params, messages: pipelineMessages },
+          contextEngine,
+        ),
+      );
+    } catch (error) {
+      params.warn(`context engine assemble failed, using pipeline messages: ${String(error)}`);
+      bounded = prepareAssembly({ messages: pipelineMessages, estimatedTokens: 0 });
+    }
+    const authority = bounded.promptAuthority ?? "assembled";
+    return {
+      messages: bounded.messages,
+      systemPrompt: bounded.systemPromptAddition
+        ? prependSystemPromptAdditionAfterCacheBoundary({
+            systemPrompt: initial.systemPrompt,
+            systemPromptAddition: bounded.systemPromptAddition,
+          })
+        : initial.systemPrompt,
+      contextEnginePromptAuthority: authority,
+      ...(authority === "preassembly_may_overflow"
+        ? { unwindowedContextEngineMessagesForPrecheck: preassemblyMessages }
+        : {}),
+    };
+  });
 }
 
 /** Invalid plugin results must fail here so the runner can fall back without poisoning state. */
@@ -235,12 +386,46 @@ export async function finalizeHarnessContextEngineTurn(
     warn: (message: string) => void;
     /** True when this turn belongs to a heartbeat run. */
     isHeartbeat?: boolean;
+    modelContextWindow?: number;
+    turnCandidate?: {
+      admission?: UserTurnTranscriptAdmissionReceipt;
+      terminalEntryId?: string | null;
+      [completedTurnMessageAnchor]?: CompletedTurnMessageAnchor;
+      record: (facts: ContextEngineTurnAttemptFacts) => void;
+    };
   },
 ) {
-  if (!params.contextEngine) {
+  if (!params.contextEngine || params.promptError || params.aborted || params.yieldAborted) {
     return { postTurnFinalizationSucceeded: true };
   }
-  if (params.promptError || params.aborted || params.yieldAborted) {
+  if (params.turnCandidate) {
+    const { admission, terminalEntryId, record } = params.turnCandidate;
+    if (admission && terminalEntryId) {
+      const committed = params.turnCandidate[completedTurnMessageAnchor];
+      // Reconstructed managers need one anchor snapshot, not a version that a later append can stale.
+      const terminal = committed
+        ? committed.anchor
+        : await readActiveTranscriptEntryAnchorAsync({ ...admission, entryId: terminalEntryId });
+      committed?.assertCurrent();
+      if (terminal) {
+        record({
+          boundary: { admission, terminal },
+          sessionIdUsed: params.sessionIdUsed,
+          sessionKey: params.sessionKey,
+          sessionTarget: params.sessionTarget,
+          promptError: params.promptError,
+          aborted: params.aborted,
+          yieldAborted: params.yieldAborted,
+          isHeartbeat: params.isHeartbeat,
+          runtimeContext: {
+            provider: params.providerId ?? undefined,
+            modelId: params.modelId ?? undefined,
+            modelContextWindow: params.modelContextWindow,
+            tokenBudget: params.tokenBudget ?? undefined,
+          },
+        });
+      }
+    }
     return { postTurnFinalizationSucceeded: true };
   }
 
@@ -305,12 +490,7 @@ export async function finalizeHarnessContextEngineTurn(
     }
   }
 
-  if (
-    !params.promptError &&
-    !params.aborted &&
-    !params.yieldAborted &&
-    postTurnFinalizationSucceeded
-  ) {
+  if (postTurnFinalizationSucceeded) {
     await (params.runMaintenance ?? runHarnessContextEngineMaintenance)({
       contextEngine: params.contextEngine,
       sessionId: params.sessionIdUsed,

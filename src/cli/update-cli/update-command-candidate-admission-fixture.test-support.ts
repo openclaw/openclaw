@@ -140,13 +140,10 @@ export function createCandidateAdmissionFixtures(f: CandidateAdmissionFixture) {
     );
     const originalSpawn = expectDefined(spawn.getMockImplementation(), "default child transport");
     spawn.mockImplementation((command: string, args: string[], options: SpawnOptions) => {
-      if (args[1] !== "update" || args[2] !== "admit") {
+      if (args.at(-4) !== "update" || args.at(-3) !== "admit" || args.at(-2) !== "--context") {
         return originalSpawn(command, args, options);
       }
-      const contextPath = expectDefined(
-        args[args.indexOf("--context") + 1],
-        "candidate admission context",
-      );
+      const contextPath = expectDefined(args.at(-1), "candidate admission context");
       contexts.push(JSON.parse(fsSync.readFileSync(contextPath, "utf8")) as UpdateAdmissionContext);
       events.push("admission");
       databaseExistsAtAdmission.push(

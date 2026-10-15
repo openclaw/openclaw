@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import os from "node:os";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
@@ -313,10 +314,10 @@ describe("eligible status recovery", () => {
         await runDaemonStatus({ rpc: {}, probe: true, requireRpc: false, json: false });
 
         const output = humanOutput();
-        expect(output).toContain("Connectivity probe: failed");
+        expect(output).toContain("Connectivity check: failed");
         expect(defaultRuntime.log).toHaveBeenCalledWith(
           expect.stringContaining(
-            "Native service is not installed; diagnostic only, not the probe target.",
+            "Native service is not installed; diagnostic only, not the check target.",
           ),
         );
         expect(output).not.toContain("Service unit not found");

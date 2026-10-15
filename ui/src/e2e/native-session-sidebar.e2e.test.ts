@@ -275,17 +275,17 @@ suite.define(() => {
       const catalogMenu = () => page.locator("openclaw-catalog-session-menu");
       const menuValues = async () =>
         catalogMenu()
-          .locator("wa-dropdown-item")
+          .getByRole("menuitem")
           .evaluateAll((items) =>
             items
-              .map((item) => item.getAttribute("value"))
+              .map((item) => item.getAttribute("data-value"))
               .filter((value): value is string => Boolean(value)),
           );
       const assertCatalogMenu = async (entryPoint: string) => {
         await expect.poll(() => catalogMenu().count()).toBe(1);
-        await expect.poll(menuValues).toEqual(["viewer", "terminal"]);
+        await expect.poll(menuValues).toEqual(["viewer", "import", "terminal"]);
         await expect
-          .poll(() => catalogMenu().locator('[value="terminal"]').getAttribute("disabled"))
+          .poll(() => catalogMenu().locator('[data-value="terminal"]').getAttribute("disabled"))
           .toBeNull();
         console.info(`[catalog-menu-proof] ${entryPoint} values=${(await menuValues()).join(",")}`);
         if (proofDir) {

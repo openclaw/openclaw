@@ -2,8 +2,10 @@ import { readFileSync } from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
-import { createChangedExtensionFallbackShards } from "../../scripts/lib/ci-changed-node-test-plan.mts";
-import { packChangedExtensionConfigShards } from "../../scripts/lib/ci-extension-test-shards.mts";
+import {
+  createChangedExtensionConfigShards,
+  packChangedExtensionConfigShards,
+} from "../../scripts/lib/ci-extension-test-shards.mts";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
 import { listVitestRuntimeConsumerFiles } from "../../scripts/lib/vitest-build-prerequisites.mts";
@@ -16,7 +18,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type ExtensionShard = Parameters<typeof packChangedExtensionConfigShards>[0][number];
 const runtimePreparationSeconds = VITEST_PRETEST_BUILD_SECONDS.runtime;
 
-function fallbackGroups(shards: ReturnType<typeof createChangedExtensionFallbackShards>) {
+function fallbackGroups(shards: ReturnType<typeof packChangedExtensionConfigShards>) {
   return shards.flatMap((shard) => shard.groups ?? [{ ...shard, shard_name: shard.shardName }]);
 }
 
@@ -160,10 +162,12 @@ describe("extension preparation packing", () => {
     );
   });
 
-  it("packs separate Telegram envelopes into serial fallback jobs without merging file scopes", () => {
-    const result = createChangedExtensionFallbackShards(["extensions/telegram/src/channel.ts"]);
-    expect(result).not.toBeNull();
-    const shards = result ?? [];
+  it("packs selected Telegram envelopes into serial jobs without merging file scopes", () => {
+    const shards = packChangedExtensionConfigShards(
+      createChangedExtensionConfigShards(["extensions/telegram"], {
+        targets: new Set(listExecutableExtensionFiles(["extensions/telegram"])),
+      }),
+    );
     const groups = fallbackGroups(shards);
     const targets = groups.flatMap((group) => group.includePatterns ?? []);
 

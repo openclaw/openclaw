@@ -24,6 +24,7 @@ import {
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as agentJobs from "./agent-turn/agent-job.js";
+import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { observeHeldGatewayWorkDrain } from "./server-held-work.test-support.js";
 import {
   getTestPluginRegistry,
@@ -212,6 +213,13 @@ describe("public Gateway close request lifetime", () => {
       handlerRuns.push(work);
       return work;
     };
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "lifetime-proof",
+        name: "test.lifetime",
+        handler: registry.gatewayHandlers["test.lifetime"],
+      }),
+    );
     setTestPluginRegistry(registry);
     let gateway: GatewayHarness | undefined;
     let ws: WebSocket | undefined;
@@ -410,6 +418,13 @@ describe("public Gateway close request lifetime", () => {
       invoked++;
       respond(true, { executed: true });
     };
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "lifetime-proof",
+        name: "test.lifetime",
+        handler: registry.gatewayHandlers["test.lifetime"],
+      }),
+    );
     registry.typedHooks.push({
       pluginId: "lifetime-proof",
       hookName: "gateway_stop",

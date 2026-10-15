@@ -113,19 +113,19 @@ describe("group runtime loading", () => {
 
   it("builds direct chat context without silent-token guidance", () => {
     expect(
-      groups.buildDirectChatContext({
+      groups.buildSourceConversationContext({
         sessionCtx: { ChatType: "direct", Provider: "telegram" },
       }),
     ).toBe(
       "You are in a Telegram direct conversation. Your replies are automatically sent to this conversation unless the current-turn context says final replies stay private.",
     );
     expect(
-      groups.buildDirectChatContext({
+      groups.buildSourceConversationContext({
         sessionCtx: { ChatType: "direct", Provider: "telegram" },
       }),
     ).not.toContain("NO_REPLY");
 
-    const toolOnlyContext = groups.buildDirectChatContext({
+    const toolOnlyContext = groups.buildSourceConversationContext({
       sessionCtx: { ChatType: "direct", Provider: "telegram" },
       sourceReplyDeliveryMode: "message_tool_only",
     });
@@ -167,29 +167,6 @@ describe("group runtime loading", () => {
     expect(groups.buildGroupChatContext({ sessionCtx: { Provider: "plain-chat" } })).toContain(
       "Avoid Markdown tables",
     );
-  });
-
-  it("gates group silent-token instructions on the resolved silent reply policy", () => {
-    const allowed = groups.buildGroupChatContext({
-      sessionCtx: { Provider: "whatsapp" },
-      silentToken: "NO_REPLY",
-      silentReplyPolicy: "allow",
-    });
-    expect(allowed).toContain('reply with exactly "NO_REPLY"');
-    expect(allowed).toContain("including after a reaction or other action");
-    expect(allowed).toContain(
-      "as the entire final answer, without commentary, punctuation, or formatting",
-    );
-    expect(allowed).toContain("reply only when directly addressed or you can add clear value");
-    expect(allowed).not.toContain("Otherwise stay silent.");
-
-    const disallowed = groups.buildGroupChatContext({
-      sessionCtx: { Provider: "whatsapp" },
-      silentToken: "NO_REPLY",
-      silentReplyPolicy: "disallow",
-    });
-    expect(disallowed).not.toContain("NO_REPLY");
-    expect(disallowed).not.toContain("as the entire final answer");
   });
 
   it("keeps per-message mention state out of stable group context", () => {

@@ -7,15 +7,8 @@ import {
   validateSessionsCatalogListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { prepareShellPathFromLoginShell } from "../../infra/shell-env.js";
-import {
-  capturePluginLifecycleAuthority,
-  capturePluginRegistryLifecycleEpoch,
-  capturePluginRegistryLifecycleSignal,
-} from "../../plugins/registry-lifecycle.js";
-import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import {
   createSessionCatalogRequestEntrySnapshot,
@@ -74,30 +67,24 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     return;
   }
   const catalogRegistrations = catalogRegistrationSnapshot();
-  let selected: SessionCatalogProvider[];
-  if (request.catalogId) {
-    const provider = catalogRegistrations.providers.find(
-      (candidate) => candidate.id === request.catalogId,
+  const requestedProvider = request.catalogId
+    ? catalogRegistrations.providers.find((candidate) => candidate.id === request.catalogId)
+    : undefined;
+  if (request.catalogId && !requestedProvider) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${request.catalogId}`),
     );
-    if (!provider) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${request.catalogId}`),
-      );
-      return;
-    }
-    selected = [provider];
-  } else {
-    selected = catalogRegistrations.providers;
+    return;
   }
+  const selected = requestedProvider ? [requestedProvider] : catalogRegistrations.providers;
   if (request.metadataOnly) {
     const metadataConfig = context.getRuntimeConfig();
     const metadataAgent = resolveAgentIdOrRespondError({
       rawAgentId: request.agentId,
       respond,
       cfg: metadataConfig,
-      normalize: normalizeOptionalString,
     });
     if (!metadataAgent) {
       return;
@@ -121,16 +108,13 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     return;
   }
   const providerAudiences = new Map(selected.map((provider) => [provider.id, provider.audience]));
-  const projection = getSessionRowProjection(context);
-  if (!projection) {
-    throw new Error("Session projection is unavailable before Gateway startup completes");
-  }
+  const projection = requireSessionRowProjection(context);
   const diagnostics = startSessionCatalogRequestDiagnostics();
   let finishInitialProjection: (() => void) | undefined;
   try {
-    while (projection.needsMaterialization) {
+    while (projection.needsSelectionPreparation({ metadataOnly: true })) {
       finishInitialProjection ??= diagnostics?.startWait("projection_initial");
-      await projection.ensureMaterialized();
+      await projection.prepareSelection({ metadataOnly: true });
     }
   } finally {
     finishInitialProjection?.();
@@ -140,7 +124,6 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     rawAgentId: request.agentId,
     respond,
     cfg: config,
-    normalize: normalizeOptionalString,
   });
   if (!resolvedAgent) {
     return;
@@ -236,7 +219,10 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
         subscriber,
         isProgressCurrent,
         client?.connectionSignal ?? signal,
-        () => (projection.needsMaterialization ? projection.ensureMaterialized() : undefined),
+        () =>
+          projection.needsSelectionPreparation({ metadataOnly: true })
+            ? projection.prepareSelection({ metadataOnly: true })
+            : undefined,
       );
     }
   };
@@ -253,57 +239,24 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     config,
     catalogRegistrations,
     context.requestEntryLifetime?.signal,
+    client,
   );
   const pending = operations.pending.get(listKey);
-  if (pending) {
-    // progressId is connection-owned and excluded from the work key.
-    subscribe(pending.progress);
-    const finishCoalesced = diagnostics?.startWait("coalesced");
-    let result: CatalogListEnumeration;
-    try {
-      result = await pending.result;
-    } finally {
-      finishCoalesced?.();
-    }
-    let finishFinalProjection: (() => void) | undefined;
-    try {
-      while (projection.needsMaterialization) {
-        finishFinalProjection ??= diagnostics?.startWait("projection_final");
-        await projection.ensureMaterialized();
-      }
-    } finally {
-      finishFinalProjection?.();
-    }
-    respondWithCatalog(result);
-    return;
-  }
-  const registry = catalogRegistrations.registry;
-  const scopedRuntime = getPluginRuntimeGatewayRequestScope()?.pluginRegistry === registry;
-  const epoch = registry ? capturePluginRegistryLifecycleEpoch(registry) : undefined;
-  const registryAuthority = registry
-    ? capturePluginLifecycleAuthority(registry, undefined, { scopedRuntime })
-    : undefined;
-  const registrySignal = registry
-    ? capturePluginRegistryLifecycleSignal(registry, epoch, { scopedRuntime })
-    : undefined;
-  const resolveGatewayContext = context.resolveGatewayContext;
-  const progress = new SessionCatalogListLifetime(
-    () =>
-      (!resolveGatewayContext || resolveGatewayContext() === context) &&
-      (!registry ||
-        (registryAuthority?.() === true &&
-          registry.sessionCatalogs === catalogRegistrations.source)),
-    [
-      getGatewayRestartDrainSignal(),
-      context.requestEntryLifetime?.signal,
-      registrySignal,
-      operations.retirement.signal,
-      signal,
-    ].filter((candidate): candidate is AbortSignal => candidate !== undefined),
-    selected.map((provider) => provider.id),
-  );
+  // An in-flight list may finish with its original registry after a hot reload.
+  // Delivery still applies current caller visibility; the next request refreshes registrations.
+  const progress =
+    pending?.progress ??
+    new SessionCatalogListLifetime(
+      [
+        getGatewayRestartDrainSignal(),
+        context.requestEntryLifetime?.signal,
+        operations.retirement.signal,
+        signal,
+      ].filter((candidate): candidate is AbortSignal => candidate !== undefined),
+      selected.map((provider) => provider.id),
+    );
   subscribe(progress);
-  const operation = (async () => {
+  const enumerate = async () => {
     let requestEntries: ReturnType<typeof createSessionCatalogRequestEntrySnapshot> | undefined;
     const finishPlanning = diagnostics?.startSync("planning");
     try {
@@ -362,6 +315,7 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
                 // The final response also reconciles these snapshots if a slow client drops a frame.
                 progress.publish(catalog, providerInstances);
               };
+              let catalog: SessionCatalog;
               try {
                 const hosts = await progress.runProvider(onHost, (lifetime) => {
                   const providerParams = {
@@ -385,19 +339,21 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
                 for (const host of hosts) {
                   requestEntries?.captureHostInstances(host, providerInstances);
                 }
-                return {
-                  catalogs: [catalogResult(provider, shareRoute, hosts, undefined, createTarget)],
-                  instancesByCatalog: new Map([[provider.id, providerInstances]]),
-                  publishedHosts,
-                };
+                catalog = catalogResult(provider, shareRoute, hosts, undefined, createTarget);
               } catch (error) {
-                return {
-                  catalogs: [
-                    catalogResult(provider, shareRoute, [], catalogError(error), createTarget),
-                  ],
-                  instancesByCatalog: new Map([[provider.id, providerInstances]]),
-                };
+                catalog = catalogResult(
+                  provider,
+                  shareRoute,
+                  [],
+                  catalogError(error),
+                  createTarget,
+                );
               }
+              return {
+                catalogs: [catalog],
+                instancesByCatalog: new Map([[provider.id, providerInstances]]),
+                ...(catalog.error ? {} : { publishedHosts }),
+              };
             },
           );
           instancesByCatalog.set(provider.id, page.instancesByCatalog.get(provider.id)!);
@@ -408,29 +364,42 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
       finishProvider?.();
     }
     return { catalogs: catalogList, instancesByCatalog, publishedHosts };
-  })();
-  const entry = { progress, result: operation };
+  };
+  const operation = pending?.result ?? enumerate();
+  const entry = pending ?? { progress, result: operation };
   // Coalesce only concurrent requests; each subsequent list sees current provider rows.
-  operations.pending.set(listKey, entry);
+  if (!pending) {
+    operations.pending.set(listKey, entry);
+  }
+  const finishCoalesced = pending ? diagnostics?.startWait("coalesced") : undefined;
   try {
-    const result = await operation;
+    let result: CatalogListEnumeration;
+    try {
+      result = await operation;
+    } finally {
+      finishCoalesced?.();
+    }
     let finishFinalProjection: (() => void) | undefined;
     try {
-      while (projection.needsMaterialization) {
+      while (projection.needsSelectionPreparation({ metadataOnly: true })) {
         finishFinalProjection ??= diagnostics?.startWait("projection_final");
-        await projection.ensureMaterialized();
+        await projection.prepareSelection({ metadataOnly: true });
       }
     } finally {
       finishFinalProjection?.();
     }
     respondWithCatalog(result);
   } catch (error) {
-    progress.retire(error);
+    if (!pending) {
+      progress.retire(error);
+    }
     throw error;
   } finally {
-    if (operations.pending.get(listKey) === entry) {
-      operations.pending.delete(listKey);
+    if (!pending) {
+      if (operations.pending.get(listKey) === entry) {
+        operations.pending.delete(listKey);
+      }
+      progress.finishListing();
     }
-    progress.finishListing();
   }
 };

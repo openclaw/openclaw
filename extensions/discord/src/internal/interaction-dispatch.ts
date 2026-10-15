@@ -4,7 +4,8 @@ import {
   deferCommandInteractionIfNeeded,
   resolveFocusedCommandOptionAutocompleteHandler,
 } from "./commands.js";
-import type { InteractionResponseState } from "./interaction-response.js";
+import type { BaseMessageInteractiveComponent } from "./components.base.js";
+import type { Modal } from "./components.modal.js";
 import {
   AutocompleteInteraction,
   BaseComponentInteraction,
@@ -14,24 +15,15 @@ import {
   type RawInteraction,
 } from "./interactions.js";
 
-type DispatchComponent = {
-  defer: boolean | ((interaction: BaseComponentInteraction) => boolean);
-  ephemeral: boolean | ((interaction: BaseComponentInteraction) => boolean);
-  run(interaction: BaseComponentInteraction, data: Record<string, unknown>): unknown;
-  customIdParser(id: string): { data: Record<string, unknown> };
-};
-
-type DispatchModal = {
-  run(interaction: ModalInteraction, data: Record<string, unknown>): unknown;
-  customIdParser(id: string): { data: Record<string, unknown> };
-};
-
 type DispatchClient = Parameters<typeof createInteraction>[0] & {
   commands: DiscordCommand[];
   componentHandler: {
-    resolve(customId: string, options?: { componentType?: number }): DispatchComponent | undefined;
+    resolve(
+      customId: string,
+      options?: { componentType?: number },
+    ): BaseMessageInteractiveComponent | undefined;
   };
-  modalHandler: { resolve(customId: string): DispatchModal | undefined };
+  modalHandler: { resolve(customId: string): Modal | undefined };
 };
 
 export async function dispatchInteraction(
@@ -111,23 +103,13 @@ async function dispatchAcknowledgeableInteraction(
 // Exceptions can contain paths, config and provider responses; keep details in Gateway logs.
 const INTERACTION_FAILURE_NOTICE = "Command failed. Check the Gateway logs for details.";
 
-type FailureReportableInteraction = {
-  responseState: InteractionResponseState;
-  hasSentFollowUp: boolean;
-  editDeferredPlaceholderIfUnanswered(payload: {
-    content: string;
-    allowed_mentions: { parse: [] };
-  }): Promise<boolean>;
-};
-
 // Only a confirmed deferred reply owns an unanswered spinner. Deferred updates
 // refer to existing channel content; other states must not create a second reply.
-async function reportInteractionFailure(interaction: FailureReportableInteraction): Promise<void> {
-  if (interaction.responseState !== "deferred") {
-    return;
-  }
+async function reportInteractionFailure(
+  interaction: ReturnType<typeof createInteraction>,
+): Promise<void> {
   // A follow-up can consume the placeholder; never overwrite its visible output.
-  if (interaction.hasSentFollowUp) {
+  if (interaction.responseState !== "deferred" || interaction.hasSentFollowUp) {
     return;
   }
   try {
@@ -150,10 +132,7 @@ function resolveConditionalComponentOption(
 }
 
 async function deferComponentInteractionIfNeeded(
-  component: {
-    defer: boolean | ((interaction: BaseComponentInteraction) => boolean);
-    ephemeral: boolean | ((interaction: BaseComponentInteraction) => boolean);
-  },
+  component: BaseMessageInteractiveComponent,
   interaction: BaseComponentInteraction,
 ): Promise<void> {
   if (!resolveConditionalComponentOption(component.defer, interaction)) {

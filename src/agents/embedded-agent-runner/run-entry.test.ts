@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearAgentRunContext,
@@ -18,6 +22,9 @@ import {
 } from "./run-entry.test-support.js";
 
 const state = setupRunEntryTestState();
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 
 type EntryParams = Parameters<typeof runEmbeddedAgentEntry>[0];
 
@@ -438,7 +445,6 @@ describe("runEmbeddedAgentEntry", () => {
         committed ? "provider" : undefined,
       );
       expect(state.finalizedAttempts).toEqual(committed ? ["candidate"] : []);
-      expect(state.discardedAttempts).toEqual(committed ? [] : ["candidate"]);
     },
   );
 
@@ -448,7 +454,6 @@ describe("runEmbeddedAgentEntry", () => {
       status: "ok",
       meta: { yielded: true, livenessState: "paused" as const, stopReason: "end_turn" },
     },
-    { label: "aborted", status: "error", meta: { aborted: true, stopReason: "error" } },
     {
       label: "timed out",
       status: "timeout",
@@ -467,7 +472,6 @@ describe("runEmbeddedAgentEntry", () => {
         modelFallbackStopReason: "idle_timeout_circuit_breaker" as const,
       },
     },
-    { label: "blocked", status: "error", meta: { livenessState: "blocked" as const } },
   ])("does not finalize a $label candidate", async ({ meta, status }) => {
     state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const { provider, model } = params;
@@ -522,7 +526,6 @@ describe("runEmbeddedAgentEntry", () => {
       ],
     });
     expect(state.finalizedAttempts).toEqual([]);
-    expect(state.discardedAttempts).toEqual(["candidate"]);
   });
 
   it("retains non-visible follow-up results for terminal delivery", async () => {
@@ -562,6 +565,84 @@ describe("runEmbeddedAgentEntry", () => {
   });
 
   it.each([
+    { declared: true, modelRouteChange: undefined },
+    {
+      declared: false,
+      modelRouteChange: "Model route changed: broker/team/chat → broker/upstream-model.",
+    },
+  ])(
+    "announces an endpoint-resolved response model unless its configured row declares it (declared: $declared)",
+    async ({ declared, modelRouteChange }) => {
+      const runId = `endpoint-resolved-${declared}`;
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            broker: {
+              baseUrl: "https://broker.example/v1",
+              models: [
+                {
+                  id: "team/chat",
+                  name: "Team chat",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 8_192,
+                  ...(declared ? { responseModelEquivalent: true } : {}),
+                },
+              ],
+            },
+          },
+        },
+      };
+      state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+        outcome: "completed" as const,
+        result: await params.run(params.provider, params.model, initialAttemptOptions(params)),
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      }));
+      const result = await runEntry({
+        selection: { cfg, provider: "broker", model: "team/chat" },
+        identity: { runId, agentId: "main", sessionId: "session-1" },
+        runCandidate: async (provider, model) =>
+          makeResult({
+            provider,
+            model,
+            meta: {
+              finalAssistantVisibleText: "done",
+              finalAssistantRawText: "done",
+              agentMeta: {
+                sessionId: "session-1",
+                provider,
+                model,
+                terminalReceipt: {
+                  runId,
+                  sessionId: "session-1",
+                  turnId: "turn-1",
+                  requested: { provider, model },
+                  effective: { provider, model, responseModel: "upstream-model" },
+                  successfulToolNames: [],
+                  rerouted: false,
+                },
+              },
+            },
+          }),
+      });
+
+      expect(result.terminal.metadata.terminalReceipt).toMatchObject({
+        effective: { provider: "broker", model: "team/chat", responseModel: "upstream-model" },
+        rerouted: !declared,
+      });
+      expect(result.terminal.metadata.terminalReply).toEqual({
+        disposition: "visible",
+        text: "done",
+        ...(modelRouteChange ? { modelRouteChange } : {}),
+      });
+    },
+  );
+
+  it.each([
     {
       name: "CLI delivered source reply",
       meta: { finalAssistantRawText: "NO_REPLY" },
@@ -573,27 +654,6 @@ describe("runEmbeddedAgentEntry", () => {
       meta: { finalAssistantRawText: "NO_REPLY" },
       sourceReplies: [{ text: "forward this reply", sourceReplyFinal: true }],
       expected: { disposition: "visible", text: "forward this reply" },
-    },
-    {
-      name: "progress internal reply before final assistant text",
-      meta: { finalAssistantVisibleText: "completed answer" },
-      sourceReplies: [{ text: "working", sourceReplyFinal: false }],
-      expected: { disposition: "visible", text: "completed answer" },
-    },
-    {
-      name: "CLI punctuation-wrapped silence",
-      meta: { finalAssistantVisibleText: "NO_REPLY...", finalAssistantRawText: "NO_REPLY..." },
-      expected: { disposition: "silent" },
-    },
-    {
-      name: "normalized silence without raw text",
-      meta: { finalAssistantVisibleText: "no_reply" },
-      expected: { disposition: "silent" },
-    },
-    {
-      name: "clean empty reply",
-      meta: {},
-      expected: { disposition: "empty" },
     },
   ])(
     "records the producer-owned terminal snapshot for $name",

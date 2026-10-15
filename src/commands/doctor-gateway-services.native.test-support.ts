@@ -34,6 +34,10 @@ const mocks = vi.hoisted(() => ({
   auditGatewayServiceConfig: vi.fn(),
   buildGatewayInstallPlan: vi.fn(),
   resolveGatewayAuthTokenForService: vi.fn(),
+  preserveGatewayAuthTokenForService: vi.fn(async () => ({
+    ref: { source: "store", provider: "default", id: "SAVED_GATEWAY_TOKEN" },
+    reused: false,
+  })),
   resolveGatewayPort: vi.fn(() => 18789),
   resolveIsNixMode: vi.fn(() => false),
   isDefaultInstallIdentity: vi.fn(() => true),
@@ -136,6 +140,7 @@ vi.mock("./daemon-install-helpers.js", () => ({
 
 vi.mock("./doctor-gateway-auth-token.js", () => ({
   resolveGatewayAuthTokenForService: mocks.resolveGatewayAuthTokenForService,
+  preserveGatewayAuthTokenForService: mocks.preserveGatewayAuthTokenForService,
 }));
 
 export { fsMocks, mocks };

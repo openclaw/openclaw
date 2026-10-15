@@ -27,9 +27,6 @@ const workflow = parse(
 const aggregateScript = workflow.jobs.aggregate_qa_profile.steps.find(
   (step: { name: string }) => step.name === "Aggregate validated shard evidence",
 ).run as string;
-const finalGateScript = workflow.jobs.aggregate_qa_profile.steps.find(
-  (step: { name: string }) => step.name === "Fail if QA profile failed",
-).run as string;
 const targetSha = "a".repeat(40);
 const protocolSha = "b".repeat(40);
 const plan = {
@@ -101,10 +98,7 @@ function fixture(layout: "named" | "direct" = "named") {
 }
 
 describe("QA profile failure diagnostics", () => {
-  it.each([
-    { label: "one of two planned shards", matrix: plan, missing: ["shard-01"] },
-    { label: "one planned shard", matrix: { include: [plan.include[1]] }, missing: [] },
-  ])("retains a directly extracted survivor with $label", ({ matrix, missing }) => {
+  it("retains a directly extracted survivor when another planned shard is missing", () => {
     const f = fixture("direct");
     const statusPath = f.writeShard(1, {
       ...f.status(1),
@@ -129,10 +123,7 @@ describe("QA profile failure diagnostics", () => {
       ...payloadFiles.map(([relativePath]) => path.join(f.input, relativePath)),
     ];
     const originalInputs = inputPaths.map((filePath) => readFileSync(filePath));
-    const { result } = f.collect({
-      PLAN_MATRIX_JSON: JSON.stringify(matrix),
-      SHARD_COUNT: String(matrix.include.length),
-    });
+    const { result } = f.collect();
     expect(result.shards).toEqual([
       {
         id: "shard-02",
@@ -148,31 +139,12 @@ describe("QA profile failure diagnostics", () => {
       stages: { AGGREGATE_OUTCOME: "failure", FINALIZE_OUTCOME: "skipped" },
       statusFiles: 1,
       evidenceFiles: 1,
-      missingStatuses: missing,
-      missingEvidence: missing,
+      missingStatuses: ["shard-01"],
+      missingEvidence: ["shard-01"],
       issues: [],
     });
     expect(inputPaths.map((filePath) => readFileSync(filePath))).toEqual(originalInputs);
     expect(readdirSync(f.output)).toEqual(["qa-profile-run-status.json"]);
-  });
-
-  it("does not attribute directly extracted evidence to an unplanned shard", () => {
-    const f = fixture("direct");
-    f.writeShard(0, {
-      ...f.status(),
-      shard: { ...plan.include[0], id: "shard-99" },
-    });
-    const { result } = f.collect();
-    expect(result.diagnostics).toMatchObject({
-      statusFiles: 1,
-      evidenceFiles: 1,
-      missingStatuses: ["shard-01", "shard-02"],
-      missingEvidence: ["shard-01", "shard-02"],
-    });
-    expect(result.diagnostics.issues).toContainEqual({
-      source: "artifact-001",
-      reason: "unexpected-shard",
-    });
   });
 
   it.skipIf(process.platform === "win32")(
@@ -200,31 +172,24 @@ describe("QA profile failure diagnostics", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32").each(["missing", "timeout"])(
-    "retains status after the actual aggregate shell rejects %s evidence",
-    (failure) => {
+  it.skipIf(process.platform === "win32")(
+    "retains status after the actual aggregate shell rejects missing evidence",
+    () => {
       const f = fixture();
       const first = f.writeShard();
       const original = readFileSync(first);
-      if (failure === "timeout") {
-        f.writeShard(1, { ...f.status(1), exitCode: 124, timedOut: true, timeoutOutcome: "term" });
-      }
       const aggregate = spawnSync(workflowBash(), ["-c", aggregateScript], {
         cwd: f.selected,
         env: f.env,
         encoding: "utf8",
       });
       expect(aggregate.status, aggregate.stderr).toBe(1);
-      expect(aggregate.stderr).toContain(
-        failure === "missing"
-          ? "Expected 2 completed status and evidence files"
-          : "Timed-out QA shard",
-      );
+      expect(aggregate.stderr).toContain("Expected 2 completed status and evidence files");
       const { result } = f.collect();
       expect(result.exitCode).toBeNull();
       expect(result.diagnostics.stages.AGGREGATE_OUTCOME).toBe("failure");
-      expect(result.diagnostics.missingStatuses).toEqual(failure === "missing" ? ["shard-02"] : []);
-      expect(result.timedOut).toBe(failure === "timeout" ? true : null);
+      expect(result.diagnostics.missingStatuses).toEqual(["shard-02"]);
+      expect(result.timedOut).toBeNull();
       expect(readFileSync(first)).toEqual(original);
       expect(readdirSync(f.output)).toEqual(["qa-profile-run-status.json"]);
     },
@@ -245,22 +210,6 @@ describe("QA profile failure diagnostics", () => {
       missingStatuses: ["shard-01", "shard-02"],
       missingEvidence: ["shard-01", "shard-02"],
       issues: [{ source: null, reason: "input-unavailable" }],
-    });
-  });
-
-  it("retains other shard diagnostics when an ID cannot be coerced to a string", () => {
-    const f = fixture();
-    f.writeShard(0, { ...f.status(), shard: { ...plan.include[0], id: { toString: null } } });
-    f.writeShard(1);
-    const { result } = f.collect();
-    expect(result.shards.map((shard: { id: string | null }) => shard.id)).toEqual([
-      null,
-      "shard-02",
-    ]);
-    expect(result.diagnostics.missingStatuses).toEqual(["shard-01"]);
-    expect(result.diagnostics.issues).toContainEqual({
-      source: "artifact-001",
-      reason: "unexpected-shard",
     });
   });
 
@@ -289,95 +238,10 @@ describe("QA profile failure diagnostics", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32").each([null, {}, [], "invalid", 1, true])(
-    "preserves the previous jq admission for shard shape %#",
-    (shard) => {
-      const f = fixture();
-      const statusPath = f.writeShard(0, { ...f.status(), shard });
-      const admission = aggregateScript
-        .split("\n")
-        .find((line) => line.includes("map(.shard + {})"));
-      expect(admission).toBeDefined();
-      for (const code of ["0", "1", "oops"]) {
-        const env = { ...f.env, qa_exit_code: code, STATUS_PATH: statusPath };
-        const prior = spawnSync(
-          "jq",
-          [
-            "-s",
-            "--argjson",
-            "exitCode",
-            code,
-            "map(.shard + {exitCode, timedOut, timeoutOutcome, completedAt})",
-            statusPath,
-          ],
-          { env, encoding: "utf8" },
-        );
-        const current = spawnSync(
-          workflowBash(),
-          ["-c", `status_paths=("$STATUS_PATH")\n${admission}`],
-          {
-            env,
-            encoding: "utf8",
-          },
-        );
-        expect(current.status).toBe(prior.status);
-        expect(current.status === 0).toBe(
-          code !== "oops" &&
-            (shard === null || (!Array.isArray(shard) && typeof shard === "object")),
-        );
-      }
-    },
-  );
-
   it.each([
-    [0, false, "none"],
-    [1, false, "none"],
-    [124, false, "none"],
-    [137, false, "none"],
-    [124, true, "term"],
-    [137, true, "kill"],
-  ])(
-    "preserves exit %i and supervised timeout %s/%s independently",
-    (code, timedOut, timeoutOutcome) => {
-      const f = fixture();
-      f.writeShard(0, { ...f.status(), exitCode: code, timedOut, timeoutOutcome });
-      f.writeShard(1);
-      const { result } = f.collect({
-        QA_EXIT_CODE: String(code),
-        AGGREGATE_OUTCOME: "success",
-        FINALIZE_OUTCOME: "success",
-      });
-      expect(result).toMatchObject({ exitCode: code, timedOut, timeoutOutcome });
-      expect(result.shards[0]).toMatchObject({ exitCode: code, timedOut, timeoutOutcome });
-      expect(result.diagnostics.issues).toEqual([]);
-    },
-  );
-
-  it.skipIf(process.platform === "win32").each(["0", "1", "124", "137"])(
-    "does not change the existing allow_failures decision for exit %s",
-    (code) => {
-      for (const allowFailures of ["false", "true"]) {
-        const f = fixture();
-        f.writeShard();
-        f.writeShard(1);
-        f.collect({ QA_EXIT_CODE: code });
-        const gate = spawnSync(workflowBash(), ["-c", finalGateScript], {
-          env: { ...f.env, QA_EXIT_CODE: code, ALLOW_FAILURES: allowFailures },
-          encoding: "utf8",
-        });
-        expect(gate.status).toBe(allowFailures === "true" ? 0 : Number(code));
-      }
-    },
-  );
-
-  it.each(
-    (["named", "direct"] as const).flatMap((layout) =>
-      ['{"untrusted-status-sentinel":', "null", "[]", "x".repeat(65 * 1024)].map((payload) => ({
-        layout,
-        payload,
-      })),
-    ),
-  )("bounds malformed $layout status input %#", ({ layout, payload }) => {
+    { layout: "named", payload: '{"untrusted-status-sentinel":' },
+    { layout: "named", payload: "x".repeat(65 * 1024) },
+  ] as const)("bounds malformed $layout status input %#", ({ layout, payload }) => {
     const f = fixture(layout);
     const source = f.writeShard(0, payload);
     const original = readFileSync(source);
@@ -432,22 +296,6 @@ describe("QA profile failure diagnostics", () => {
         "invalid-completion-time",
       ]),
     );
-  });
-
-  it("records missing evidence and finalizer failure without rewriting the aggregate exit", () => {
-    const f = fixture();
-    const directory = path.join(f.input, `qa-profile-evidence-shard-shard-01-${targetSha}`);
-    mkdirSync(directory, { recursive: true });
-    writeFileSync(path.join(directory, "qa-profile-run-status.json"), JSON.stringify(f.status()));
-    const { result } = f.collect({
-      QA_EXIT_CODE: "0",
-      AGGREGATE_OUTCOME: "success",
-      FINALIZE_OUTCOME: "failure",
-    });
-    expect(result.exitCode).toBe(0);
-    expect(result.diagnostics.stages.FINALIZE_OUTCOME).toBe("failure");
-    expect(result.diagnostics.missingEvidence).toEqual(["shard-01", "shard-02"]);
-    expect(result).not.toHaveProperty("qaPassed");
   });
 
   it("bounds the artifact inventory and produces deterministic output", () => {

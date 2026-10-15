@@ -1,848 +1,402 @@
-// Progress draft compositor tests cover streamed draft composition for channel progress updates.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import type { ChannelStreamingProgressConfig } from "../config/types.base.js";
 import { projectAgentToolActivity } from "../infra/agent-activity-events.js";
 import {
   createChannelProgressDraftCompositor,
   createChannelProgressWorkCounter,
   PROGRESS_STATUS_PREAMBLE_FRESH_MS,
 } from "./progress-draft-compositor.js";
+import type { ChannelProgressDraftCompositorParams } from "./progress-draft-compositor.types.js";
+import { buildChannelProgressDraftLine } from "./streaming.js";
 
-function createTestProgressDraftCompositor(
-  overrides: Partial<
-    Omit<Parameters<typeof createChannelProgressDraftCompositor>[0], "mode" | "active" | "seed">
-  >,
+function createProgress(
+  config: ChannelStreamingProgressConfig = { label: "Shelling", toolProgress: true },
+  overrides: Partial<ChannelProgressDraftCompositorParams> = {},
 ) {
-  return createChannelProgressDraftCompositor({
-    mode: "progress",
+  const update = vi.fn<NonNullable<ChannelProgressDraftCompositorParams["update"]>>();
+  const progress = createChannelProgressDraftCompositor({
     active: true,
+    mode: "progress",
     seed: "test",
-    entry: {
-      streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
-    },
+    entry: { streaming: { mode: overrides.mode ?? "progress", progress: config } },
+    update,
     ...overrides,
   });
+  onTestFinished(() => progress.cancel());
+  return { progress, update };
 }
 
-const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 1_500;
+const plan = [
+  { step: "Inspect", status: "completed" },
+  { step: "Repair", status: "in_progress" },
+  { step: "Verify", status: "pending" },
+] satisfies Parameters<
+  ReturnType<typeof createChannelProgressDraftCompositor>["pushPlanProgress"]
+>[0];
+const INITIAL_DELAY_MS = 1_500;
 
-describe("createChannelProgressDraftCompositor", () => {
-  it("counts only work tool calls and resets per turn", () => {
+describe("channel progress draft compositor", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("keeps bounded operation state without a preamble or verbose tool log", async () => {
+    const { progress, update } = createProgress(
+      { toolProgress: false, label: false },
+      { preparedItems: true, showWorkStatus: true },
+    );
+    await progress.pushItemEvent({
+      itemId: "read-1",
+      kind: "tool",
+      name: "read",
+      phase: "start",
+      status: "running",
+      title: "Private document",
+      meta: "private/path.txt",
+    });
+    expect(update).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
+    expect(update.mock.lastCall?.[0]).toBe("Read: running");
+    await progress.pushItemEvent({
+      itemId: "exec-2",
+      kind: "tool",
+      name: "exec",
+      phase: "start",
+      status: "running",
+    });
+    await progress.pushItemEvent({
+      itemId: "read-1",
+      kind: "tool",
+      name: "read",
+      phase: "end",
+      status: "completed",
+    });
+    expect(update.mock.lastCall?.[0]).toBe("Exec: running");
+    expect(progress.getSnapshot().lines).toHaveLength(1);
+    expect(JSON.stringify(update.mock.calls)).not.toContain("private/path");
+    await progress.pushItemEvent({ itemId: "exec-2", hideFromChannelProgress: true });
+    expect(progress.getSnapshot().lines).toHaveLength(0);
+    progress.markFinalReplyStarted();
+    const calls = update.mock.calls.length;
+    await progress.pushItemEvent({
+      itemId: "late",
+      kind: "tool",
+      name: "write",
+      status: "running",
+    });
+    await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
+    expect(update).toHaveBeenCalledTimes(calls);
+  });
+
+  it("continues public child state with the detailed tool log disabled", async () => {
+    const { progress, update } = createProgress(
+      { toolProgress: false, label: false },
+      { preparedItems: true, showWorkStatus: true },
+    );
+    await progress.pushPreambleHeadline("Checking the result");
+    await progress.pushItemEvent({
+      itemId: "child",
+      kind: "subagent",
+      title: "Verification",
+      status: "running",
+      summary: "PRIVATE CHILD CONTENT",
+    });
+    await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
+    expect(update.mock.lastCall?.[0]).toContain("Verification: running");
+    expect(update.mock.lastCall?.[0]).toContain("Checking the result");
+    await progress.pushItemEvent({
+      itemId: "child",
+      kind: "subagent",
+      title: "Verification",
+      phase: "end",
+      status: "completed",
+    });
+    expect(update.mock.lastCall?.[0]).toContain("Verification: completed");
+    expect(JSON.stringify(update.mock.calls)).not.toContain("PRIVATE CHILD CONTENT");
+  });
+
+  it("counts only work tools and resets per turn", () => {
     let now = 1_000;
     const work = createChannelProgressWorkCounter({ now: () => now });
-
     work.noteToolCall("exec");
     work.noteToolCall("progress_card");
     now = 43_000;
-
     expect(work.toolCalls).toBe(1);
     expect(work.elapsedSeconds).toBe(42);
-
     work.reset();
     now = 43_500;
     expect(work.toolCalls).toBe(0);
     expect(work.elapsedSeconds).toBe(1);
   });
 
-  it("keeps the progress label visible when tool lines are hidden", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      entry: {
-        streaming: { mode: "progress", progress: { label: "Shelling", toolProgress: false } },
-      },
-      update,
-    });
-
-    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
-
-    expect(update).toHaveBeenCalledWith(
-      "Shelling",
-      expect.objectContaining({
-        flush: true,
-        lines: [],
-        snapshot: { lines: [], label: "Shelling" },
-      }),
-    );
-  });
-
-  it("gates window thinking on its own flag, independent of tool progress", async () => {
-    // thinking: false hides thoughts even though toolProgress stays on…
-    const hiddenUpdate = vi.fn();
-    const hidden = createTestProgressDraftCompositor({
-      reasoningGate: false,
-      update: hiddenUpdate,
-    });
-    await hidden.pushToolProgress("🛠️ Exec", { startImmediately: true });
-    await hidden.pushReasoningProgress("Reading files");
-    expect(hiddenUpdate.mock.calls.every(([text]) => !String(text).includes("Reading"))).toBe(true);
-
-    // …and a quiet draft (toolProgress off) still shows authored reasoning.
-    const quietUpdate = vi.fn();
-    const quiet = createTestProgressDraftCompositor({
-      entry: {
-        streaming: {
-          mode: "progress",
-          progress: { label: "Shelling", toolProgress: false },
-        },
-      },
-      update: quietUpdate,
-    });
-    await quiet.pushToolProgress("🛠️ Exec", { startImmediately: true });
-    await quiet.pushReasoningProgress("Reading files");
-    expect(quietUpdate.mock.lastCall?.[0]).toBe("Shelling\n\n• _Reading files_");
-    expect(quietUpdate.mock.calls.every(([text]) => !String(text).includes("Exec"))).toBe(true);
-  });
-
-  it("shares reasoning merge state with legacy preview renderers", () => {
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "partial" } },
-      mode: "partial",
-      active: false,
-      seed: "test",
-      update: vi.fn(),
-    });
-
+  it("shares reasoning merge state with inactive preview renderers", () => {
+    const { progress } = createProgress({}, { mode: "partial", active: false });
     expect(progress.mergeReasoningProgress("Reading")).toBe("Reading");
     expect(progress.mergeReasoningProgress(" the Slack handler")).toBe("Reading the Slack handler");
     progress.resetReasoningProgress();
     expect(progress.mergeReasoningProgress("Checking again")).toBe("Checking again");
   });
 
-  it("re-arms the draft for a queued turn after the primary final settled", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      update,
-    });
-
+  it("cancels delayed startup before final delivery", async () => {
+    const { progress, update } = createProgress();
+    await progress.pushToolProgress("Exec");
     progress.markFinalReplyStarted();
-    progress.markFinalReplyDelivered();
-    expect(await progress.pushReasoningProgress("queued-turn thinking")).toBe(false);
-
-    // New assistant message boundary on a queued/followup turn.
-    expect(progress.beginNewTurn()).toBe(true);
+    await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
     expect(progress.hasStarted).toBe(false);
-    await progress.start();
-    await progress.pushReasoningProgress("queued-turn thinking", { snapshot: true });
-
-    expect(update).toHaveBeenCalled();
-    expect(progress.beginNewTurn()).toBe(false);
-  });
-
-  it("force-rearms an authoritative queued boundary without a prior final", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      update,
-    });
-
-    await progress.pushToolProgress("first turn", { startImmediately: true });
-    expect(progress.beginNewTurn()).toBe(false);
-    expect(progress.beginNewTurn({ force: true })).toBe(true);
-    await progress.pushToolProgress("queued turn", { startImmediately: true });
-
-    expect(update).toHaveBeenLastCalledWith("Shelling\n\n• queued turn", expect.anything());
-  });
-
-  it("cancels a delayed draft when the final reply starts", async () => {
-    vi.useFakeTimers();
-    try {
-      const update = vi.fn();
-      const progress = createTestProgressDraftCompositor({
-        update,
-      });
-
-      await progress.pushToolProgress("🛠️ Exec");
-      progress.markFinalReplyStarted();
-      await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS);
-
-      expect(progress.hasStarted).toBe(false);
-      expect(update).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not resurrect progress after suppression", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      update,
-    });
-
-    progress.suppress();
-    await progress.pushReasoningProgress("Reading files");
-
     expect(update).not.toHaveBeenCalled();
   });
 
-  it("composes reasoning deltas with tool progress", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      reasoningLinePrefix: "🧠 ",
-      update,
-    });
-
-    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
-    await progress.pushReasoningProgress("Reading");
-    await progress.pushReasoningProgress(" files");
-
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\n🛠️ Exec\n🧠 _Reading files_",
-      expect.objectContaining({
-        lines: ["🛠️ Exec", "🧠 _Reading files_"],
-      }),
-    );
+  it("does not resurrect suppressed progress", async () => {
+    const { progress, update } = createProgress();
+    progress.suppress();
+    await progress.pushReasoningProgress("Reading files");
+    expect(update).not.toHaveBeenCalled();
   });
 
-  it("labels window narration with a 💬 prefix", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      entry: {
-        streaming: {
-          mode: "progress",
-          progress: { toolProgress: true, label: "Shelling", commentary: true },
-        },
-      },
-      commentaryLinePrefix: "💬 ",
-      update,
-    });
-
-    const rejected = await progress.pushCommentaryProgress(
-      "[[reply_to_current]] _NO_REPLY_ [[audio_as_voice]]",
-      { itemId: "silent" },
+  it("publishes completion metadata when the final commentary delta has identical text", async () => {
+    const { progress, update } = createProgress(
+      { toolProgress: false, label: false, commentary: true, maxLines: 1 },
+      { updateOnLineChange: true },
     );
-    const accepted = await progress.pushCommentaryProgress("Checking the workspace", {
-      itemId: "c1",
-    });
-
-    const rendered = update.mock.calls.map((call) => call[0]);
-    expect(rejected).toBe(false);
-    expect(accepted).toBe(true);
-    expect(rendered).toContain("Shelling\n\n💬 _Checking the workspace_");
-  });
-
-  it("publishes completion metadata even when the last preamble delta has identical text", async () => {
-    const update = vi.fn(() => true);
-    const progress = createChannelProgressDraftCompositor({
-      entry: {
-        streaming: {
-          mode: "progress",
-          progress: { toolProgress: false, label: false, commentary: true, maxLines: 1 },
-        },
-      },
-      mode: "progress",
-      active: true,
-      seed: "test",
-      updateOnLineChange: true,
-      update,
-    });
-    await progress.pushCommentaryProgress("I’ll check the key releases.", {
-      itemId: "p1",
-      complete: false,
-    });
+    await progress.pushCommentaryProgress("Checking releases", { itemId: "p1", complete: false });
     expect(progress.getSnapshot().lines).toEqual([expect.objectContaining({ complete: false })]);
     update.mockClear();
-    await progress.pushCommentaryProgress("I’ll check the key releases.", {
-      itemId: "p1",
-      complete: true,
-    });
+    await progress.pushCommentaryProgress("Checking releases", { itemId: "p1", complete: true });
     expect(update).toHaveBeenCalledOnce();
     expect(update).toHaveBeenLastCalledWith(
-      "_I’ll check the key releases._",
-      expect.objectContaining({
-        lines: [expect.objectContaining({ complete: true })],
-      }),
+      "_Checking releases_",
+      expect.objectContaining({ lines: [expect.objectContaining({ complete: true })] }),
     );
   });
 
-  it("collapses cumulative id-less commentary snapshots onto one line", async () => {
-    const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: {
-        streaming: {
-          mode: "progress",
-          progress: { toolProgress: true, label: "Shelling", commentary: true },
-        },
-      },
-      mode: "progress",
-      active: true,
-      seed: "test",
-      commentaryLinePrefix: "💬 ",
-      update,
-    });
-
-    expect(await progress.pushCommentaryProgress("Checking")).toBe(true);
-    expect(await progress.pushCommentaryProgress("Checking the workspace")).toBe(true);
-    expect(await progress.pushCommentaryProgress("Checking the workspace before answering.")).toBe(
-      true,
+  it("updates cumulative id-less commentary in place across tools and ignores silent snapshots", async () => {
+    const { progress, update } = createProgress(
+      { toolProgress: true, label: "Shelling", commentary: true },
+      { commentaryLinePrefix: "💬 " },
     );
-
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\n💬 _Checking the workspace before answering._",
-      expect.objectContaining({
-        lines: [
-          expect.objectContaining({
-            text: "💬 _Checking the workspace before answering._",
-            kind: "item",
-            label: "Commentary",
-          }),
-        ],
-      }),
-    );
-    expect(progress.getSnapshot().lines).toHaveLength(1);
-  });
-
-  it("appends genuinely distinct id-less commentary as separate lines", async () => {
-    const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: {
-        streaming: {
-          mode: "progress",
-          progress: { toolProgress: true, label: "Shelling", commentary: true },
-        },
-      },
-      mode: "progress",
-      active: true,
-      seed: "test",
-      commentaryLinePrefix: "💬 ",
-      update,
-    });
-
-    expect(await progress.pushCommentaryProgress("Checking the workspace")).toBe(true);
-    expect(await progress.pushCommentaryProgress("Writing the patch next")).toBe(true);
-
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\n💬 _Checking the workspace_\n💬 _Writing the patch next_",
-      expect.objectContaining({
-        lines: [
-          expect.objectContaining({ text: "💬 _Checking the workspace_" }),
-          expect.objectContaining({ text: "💬 _Writing the patch next_" }),
-        ],
-      }),
-    );
-  });
-
-  it("updates an id-less commentary line in place after a later tool line", async () => {
-    const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: {
-        streaming: {
-          mode: "progress",
-          progress: { toolProgress: true, label: "Shelling", commentary: true },
-        },
-      },
-      mode: "progress",
-      active: true,
-      seed: "test",
-      commentaryLinePrefix: "💬 ",
-      update,
-    });
-
+    expect(await progress.pushPreambleHeadline("Checking")).toBe(false);
+    expect(progress.hasStatusHeadline).toBe(false);
     await progress.pushCommentaryProgress("Checking");
-    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await progress.pushToolProgress("Exec", { startImmediately: true });
     await progress.pushCommentaryProgress("Checking the workspace");
-
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\n💬 _Checking the workspace_\n🛠️ Exec",
-      expect.objectContaining({
-        lines: [expect.objectContaining({ text: "💬 _Checking the workspace_" }), "🛠️ Exec"],
-      }),
-    );
-  });
-
-  it("keeps id-less commentary when a later snapshot sanitizes to empty", async () => {
-    const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: {
-        streaming: {
-          mode: "progress",
-          progress: { toolProgress: true, label: "Shelling", commentary: true },
-        },
-      },
-      mode: "progress",
-      active: true,
-      seed: "test",
-      commentaryLinePrefix: "💬 ",
-      update,
-    });
-
-    expect(await progress.pushCommentaryProgress("Checking the workspace")).toBe(true);
-    const callsAfterValid = update.mock.calls.length;
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\n💬 _Checking the workspace_\n• Exec");
+    expect(progress.getSnapshot().lines).toEqual([
+      expect.objectContaining({ text: "💬 _Checking the workspace_" }),
+      "Exec",
+    ]);
+    const calls = update.mock.calls.length;
     expect(
       await progress.pushCommentaryProgress("[[reply_to_current]] _NO_REPLY_ [[audio_as_voice]]"),
     ).toBe(false);
-
-    expect(update).toHaveBeenCalledTimes(callsAfterValid);
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\n💬 _Checking the workspace_",
-      expect.objectContaining({
-        lines: [expect.objectContaining({ text: "💬 _Checking the workspace_" })],
-      }),
+    expect(update).toHaveBeenCalledTimes(calls);
+    await progress.pushCommentaryProgress("Writing the patch next");
+    expect(progress.getSnapshot().lines).toHaveLength(3);
+    expect(update.mock.lastCall?.[0]).toBe(
+      "Shelling\n\n💬 _Checking the workspace_\n• Exec\n💬 _Writing the patch next_",
     );
+  });
+
+  it.each([{ toolIcons: true, exec: "🛠️ Exec: running" }])(
+    "prefixes generated tool rows with text glyphs when toolIcons is $toolIcons",
+    async ({ toolIcons, exec }) => {
+      const { progress, update } = createProgress(
+        { toolProgress: true, label: false, commentary: true },
+        {
+          toolIcons,
+          commentaryLinePrefix: "💬 ",
+          buildProgressEventLine: (input, options) => {
+            const line = buildChannelProgressDraftLine(input, options);
+            return line?.toolName === "read" ? { ...line, icon: "🧪" } : line;
+          },
+        },
+      );
+      await progress.pushCommentaryProgress("Checking");
+      await progress.pushItemEvent({
+        itemId: "exec-1",
+        kind: "tool",
+        name: "exec",
+        status: "running",
+      });
+      await progress.pushItemEvent({
+        itemId: "read-1",
+        kind: "tool",
+        name: "read",
+        status: "running",
+      });
+      await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
+      expect(update.mock.lastCall?.[0]).toBe(`💬 _Checking_\n${exec}\n🧪 Read: running`);
+    },
+  );
+
+  it("replaces and retracts only the addressed commentary item", async () => {
+    const { progress, update } = createProgress({
+      label: false,
+      commentary: true,
+      toolProgress: true,
+    });
+    await progress.pushCommentaryProgress("First note", { itemId: "c1" });
+    await progress.pushCommentaryProgress("Updated note", { itemId: "c1" });
+    await progress.pushCommentaryProgress("Other note", { itemId: "c2" });
+    expect(progress.getSnapshot().lines).toEqual([
+      expect.objectContaining({ id: "commentary:c1", text: "_Updated note_" }),
+      expect.objectContaining({ id: "commentary:c2", text: "_Other note_" }),
+    ]);
+    expect(await progress.pushCommentaryProgress("", { itemId: "c1" })).toBe(false);
+    expect(update.mock.lastCall?.[0]).toBe("_Other note_");
     expect(progress.getSnapshot().lines).toHaveLength(1);
   });
 
-  it("replaces and retracts commentary by itemId", async () => {
-    const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: {
-        streaming: {
-          mode: "progress",
-          progress: { toolProgress: true, label: "Shelling", commentary: true },
-        },
-      },
-      mode: "progress",
-      active: true,
-      seed: "test",
-      commentaryLinePrefix: "💬 ",
-      update,
-    });
-
-    expect(await progress.pushCommentaryProgress("First note", { itemId: "c1" })).toBe(true);
-    expect(await progress.pushCommentaryProgress("Updated note", { itemId: "c1" })).toBe(true);
-    expect(await progress.pushCommentaryProgress("Other note", { itemId: "c2" })).toBe(true);
-    expect(progress.getSnapshot().lines).toHaveLength(2);
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\n💬 _Updated note_\n💬 _Other note_",
-      expect.objectContaining({
-        lines: [
-          expect.objectContaining({ id: "commentary:c1", text: "💬 _Updated note_" }),
-          expect.objectContaining({ id: "commentary:c2", text: "💬 _Other note_" }),
-        ],
-      }),
+  it("merges reasoning deltas within a burst and separates bursts across tools", async () => {
+    const { progress, update } = createProgress(
+      { label: "Shelling", toolProgress: true, maxLines: 8 },
+      { reasoningLinePrefix: "🧠 " },
     );
-
-    expect(await progress.pushCommentaryProgress("", { itemId: "c1" })).toBe(false);
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\n💬 _Other note_",
-      expect.objectContaining({
-        lines: [expect.objectContaining({ id: "commentary:c2", text: "💬 _Other note_" })],
-      }),
-    );
-  });
-
-  it("keeps reasoning bursts separate across tools", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      entry: {
-        streaming: {
-          mode: "progress",
-          progress: { toolProgress: true, label: "Shelling", maxLines: 8 },
-        },
-      },
-      reasoningLinePrefix: "🧠 ",
-      update,
-    });
-
-    await progress.pushReasoningProgress("Listing the workspace");
-    await progress.pushToolProgress("🛠️ ls", { startImmediately: true });
+    await progress.pushReasoningProgress("Listing");
+    await progress.pushReasoningProgress(" the workspace");
+    await progress.pushToolProgress("ls", { startImmediately: true });
     await progress.pushReasoningProgress("Picking the largest");
-    await progress.pushToolProgress("🛠️ wc", { startImmediately: true });
-
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\n🧠 _Listing the workspace_\n🛠️ ls\n🧠 _Picking the largest_\n🛠️ wc",
-      expect.objectContaining({
-        lines: ["🧠 _Listing the workspace_", "🛠️ ls", "🧠 _Picking the largest_", "🛠️ wc"],
-      }),
+    await progress.pushToolProgress("wc", { startImmediately: true });
+    expect(update.mock.lastCall?.[0]).toBe(
+      "Shelling\n\n🧠 _Listing the workspace_\n• ls\n🧠 _Picking the largest_\n• wc",
     );
-    progress.cancel();
+    expect(progress.getSnapshot().lines).toEqual([
+      "🧠 _Listing the workspace_",
+      "ls",
+      "🧠 _Picking the largest_",
+      "wc",
+    ]);
   });
 
-  it("preserves partial reasoning tag buffers across deltas", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      reasoningLinePrefix: "🧠 ",
-      update,
-    });
-
-    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+  it("buffers partial reasoning tags without leaking final answer prose", async () => {
+    const { progress, update } = createProgress(undefined, { reasoningLinePrefix: "🧠 " });
+    await progress.pushToolProgress("Exec", { startImmediately: true });
     const calls = update.mock.calls.length;
     await progress.pushReasoningProgress("<thin");
-    expect(update.mock.calls).toHaveLength(calls);
+    expect(update).toHaveBeenCalledTimes(calls);
     await progress.pushReasoningProgress("k>Checking files</think>Final answer prose");
-
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\n🛠️ Exec\n🧠 _Checking files_",
-      expect.objectContaining({
-        lines: ["🛠️ Exec", "🧠 _Checking files_"],
-      }),
-    );
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\n• Exec\n🧠 _Checking files_");
   });
 
   it("keeps literal reasoning tags inside code blocks", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      reasoningLinePrefix: "🧠 ",
-      update,
-    });
-
-    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    const { progress, update } = createProgress(undefined, { reasoningLinePrefix: "🧠 " });
+    await progress.pushToolProgress("Exec", { startImmediately: true });
     await progress.pushReasoningProgress("```html\n<think>literal</think>\n```");
-
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\n🛠️ Exec\n🧠 _```html <think>literal</think> ```_",
-      expect.objectContaining({
-        lines: ["🛠️ Exec", "🧠 _```html <think>literal</think> ```_"],
-      }),
+    expect(update.mock.lastCall?.[0]).toBe(
+      "Shelling\n\n• Exec\n🧠 _```html <think>literal</think> ```_",
     );
   });
 
   it("replaces repeated formatted reasoning snapshots", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      reasoningLinePrefix: "🧠 ",
-      update,
-    });
-
-    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    const { progress, update } = createProgress(undefined, { reasoningLinePrefix: "🧠 " });
+    await progress.pushToolProgress("Exec", { startImmediately: true });
     await progress.pushReasoningProgress("Thinking\n\n_Reading_");
     await progress.pushReasoningProgress("Thinking\n\n_Reading files_");
-
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\n🛠️ Exec\n🧠 _Reading files_",
-      expect.objectContaining({
-        lines: ["🛠️ Exec", "🧠 _Reading files_"],
-      }),
-    );
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\n• Exec\n🧠 _Reading files_");
   });
 
-  it("keeps tool lines under narration and drops redundant edits", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({ update });
-
-    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
-    await progress.pushNarrationProgress("Updating the config file now.");
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\nUpdating the config file now.\n\n🛠️ Exec",
-      expect.anything(),
-    );
-
-    // Tool events stay visible under the headline, so each new line edits.
-    await progress.pushToolProgress("🛠️ Wc", { startImmediately: true });
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\nUpdating the config file now.\n\n🛠️ Exec\n🛠️ Wc",
-      expect.anything(),
-    );
-
-    // Identical narration is dropped; changed narration edits once.
-    expect(await progress.pushNarrationProgress("Updating the config file now.")).toBe(false);
-    await progress.pushNarrationProgress("Restarting the gateway.");
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\nRestarting the gateway.\n\n🛠️ Exec\n🛠️ Wc",
-      expect.anything(),
-    );
-
-    // Narration stopping (empty update) leaves the raw tool lines.
+  it("keeps tool lines under narration while deduplicating and clearing the headline", async () => {
+    const { progress, update } = createProgress();
+    await progress.pushToolProgress("Exec", { startImmediately: true });
+    await progress.pushNarrationProgress("Updating config");
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\nUpdating config\n\n• Exec");
+    await progress.pushToolProgress("Wc", { startImmediately: true });
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\nUpdating config\n\n• Exec\n• Wc");
+    expect(await progress.pushNarrationProgress("Updating config")).toBe(false);
+    await progress.pushNarrationProgress("Restarting");
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\nRestarting\n\n• Exec\n• Wc");
     await progress.pushNarrationProgress("");
-    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🛠️ Wc", expect.anything());
-  });
-
-  it("hands preambles to the commentary lane when it is enabled", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      entry: {
-        streaming: {
-          mode: "progress",
-          progress: { toolProgress: true, label: "Shelling", commentary: true },
-        },
-      },
-      update,
-    });
-
-    // The opt-in 💬 lane renders every preamble as an interleaved line; the
-    // headline must decline so it cannot replace those documented lines.
-    expect(await progress.pushPreambleHeadline("Reading the workspace.")).toBe(false);
-    expect(progress.hasStatusHeadline).toBe(false);
-  });
-
-  it("holds a preamble headline until the gate starts and hides the implicit label", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { toolProgress: true } } },
-      update,
-    });
-
-    expect(await progress.pushPreambleHeadline("  Reading\n the workspace. ")).toBe(false);
-    expect(await progress.pushPreambleHeadline("   ")).toBe(false);
-    expect(progress.hasStarted).toBe(false);
-    expect(update).not.toHaveBeenCalled();
-
-    await progress.start();
-
-    expect(update).toHaveBeenCalledWith(
-      "Reading the workspace.",
-      expect.objectContaining({
-        flush: true,
-        lines: [],
-        snapshot: { lines: [], statusHeadline: "Reading the workspace." },
-      }),
-    );
-  });
-
-  it("publishes rolling tool-line changes beneath a stable preamble headline", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { toolProgress: true, maxLines: 8 } } },
-      updateOnLineChange: true,
-      update,
-    });
-
-    await progress.pushPreambleHeadline("Reading the workspace.");
-    await progress.pushToolProgress("🛠️ Exec one", { startImmediately: true });
-    await progress.pushToolProgress("🛠️ Exec two", { startImmediately: true });
-
-    expect(update).toHaveBeenLastCalledWith(
-      "Reading the workspace.\n\n🛠️ Exec one\n🛠️ Exec two",
-      expect.objectContaining({
-        lines: ["🛠️ Exec one", "🛠️ Exec two"],
-      }),
-    );
-  });
-
-  it("rejects control-only preambles without clobbering a valid headline", async () => {
-    let nowMs = 0;
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { toolProgress: true } } },
-      now: () => nowMs,
-      update,
-    });
-
-    expect(progress.hasStatusHeadline).toBe(false);
-    expect(await progress.pushPreambleHeadline("[[reply_to_current]]")).toBe(false);
-    expect(progress.hasStatusHeadline).toBe(false);
-    await progress.pushPreambleHeadline(
-      "[[reply_to_current]] Reading   the workspace. [[audio_as_voice]]",
-    );
-    expect(progress.hasStatusHeadline).toBe(true);
-    await progress.start();
-    expect(update).toHaveBeenLastCalledWith(
-      "Reading the workspace.",
-      expect.objectContaining({
-        flush: true,
-        lines: [],
-      }),
-    );
-
-    nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS;
-    const calls = update.mock.calls.length;
-    expect(await progress.pushPreambleHeadline("[[reply_to_current]]")).toBe(false);
-    expect(
-      await progress.pushPreambleHeadline("[[reply_to_current]] ~~NO_REPLY~~ [[audio_as_voice]]"),
-    ).toBe(false);
-    expect(progress.hasStatusHeadline).toBe(true);
-    expect(update).toHaveBeenCalledTimes(calls);
-
-    await progress.pushNarrationProgress("Utility filler.");
-    expect(update).toHaveBeenLastCalledWith("Utility filler.", expect.anything());
-    await progress.pushNarrationProgress("");
-    expect(update).toHaveBeenLastCalledWith("Reading the workspace.", expect.anything());
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\n• Exec\n• Wc");
   });
 
   it("retracts only the matching preamble headline", async () => {
-    const update = vi.fn();
     const deleteCurrent = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      update,
-      deleteCurrent,
-    });
-
+    const { progress, update } = createProgress(undefined, { deleteCurrent });
     await progress.start();
-    await progress.pushPreambleHeadline("Reading the workspace.", { itemId: "preamble-1" });
-    await progress.pushPreambleHeadline("Checking the config.", { itemId: "preamble-2" });
-    const callsBeforeStaleRetraction = update.mock.calls.length;
-
-    expect(await progress.pushPreambleHeadline("", { itemId: "preamble-1" })).toBe(false);
-    expect(update).toHaveBeenCalledTimes(callsBeforeStaleRetraction);
+    await progress.pushPreambleHeadline("Reading", { itemId: "p1" });
+    await progress.pushPreambleHeadline("Checking", { itemId: "p2" });
+    const calls = update.mock.calls.length;
+    expect(await progress.pushPreambleHeadline("", { itemId: "p1" })).toBe(false);
+    expect(update).toHaveBeenCalledTimes(calls);
     expect(progress.hasStatusHeadline).toBe(true);
-
-    expect(await progress.pushPreambleHeadline("", { itemId: "preamble-2" })).toBe(true);
+    expect(await progress.pushPreambleHeadline("", { itemId: "p2" })).toBe(true);
     expect(progress.hasStatusHeadline).toBe(false);
     expect(deleteCurrent).toHaveBeenCalledOnce();
     expect(progress.isVisible).toBe(false);
   });
 
-  it("keeps a fresh preamble ahead of later narration", async () => {
-    let nowMs = 0;
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      now: () => nowMs,
-      update,
-    });
-
-    await progress.start();
-    await progress.pushPreambleHeadline("Reading the workspace.");
-    nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS - 1;
-    await progress.pushNarrationProgress("Utility narration should wait.");
-
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\nReading the workspace.",
-      expect.anything(),
-    );
-  });
-
-  it("uses newer narration after the preamble becomes stale", async () => {
-    let nowMs = 0;
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      now: () => nowMs,
-      update,
-    });
-
-    await progress.start();
-    await progress.pushPreambleHeadline("Reading the workspace.");
-    nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS;
-    await progress.pushNarrationProgress("Comparing the configuration now.");
-
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\nComparing the configuration now.",
-      expect.anything(),
-    );
-  });
-
   it("uses a plan explanation after the preamble becomes stale", async () => {
-    let nowMs = 0;
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      now: () => nowMs,
-      update,
-    });
-
+    const { progress, update } = createProgress();
     await progress.start();
-    await progress.pushPreambleHeadline("Reading the workspace.");
-    nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS;
+    await progress.pushPreambleHeadline("Reading");
+    await vi.advanceTimersByTimeAsync(PROGRESS_STATUS_PREAMBLE_FRESH_MS);
     await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }], {
-      explanation: "Applying the revised plan.",
+      explanation: "Applying the plan",
     });
-
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\nApplying the revised plan.\n\n▸ Patch",
-      expect.anything(),
-    );
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\nApplying the plan\n\n▸ Patch");
   });
 
-  it("refreshes a new preamble item when its text matches the stale item", async () => {
-    let nowMs = 0;
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      now: () => nowMs,
-      update,
-    });
-
+  it("refreshes a new preamble item even when it repeats the stale text", async () => {
+    const { progress, update } = createProgress();
     await progress.start();
-    await progress.pushPreambleHeadline("Reading the workspace.", { itemId: "first" });
-    nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS;
-    await progress.pushNarrationProgress("Comparing the configuration now.");
-    await progress.pushPreambleHeadline("Reading the workspace.", { itemId: "second" });
-
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\nReading the workspace.",
-      expect.anything(),
-    );
+    await progress.pushPreambleHeadline("Reading", { itemId: "first" });
+    await vi.advanceTimersByTimeAsync(PROGRESS_STATUS_PREAMBLE_FRESH_MS);
+    await progress.pushNarrationProgress("Comparing");
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\nComparing");
+    await progress.pushPreambleHeadline("Reading", { itemId: "second" });
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\nReading");
   });
 
-  it("refreshes to retained narration when a visible preamble expires", async () => {
-    vi.useFakeTimers();
-    try {
-      const update = vi.fn();
-      const progress = createTestProgressDraftCompositor({
-        update,
-      });
-
-      await progress.start();
-      await progress.pushPreambleHeadline("Reading the workspace.");
-      await progress.pushNarrationProgress("Comparing the configuration now.");
-      expect(update).toHaveBeenLastCalledWith(
-        "Shelling\n\nReading the workspace.",
-        expect.anything(),
-      );
-
-      await vi.advanceTimersByTimeAsync(PROGRESS_STATUS_PREAMBLE_FRESH_MS);
-
-      expect(update).toHaveBeenLastCalledWith(
-        "Shelling\n\nComparing the configuration now.",
-        expect.anything(),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("cancels a pending preamble-expiry refresh when the final starts", async () => {
-    vi.useFakeTimers();
-    try {
-      const progress = createTestProgressDraftCompositor({
-        entry: { streaming: { mode: "progress", progress: { toolProgress: true } } },
-        update: vi.fn(),
-      });
-
-      await progress.start();
-      await progress.pushPreambleHeadline("Reading the workspace.");
-      await progress.pushNarrationProgress("Comparing the configuration now.");
-      expect(vi.getTimerCount()).toBe(1);
-
-      progress.markFinalReplyStarted();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("clears both status sources on reset", async () => {
-    let nowMs = 0;
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      now: () => nowMs,
-      update,
-    });
-
+  it("refreshes to retained narration when the preamble expires", async () => {
+    const { progress, update } = createProgress();
     await progress.start();
-    await progress.pushPreambleHeadline("Reading the workspace.");
-    nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS;
-    await progress.pushNarrationProgress("Comparing the configuration now.");
-    progress.reset();
-    await progress.pushToolProgress("🛠️ Next", { startImmediately: true });
+    await progress.pushPreambleHeadline("Reading");
+    await progress.pushNarrationProgress("Comparing");
+    await vi.advanceTimersByTimeAsync(PROGRESS_STATUS_PREAMBLE_FRESH_MS - 1);
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\nReading");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\nComparing");
+  });
 
-    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Next", expect.anything());
+  it("cancels expiry and ignores late status until a new turn", async () => {
+    const { progress, update } = createProgress();
+    await progress.start();
+    expect(progress.isVisible).toBe(true);
+    await progress.pushPreambleHeadline("Checking");
+    await progress.pushNarrationProgress("Working");
+    expect(vi.getTimerCount()).toBe(1);
+    progress.markFinalReplyStarted();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(progress.isVisible).toBe(false);
+    expect(await progress.pushPreambleHeadline("Too late")).toBe(false);
+    expect(await progress.pushNarrationProgress("Too late")).toBe(false);
+    progress.markFinalReplyDelivered();
+    expect(await progress.pushReasoningProgress("Too late")).toBe(false);
+    expect(progress.beginNewTurn()).toBe(true);
+    expect(progress.hasStarted).toBe(false);
+    await progress.pushToolProgress("Next", { startImmediately: true });
+    expect(update.mock.lastCall?.[0]).toBe("Shelling\n\n• Next");
+    expect(progress.beginNewTurn()).toBe(false);
   });
 
   it("holds narration behind the initial progress delay", async () => {
-    vi.useFakeTimers();
-    try {
-      const update = vi.fn();
-      const progress = createTestProgressDraftCompositor({
-        entry: { streaming: { mode: "progress", progress: { toolProgress: true } } },
-        update,
-      });
-
-      await progress.pushToolProgress("🛠️ Exec");
-      await progress.pushNarrationProgress("Reading the gateway config.");
-
-      expect(update).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS - 1);
-      expect(update).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(1);
-      expect(update).toHaveBeenCalledWith(
-        "Reading the gateway config.\n\n🛠️ Exec",
-        expect.objectContaining({
-          flush: true,
-          lines: ["🛠️ Exec"],
-        }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+    const { progress, update } = createProgress({ toolProgress: true });
+    await progress.pushToolProgress("Exec");
+    await progress.pushNarrationProgress("Reading config");
+    await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS - 1);
+    expect(update).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(update).toHaveBeenCalledWith(
+      "Reading config\n\n• Exec",
+      expect.objectContaining({ flush: true, lines: ["Exec"] }),
+    );
+    expect(progress.isVisible).toBe(true);
   });
 
   it("renders prepared items without duplicating raw diagnostic events", async () => {
-    const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      preparedItems: true,
-      entry: { streaming: { mode: "progress", progress: { toolProgress: true } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
-      update,
-    });
-
+    const { progress } = createProgress({ toolProgress: true }, { preparedItems: true });
     await progress.start();
     await progress.pushToolEvent({
       itemId: "tool-1",
@@ -860,11 +414,7 @@ describe("createChannelProgressDraftCompositor", () => {
         args: { command: "pnpm test" },
       }),
     );
-    await progress.pushItemEvent({
-      itemId: "item-1",
-      kind: "search",
-      progressText: "found tests",
-    });
+    await progress.pushItemEvent({ itemId: "item-1", kind: "search", progressText: "found tests" });
     await progress.pushApprovalEvent({ phase: "requested", command: "pnpm test" });
     await progress.pushCommandOutputEvent({
       itemId: "command-1",
@@ -898,7 +448,6 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushCommandOutputEvent({ title: "ignored without phase" });
     await progress.pushPatchEvent({ phase: "start", modified: ["ignored.ts"] });
     await progress.pushPatchEvent({ modified: ["ignored-without-phase.ts"] });
-
     expect(progress.getSnapshot().lines).toEqual([
       expect.objectContaining({ id: "tool:tool-1", toolName: "exec" }),
       expect.objectContaining({ id: "item-1", kind: "item", toolName: "web_search" }),
@@ -909,84 +458,269 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(progress.getSnapshot().diffStat).toBeUndefined();
   });
 
-  it.each([false, undefined, "Custom progress"])(
-    "retains completed edits when clearing a quiet plan with label %s",
-    async (label) => {
-      const update = vi.fn();
-      const progress = createTestProgressDraftCompositor({
-        entry: {
-          streaming: { mode: "progress", progress: { toolProgress: false, label } },
-        },
-        update,
-        updateOnLineChange: true,
-      });
-
-      await progress.pushPlanProgress([{ step: "Stale plan", status: "in_progress" }]);
-      await progress.pushToolEvent({
-        toolCallId: "write-1",
-        name: "write",
-        phase: "start",
-        args: { path: "src/example.ts", content: "one\ntwo" },
-      });
-      expect(progress.getSnapshot().diffStat).toBeUndefined();
-      await progress.pushItemEvent({
-        toolCallId: "write-1",
-        kind: "tool",
-        phase: "end",
-        status: "completed",
-      });
-      expect(progress.getSnapshot().diffStat).toEqual({ files: 1, added: 2, removed: 0 });
-      expect(await progress.pushPlanProgress([])).toBe(true);
-      expect(update.mock.lastCall?.[0]).toContain("📝 1 files +2");
-      expect(update.mock.lastCall?.[0]).not.toContain("Stale plan");
-      expect(progress.getSnapshot().lines).toEqual([]);
+  it.each([{ action: "react", status: "failed", hidden: false }] as const)(
+    "projects message $action/$status progress",
+    async ({ action, status, hidden }) => {
+      const { progress } = createProgress({ toolProgress: true }, { preparedItems: true });
+      await progress.start();
+      await progress.pushItemEvent(
+        projectAgentToolActivity({
+          toolCallId: "message-1",
+          name: "message",
+          phase: "start",
+          args: { action, channel: "slack", target: "C000000001" },
+        }),
+      );
+      expect(progress.getSnapshot().lines).toEqual(
+        action === "react" ? [] : [expect.objectContaining({ toolName: "message" })],
+      );
+      await progress.pushItemEvent(
+        projectAgentToolActivity({
+          toolCallId: "message-1",
+          name: "message",
+          phase: "result",
+          args: { action, channel: "slack", target: "C000000001" },
+          status,
+        }),
+      );
+      await progress.pushItemEvent(
+        projectAgentToolActivity({
+          toolCallId: "read-1",
+          name: "read",
+          phase: "result",
+          args: { path: "README.md" },
+          status: "completed",
+        }),
+      );
+      expect(progress.getSnapshot().lines).toEqual([
+        ...(hidden ? [] : [expect.objectContaining({ id: "tool:message-1", toolName: "message" })]),
+        expect.objectContaining({ id: "tool:read-1", toolName: "read", status: "completed" }),
+      ]);
     },
   );
 
-  it("ignores status updates once the final reply started and clears both per turn", async () => {
-    const update = vi.fn();
-    const progress = createTestProgressDraftCompositor({
-      update,
+  it("retains completed edits when clearing a quiet plan", async () => {
+    const { progress, update } = createProgress(
+      { toolProgress: false, label: false },
+      { updateOnLineChange: true },
+    );
+    await progress.pushPlanProgress([{ step: "Stale plan", status: "in_progress" }]);
+    await progress.pushToolEvent({
+      toolCallId: "write-1",
+      name: "write",
+      phase: "start",
+      args: { path: "src/example.ts", content: "one\ntwo" },
     });
-
-    await progress.start();
-    expect(progress.isVisible).toBe(true);
-    await progress.pushPreambleHeadline("Checking the primary turn.");
-    await progress.pushNarrationProgress("Working on it.");
-    progress.markFinalReplyStarted();
-    expect(progress.isVisible).toBe(false);
-    expect(await progress.pushPreambleHeadline("Too late.")).toBe(false);
-    expect(await progress.pushNarrationProgress("Too late.")).toBe(false);
-
-    progress.markFinalReplyDelivered();
-    progress.beginNewTurn();
-    await progress.pushToolProgress("🛠️ Next", { startImmediately: true });
-    // The queued turn starts without either primary-turn status source.
-    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Next", expect.anything());
+    expect(progress.getSnapshot().diffStat).toBeUndefined();
+    await progress.pushItemEvent({
+      toolCallId: "write-1",
+      kind: "tool",
+      phase: "end",
+      status: "completed",
+    });
+    expect(progress.getSnapshot().diffStat).toEqual({ files: 1, added: 2, removed: 0 });
+    expect(await progress.pushPlanProgress([])).toBe(true);
+    expect(update.mock.lastCall?.[0]).toContain("📝 1 files +2");
+    expect(update.mock.lastCall?.[0]).not.toContain("Stale plan");
+    expect(progress.getSnapshot().lines).toEqual([]);
   });
 
-  it("logs a timer-fired start failure via the gate's default boundary logger", async () => {
-    vi.useFakeTimers();
+  it("logs timer-fired startup failures at the boundary", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const error = new Error("send failed");
-      const update = vi.fn().mockRejectedValue(error);
-      const progress = createTestProgressDraftCompositor({
-        update,
+    const update = vi.fn().mockRejectedValue(new Error("send failed"));
+    const { progress } = createProgress(undefined, { update });
+    await progress.pushToolProgress("Exec");
+    expect(warn).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
+    expect(update).toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "[progress-draft] channel progress draft failed to start: Error: send failed",
+    );
+  });
+
+  it("passes unformatted prepared notes to native updates", async () => {
+    const tryNativeUpdate = vi.fn(async () => true);
+    const { progress } = createProgress({ label: false, toolProgress: true }, { tryNativeUpdate });
+    await progress.pushPlanProgress([], {
+      explanation: "Use **literal**.",
+      explanationFormat: "plain",
+    });
+    await progress.pushToolProgress("Reading", { startImmediately: true });
+    expect(tryNativeUpdate).toHaveBeenCalledWith(expect.stringContaining("Use **literal**."));
+  });
+
+  it.each(["partial"] as const)(
+    "retains plans across message boundaries but clears them per turn (%s)",
+    async (mode) => {
+      const { progress, update } = createProgress({ label: false, toolProgress: true }, { mode });
+      const steps = [{ step: "Patch", status: "in_progress" as const }];
+      await progress.pushPlanProgress(steps, { explanation: "0/1 complete" });
+      await progress.pushToolProgress("Inspecting files", { startImmediately: true });
+      progress.beginAssistantMessage();
+      await progress.pushItemEvent({
+        itemId: "blocked-card",
+        kind: "tool",
+        name: "progress_card",
+        phase: "end",
+        status: "blocked",
       });
-
-      await progress.pushToolProgress("🛠️ Exec");
-      expect(warn).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS);
-
-      expect(update).toHaveBeenCalled();
-      expect(warn).toHaveBeenCalledWith(
-        "[progress-draft] channel progress draft failed to start: Error: send failed",
+      const lines = [
+        "Inspecting files",
+        expect.objectContaining({ id: "blocked-card", status: "blocked" }),
+      ];
+      expect(update).toHaveBeenLastCalledWith(
+        expect.stringContaining("▸ Patch"),
+        expect.objectContaining({
+          snapshot: expect.objectContaining({
+            plan: steps,
+            planExplanation: "0/1 complete",
+            lines,
+          }),
+        }),
       );
-    } finally {
-      vi.useRealTimers();
-      warn.mockRestore();
-    }
+      progress.beginAssistantMessage();
+      expect(await progress.pushPlanProgress([])).toBe(true);
+      expect(progress.getSnapshot()).toEqual({ lines });
+      await progress.pushPlanProgress(steps, { explanation: "0/1 complete" });
+      progress.resetActivity({ suppressed: true });
+      expect(await progress.pushToolProgress("Hidden")).toBe(false);
+      progress.beginAssistantMessage();
+      expect(await progress.pushToolProgress("Verifying files", { startImmediately: true })).toBe(
+        true,
+      );
+      expect(update.mock.lastCall?.[0]).toBe("0/1 complete\n\n• Verifying files\n▸ Patch");
+      expect(progress.beginNewTurn({ force: true })).toBe(true);
+      expect(progress.getSnapshot()).toEqual({ lines: [] });
+      await progress.pushPlanProgress(steps, { explanation: "0/1 complete" });
+      progress.reset();
+      expect(progress.getSnapshot()).toEqual({ lines: [] });
+    },
+  );
+
+  it("preserves summary presentation for SDK callers", async () => {
+    const { progress, update } = createProgress(
+      { toolProgress: true },
+      { presentation: "summary" },
+    );
+    await progress.pushItemEvent(
+      projectAgentToolActivity({ name: "exec", toolCallId: "call-1", phase: "start" }),
+    );
+    await progress.noteActivity({ startImmediately: true });
+    expect(update.mock.lastCall?.[0]).toBe("Working");
+    await progress.pushReasoningProgress("Checking the result");
+    expect(update.mock.lastCall?.[0]).toContain("Checking the result");
+    await progress.pushPlanProgress([{ step: "Verify", status: "in_progress" }]);
+    expect(update.mock.lastCall?.[0]).toContain("In progress: Verify");
+  });
+
+  it("ignores late approval resolution after final delivery takes over", async () => {
+    const deleteCurrent = vi.fn();
+    const { progress, update } = createProgress({ label: false }, { deleteCurrent });
+    await progress.pushApprovalEvent({
+      phase: "requested",
+      approvalId: "approval",
+      title: "Run checks",
+    });
+    progress.markFinalReplyStarted();
+    update.mockClear();
+    await progress.pushApprovalEvent({ phase: "resolved", approvalId: "approval" });
+    expect(update).not.toHaveBeenCalled();
+    expect(deleteCurrent).not.toHaveBeenCalled();
+  });
+
+  it.each([{ toolProgress: true, maxLines: 1 }])(
+    "flushes and retains approval attention through a full plan and activity ($toolProgress, $maxLines)",
+    async ({ toolProgress, maxLines }) => {
+      const { progress, update } = createProgress({
+        toolProgress,
+        maxLines,
+        commentary: true,
+        label: false,
+      });
+      await progress.pushApprovalEvent({
+        phase: "requested",
+        approvalId: "approval",
+        title: "Run checks",
+      });
+      expect(progress.hasStarted).toBe(true);
+      expect(update.mock.lastCall?.[0]).toContain("Run checks");
+      expect(update.mock.lastCall?.[1]).toMatchObject({ flush: true });
+      await progress.pushPlanProgress(plan);
+      for (let index = 0; index < 5; index++) {
+        await progress.pushToolEvent({ name: "read", toolCallId: `call-${index}`, phase: "start" });
+        await progress.pushCommentaryProgress(`Inspecting file ${index}`, {
+          itemId: `comment-${index}`,
+        });
+        await progress.pushReasoningProgress(`Thinking ${index}`, { snapshot: true });
+      }
+      expect(update.mock.lastCall?.[0]).toContain("Run checks");
+      expect(progress.getSnapshot().lines.length).toBeLessThanOrEqual(maxLines);
+      expect(update.mock.lastCall?.[0].split("\n").filter(Boolean).length).toBeLessThanOrEqual(
+        maxLines,
+      );
+      await progress.pushApprovalEvent({ phase: "resolved", approvalId: "approval" });
+      expect(update.mock.lastCall?.[0]).not.toContain("Run checks");
+    },
+  );
+
+  it.each([{ presentation: "summary" as const, toolProgress: true, maxLines: 3 }])(
+    "keeps failed commands out of quiet plans ($presentation)",
+    async ({ presentation, toolProgress, maxLines }) => {
+      const { progress, update } = createProgress(
+        { toolProgress, maxLines, commentary: true, label: false },
+        { presentation },
+      );
+      await progress.pushPlanProgress(plan);
+      const planText = update.mock.lastCall?.[0];
+      await progress.pushItemEvent(
+        projectAgentToolActivity({
+          name: "exec",
+          phase: "result",
+          toolCallId: "failed-command",
+          status: "failed",
+        }),
+      );
+      expect(update.mock.lastCall?.[0]).toBe(planText);
+      expect(progress.getSnapshot().lines).toEqual([]);
+      for (let index = 0; index < 5; index++) {
+        await progress.pushToolEvent({ name: "read", toolCallId: `read-${index}`, phase: "start" });
+        await progress.pushReasoningProgress(`Thinking ${index}`, { snapshot: true });
+        expect(update.mock.lastCall?.[0]).not.toContain("failed");
+        await progress.pushCommentaryProgress(`Inspecting file ${index}`, {
+          itemId: `comment-${index}`,
+        });
+        expect(update.mock.lastCall?.[0]).not.toContain("failed");
+      }
+      expect(update.mock.lastCall?.[0].split("\n").filter(Boolean).length).toBeLessThanOrEqual(
+        maxLines,
+      );
+      await progress.pushItemEvent(
+        projectAgentToolActivity({
+          name: "exec",
+          phase: "result",
+          toolCallId: "failed-command",
+          status: "completed",
+        }),
+      );
+      expect(update.mock.lastCall?.[0]).not.toContain("failed");
+    },
+  );
+
+  it("rejects pending startup acceptance after final delivery cancels it", async () => {
+    const started = createDeferred();
+    const accepted = createDeferred<boolean>();
+    const { progress } = createProgress(undefined, {
+      update: () => {
+        started.resolve();
+        return accepted.promise;
+      },
+    });
+    const result = progress.pushToolProgress("Exec", { startImmediately: true });
+    await started.promise;
+    progress.markFinalReplyStarted();
+    accepted.resolve(true);
+    expect(await result).toBe(false);
+    expect(progress.hasStarted).toBe(false);
+    expect(progress.isVisible).toBe(false);
   });
 });

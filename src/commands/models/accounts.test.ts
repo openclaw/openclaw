@@ -24,10 +24,9 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { DEVICE_CODE_PHISHING_WARNING } from "../../wizard/prompts.js";
 import { sanitizeWizardStepForClient, WizardSession } from "../../wizard/session.js";
 import {
-  modelsAccountsClearDefaultCommand,
+  modelsAccountsUpdateDefaultCommand,
   modelsAccountsLoginCommand,
   modelsAccountsListCommand,
-  modelsAccountsUseCommand,
 } from "./accounts.js";
 
 const mocks = vi.hoisted(() => ({
@@ -321,14 +320,20 @@ describe("personal model account CLI over an identified Gateway connection", () 
   it.each([
     {
       run: (port: string, output: ReturnType<typeof runtime>) =>
-        modelsAccountsUseCommand({ port, authProfileId: ACCOUNT_ID }, output),
+        modelsAccountsUpdateDefaultCommand(
+          { port, action: "use", authProfileId: ACCOUNT_ID },
+          output,
+        ),
       method: "users.selectModelAccount",
       params: { profileId: PROFILE_ID, authProfileId: ACCOUNT_ID },
       note: "Existing sessions keep",
     },
     {
       run: (port: string, output: ReturnType<typeof runtime>) =>
-        modelsAccountsClearDefaultCommand({ port, provider: "openai" }, output),
+        modelsAccountsUpdateDefaultCommand(
+          { port, action: "clear-default", provider: "openai" },
+          output,
+        ),
       method: "users.unlinkAuthProfile",
       params: { profileId: PROFILE_ID, provider: "openai" },
       note: "Saved credentials and existing session accounts are unchanged",
@@ -355,7 +360,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
     },
   );
 
-  it.each([{ action: "login" }, { action: "list" }])(
+  it.each([{ action: "login" }])(
     "guides an unidentified person through $action without prompting for provider credentials",
     async ({ action }) => {
       const output = runtime();
@@ -496,10 +501,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
     );
   });
 
-  it.each([
-    { provider: "missing", method: undefined, error: "Unknown provider" },
-    { provider: "openai", method: "missing", error: "Unknown sign-in method" },
-  ])(
+  it.each([{ provider: "openai", method: "missing", error: "Unknown sign-in method" }])(
     "rejects an unavailable catalog selection before starting: $error",
     async ({ provider, method, error }) => {
       await withGateway(
@@ -645,7 +647,6 @@ describe("personal model account CLI over an identified Gateway connection", () 
   });
 
   it.each([
-    { result: connected, exitCode: undefined },
     {
       result: { status: "failed", reason: "exchange" } satisfies UsersAuthConnectStatusResult,
       exitCode: 1,

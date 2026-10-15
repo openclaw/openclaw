@@ -2,12 +2,10 @@
 // list of packed group plans. Extracted from .github/workflows/ci.yml so the
 // execution policy is unit-testable and plans can run concurrently.
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import {
   constants,
   cpSync,
   existsSync,
-  lstatSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -27,8 +25,14 @@ import { decodeNodeTestGroups } from "./lib/ci-node-test-groups-codec.mts";
 import type { CiTestRuntimeSelection } from "./lib/ci-test-runtime.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { isConstrainedCiCheckHost, isExclusiveCiTestConfig } from "./lib/local-check-runtime.mts";
+import { signalExitCode } from "./lib/managed-child-process.mts";
 import { parsePositiveInt, readPositiveEnvInt } from "./lib/numeric-options.mjs";
-import { isCiLikeEnv } from "./lib/vitest-local-scheduling.mts";
+import { isCiLikeEnv, shouldContinueVitestFailures } from "./lib/vitest-local-scheduling.mts";
+import {
+  VITEST_INFRASTRUCTURE_EXIT_CODE,
+  mergeVitestExitCodes,
+  vitestInfrastructureExitCode,
+} from "./lib/vitest-outcome.mts";
 import {
   MAX_CI_VITEST_PLAN_CONCURRENCY,
   resolveCiVitestPlanConcurrency,
@@ -96,7 +100,6 @@ export type ShardGroupPlan = {
 export type ShardPlan = ShardTargetPlan | ShardGroupPlan;
 type RunShardOptions = {
   concurrency?: number;
-  continueOnFailure?: boolean;
   env?: NodeJS.ProcessEnv;
   fsModuleCacheMaxBytes?: number;
   nodeCompileCacheMaxBytes?: number;
@@ -366,6 +369,17 @@ export function resolveShardChildCommand(
   testProjectsEntrypoint = resolveTestProjectsEntrypoint(),
   workerRun?: VitestWorkerRun,
 ) {
+  if (args[0] === "--native-bun") {
+    return {
+      command: nodeExecPath,
+      args: [
+        "--import",
+        "tsx",
+        fileURLToPath(new URL("./run-vitest.mts", import.meta.url)),
+        ...args,
+      ],
+    };
+  }
   const loaderArgs = testProjectsEntrypoint.endsWith(".mts") ? ["--import", "tsx"] : [];
   return {
     command: nodeExecPath,
@@ -441,6 +455,10 @@ async function runChild(
   timingKey: string,
   context?: Awaited<ReturnType<typeof createWorkerContext>>,
 ) {
+  const spawnEnv =
+    args[0] === "--native-bun" && context
+      ? { ...childEnv, OPENCLAW_NATIVE_BUN_PARENT_IPC: "1" }
+      : childEnv;
   // Use Node directly. `pnpm exec node` may reconcile the workspace before
   // tests, which destroys the sticky dependency fast path.
   const childCommand = resolveShardChildCommand(
@@ -457,7 +475,7 @@ async function runChild(
       command: childCommand.command,
       args: childCommand.args,
       options: {
-        env: childEnv,
+        env: spawnEnv,
         stdio: ["ignore", "pipe", "pipe", "ipc"],
       },
       homeMode: "tooling",
@@ -476,19 +494,23 @@ async function runChild(
           throw new Error("CI group descendant completion is unverified");
         }
         context.normalCompletion &&= typeof result.code === "number" && result.signal === null;
-        return result.code ?? 1;
+        return result.signal
+          ? signalExitCode(result.signal)
+          : (result.code ?? VITEST_INFRASTRUCTURE_EXIT_CODE);
       }),
     );
   } else {
     child = spawn(childCommand.command, childCommand.args, {
-      env: childEnv,
+      env: spawnEnv,
       stdio: ["ignore", "pipe", "pipe"],
     });
     completion = new Promise<number>((resolve) => {
-      child.once("close", (code) => resolve(code ?? 1));
+      child.once("close", (code, signal) =>
+        resolve(signal ? signalExitCode(signal) : (code ?? VITEST_INFRASTRUCTURE_EXIT_CODE)),
+      );
       child.once("error", (error) => {
         process.stdout.write(`[shard:${label}] failed to spawn: ${error}\n`);
-        resolve(1);
+        resolve(VITEST_INFRASTRUCTURE_EXIT_CODE);
       });
     });
   }
@@ -512,50 +534,55 @@ async function runChild(
   return code;
 }
 
-function readUiNativeShardReceipt(
-  file: string,
-  requestId: string,
-  expectedFiles: ReadonlySet<string>,
-): Set<string> | undefined {
-  try {
-    const stat = lstatSync(file);
-    if (!stat.isFile() || stat.size > 1024 * 1024) {
-      return undefined;
-    }
-    const receipt: unknown = JSON.parse(readFileSync(file, "utf8"));
-    if (
-      !isRecord(receipt) ||
-      receipt.version !== 1 ||
-      receipt.requestId !== requestId ||
-      receipt.config !== join(process.cwd(), "ui/vitest.config.ts").replaceAll("\\", "/") ||
-      receipt.root !== join(process.cwd(), "ui").replaceAll("\\", "/") ||
-      !isStringArray(receipt.files) ||
-      receipt.files.length === 0 ||
-      receipt.files.some((candidateFile) => !expectedFiles.has(candidateFile))
-    ) {
-      return undefined;
-    }
-    return new Set(receipt.files);
-  } catch {
-    return undefined;
-  }
-}
-
 export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions = {}) {
   const inheritedEnv = options.env ?? process.env;
   const jobEnv = mergePlanEnv({}, parseJsonEnv(inheritedEnv, "OPENCLAW_NODE_TEST_ENV_JSON"));
   const baseEnv = mergePlanEnv(inheritedEnv, jobEnv);
+  const extraArgs = (entry: ShardPlan) =>
+    [
+      inheritedEnv,
+      mergePlanEnv(jobEnv, entry.kind === "group" ? entry.plan.env : undefined),
+    ].flatMap((env) => {
+      const value = parseJsonEnv(env, VITEST_EXTRA_ARGS_ENV_KEY, []);
+      return isStringArray(value) ? value : [];
+    });
   if (
     baseEnv.OPENCLAW_E2E_USE_PREBUILT_DIST === "1" &&
     fileURLToPath(import.meta.url) === join(process.cwd(), "scripts/ci-run-node-test-shard.mts")
   ) {
-    const { preparePrebuiltAiPackage } = await import("./lib/vitest-build-prerequisites.mts");
+    const { preparePrebuiltAiPackage, prepareVitestControlUi } =
+      await import("./lib/vitest-build-prerequisites.mts");
+    const { matchesVitestCliSelection } = await import("../test/vitest/vitest.pattern-file.ts");
+    const uiSelections = [];
     for (const entry of plans) {
       const selection = entry.kind === "target" ? { includePatterns: [entry.target] } : entry.plan;
-      const code = await preparePrebuiltAiPackage([selection], prepareChildEnv(entry, baseEnv));
+      const childEnv = prepareChildEnv(entry, baseEnv);
+      const code = await preparePrebuiltAiPackage([selection], childEnv);
       if (code !== 0) {
-        return code;
+        return vitestInfrastructureExitCode(code);
       }
+      if (childEnv.OPENCLAW_E2E_SKIP_BUILD !== "1") {
+        uiSelections.push({
+          ...selection,
+          matchesFile: (
+            file: string,
+            included: boolean,
+            includePatterns?: readonly string[] | null,
+          ) =>
+            matchesVitestCliSelection(
+              file,
+              included ? [file] : [],
+              extraArgs(entry),
+              "",
+              childEnv,
+              includePatterns,
+            ),
+        });
+      }
+    }
+    const code = await prepareVitestControlUi(uiSelections, baseEnv);
+    if (code !== 0) {
+      return vitestInfrastructureExitCode(code);
     }
   }
   // Historical targets use a workflow-owned adapter. Their Node
@@ -575,6 +602,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
         )
       : parsePositiveInt(options.concurrency, "Shard plan concurrency");
   const ci = isCiLikeEnv(baseEnv);
+  const continueOnFailure = shouldContinueVitestFailures(baseEnv);
   const hostResources = ci
     ? { logicalCpuCount: os.availableParallelism(), totalMemoryBytes: os.totalmem() }
     : null;
@@ -752,23 +780,18 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     await runVitestPlans(admittedPlans, {
       concurrency,
       isExclusive: exclusive,
-      shouldStop: () => Boolean(interrupted) || (exitCode !== 0 && !options.continueOnFailure),
+      shouldStop: () =>
+        Boolean(interrupted) || (exitCode !== 0 && (exitCode !== 1 || !continueOnFailure)),
       run: async (entry, index, cacheSlot) => {
         const targetArgs = entry.kind === "target" ? [entry.target] : entry.plan.configs;
         if (!Array.isArray(targetArgs) || targetArgs.length === 0) {
           console.error(`Missing node test shard configs for ${entry.name}`);
-          exitCode = exitCode || 1;
+          exitCode = mergeVitestExitCodes(exitCode, VITEST_INFRASTRUCTURE_EXIT_CODE);
           return;
         }
         // A standalone plan already projects the job environment. Resolve its
         // scoped override once, then append it to the inherited global flags.
-        const vitestExtraArgs = [
-          inheritedEnv,
-          mergePlanEnv(jobEnv, entry.kind === "group" ? entry.plan.env : undefined),
-        ].flatMap((env) => {
-          const value = parseJsonEnv(env, VITEST_EXTRA_ARGS_ENV_KEY, []);
-          return isStringArray(value) ? value : [];
-        });
+        const vitestExtraArgs = extraArgs(entry);
         const selections = preparedRuntimeSelections.get(entry) ??
           runtimeOwner?.resolveCiTestRuntimeSelections(
             {
@@ -778,50 +801,12 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
             },
             policy,
           ) ?? [{ runtime: "node" as const }];
-        const [nodeSelection, bunSelection] = selections;
-        // Only the proven UI partition has native sharding after discovery.
-        // Run it once on Bun and reuse that owner's facts, never its algorithm.
-        const uiReceipt =
-          context &&
-          policy === "bun-compatible" &&
-          entry.kind === "group" &&
-          entry.plan.configs.length === 1 &&
-          entry.plan.configs[0] === "ui/vitest.config.ts" &&
-          selections.length === 2 &&
-          nodeSelection?.runtime === "node" &&
-          nodeSelection.includeAfterShard &&
-          nodeSelection.includePatterns?.length &&
-          bunSelection?.runtime === "bun" &&
-          bunSelection.includeAfterShard &&
-          bunSelection.includePatterns?.length
-            ? {
-                directory: mkdtempSync(join(scratchDir, "ui-native-shard-")),
-                requestId: randomUUID(),
-                expectedFiles: new Set([
-                  ...nodeSelection.includePatterns,
-                  ...bunSelection.includePatterns,
-                ]),
-                selections: [bunSelection, nodeSelection],
-              }
-            : undefined;
-        let nativeShardFiles: Set<string> | undefined;
-        for (const selection of uiReceipt?.selections ?? selections) {
-          if (interrupted) {
+        for (const selection of selections) {
+          if (interrupted || (exitCode !== 0 && exitCode !== 1)) {
             return;
           }
           const runtime = selection.runtime;
-          const nativeFiles = nativeShardFiles;
-          if (
-            runtime === "node" &&
-            nativeFiles &&
-            selection.includePatterns &&
-            !selection.includePatterns.some((file) => nativeFiles.has(file))
-          ) {
-            process.stdout.write(
-              `[shard:node-subset:${entry.name}] skipped (native shard has no Node-only files)\n`,
-            );
-            continue;
-          }
+          const nativeBun = selection.engine === "bun-test";
           const selectedEntry =
             entry.kind === "group" && (selection.configs || selection.includePatterns)
               ? {
@@ -835,13 +820,23 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
               : entry;
           const selectedArgs =
             selectedEntry.kind === "target" ? [selectedEntry.target] : selectedEntry.plan.configs;
-          const args =
-            vitestExtraArgs.length > 0 ? [...selectedArgs, "--", ...vitestExtraArgs] : selectedArgs;
-          const childEnv = buildChildEnv(selectedEntry, baseEnv, scratchDir, index, {
-            serial: concurrency === 1,
-            cacheSlot,
-            runtime,
-          });
+          const args = nativeBun
+            ? ["--native-bun", ...selection.files.map((file) => `./${file}`)]
+            : vitestExtraArgs.length > 0
+              ? [...selectedArgs, "--", ...vitestExtraArgs]
+              : selectedArgs;
+          const childEnv = nativeBun
+            ? prepareChildEnv(entry, { ...baseEnv, OPENCLAW_VITEST_RUNTIME: "bun" })
+            : buildChildEnv(selectedEntry, baseEnv, scratchDir, index, {
+                serial: concurrency === 1,
+                cacheSlot,
+                runtime,
+              });
+          if (nativeBun) {
+            delete childEnv[FS_MODULE_CACHE_ROOT_ENV_KEY];
+            delete childEnv[FS_MODULE_CACHE_PATH_ENV_KEY];
+            delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
+          }
           if (selection.includeAfterShard) {
             childEnv.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE =
               childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
@@ -856,15 +851,10 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
             }
           }
           Object.assign(childEnv, selection.env);
-          delete childEnv.OPENCLAW_VITEST_NATIVE_SHARD_RECEIPT;
-          delete childEnv.OPENCLAW_VITEST_NATIVE_SHARD_REQUEST_ID;
-          if (uiReceipt && runtime === "bun") {
-            childEnv.OPENCLAW_VITEST_NATIVE_SHARD_RECEIPT = join(uiReceipt.directory, "files.json");
-            childEnv.OPENCLAW_VITEST_NATIVE_SHARD_REQUEST_ID = uiReceipt.requestId;
-          }
           const timingKey = entry.kind === "group" ? (entry.timingKey ?? entry.name) : entry.name;
-          const timingPrefix =
-            runtime === "bun"
+          const timingPrefix = nativeBun
+            ? "bun-native:"
+            : runtime === "bun"
               ? "bun:"
               : selection.configs || selection.includePatterns
                 ? "node-subset:"
@@ -877,23 +867,15 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
             `${timingPrefix}${entry.name}`,
             `${timingPrefix}${timingKey}`,
           );
-          if (uiReceipt && runtime === "bun") {
-            // runner() has joined the child and its descendants before these
-            // facts can suppress a process or their scratch directory retires.
-            if (code === 0 && !interrupted) {
-              nativeShardFiles = readUiNativeShardReceipt(
-                join(uiReceipt.directory, "files.json"),
-                uiReceipt.requestId,
-                uiReceipt.expectedFiles,
-              );
-            }
-            rmSync(uiReceipt.directory, { recursive: true, force: true });
-          }
           // A dual-runtime envelope always completes both ordinary test runs;
-          // its first failure still stops admission of later envelopes.
+          // CI and explicit local reruns also drain later envelopes after exit 1.
           if (code !== 0) {
             completion.failedInvocations++;
-            exitCode = exitCode || code;
+            exitCode = mergeVitestExitCodes(exitCode, code);
+            // Infrastructure and terminal outcomes must not admit another runtime.
+            if (code !== 1) {
+              return;
+            }
           }
         }
         completion.completed++;
@@ -970,7 +952,5 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const plans = resolveShardPlans();
-  process.exitCode = await runShardPlans(plans, {
-    continueOnFailure: process.env.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE === "1",
-  });
+  process.exitCode = await runShardPlans(plans);
 }

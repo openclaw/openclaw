@@ -19,16 +19,6 @@ type VeniceBalanceResponse = {
   diemEpochAllocation?: unknown;
 };
 
-async function readPayload(response: Response, timeoutMs: number): Promise<VeniceBalanceResponse> {
-  const data = await readProviderJsonObjectResponse(response, "Venice usage", {
-    maxBytes: VENICE_USAGE_RESPONSE_MAX_BYTES,
-    chunkTimeoutMs: timeoutMs,
-    onIdleTimeout: ({ chunkTimeoutMs }) =>
-      new Error(`Venice usage response stalled for ${chunkTimeoutMs}ms`),
-  });
-  return data as VeniceBalanceResponse;
-}
-
 export async function fetchVeniceUsage(params: {
   token: string;
   timeoutMs: number;
@@ -53,7 +43,12 @@ export async function fetchVeniceUsage(params: {
 
   let data: VeniceBalanceResponse;
   try {
-    data = await readPayload(response, params.timeoutMs);
+    data = await readProviderJsonObjectResponse(response, "Venice usage", {
+      maxBytes: VENICE_USAGE_RESPONSE_MAX_BYTES,
+      chunkTimeoutMs: params.timeoutMs,
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new Error(`Venice usage response stalled for ${chunkTimeoutMs}ms`),
+    });
   } catch {
     return buildUsageErrorSnapshot("venice", "Malformed usage response");
   }

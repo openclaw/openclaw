@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
 import {
   collectToolCallIds,
   isContractToolCallBlock,
@@ -16,7 +17,6 @@ import {
   isHeartbeatAcknowledgementText,
   resolveHeartbeatPromptForResponseTool,
 } from "./heartbeat.js";
-import { MESSAGE_TOOL_DELIVERY_HINTS } from "./reply/delivery-hints.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "./tokens.js";
 
 const HEARTBEAT_TASK_PROMPT_PREFIX =
@@ -29,13 +29,6 @@ const HEARTBEAT_TASK_PROMPT_COMPLETIONS = [
   `After completing all due tasks, use ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
 ];
 type HeartbeatTranscriptMessage = { role: string; content?: unknown };
-
-function collectToolResultBlocks(content: unknown): Array<Record<string, unknown>> {
-  if (!Array.isArray(content)) {
-    return [];
-  }
-  return content.filter(isContractToolResultBlock);
-}
 
 function isVisibleHeartbeatResponseToolCall(block: Record<string, unknown>): boolean {
   const nested = isRecord(block.function) ? block.function : undefined;
@@ -81,34 +74,8 @@ function isToolResultMessage(message: HeartbeatTranscriptMessage): boolean {
   );
 }
 
-function isFailedToolResultRecord(record: Record<string, unknown>): boolean {
-  return (
-    record.isError === true ||
-    record.is_error === true ||
-    readString(record.type) === "tool_result_error"
-  );
-}
-
-function hasSuccessfulToolResultMessage(message: HeartbeatTranscriptMessage): boolean {
-  const resultBlocks = collectToolResultBlocks(message.content);
-  if (resultBlocks.length > 0) {
-    return resultBlocks.some((block) => !isFailedToolResultRecord(block));
-  }
-  return isToolResultMessage(message) && !isFailedToolResultRecord(message);
-}
-
-function collectSuccessfulToolResultCallIds(message: HeartbeatTranscriptMessage): string[] {
-  const resultBlocks = collectToolResultBlocks(message.content);
-  const records = resultBlocks.length > 0 ? resultBlocks : [message];
-  const ids = records.flatMap((record) =>
-    isFailedToolResultRecord(record) ? [] : collectToolCallIds(record),
-  );
-  return [...new Set(ids)];
-}
-
 function matchesHeartbeatPromptText(text: string, prompt: string | undefined): boolean {
-  const normalized = prompt?.trim();
-  return Boolean(normalized) && (text === normalized || text.startsWith(`${normalized}\n`));
+  return Boolean(prompt) && (text === prompt || text.startsWith(`${prompt}\n`));
 }
 
 function resolveMessageText(content: unknown): { text: string; hasNonTextContent: boolean } {
@@ -216,10 +183,6 @@ function advancePastAdjacentToolResults(
   return index;
 }
 
-function isToolResultCompletionCandidate(message: HeartbeatTranscriptMessage): boolean {
-  return isToolResultMessage(message) || collectToolResultBlocks(message.content).length > 0;
-}
-
 function hasCompletedVisibleHeartbeatResponseToolCall(
   messages: HeartbeatTranscriptMessage[],
   index: number,
@@ -228,19 +191,22 @@ function hasCompletedVisibleHeartbeatResponseToolCall(
   const callIds = new Set(visibleCalls.flatMap((call) => collectToolCallIds(call)));
   for (let resultIndex = index + 1; resultIndex < messages.length; resultIndex++) {
     const result = expectDefined(messages[resultIndex], "messages entry at resultIndex");
-    if (!isToolResultCompletionCandidate(result)) {
+    const { content } = result;
+    const blocks = Array.isArray(content) ? content.filter(isContractToolResultBlock) : [];
+    if (blocks.length === 0 && !isToolResultMessage(result)) {
       break;
     }
-    if (!hasSuccessfulToolResultMessage(result)) {
-      continue;
-    }
-    if (callIds.size === 0) {
+    const records: Array<Record<string, unknown>> = blocks.length > 0 ? blocks : [result];
+    if (
+      records.some(
+        (record) =>
+          record.isError !== true &&
+          record.is_error !== true &&
+          readString(record.type) !== "tool_result_error" &&
+          (callIds.size === 0 || collectToolCallIds(record).some((id) => callIds.has(id))),
+      )
+    ) {
       return true;
-    }
-    for (const resultId of collectSuccessfulToolResultCallIds(result)) {
-      if (callIds.has(resultId)) {
-        return true;
-      }
     }
   }
   return false;
@@ -278,24 +244,21 @@ function resolveHeartbeatArtifactSpanEnd(
       if (hasCompletedVisibleHeartbeatResponseToolCall(messages, index, visibleCalls)) {
         return undefined;
       }
-      index++;
-      continue;
-    }
-    if (heartbeatCalls.length > 0) {
+    } else if (heartbeatCalls.length > 0) {
       sawTerminalHeartbeatArtifact = true;
       index = advancePastAdjacentToolResults(messages, index + 1);
       continue;
-    }
-    if (sawTerminalHeartbeatArtifact || isToolResultMessage(message) || toolCalls.length > 0) {
-      index++;
-      continue;
-    }
-    if (message.role === "assistant") {
+    } else if (
+      !sawTerminalHeartbeatArtifact &&
+      !isToolResultMessage(message) &&
+      toolCalls.length === 0
+    ) {
+      if (message.role !== "assistant") {
+        return undefined;
+      }
       sawNonTerminalAssistantOutput = true;
-      index++;
-      continue;
     }
-    return undefined;
+    index++;
   }
 
   if (sawNonTerminalAssistantOutput && !sawTerminalHeartbeatArtifact) {
@@ -315,18 +278,15 @@ export function filterHeartbeatTranscriptArtifacts<T extends HeartbeatTranscript
   }
 
   const result: T[] = [];
-  let i = 0;
-  while (i < messages.length) {
+  for (let i = 0; i < messages.length;) {
     const message = expectDefined(messages[i], "messages entry at i");
     const next = isHeartbeatUserMessage(message, heartbeatPrompt)
       ? resolveHeartbeatArtifactSpanEnd(messages, i, ackMaxChars)
       : undefined;
     if (next === undefined) {
       result.push(message);
-      i++;
-    } else {
-      i = next;
     }
+    i = next ?? i + 1;
   }
 
   return result;

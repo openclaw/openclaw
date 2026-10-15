@@ -1,14 +1,20 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
-import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { createOpenClawReadTool } from "./agent-tools.read.js";
 import { buildExecForegroundResult } from "./bash-tools.exec-support.js";
+import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
+import { createReadTool } from "./sessions/tools/read.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
-import { redactTranscriptMessage } from "./transcript-redact.js";
+import { sanitizeTranscriptMessage } from "./transcript-sanitize.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
 const asAppendMessage = (message: unknown) => message as AppendMessage;
@@ -41,6 +47,23 @@ function resultText(sm: SessionManager) {
 }
 
 describe("installSessionToolResultGuard", () => {
+  it("publishes run ownership before the first assistant continuation without adopting transcript-only edits", () => {
+    const live = call();
+    const { sm } = setup({
+      runId: "synthetic-run",
+      beforeMessageWriteHook: ({ message }) => ({
+        message: { ...message, content: [{ type: "text", text: "transcript-only" }] },
+      }),
+    });
+    sm.appendMessage(live);
+    expect(live).toMatchObject({ __openclaw: { runId: "synthetic-run" } });
+    expect(live.content).toEqual(call().content);
+    expect(messages(sm)[0]).toMatchObject({
+      __openclaw: { runId: "synthetic-run" },
+      content: [{ type: "text", text: "transcript-only" }],
+    });
+  });
+
   it("keeps the exec retention-loss disclosure through the session result cap", () => {
     const { sm } = setup({ maxToolResultChars: 4_000 });
     const output = buildExecForegroundResult({
@@ -151,35 +174,23 @@ describe("installSessionToolResultGuard", () => {
     expect(blocked).toMatchObject([{ role: "user", content: "hidden" }]);
   });
 
-  it.each(["added", "error", "aborted"] as const)(
-    "repairs only canonical calls after a hook leaves them %s",
-    (change) => {
-      const { sm, guard } = setup({
-        beforeMessageWriteHook: ({ message }) =>
-          message.role === "assistant"
-            ? {
-                message: {
-                  ...message,
-                  content: [{ type: "toolCall", id: "canonical", name: "read", arguments: {} }],
-                  stopReason: change === "added" ? "toolUse" : change,
-                },
-              }
-            : undefined,
-      });
-      sm.appendMessage(change === "added" ? assistant("checking") : call());
-      guard.flushPendingToolResults();
-      expect(messages(sm).filter((message) => message.role === "toolResult")).toEqual(
-        change === "added"
-          ? [expect.objectContaining({ toolCallId: "canonical", toolName: "read", isError: true })]
-          : [],
-      );
-      expect(guard.getPendingIds()).toEqual([]);
-    },
-  );
-
-  it("preserves correlation IDs while backfilling names through redaction", () => {
+  it("consumes runtime attribution when a hook blocks the marker before the next user", () => {
+    let writes = 0;
     const { sm, guard } = setup({
-      beforeMessageWriteHook: ({ message }) => ({ message: redactTranscriptMessage(message, {}) }),
+      beforeMessageWriteHook: () => (writes++ === 0 ? { block: true } : undefined),
+    });
+    guard.setNextUserMessagePersistence("runtime");
+    sm.appendMessage(makeUserMessage("runtime-only marker", 1));
+    sm.appendMessage(makeUserMessage("actual user", 2));
+
+    expect(messages(sm)).toEqual([{ role: "user", content: "actual user", timestamp: 2 }]);
+  });
+
+  it("preserves correlation IDs while backfilling names through persistence transforms", () => {
+    const { sm, guard } = setup({
+      beforeMessageWriteHook: ({ message }) => ({
+        message: sanitizeTranscriptMessage(message),
+      }),
     });
     const id = "call_fixture|fc-" + "a".repeat(24);
     sm.appendMessage(asAppendMessage({ role: "assistant", content: call(id).content }));
@@ -225,37 +236,26 @@ describe("installSessionToolResultGuard", () => {
     });
   });
 
-  it("persists env reads only after owner-context redaction", async () => {
-    const credential = "persisted-env-credential-1234567890";
-    const text = "api_key: " + credential;
-    const read = createOpenClawReadTool({
-      name: "read",
-      label: "read",
-      description: "test read",
-      parameters: Type.Object({ path: Type.String() }),
-      execute: async () => ({
-        content: [{ type: "text" as const, text }],
-        details: { kind: "text", content: text },
-      }),
-    });
-    const output = await read.execute("call_1", { path: ".env.production" });
-    const { sm } = setup({
-      beforeMessageWriteHook: ({ message }) => ({ message: redactTranscriptMessage(message, {}) }),
-    });
-    sm.appendMessage(call());
-    sm.appendMessage({ ...result(""), content: output.content, details: output.details });
-    expect(JSON.stringify(messages(sm))).not.toContain(credential);
-  });
-
-  it("applies before_message_write to synthetic tool-result flushes", () => {
-    const { sm, guard } = setup({
-      beforeMessageWriteHook: ({ message }) =>
-        message.role === "toolResult" ? { block: true } : undefined,
-    });
-    sm.appendMessage(call());
-    guard.flushPendingToolResults();
-    roles(sm, ["assistant"]);
-  });
+  it.each([["source.ts", "API_TOKEN = computeToken()\n"]])(
+    "preserves %s read bytes in model context and transcript",
+    async (fileName, text) => {
+      const workspace = tempDirs.make("tool-result-fidelity-");
+      await fs.writeFile(path.join(workspace, fileName), text);
+      const read = createOpenClawReadTool(createReadTool(workspace));
+      const output = await read.execute("call_1", { path: fileName });
+      const sm = guardSessionManager(SessionManager.inMemory(), {
+        config: { logging: { redactPatterns: ["fixture-token-[a-z0-9]+"] } },
+      });
+      sm.appendMessage(call());
+      sm.appendMessage({ ...result(""), content: output.content, details: output.details });
+      expect(output.content).toEqual([{ type: "text", text }]);
+      expect(resultText(sm)).toBe(text);
+      const modelResult = sm
+        .buildSessionContext()
+        .messages.find((message) => message.role === "toolResult");
+      expect(modelResult?.content).toEqual([{ type: "text", text }]);
+    },
+  );
 
   it("suppresses only the next persisted user message when requested", () => {
     const { sm } = setup({ suppressNextUserMessagePersistence: true });

@@ -1,15 +1,14 @@
 // Pure helpers for custom session groups and their sidebar section tokens.
 // Catalog storage and member updates live on the gateway (sessions.groups.*);
 // the SessionCapability mirrors the catalog into state.groups.
+import type {
+  SessionGroup,
+  SessionGroupDefaults,
+} from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 
 const BUILT_IN_SESSION_SECTION_IDS = new Set(["ungrouped", "groups", "work"]);
 
-export type SessionGroupSettings = {
-  name: string;
-  position: number;
-  cwd?: string;
-  worktree?: boolean;
-};
+export type SessionGroupSettings = SessionGroup & SessionGroupDefaults;
 
 export function readSessionCustomGroups(payload: unknown): SessionGroupSettings[] {
   const groups = (payload as { groups?: unknown } | null)?.groups;

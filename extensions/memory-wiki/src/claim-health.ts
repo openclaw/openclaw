@@ -8,6 +8,7 @@ export const WIKI_AGING_DAYS = 30;
 const WIKI_STALE_DAYS = 90;
 
 const CONTESTED_CLAIM_STATUSES = new Set(["contested", "contradicted", "refuted", "superseded"]);
+const CLAIM_FRESHNESS_ORDER = ["stale", "aging", "fresh"];
 
 export type WikiFreshnessLevel = "fresh" | "aging" | "stale" | "unknown";
 
@@ -18,25 +19,11 @@ export type WikiFreshness = {
   lastTouchedAt?: string;
 };
 
-export type WikiClaimHealth = {
-  key: string;
-  pagePath: string;
-  pageTitle: string;
-  pageId?: string;
-  claimId?: string;
-  text: string;
-  status: string;
-  confidence?: number;
-  evidenceCount: number;
-  missingEvidence: boolean;
-  freshness: WikiFreshness;
-};
+export type WikiClaimHealth = ReturnType<typeof buildWikiClaimHealth>;
 
-export type WikiClaimContradictionCluster = {
-  key: string;
-  label: string;
-  entries: WikiClaimHealth[];
-};
+export type WikiClaimContradictionCluster = ReturnType<
+  typeof buildClaimContradictionClusters
+>[number];
 
 export type WikiPageContradictionCluster = {
   key: string;
@@ -105,6 +92,20 @@ export function isClaimContestedStatus(status?: string): boolean {
   return CONTESTED_CLAIM_STATUSES.has(normalizeClaimStatus(status));
 }
 
+export function compareWikiClaimSummaries(
+  left: { text: string; confidence?: number; freshnessLevel?: string },
+  right: { text: string; confidence?: number; freshnessLevel?: string },
+): number {
+  const leftConfidence = typeof left.confidence === "number" ? left.confidence : -1;
+  const rightConfidence = typeof right.confidence === "number" ? right.confidence : -1;
+  return (
+    rightConfidence - leftConfidence ||
+    CLAIM_FRESHNESS_ORDER.indexOf(right.freshnessLevel ?? "") -
+      CLAIM_FRESHNESS_ORDER.indexOf(left.freshnessLevel ?? "") ||
+    left.text.localeCompare(right.text)
+  );
+}
+
 export function assessPageFreshness(page: WikiPageSummary, now?: Date): WikiFreshness {
   return buildFreshnessFromTimestamp({ timestamp: page.updatedAt, now });
 }
@@ -133,7 +134,7 @@ function buildWikiClaimHealth(params: {
   claim: WikiClaim;
   index: number;
   now?: Date;
-}): WikiClaimHealth {
+}) {
   const claimId = params.claim.id?.trim();
   return {
     key: `${params.page.relativePath}#${claimId ?? `claim-${params.index + 1}`}`,
@@ -156,10 +157,7 @@ export function collectWikiClaimHealth(pages: WikiPageSummary[], now?: Date): Wi
   );
 }
 
-export function buildClaimContradictionClusters(params: {
-  pages: WikiPageSummary[];
-  now?: Date;
-}): WikiClaimContradictionCluster[] {
+export function buildClaimContradictionClusters(params: { pages: WikiPageSummary[]; now?: Date }) {
   const claimHealth = collectWikiClaimHealth(params.pages, params.now);
   const byId = new Map<string, WikiClaimHealth[]>();
   for (const claim of claimHealth) {

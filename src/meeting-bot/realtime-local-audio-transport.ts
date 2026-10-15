@@ -7,8 +7,7 @@ import { createSpeechThresholdGate, readPcm16AudioStats } from "../talk/audio-en
 import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import {
   terminateMeetingBridgeProcess,
-  writeMeetingOutputChunk,
-  type MeetingOutputWriteWaiter,
+  MeetingOutputProcessOwner,
   type MeetingBridgeProcess,
 } from "./bridge-process.js";
 import { splitCommandArgv } from "./command-argv.js";
@@ -116,8 +115,9 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   let fatalSignaled = false;
   let fatalHandler: (() => void) | undefined;
   let stopPromise: Promise<void> | undefined;
-  const retiredOutputStops = new Set<Promise<void>>();
-  const outputWriteWaiters = new Set<MeetingOutputWriteWaiter<BridgeProcess>>();
+  const outputOwner = new MeetingOutputProcessOwner<BridgeProcess>(
+    LOCAL_BRIDGE_TERMINATION_GRACE_MS,
+  );
   const outputLoopbackVerifier = createMeetingOutputLoopbackVerifier({
     audioFormat: params.audioFormat ?? "pcm16-24khz",
   });
@@ -137,21 +137,26 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
     params.logger.warn(`${params.logScope} ${label} failed: ${formatErrorMessage(error)}`);
     signalFatal();
   };
-  const attachOutputProcessHandlers = (proc: BridgeProcess) => {
-    proc.on("error", (error) => {
-      if (proc === outputProcess) {
-        fail("audio output command")(error);
-      }
-    });
-    proc.stdin?.on?.("error", (error: Error) => {
-      if (proc === outputProcess) {
-        fail("audio output command")(error);
-      }
-    });
+  const attachAudioProcessHandlers = (proc: BridgeProcess, role: "input" | "output") => {
+    const isCurrent = () => role === "input" || proc === outputProcess;
+    const onError =
+      (suffix = "") =>
+      (error: Error) => {
+        if (isCurrent()) {
+          fail(`audio ${role} command${suffix}`)(error);
+        }
+      };
+    proc.on("error", onError());
+    if (role === "output") {
+      proc.stdin?.on?.("error", onError());
+    } else {
+      proc.stdout?.on("error", onError(" stdout"));
+    }
+    proc.stderr?.on("error", onError(" stderr"));
     proc.on("exit", (code, signal) => {
-      if (proc === outputProcess && !stopped) {
+      if (isCurrent() && !stopped) {
         params.logger.warn(
-          `${params.logScope} audio output command exited (${code ?? signal ?? "done"})`,
+          `${params.logScope} audio ${role} command exited (${code ?? signal ?? "done"})`,
         );
         signalFatal();
       }
@@ -159,58 +164,20 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
     attachStderrLineLogger({
       stderr: proc.stderr,
       logger: params.logger,
-      prefix: `${params.logScope} audio output`,
+      prefix: `${params.logScope} audio ${role}`,
     });
-    proc.stderr?.on("error", (error: Error) => {
-      if (proc === outputProcess) {
-        fail("audio output command stderr")(error);
-      }
-    });
-  };
-  const releaseOutputWriteWaiters = (proc?: BridgeProcess) => {
-    for (const waiter of outputWriteWaiters) {
-      if (!proc || waiter.process === proc) {
-        waiter.release();
-      }
-    }
   };
   const stop = () => {
     stopPromise ??= (async () => {
       stopped = true;
       outputLoopbackVerifier.cancelOutput();
-      releaseOutputWriteWaiters();
-      await Promise.all([
-        terminateMeetingBridgeProcess(inputProcess, {
-          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
-        }),
-        terminateMeetingBridgeProcess(outputProcess, {
-          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
-        }),
-        terminateMeetingBridgeProcess(bargeInInputProcess, {
-          graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
-        }),
-        ...retiredOutputStops,
-      ]);
+      outputOwner.release();
+      await outputOwner.stop(inputProcess, outputProcess, bargeInInputProcess);
     })();
     return stopPromise;
   };
-  attachOutputProcessHandlers(outputProcess);
-  inputProcess.on("error", fail("audio input command"));
-  inputProcess.on("exit", (code, signal) => {
-    if (!stopped) {
-      params.logger.warn(
-        `${params.logScope} audio input command exited (${code ?? signal ?? "done"})`,
-      );
-      signalFatal();
-    }
-  });
-  attachStderrLineLogger({
-    stderr: inputProcess.stderr,
-    logger: params.logger,
-    prefix: `${params.logScope} audio input`,
-  });
-  inputProcess.stdout?.on("error", fail("audio input command stdout"));
-  inputProcess.stderr?.on("error", fail("audio input command stderr"));
+  attachAudioProcessHandlers(outputProcess, "output");
+  attachAudioProcessHandlers(inputProcess, "input");
 
   const transport: MeetingRealtimeAudioTransport = {
     onFatal: (handler) => {
@@ -245,7 +212,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       }
       outputLoopbackVerifier.recordOutput(audio);
       try {
-        await writeMeetingOutputChunk(outputWriteWaiters, proc, stdin, audio);
+        await outputOwner.write(proc, stdin, audio);
       } catch (error) {
         if (stopped || proc !== outputProcess || fatalSignaled) {
           return;
@@ -262,19 +229,12 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       outputLoopbackVerifier.cancelOutput();
       const previousOutput = outputProcess;
       outputProcess = spawnOutputProcess();
-      attachOutputProcessHandlers(outputProcess);
-      releaseOutputWriteWaiters(previousOutput);
+      attachAudioProcessHandlers(outputProcess, "output");
+      outputOwner.release(previousOutput);
       params.logger.debug?.(
         `${params.logScope} cleared realtime audio output buffer by restarting playback command`,
       );
-      const retiredOutputStop = terminateMeetingBridgeProcess(previousOutput, {
-        graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
-        initialSignal: "SIGKILL",
-      });
-      retiredOutputStops.add(retiredOutputStop);
-      void retiredOutputStop.finally(() => {
-        retiredOutputStops.delete(retiredOutputStop);
-      });
+      outputOwner.retire(previousOutput, "SIGKILL");
     },
     dispose: async () => {
       await transport.stop();

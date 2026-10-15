@@ -146,7 +146,7 @@ describe("models.probe", () => {
   });
 
   it("probes the default agent when agentId is empty", async () => {
-    const cfg: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     const { options } = createOptions({ provider: "openai", agentId: "" }, cfg);
 
     await handler(options);
@@ -162,7 +162,7 @@ describe("models.probe", () => {
 
   it("probes an explicit configured agent", async () => {
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "writer" }] },
+      agents: { entries: { main: {}, writer: {} } },
     };
     const { options } = createOptions({ provider: "openai", agentId: "Writer" }, cfg);
 
@@ -178,7 +178,7 @@ describe("models.probe", () => {
   });
 
   it.each(["retired", "   "])("rejects explicit unknown agentId %j", async (agentId) => {
-    const cfg: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     mocks.listAgentIds.mockReturnValue(["main"]);
     const { options, respond } = createOptions({ provider: "openai", agentId }, cfg);
 
@@ -382,9 +382,9 @@ describe("models.probe", () => {
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ code: "UNAVAILABLE", message: "Connection probe failed." }),
+      expect.objectContaining({ code: "UNAVAILABLE", message: "Connection check failed." }),
     );
-    expect(warn).toHaveBeenCalledWith("Model connection probe failed.", {
+    expect(warn).toHaveBeenCalledWith("Model connection check failed.", {
       event: "models_probe_failed",
       provider: "ollama",
       timeoutMs: 9_000,

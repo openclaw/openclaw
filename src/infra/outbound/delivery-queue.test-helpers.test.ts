@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   isOpenClawStateDatabaseOpen,
   openOpenClawStateDatabase,
@@ -12,13 +12,16 @@ describe("installDeliveryQueueTmpDirHooks", () => {
   // Parent hooks run after the fixture's inner afterEach, before its afterAll.
   afterEach(() => {
     expect(isOpenClawStateDatabaseOpen()).toBe(false);
+  });
+
+  afterAll(() => {
     expect(fs.existsSync(caseDir)).toBe(false);
   });
 
   describe("per-case cleanup", () => {
     const { tmpDir } = installDeliveryQueueTmpDirHooks();
 
-    it("closes the state database and removes the case directory", () => {
+    it("closes state per case and removes the directory after the suite", () => {
       caseDir = tmpDir();
       openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: caseDir } });
       expect(isOpenClawStateDatabaseOpen()).toBe(true);

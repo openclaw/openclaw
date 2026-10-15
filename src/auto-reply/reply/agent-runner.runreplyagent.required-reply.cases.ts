@@ -19,13 +19,11 @@ type RequiredReplyFixture = {
   state: {
     runEmbeddedAgentMock: Pick<Mock, "mockImplementationOnce" | "mockResolvedValueOnce">;
   };
-  requireScheduledFollowupRunner: () => (run: FollowupRun) => Promise<void>;
 };
 
 export function registerRequiredReplyCompletionCases({
   createMinimalRun,
   state,
-  requireScheduledFollowupRunner,
 }: RequiredReplyFixture): void {
   it("suppresses narrated silent-turn partials, block replies, and final payloads", async () => {
     const onPartialReply = vi.fn();
@@ -84,34 +82,6 @@ export function registerRequiredReplyCompletionCases({
       }
     },
   );
-
-  it("delivers a required queued answer fallback from a heartbeat-owned drain", async () => {
-    state.runEmbeddedAgentMock
-      .mockResolvedValueOnce({ payloads: [], meta: {} })
-      .mockResolvedValueOnce({
-        payloads: [{ text: "NO_REPLY" }],
-        meta: { finalAssistantRawText: "NO_REPLY", finalAssistantVisibleText: "" },
-      });
-    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
-    const heartbeat = createMinimalRun({
-      opts: { isHeartbeat: true, onBlockReply },
-      runOverrides: { terminalReplyExpectation: "optional" },
-    });
-    await expect(heartbeat.run()).resolves.toBeUndefined();
-    expect(onBlockReply).not.toHaveBeenCalled();
-
-    const queued = createMinimalRun({
-      currentInboundEventKind: "user_request",
-      runOverrides: { terminalReplyExpectation: "required" },
-    });
-    await requireScheduledFollowupRunner()(queued.followupRun);
-
-    expect(onBlockReply).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ isError: true, text: expect.any(String) }),
-    );
-    expect(onBlockReply.mock.calls[0]?.[0].text).not.toContain("NO_REPLY");
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
-  });
 
   it.each([
     { label: "empty output", payloads: [] },

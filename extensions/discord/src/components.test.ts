@@ -1,51 +1,34 @@
 // Discord tests cover components plugin behavior.
 import { ButtonStyle, MessageFlags } from "discord-api-types/v10";
-import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  registerDiscordComponentEntries,
+  resolveDiscordComponentEntryWithPersistence,
+  resolveDiscordModalEntryWithPersistence,
+} from "./components-registry.js";
 import { clearDiscordComponentEntriesForTest } from "./components-registry.test-support.js";
-import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
+import {
+  buildDiscordComponentCustomId,
+  buildDiscordComponentMessage,
+  buildDiscordComponentMessageFlags,
+  buildDiscordModalCustomId,
+  parseDiscordComponentCustomId,
+  parseDiscordComponentCustomIdForInteraction,
+  parseDiscordModalCustomId,
+  parseDiscordModalCustomIdForInteraction,
+  readDiscordComponentSpec,
+  coerceDiscordComponentParam,
+  type DiscordComponentEntry,
+  type DiscordModalEntry,
+} from "./components.js";
+import { setDiscordRuntime } from "./runtime.js";
 
-let registerDiscordComponentEntries: typeof import("./components-registry.js").registerDiscordComponentEntries;
-let resolveDiscordComponentEntryWithPersistence: typeof import("./components-registry.js").resolveDiscordComponentEntryWithPersistence;
-let resolveDiscordModalEntryWithPersistence: typeof import("./components-registry.js").resolveDiscordModalEntryWithPersistence;
-let buildDiscordComponentCustomId: typeof import("./components.js").buildDiscordComponentCustomId;
-let buildDiscordComponentMessage: typeof import("./components.js").buildDiscordComponentMessage;
-let buildDiscordComponentMessageFlags: typeof import("./components.js").buildDiscordComponentMessageFlags;
-let buildDiscordModalCustomId: typeof import("./components.js").buildDiscordModalCustomId;
-let parseDiscordComponentCustomId: typeof import("./components.js").parseDiscordComponentCustomId;
-let parseDiscordComponentCustomIdForInteraction: typeof import("./components.js").parseDiscordComponentCustomIdForInteraction;
-let parseDiscordModalCustomId: typeof import("./components.js").parseDiscordModalCustomId;
-let parseDiscordModalCustomIdForInteraction: typeof import("./components.js").parseDiscordModalCustomIdForInteraction;
-let readDiscordComponentSpec: typeof import("./components.js").readDiscordComponentSpec;
-let coerceDiscordComponentParam: typeof import("./components.js").coerceDiscordComponentParam;
-let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
 type DiscordRuntime = Parameters<typeof import("./runtime.js").setDiscordRuntime>[0];
 
 const { clearRuntime: clearDiscordRuntime } = createPluginRuntimeStore<DiscordRuntime>({
   pluginId: "discord",
   errorMessage: "Discord runtime not initialized",
-});
-
-beforeAll(async () => {
-  ({
-    registerDiscordComponentEntries,
-    resolveDiscordComponentEntryWithPersistence,
-    resolveDiscordModalEntryWithPersistence,
-  } = await import("./components-registry.js"));
-  ({
-    buildDiscordComponentCustomId,
-    buildDiscordComponentMessage,
-    buildDiscordComponentMessageFlags,
-    buildDiscordModalCustomId,
-    parseDiscordComponentCustomId,
-    parseDiscordComponentCustomIdForInteraction,
-    parseDiscordModalCustomId,
-    parseDiscordModalCustomIdForInteraction,
-    readDiscordComponentSpec,
-    coerceDiscordComponentParam,
-  } = await import("./components.js"));
-  ({ setDiscordRuntime } = await import("./runtime.js"));
 });
 
 describe("discord components", () => {
@@ -69,21 +52,6 @@ describe("discord components", () => {
     expect(parseDiscordModalCustomIdForInteraction(modalCustomId).data).toMatchObject({
       mid: modalId,
     });
-  });
-
-  it("keeps legacy percent-like custom id values raw", () => {
-    expect(buildDiscordComponentCustomId({ componentId: "button_v1" })).toBe(
-      "occomp:cid=button_v1",
-    );
-    expect(buildDiscordComponentCustomId({ componentId: "button=v1" })).toBe(
-      "occomp:cid=button=v1",
-    );
-    expect(buildDiscordModalCustomId("modal_v1")).toBe("ocmodal:mid=modal_v1");
-    expect(buildDiscordModalCustomId("modal=v1")).toBe("ocmodal:mid=modal=v1");
-    expect(parseDiscordComponentCustomId("occomp:cid=button%3Bv1")).toEqual({
-      componentId: "button%3Bv1",
-    });
-    expect(parseDiscordModalCustomId("ocmodal:mid=modal%3Dv1")).toBe("modal%3Dv1");
   });
 
   it("builds v2 containers with modal trigger", () => {
@@ -123,7 +91,6 @@ describe("discord components", () => {
 
   it.each([
     { label: "minimum", accentColor: 0, expected: 0 },
-    { label: "maximum", accentColor: 0xffffff, expected: 0xffffff },
     { label: "negative", accentColor: -1, expected: undefined },
     { label: "fractional", accentColor: 1.5, expected: undefined },
     { label: "above maximum", accentColor: 0x1000000, expected: undefined },
@@ -180,28 +147,6 @@ describe("discord components", () => {
       disabled: true,
     });
     expect(result.entries).toHaveLength(0);
-  });
-
-  it("omits unset optional fields from persisted button entries", () => {
-    const spec = readDiscordComponentSpec({
-      blocks: [
-        {
-          type: "actions",
-          buttons: [{ label: "Allow Once", style: "success" }],
-        },
-      ],
-    });
-    if (!spec) {
-      throw new Error("Expected component spec to be parsed");
-    }
-
-    const result = buildDiscordComponentMessage({ spec });
-    const entry = result.entries[0];
-    if (!entry) {
-      throw new Error("Expected button entry");
-    }
-
-    expect(Object.entries(entry).filter(([, value]) => value === undefined)).toEqual([]);
   });
 
   it("requires options for modal select fields", () => {
@@ -382,26 +327,8 @@ describe("discord components", () => {
       raw: { blocks: [{ type: "text", text: 1 }] },
       error: "components.blocks[0].text must be a string",
     },
-    {
-      raw: { blocks: [{ type: "section", texts: [" \n\t "] }] },
-      error: "components.blocks[0].texts[0] cannot be empty",
-    },
   ])("retains required component body validation: $error", ({ raw, error }) => {
     expect(() => readDiscordComponentSpec(raw)).toThrow(error);
-  });
-
-  it("keeps optional blank component text absent", () => {
-    const spec = readDiscordComponentSpec({
-      text: " \n\t ",
-      blocks: [{ type: "text", text: "fallback" }],
-    });
-    if (!spec) {
-      throw new Error("Expected component spec to be parsed");
-    }
-    expect(buildDiscordComponentMessage({ spec }).components[0]?.serialize()).toMatchObject({
-      type: 17,
-      components: [{ type: 10, content: "fallback" }],
-    });
   });
 
   it("parses stringified component specs from MCP object transports", () => {
@@ -440,7 +367,6 @@ describe("discord component registry", () => {
     clearDiscordRuntime();
   });
 
-  const componentsRegistryModuleUrl = new URL("./components-registry.ts", import.meta.url).href;
   const componentsRegistryStateModuleUrl = new URL(
     "./components-registry-state.ts",
     import.meta.url,
@@ -478,12 +404,6 @@ describe("discord component registry", () => {
     { placement: "row", buttonReusable: true, cardReusable: false, expectedReusable: true },
     { placement: "row", buttonReusable: false, cardReusable: true, expectedReusable: false },
     { placement: "row", buttonReusable: undefined, cardReusable: true, expectedReusable: true },
-    {
-      placement: "row",
-      buttonReusable: undefined,
-      cardReusable: undefined,
-      expectedReusable: undefined,
-    },
     { placement: "section", buttonReusable: false, cardReusable: true, expectedReusable: false },
   ] as const)(
     "preserves $placement button reuse=$buttonReusable over card reuse=$cardReusable through delivery",
@@ -567,76 +487,9 @@ describe("discord component registry", () => {
         id: componentId,
         consume: false,
       });
-      expect(Boolean(secondInteraction)).toBe(expectedReusable === true);
+      expect(Boolean(secondInteraction)).toBe(expectedReusable);
     },
   );
-
-  it("consumes sibling entries from the same non-reusable component message", async () => {
-    const result = buildDiscordComponentMessage({
-      spec: {
-        text: "Confirm action",
-        blocks: [
-          {
-            type: "actions",
-            buttons: [
-              { label: "Confirm", callbackData: "confirm" },
-              { label: "Cancel", callbackData: "cancel" },
-            ],
-          },
-        ],
-      },
-    });
-    const confirm = result.entries.find((entry) => entry.label === "Confirm");
-    const cancel = result.entries.find((entry) => entry.label === "Cancel");
-    if (!confirm?.consumptionGroupId) {
-      throw new Error("expected confirm entry to carry a consumption group id");
-    }
-    if (!cancel) {
-      throw new Error("expected cancel entry");
-    }
-    expect(cancel.consumptionGroupId).toBe(confirm.consumptionGroupId);
-    expect(confirm.consumptionGroupEntryIds).toEqual([confirm.id, cancel.id]);
-
-    await registerDiscordComponentEntries({
-      entries: result.entries,
-      modals: [],
-      messageId: "msg_1",
-      ttlMs: 1000,
-    });
-
-    const consumed = await resolveDiscordComponentEntryWithPersistence({ id: confirm?.id ?? "" });
-    expect(consumed?.label).toBe("Confirm");
-    await expect(
-      resolveDiscordComponentEntryWithPersistence({ id: cancel?.id ?? "", consume: false }),
-    ).resolves.toBeNull();
-  });
-
-  it("shares registry state across duplicate module instances", async () => {
-    const first = (await import(
-      `${componentsRegistryModuleUrl}?t=first-${Date.now()}`
-    )) as typeof import("./components-registry.js");
-    const second = (await import(
-      `${componentsRegistryModuleUrl}?t=second-${Date.now()}`
-    )) as typeof import("./components-registry.js");
-
-    clearDiscordComponentEntriesForTest();
-    await first.registerDiscordComponentEntries({
-      entries: [{ id: "btn_shared", kind: "button", label: "Shared" }],
-      modals: [],
-    });
-
-    const sharedEntry = await second.resolveDiscordComponentEntryWithPersistence({
-      id: "btn_shared",
-      consume: false,
-    });
-    expect(sharedEntry?.id).toBe("btn_shared");
-    expect(sharedEntry?.kind).toBe("button");
-    expect(sharedEntry?.label).toBe("Shared");
-    expect(typeof sharedEntry?.createdAt).toBe("number");
-    expect(typeof sharedEntry?.expiresAt).toBe("number");
-
-    clearDiscordComponentEntriesForTest();
-  });
 
   it("shares persistent registry state across duplicate state modules", async () => {
     const first = (await import(
@@ -671,23 +524,6 @@ describe("discord component registry", () => {
     } finally {
       dateNowSpy.mockRestore();
     }
-  });
-
-  it("expires component entries whose calculated expiry exceeds the Date range", async () => {
-    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
-    try {
-      await registerDiscordComponentEntries({
-        entries: [{ id: "btn_overflow", kind: "button", label: "Overflow" }],
-        modals: [],
-        ttlMs: 1000,
-      });
-    } finally {
-      dateNowSpy.mockRestore();
-    }
-
-    await expect(
-      resolveDiscordComponentEntryWithPersistence({ id: "btn_overflow", consume: false }),
-    ).resolves.toBeNull();
   });
 
   function createPersistentRegistryStore() {

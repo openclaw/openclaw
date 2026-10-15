@@ -7,7 +7,7 @@ import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import {
   authorizeIncognitoSessionTarget,
   createSessionListEntryFilter,
@@ -33,10 +33,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    const projection = getSessionRowProjection(context);
-    if (!projection) {
-      throw new Error("Session projection is unavailable before Gateway startup completes");
-    }
+    const projection = requireSessionRowProjection(context);
     await withReadySessionRows(
       projection,
       (cfg) => {
@@ -95,10 +92,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
     }
     const limit = resolveIntegerOption(p.limit, 200, { min: 1 });
 
-    const projection = getSessionRowProjection(context);
-    if (!projection) {
-      throw new Error("Session projection is unavailable before Gateway startup completes");
-    }
+    const projection = requireSessionRowProjection(context);
     const requestedAgent = () =>
       resolveRequestedSessionAgentId(
         context.getRuntimeConfig(),

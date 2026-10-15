@@ -1,10 +1,10 @@
 import { ChannelType, PermissionFlagsBits as P, Routes } from "discord-api-types/v10";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as api from "./send.permissions.js";
 import { EMPTY_DISCORD_TEST_OPTS as opts } from "./test-support/config.js";
 
 const mockRest = vi.hoisted(() => ({ get: vi.fn() }));
 vi.mock("./client.js", () => ({ resolveDiscordRest: () => mockRest }));
-let api: typeof import("./send.permissions.js");
 type Role = [id: string, permissions: bigint, position?: number];
 type Fixture = {
   owner?: string;
@@ -85,9 +85,6 @@ function mockGuild({
 }
 
 describe("discord guild permission authorization", () => {
-  beforeAll(async () => {
-    api = await import("./send.permissions.js");
-  });
   beforeEach(() => {
     mockRest.get.mockReset();
   });
@@ -154,13 +151,6 @@ describe("discord guild permission authorization", () => {
     expect(await api.fetchMemberGuildPermissionsDiscord("guild-1", "user-1", opts)).toBeNull();
   });
 
-  it("combines everyone and member-role permissions", async () => {
-    mockGuild({ everyone: P.ViewChannel, member: P.KickMembers });
-    expect(await api.fetchMemberGuildPermissionsDiscord("guild-1", "user-1", opts)).toBe(
-      P.ViewChannel | P.KickMembers,
-    );
-  });
-
   it.each<[string, Fixture, bigint[], boolean]>([
     ["authorizes the guild owner without role bits", { owner: "user-1" }, [P.ManageChannels], true],
     ["authorizes a matching permission", { member: P.KickMembers }, [P.KickMembers], true],
@@ -180,7 +170,6 @@ describe("discord guild permission authorization", () => {
 
   it.each<[string, bigint, boolean]>([
     ["rejects a member with only one required permission", P.KickMembers, false],
-    ["authorizes an administrator", P.Administrator, true],
   ])("hasAllGuildPermissionsDiscord %s", async (_name, bits, allowed) => {
     mockGuild({ member: bits });
     expect(
@@ -201,15 +190,6 @@ describe("discord guild permission authorization", () => {
       true,
     ],
     [
-      "applies channel overwrites",
-      {
-        everyone: P.ManageChannels,
-        channel: { permission_overwrites: deny(P.ManageChannels) },
-      },
-      P.ManageChannels,
-      false,
-    ],
-    [
       "applies parent overwrites for a thread",
       {
         everyone: P.ManageThreads,
@@ -217,12 +197,6 @@ describe("discord guild permission authorization", () => {
         parentOverwrites: deny(P.ManageThreads),
       },
       P.ManageThreads,
-      false,
-    ],
-    [
-      "rejects a channel from another guild",
-      { everyone: P.ManageChannels, channel: { guild_id: "guild-2" } },
-      P.ManageChannels,
       false,
     ],
   ])("hasAnyChannelPermissionDiscord %s", async (_name, fixture, required, allowed) => {

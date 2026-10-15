@@ -1,14 +1,13 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
+import type { PreparedTtsPreferences } from "../../tts/tts-preferences.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -17,8 +16,6 @@ import {
 } from "../reply-payload.js";
 import { prepareReplyPayloadForDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
-import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
 
 const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
 
@@ -121,7 +118,6 @@ export function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): stri
 export function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
   const metadata = getReplyPayloadMetadata(reply);
   const text = normalizeOptionalString(reply.text);
-  const textPreview = text ? truncateUtf16Safe(text.replace(/\s+/g, " "), 160) : undefined;
   const sendableParts = resolveSendableOutboundReplyParts(reply);
   const richParts = [
     reply.presentation ? "presentation" : undefined,
@@ -135,16 +131,13 @@ export function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string 
     `error=${reply.isError === true}`,
     `beforeAgentRunBlocked=${metadata?.beforeAgentRunBlocked === true}`,
     `deliverDespiteSuppression=${metadata?.deliverDespiteSourceReplySuppression === true}`,
-    textPreview ? `textPreview=${JSON.stringify(textPreview)}` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  ].join(" ");
 }
 
-async function maybeApplyTtsToReplyPayload(
+export async function maybeApplyTtsToReplyPayload(
   params: Parameters<
     Awaited<ReturnType<typeof ttsRuntimeLoader.load>>["maybeApplyTtsToPayload"]
-  >[0],
+  >[0] & { preparedTtsPreferences: PreparedTtsPreferences },
 ) {
   if (isReplyPayloadStatusNotice(params.payload)) {
     return params.payload;
@@ -152,6 +145,7 @@ async function maybeApplyTtsToReplyPayload(
   if (
     !shouldAttemptTtsPayload({
       cfg: params.cfg,
+      preparedTtsPreferences: params.preparedTtsPreferences,
       ttsAuto: params.ttsAuto,
       agentId: params.agentId,
       channelId: params.channel,
@@ -165,31 +159,6 @@ async function maybeApplyTtsToReplyPayload(
   return ttsPayload === params.payload
     ? ttsPayload
     : copyReplyPayloadMetadata(params.payload, ttsPayload);
-}
-
-export function createFinalizationAwareTtsPayloadApplier(params: {
-  getReplyOperation: () => ReplyOperation | undefined;
-  hasInboundAudio: () => boolean;
-}) {
-  return async (
-    ttsParams: Omit<Parameters<typeof maybeApplyTtsToReplyPayload>[0], "inboundAudio">,
-  ) => {
-    const replyOperation = params.getReplyOperation();
-    // Provider fallbacks can outlive the default lease, but remain bounded by
-    // the same hard no-progress ceiling used for stale run takeover.
-    const finishFinalizationWork = replyOperation
-      ? beginReplyOperationFinalizationWork(replyOperation, RUN_STALE_TAKEOVER_MS)
-      : undefined;
-    try {
-      return await maybeApplyTtsToReplyPayload({
-        ...ttsParams,
-        inboundAudio: params.hasInboundAudio(),
-      });
-    } finally {
-      finishFinalizationWork?.();
-      replyOperation?.recordActivity();
-    }
-  };
 }
 
 /** Applies dispatcher normalization before TTS or transcript-visible side effects. */

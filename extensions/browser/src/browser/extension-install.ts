@@ -22,7 +22,6 @@ import {
   ensurePrivateDirectory,
   type DiscoveredChromeExtension,
   type DiscoveredChromeStoreExtension,
-  type ExtensionInstallDeps,
   generateChromeExtensionIdForPath,
   inspectInstalledCopy,
   installStableChromeExtension,
@@ -86,7 +85,6 @@ export async function installChromeExtensionBootstrap(params: {
   pluginRoot: string;
   waitMs?: number;
   requestStoreInstall?: boolean;
-  deps?: ExtensionInstallDeps;
   onProgress?: (message: string) => void;
   signal?: AbortSignal;
   browserProfile?: string;
@@ -94,8 +92,7 @@ export async function installChromeExtensionBootstrap(params: {
   requireCurrentLaunchContext?: boolean;
   expectedRegistrations?: readonly NativeHostRegistrationStatus[];
 }): Promise<BrowserExtensionStatus> {
-  const deps = params.deps ?? {};
-  const platform = deps.platform ?? process.platform;
+  const platform = process.platform;
   if (params.browserProfile !== undefined && !isValidProfileName(params.browserProfile)) {
     throw new Error("Invalid native browser profile");
   }
@@ -104,19 +101,16 @@ export async function installChromeExtensionBootstrap(params: {
     (params.requireCurrentLaunchContext || params.expectedRegistrations) &&
     platform !== "win32"
   ) {
-    for (const root of chromeProductRoots(deps)) {
-      const registration = await inspectRegistration(root, deps);
+    for (const root of chromeProductRoots()) {
+      const registration = await inspectRegistration(root);
       if (params.requireCurrentLaunchContext) {
-        assertCurrentNativeHostLaunchContext(registration, deps);
+        assertCurrentNativeHostLaunchContext(registration);
       }
       assertExpectedNativeHostProfile(registration, params.expectedRegistrations);
     }
     params.signal?.throwIfAborted();
   }
-  const installed = await installStableChromeExtension(params.bundledDir, deps);
-  if (platform === "win32" && process.platform !== "win32" && !deps.windowsNative) {
-    return await browserExtensionStatus({ bundledDir: params.bundledDir, deps });
-  }
+  const installed = await installStableChromeExtension(params.bundledDir);
   const approvedPaths = await approvedInstallRealpaths(installed, params.bundledDir);
   const predictedIds = [
     ...new Set(
@@ -129,14 +123,13 @@ export async function installChromeExtensionBootstrap(params: {
       ...params,
       executable: params.nativeHostExecutable,
       extensionIds: predictedIds,
-      deps,
     });
     // Keep the accepted post-mutation receipt: no automatic follow-up or retry can hide a partial result.
-    return await browserExtensionStatus({ ...params, deps, windowsObservation: windows });
+    return await browserExtensionStatus({ ...params, windowsObservation: windows });
   }
   const preRegistrationIssues: string[] = [];
   let preRegisteredRoots = 0;
-  for (const root of chromeProductRoots(deps)) {
+  for (const root of chromeProductRoots()) {
     params.signal?.throwIfAborted();
     try {
       if (!(await pathInfo(root.userDataDir))) {
@@ -152,7 +145,6 @@ export async function installChromeExtensionBootstrap(params: {
         root,
         extensionIds: predictedIds,
         pluginRoot: params.pluginRoot,
-        deps,
         browserProfile: params.browserProfile,
         signal: params.signal,
         requireCurrentLaunchContext: params.requireCurrentLaunchContext,
@@ -173,9 +165,7 @@ export async function installChromeExtensionBootstrap(params: {
     try {
       params.signal?.throwIfAborted();
       const request =
-        params.requestStoreInstall === false
-          ? undefined
-          : await requestChromeStoreInstall(root, deps);
+        params.requestStoreInstall === false ? undefined : await requestChromeStoreInstall(root);
       if (request) {
         params.onProgress?.(
           `Requested the OpenClaw Store extension for ${root.label}. Restart Chrome if needed, then approve OpenClaw in chrome://extensions.`,
@@ -198,36 +188,31 @@ export async function installChromeExtensionBootstrap(params: {
     );
   }
   const waitMs = normalizeExtensionInstallWaitMs(params.waitMs);
-  const now = deps.now ?? Date.now;
-  const wait = deps.sleep ?? sleep;
-  const deadline = now() + waitMs;
+  const deadline = Date.now() + waitMs;
   let discovery = await discoverChromeExtensionIds({
     approvedDirs: approvedPaths,
     storeExtensionId: FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID,
-    deps,
   });
   let announcedWait = false;
   while (
     discovery.discovered.length === 0 &&
     discovery.storeDiscovered.length === 0 &&
-    now() < deadline
+    Date.now() < deadline
   ) {
     if (!announcedWait) {
       params.onProgress?.("Waiting for Chrome to verify the OpenClaw extension…");
       announcedWait = true;
     }
     params.signal?.throwIfAborted();
-    await wait(Math.min(500, Math.max(1, deadline - now())));
+    await sleep(Math.min(500, Math.max(1, deadline - Date.now())));
     params.signal?.throwIfAborted();
     discovery = await discoverChromeExtensionIds({
       approvedDirs: approvedPaths,
       storeExtensionId: FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID,
-      deps,
     });
   }
   const status = await browserExtensionStatus({
     bundledDir: params.bundledDir,
-    deps,
     requireCurrentLaunchContext: params.requireCurrentLaunchContext,
   });
   return {
@@ -245,11 +230,9 @@ export async function browserExtensionStatus(params: {
   signal?: AbortSignal;
   windowsObservation?: import("./extension-windows-host.js").WindowsHostProjection;
   requireCurrentLaunchContext?: boolean;
-  deps?: ExtensionInstallDeps;
 }): Promise<BrowserExtensionStatus> {
-  const deps = params.deps ?? {};
-  const platform = deps.platform ?? process.platform;
-  const installedPath = stableChromeExtensionDir(deps);
+  const platform = process.platform;
+  const installedPath = stableChromeExtensionDir();
   const installedCopy = await inspectInstalledCopy(installedPath);
   const bundledPath = await fs.realpath(params.bundledDir);
   await assertOwnedPath(bundledPath, "directory", { allowRootOwner: true });
@@ -259,7 +242,6 @@ export async function browserExtensionStatus(params: {
   const discovery = await discoverChromeExtensionIds({
     approvedDirs: approvedPaths,
     storeExtensionId: FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID,
-    deps,
   });
   const predictedIds = [
     ...new Set(
@@ -267,12 +249,11 @@ export async function browserExtensionStatus(params: {
     ),
   ].toSorted();
   const windows =
-    platform === "win32" && (process.platform === "win32" || deps.windowsNative)
+    platform === "win32"
       ? (params.windowsObservation ??
         (await (
           await import("./extension-windows-host.js")
         ).inspectWindowsNativeHosts({
-          deps,
           pluginRoot: params.pluginRoot,
           executable: params.nativeHostExecutable,
           extensionIds: predictedIds,
@@ -284,11 +265,11 @@ export async function browserExtensionStatus(params: {
     platform === "win32"
       ? (windows?.registrations ?? [])
       : await Promise.all(
-          chromeProductRoots(deps).map((root) => inspectRegistration(root, deps, predictedIds)),
+          chromeProductRoots().map((root) => inspectRegistration(root, predictedIds)),
         ).then((entries) =>
           entries.map((registration) => {
             if (params.requireCurrentLaunchContext) {
-              assertCurrentNativeHostLaunchContext(registration, deps);
+              assertCurrentNativeHostLaunchContext(registration);
             }
             const {
               nativeHostPath: _nativeHostPath,
@@ -306,7 +287,7 @@ export async function browserExtensionStatus(params: {
     return productWasDiscovered && (registration.state !== "owned" || Boolean(registration.issue));
   });
   const storeInstallRequests =
-    windows?.storeInstallRequests ?? (await chromeStoreInstallRequests(deps));
+    windows?.storeInstallRequests ?? (await chromeStoreInstallRequests());
   return {
     platform,
     platformSupport:
@@ -339,11 +320,8 @@ export async function browserExtensionStatus(params: {
 }
 
 /** Resolve the installed stable copy when present, bundled source otherwise. */
-export async function resolveChromeExtensionLoadPath(
-  bundledDir: string,
-  deps: ExtensionInstallDeps = {},
-): Promise<string> {
-  const installedPath = stableChromeExtensionDir(deps);
+export async function resolveChromeExtensionLoadPath(bundledDir: string): Promise<string> {
+  const installedPath = stableChromeExtensionDir();
   const installed = await inspectInstalledCopy(installedPath);
   if (installed.present) {
     if (!installed.owned) {

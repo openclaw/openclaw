@@ -48,83 +48,79 @@ function run(
 }
 
 describe("meeting participation browser dispatch", () => {
-  it("checks the tracked tab and dispatches once with the session and request identity", async () => {
-    const adapter = createAdapter();
-    const build = vi.spyOn(adapter, "buildActionScript");
-    const parse = vi.spyOn(adapter, "parseActionResult");
-    const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async (request) =>
-      request.path === "/tabs" ? tabs : { result: "test-result" },
-    );
+  it.each([false, true])(
+    "dispatches once with session identity (preparation: %s)",
+    async (prepared) => {
+      const adapter = prepared ? createPreparingAdapter() : createAdapter();
+      const build = vi.spyOn(adapter, "buildActionScript");
+      const parse = vi.spyOn(adapter, "parseActionResult");
+      const prepare = adapter.buildPreparationScript && vi.spyOn(adapter, "buildPreparationScript");
+      const parsePreparation =
+        adapter.parsePreparationResult && vi.spyOn(adapter, "parsePreparationResult");
+      const response = { result: prepared ? "ready" : "test-result" };
+      const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async (request) =>
+        request.path === "/tabs" ? tabs : response,
+      );
+      await expect(run(callBrowser, { adapter })).resolves.toEqual({
+        status: "succeeded",
+        observed: { sent: true },
+      });
+      const identity = {
+        meetingSessionId: "session-1",
+        meetingUrl,
+        requestId: "request-1",
+        action: { type: "test-action" },
+      };
+      expect(build).toHaveBeenCalledExactlyOnceWith(identity);
+      expect(parse).toHaveBeenCalledWith(response, identity.action);
+      expect(callBrowser.mock.calls.map(([request]) => [request.method, request.path])).toEqual([
+        ["GET", "/tabs"],
+        ...(prepared ? [["POST", "/act"]] : []),
+        ["POST", "/act"],
+      ]);
+      expect(callBrowser.mock.calls.map(([request]) => request.body)).toEqual([
+        undefined,
+        ...(prepared ? [{ kind: "evaluate", targetId, fn: "() => 'prepared'" }] : []),
+        { kind: "evaluate", targetId, fn: "() => 'test-result'" },
+      ]);
+      if (prepared) {
+        expect(prepare).toHaveBeenCalledWith(identity);
+        expect(parsePreparation).toHaveBeenCalledWith(response, identity.action);
+      }
+    },
+  );
 
-    await expect(run(callBrowser, { adapter })).resolves.toEqual({
-      status: "succeeded",
-      observed: { sent: true },
-    });
-    expect(callBrowser.mock.calls.map(([request]) => [request.method, request.path])).toEqual([
-      ["GET", "/tabs"],
-      ["POST", "/act"],
-    ]);
-    expect(callBrowser.mock.calls[1]?.[0].body).toEqual({
-      kind: "evaluate",
-      targetId,
-      fn: "() => 'test-result'",
-    });
-    expect(build).toHaveBeenCalledWith({
-      meetingSessionId: "session-1",
-      meetingUrl,
-      requestId: "request-1",
-      action: { type: "test-action" },
-    });
-    expect(parse).toHaveBeenCalledWith({ result: "test-result" }, { type: "test-action" });
-  });
-
-  it.each([86_400_000, -86_400_000])(
-    "keeps one monotonic budget when the wall clock jumps by %i ms",
-    async (wallClockJump) => {
+  it.each([false, true])(
+    "keeps a monotonic budget (exhausted by preparation: %s)",
+    async (exhausted) => {
       let monotonicNow = 1_000;
       let wallClockNow = 1_800_000_000_000;
       const monotonic = vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
       const wallClock = vi.spyOn(Date, "now").mockImplementation(() => wallClockNow);
       const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async (request) => {
-        monotonicNow += request.path === "/tabs" ? 2_000 : 3_000;
-        wallClockNow += wallClockJump;
+        monotonicNow += request.path === "/tabs" ? 2_000 : exhausted ? 10_000 : 3_000;
+        wallClockNow += 86_400_000;
         return request.path === "/tabs" ? tabs : { result: "ready" };
       });
       try {
-        await expect(
-          run(callBrowser, { adapter: createPreparingAdapter() }),
-        ).resolves.toMatchObject({
-          status: "succeeded",
-        });
-        expect(callBrowser.mock.calls.map(([request]) => request.timeoutMs)).toEqual([
-          10_000, 8_000, 5_000,
-        ]);
+        const result = await run(callBrowser, { adapter: createPreparingAdapter() });
+        if (exhausted) {
+          expect(result).toEqual({
+            status: "failed",
+            message: "Meeting participation timed out before dispatch.",
+          });
+        } else {
+          expect(result).toMatchObject({ status: "succeeded" });
+        }
+        expect(callBrowser.mock.calls.map(([request]) => request.timeoutMs)).toEqual(
+          exhausted ? [10_000, 8_000] : [10_000, 8_000, 5_000],
+        );
       } finally {
         monotonic.mockRestore();
         wallClock.mockRestore();
       }
     },
   );
-
-  it("does not dispatch after preparation exhausts the monotonic budget", async () => {
-    let monotonicNow = 1_000;
-    const monotonic = vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
-    const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async (request) => {
-      if (request.path === "/act") {
-        monotonicNow += 10_000;
-      }
-      return request.path === "/tabs" ? tabs : { result: "ready" };
-    });
-    try {
-      await expect(run(callBrowser, { adapter: createPreparingAdapter() })).resolves.toEqual({
-        status: "failed",
-        message: "Meeting participation timed out before dispatch.",
-      });
-      expect(callBrowser).toHaveBeenCalledTimes(2);
-    } finally {
-      monotonic.mockRestore();
-    }
-  });
 
   it.each([
     { capabilities: [], expected: "unsupported" },
@@ -161,28 +157,42 @@ describe("meeting participation browser dispatch", () => {
     expect(callBrowser).not.toHaveBeenCalled();
   });
 
-  it("rejects a session that leaves while the tab check is pending", async () => {
+  it.each([
+    { stage: "tab check", status: "rejected", message: "Session ended.", calls: 1 },
+    { stage: "script preparation", status: "rejected", message: "Session replaced.", calls: 1 },
+    { stage: "native dispatch", status: "uncertain", message: "Session ended.", calls: 2 },
+  ])("revalidates authority during $stage", async ({ stage, status, message, calls }) => {
     let current = true;
-    const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async () => {
+    const adapter = createAdapter();
+    const build = adapter.buildActionScript.bind(adapter);
+    adapter.buildActionScript = (params) => {
+      if (stage === "script preparation") {
+        current = false;
+      }
+      return build(params);
+    };
+    const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async (request) => {
       await Promise.resolve();
-      current = false;
-      return tabs;
+      if (stage === (request.path === "/tabs" ? "tab check" : "native dispatch")) {
+        current = false;
+      }
+      return request.path === "/tabs" ? tabs : { result: "test-result" };
     });
     await expect(
       run(callBrowser, {
+        adapter,
         assertCurrent: () => {
           if (!current) {
-            throw new Error("Session ended.");
+            throw new Error(message);
           }
         },
       }),
-    ).resolves.toEqual({ status: "rejected", message: "Session ended." });
-    expect(callBrowser).toHaveBeenCalledTimes(1);
+    ).resolves.toEqual({ status, message });
+    expect(callBrowser).toHaveBeenCalledTimes(calls);
     expect(callBrowser.mock.calls[0]?.[0].path).toBe("/tabs");
   });
 
   it.each([
-    { tabList: [] },
     { tabList: [{ targetId: "another-target", url: meetingUrl }] },
     { tabList: [{ targetId, url: "https://meet.test/another-meeting" }] },
   ])(
@@ -195,75 +205,28 @@ describe("meeting participation browser dispatch", () => {
     },
   );
 
-  it("does not dispatch after authority changes during script preparation", async () => {
-    let current = true;
-    const adapter = {
-      ...createAdapter(),
-      buildActionScript: () => {
-        current = false;
-        return "() => 'test-result'";
-      },
-    };
-    const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async () => tabs);
-    await expect(
-      run(callBrowser, {
-        adapter,
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("Session replaced.");
-          }
-        },
-      }),
-    ).resolves.toEqual({ status: "rejected", message: "Session replaced." });
-    expect(callBrowser).toHaveBeenCalledTimes(1);
-  });
-
-  it("verifies native preparation before dispatching the requested action", async () => {
-    const adapter = createPreparingAdapter();
-    const prepare = vi.spyOn(adapter, "buildPreparationScript");
-    const parsePreparation = vi.spyOn(adapter, "parsePreparationResult");
-    const build = vi.spyOn(adapter, "buildActionScript");
-    const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async (request) =>
-      request.path === "/tabs" ? tabs : { result: "ready" },
-    );
-
-    await expect(run(callBrowser, { adapter })).resolves.toMatchObject({ status: "succeeded" });
-    expect(prepare).toHaveBeenCalledWith({
-      meetingSessionId: "session-1",
-      meetingUrl,
-      requestId: "request-1",
-      action: { type: "test-action" },
-    });
-    expect(parsePreparation).toHaveBeenCalledWith({ result: "ready" }, { type: "test-action" });
-    expect(build).toHaveBeenCalledTimes(1);
-    expect(callBrowser.mock.calls.map(([request]) => request.body)).toEqual([
-      undefined,
-      { kind: "evaluate", targetId, fn: "() => 'prepared'" },
-      { kind: "evaluate", targetId, fn: "() => 'test-result'" },
-    ]);
-  });
-
-  it("does not request native preparation without a result parser", async () => {
-    const adapter = { ...createAdapter(), buildPreparationScript: () => "() => 'prepared'" };
-    const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async () => tabs);
-    await expect(run(callBrowser, { adapter })).resolves.toMatchObject({ status: "failed" });
-    expect(callBrowser).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not perform an action when native preparation rejects it", async () => {
-    const adapter: MeetingBrowserParticipationAdapter = {
-      ...createPreparingAdapter(),
-      parsePreparationResult: () => ({ status: "rejected", message: "Meeting ended." }),
-    };
-    const build = vi.spyOn(adapter, "buildActionScript");
-    const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async () => tabs);
-    await expect(run(callBrowser, { adapter })).resolves.toEqual({
-      status: "rejected",
-      message: "Meeting ended.",
-    });
-    expect(callBrowser).toHaveBeenCalledTimes(2);
-    expect(build).not.toHaveBeenCalled();
-  });
+  it.each(["missing parser", "rejected"])(
+    "does not dispatch when preparation is %s",
+    async (failure) => {
+      const adapter: MeetingBrowserParticipationAdapter = {
+        ...createPreparingAdapter(),
+        parsePreparationResult:
+          failure === "missing parser"
+            ? undefined
+            : () => ({ status: "rejected", message: "Meeting ended." }),
+      };
+      const build = vi.spyOn(adapter, "buildActionScript");
+      const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async () => tabs);
+      const result = await run(callBrowser, { adapter });
+      if (failure === "missing parser") {
+        expect(result).toMatchObject({ status: "failed" });
+      } else {
+        expect(result).toEqual({ status: "rejected", message: "Meeting ended." });
+      }
+      expect(callBrowser).toHaveBeenCalledTimes(failure === "missing parser" ? 1 : 2);
+      expect(build).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects a session that leaves during preparation while retaining the browser lock", async () => {
     const { promise: gate, resolve: release } = createDeferredCore();
@@ -305,82 +268,25 @@ describe("meeting participation browser dispatch", () => {
     expect(build).not.toHaveBeenCalled();
   });
 
-  it("records failure without a requested effect if native preparation throws", async () => {
-    const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async (request) => {
-      if (request.path === "/tabs") {
-        return tabs;
-      }
-      throw new Error("Preparation response lost.");
-    });
-    await expect(run(callBrowser, { adapter: createPreparingAdapter() })).resolves.toEqual({
-      status: "failed",
-      message: "Preparation response lost.",
-    });
-    expect(callBrowser).toHaveBeenCalledTimes(2);
-  });
-
-  it("records uncertainty if a prepared action loses its final browser response", async () => {
-    let actCalls = 0;
-    const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async (request) => {
-      if (request.path === "/tabs") {
-        return tabs;
-      }
-      actCalls += 1;
-      if (actCalls === 1) {
-        return { result: "ready" };
-      }
-      throw new Error("Action response lost.");
-    });
-    await expect(run(callBrowser, { adapter: createPreparingAdapter() })).resolves.toEqual({
-      status: "uncertain",
-      message: "Action response lost.",
-    });
-    expect(callBrowser).toHaveBeenCalledTimes(3);
-  });
-
-  it("records an uncertain result after an attempted native dispatch throws", async () => {
-    const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async (request) => {
-      if (request.path === "/tabs") {
-        return tabs;
-      }
-      throw new Error("Browser response lost.");
-    });
-    await expect(run(callBrowser)).resolves.toEqual({
-      status: "uncertain",
-      message: "Browser response lost.",
-    });
-    expect(callBrowser).toHaveBeenCalledTimes(2);
-  });
-
-  it("records failure without a native dispatch if the tab check throws", async () => {
-    const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async () => {
-      throw new Error("Browser unavailable.");
-    });
-    await expect(run(callBrowser)).resolves.toEqual({
-      status: "failed",
-      message: "Browser unavailable.",
-    });
-    expect(callBrowser).toHaveBeenCalledTimes(1);
-  });
-
-  it("records an uncertain result when the session ends during native dispatch", async () => {
-    let current = true;
-    const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async (request) => {
-      if (request.path === "/tabs") {
-        return tabs;
-      }
-      current = false;
-      return { result: "test-result" };
-    });
-    await expect(
-      run(callBrowser, {
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("Session ended.");
-          }
-        },
-      }),
-    ).resolves.toEqual({ status: "uncertain", message: "Session ended." });
-    expect(callBrowser).toHaveBeenCalledTimes(2);
-  });
+  it.each([
+    { prepared: true, failureCall: 2, status: "failed", message: "Preparation response lost." },
+    { prepared: true, failureCall: 3, status: "uncertain", message: "Action response lost." },
+    { prepared: false, failureCall: 2, status: "uncertain", message: "Browser response lost." },
+    { prepared: false, failureCall: 1, status: "failed", message: "Browser unavailable." },
+  ])(
+    "records $status when browser call $failureCall fails (prepared: $prepared)",
+    async ({ prepared, failureCall, status, message }) => {
+      let calls = 0;
+      const callBrowser = vi.fn<MeetingBrowserRequestCaller>(async (request) => {
+        if (++calls === failureCall) {
+          throw new Error(message);
+        }
+        return request.path === "/tabs" ? tabs : { result: "ready" };
+      });
+      await expect(
+        run(callBrowser, { adapter: prepared ? createPreparingAdapter() : createAdapter() }),
+      ).resolves.toEqual({ status, message });
+      expect(callBrowser).toHaveBeenCalledTimes(failureCall);
+    },
+  );
 });

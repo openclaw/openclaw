@@ -1,10 +1,7 @@
-// Video live test helpers resolve live provider test settings from environment.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
-import {
-  resolveConfiguredLiveProviderModels,
-  resolveLiveAuthStore,
-} from "../media-generation/live-test-helpers.js";
+import { resolveConfiguredLiveProviderModels } from "../media-generation/live-test-helpers.js";
+export { resolveLiveAuthStore as resolveLiveVideoAuthStore } from "../media-generation/live-test-helpers.js";
 
 // Default provider/model matrix for video live tests. Env/config filters can
 // override this without editing the live test source.
@@ -21,7 +18,7 @@ export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   pixverse: "pixverse/v6",
   qwen: "qwen/wan2.6-t2v",
   runway: "runway/gen4.5",
-  together: "together/Wan-AI/Wan2.2-T2V-A14B",
+  together: "together/Wan-AI/wan2.7-t2v",
   vydra: "vydra/veo3",
   xai: "xai/grok-imagine-video",
   zai: "zai/cogvideox-3",
@@ -29,7 +26,7 @@ export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
 
 const REMOTE_URL_VIDEO_TO_VIDEO_PROVIDERS = new Set(["alibaba", "google", "qwen", "xai"]);
 const BUFFER_BACKED_IMAGE_TO_VIDEO_UNSUPPORTED_PROVIDERS = new Set(["vydra"]);
-const TOGETHER_BUFFER_BACKED_IMAGE_TO_VIDEO_MODEL = "Wan-AI/Wan2.2-I2V-A14B";
+const TOGETHER_BUFFER_BACKED_IMAGE_TO_VIDEO_MODEL = "Wan-AI/wan2.7-i2v";
 
 // Keep live-test resolution conservative and provider-specific so broad smoke
 // lanes do not spend extra time or hit unsupported defaults.
@@ -102,11 +99,4 @@ export function canRunBufferBackedImageToVideoLiveLane(params: {
     return params.modelRef.includes(TOGETHER_BUFFER_BACKED_IMAGE_TO_VIDEO_MODEL);
   }
   return true;
-}
-
-export function resolveLiveVideoAuthStore(params: {
-  requireProfileKeys: boolean;
-  hasLiveKeys: boolean;
-}) {
-  return resolveLiveAuthStore(params);
 }

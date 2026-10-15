@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as network from "openclaw/plugin-sdk/ssrf-runtime";
@@ -60,6 +61,86 @@ describe("Mantis Crabbox binary admission", () => {
 });
 
 describe("Crabbox command runner", () => {
+  it.skipIf(process.platform === "win32")(
+    "waits for aborted child cleanup without exposing its final output",
+    async () => {
+      const fixtureDir = tempDirs.make("mantis-abort-");
+      const ready = path.join(fixtureDir, "ready");
+      const cancelled = path.join(fixtureDir, "cancelled");
+      const release = path.join(fixtureDir, "release");
+      const controller = new AbortController();
+      const reason = new Error("fixture cancellation");
+      const childScript = `
+      const fs = require('node:fs');
+      process.on('SIGTERM', () => {
+        fs.writeFileSync(process.argv[2], 'cancelled');
+        setInterval(() => {
+          if (!fs.existsSync(process.argv[3])) return;
+          process.stdout.write('private stdout tail');
+          process.stderr.write('private stderr tail');
+          process.exit(0);
+        }, 10);
+      });
+      fs.writeFileSync(process.argv[1], 'ready');
+      setInterval(() => {}, 1000);
+    `;
+      let settled = false;
+      const result = defaultCommandRunner(
+        process.execPath,
+        ["-e", childScript, ready, cancelled, release],
+        {
+          signal: controller.signal,
+        },
+      )
+        .catch((error: unknown) => error)
+        .finally(() => {
+          settled = true;
+        });
+      try {
+        await vi.waitFor(async () => expect(await fs.readFile(ready, "utf8")).toBe("ready"));
+        controller.abort(reason);
+        await vi.waitFor(async () =>
+          expect(await fs.readFile(cancelled, "utf8")).toBe("cancelled"),
+        );
+        expect(settled).toBe(false);
+        await fs.writeFile(release, "release");
+        const error = await result;
+        expect(error).toMatchObject({ name: "AbortError", code: "ABORT_ERR", cause: reason });
+        expect(String(error)).not.toContain("private");
+        expect(JSON.stringify(error)).not.toContain("private");
+      } finally {
+        controller.abort(reason);
+        await fs.writeFile(release, "release");
+        await result;
+      }
+    },
+  );
+
+  it.each(["missing executable", "already aborted"])(
+    "settles %s without hanging",
+    async (failure) => {
+      const result = defaultCommandRunner(
+        failure === "missing executable"
+          ? path.join(tempDirs.make("mantis-missing-"), "absent")
+          : process.execPath,
+        ["-e", "setInterval(() => {}, 1000)"],
+        failure === "already aborted" ? { signal: AbortSignal.abort() } : {},
+      );
+      await expect(result).rejects.toMatchObject({
+        code: failure === "missing executable" ? "ENOENT" : "ABORT_ERR",
+      });
+    },
+  );
+
+  it("keeps large successful JSON complete", async () => {
+    const result = await defaultCommandRunner(
+      process.execPath,
+      ["-e", 'process.stdout.write(JSON.stringify("测".repeat(20000)))'],
+      {},
+    );
+    expect(JSON.parse(result.stdout)).toBe("测".repeat(20000));
+  });
+
   it("preserves UTF-8 split across child-process pipe chunks", async () => {
     const childScript = `
       process.stdout.write(Buffer.from([0xf0, 0x9f]));

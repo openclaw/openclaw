@@ -1,30 +1,21 @@
-import { html, nothing } from "lit";
-import { quoteCliArg } from "../../../../src/cli/quote-cli-arg.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { renderConnectCommand } from "../../components/connect-command.ts";
-import { icons } from "../../components/icons.ts";
-import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import { requestDevicePairJoinSetup, type DevicePairSetup } from "../../lib/device-pair-setup.ts";
+import {
+  requestDevicePairJoinSetup,
+  type DevicePairJoinSetup,
+} from "../../lib/device-pair-setup.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { formatTimeMs } from "../../lib/format.ts";
 
 registerNewSessionSetupEnglish();
 
-/**
- * The join setup behind the connect-machine dialog.
- *
- * The request token and the open flag travel together on purpose: a setup that
- * arrives after the dialog closed, after the gateway changed, or after a newer
- * request started must be dropped rather than shown, and closing has to retire
- * whatever is still in flight.
- */
+// Closing, replacing the Gateway, or starting a newer request retires prior setup.
+// Both the request token and open state fence late replies.
 export class ConnectMachineSetupState {
   private openValue = false;
   private loadingValue = false;
   private errorValue: string | null = null;
-  private setupValue: DevicePairSetup | null = null;
+  private setupValue: DevicePairJoinSetup | null = null;
   private requestId = 0;
 
   constructor(
@@ -52,104 +43,19 @@ export class ConnectMachineSetupState {
     this.setupValue = null;
   }
 
-  render(enabled: boolean, onManageDevices: () => void) {
-    if (!this.open || !enabled) {
-      return nothing;
-    }
-    const onClose = () => {
-      this.close();
-      this.requestUpdate();
+  view(enabled: boolean, onManageDevices: () => void) {
+    return {
+      open: this.open && enabled,
+      loading: this.loadingValue,
+      error: this.errorValue,
+      setup: this.setupValue,
+      onClose: () => {
+        this.close();
+        this.requestUpdate();
+      },
+      onRefresh: () => void this.refresh(),
+      onManageDevices,
     };
-    const { loadingValue: loading, errorValue: error, setupValue: setup } = this;
-    const title = t("newSession.connectMachineTitle");
-    const joinUrl = setup?.joinUrl?.trim();
-    const command = joinUrl ? `npx openclaw connect ${quoteCliArg(joinUrl)}` : null;
-    const expiresAt = setup?.expiresAtMs
-      ? formatTimeMs(setup.expiresAtMs, { hour: "numeric", minute: "2-digit" }, "")
-      : "";
-
-    return html`
-      <openclaw-modal-dialog
-        class="connect-machine-dialog"
-        label=${title}
-        description=${t("newSession.connectMachineDescription")}
-        @modal-cancel=${onClose}
-      >
-        <section class="exec-approval-card connect-machine-dialog__card">
-          <header class="exec-approval-header">
-            <div>
-              <h2 class="exec-approval-title">${title}</h2>
-              <p class="exec-approval-sub">${t("newSession.connectMachineDescription")}</p>
-            </div>
-            <button
-              class="btn btn--icon btn--ghost"
-              type="button"
-              aria-label=${t("common.dismiss")}
-              @click=${onClose}
-            >
-              ${icons.x}
-            </button>
-          </header>
-
-          <div class="connect-machine-dialog__body">
-            ${
-              loading && !command
-                ? html`<p class="connect-machine-dialog__status" role="status">
-                    ${t("newSession.connectMachineGenerating")}
-                  </p>`
-                : nothing
-            }
-            ${
-              error
-                ? html`<p class="exec-approval-error" role="alert">
-                    ${t("newSession.connectMachineFailed")} ${error}
-                  </p>`
-                : nothing
-            }
-            ${
-              command
-                ? html`
-                    ${renderConnectCommand(command)}
-                    <p class="connect-machine-dialog__hint">
-                      ${t("newSession.connectMachineTeamHint")}
-                    </p>
-                    <p class="connect-machine-dialog__hint">
-                      ${
-                        expiresAt
-                          ? t("newSession.connectMachineSingleUseExpires", { time: expiresAt })
-                          : t("newSession.connectMachineSingleUse")
-                      }
-                    </p>
-                  `
-                : nothing
-            }
-          </div>
-
-          <footer class="exec-approval-actions connect-machine-dialog__actions">
-            ${
-              command || error
-                ? html`<button
-                    class="btn"
-                    type="button"
-                    ?disabled=${loading}
-                    @click=${() => void this.refresh()}
-                  >
-                    ${icons.refresh}
-                    ${
-                      loading
-                        ? t("newSession.connectMachineRefreshing")
-                        : t("newSession.connectMachineFreshCode")
-                    }
-                  </button>`
-                : nothing
-            }
-            <button class="btn btn--ghost" type="button" @click=${onManageDevices}>
-              ${t("newSession.connectMachineManageDevices")}
-            </button>
-          </footer>
-        </section>
-      </openclaw-modal-dialog>
-    `;
   }
 
   async refresh(): Promise<void> {

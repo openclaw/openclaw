@@ -25,9 +25,9 @@ export function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayl
   if (!obj) {
     return null;
   }
-  const id = typeof obj.id === "string" ? obj.id.trim() : "";
-  const nodeId = typeof obj.nodeId === "string" ? obj.nodeId.trim() : "";
-  const command = typeof obj.command === "string" ? obj.command.trim() : "";
+  const id = normalizeOptionalString(obj.id);
+  const nodeId = normalizeOptionalString(obj.nodeId);
+  const command = normalizeOptionalString(obj.command);
   if (!id || !nodeId || !command) {
     return null;
   }

@@ -15,12 +15,8 @@ export function validateLmstudioSetupUrl(value: string | undefined): string | un
   }
   const invalidUrl =
     "Enter a valid HTTP or HTTPS URL without embedded credentials (e.g. http://localhost:1234).";
-  try {
-    const parsed = new URL(toFetchableLmstudioBaseUrl(value.trim()));
-    // Discovery fetches reject credential-bearing URLs; catch them here instead.
-    const isHttp = parsed.protocol === "http:" || parsed.protocol === "https:";
-    return isHttp && !parsed.username && !parsed.password ? undefined : invalidUrl;
-  } catch {
-    return invalidUrl;
-  }
+  const parsed = URL.parse(toFetchableLmstudioBaseUrl(value.trim()));
+  // Discovery fetches reject credential-bearing URLs; catch them here instead.
+  const isHttp = parsed?.protocol === "http:" || parsed?.protocol === "https:";
+  return isHttp && !parsed.username && !parsed.password ? undefined : invalidUrl;
 }

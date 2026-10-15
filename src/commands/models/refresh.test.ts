@@ -2,7 +2,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ExpectedCliError } from "../../cli/failure-output.js";
 
 const mocks = vi.hoisted(() => ({ refresh: vi.fn(), getConfig: vi.fn(() => ({})) }));
-vi.mock("../../config/config.js", () => ({ getRuntimeConfig: mocks.getConfig }));
+// mock-isolation: Output tests exercise an offline refresh; admission has separate boundary coverage.
+vi.mock("../../cli/local-state-owner.js", () => ({
+  runWithLocalStateOwner: async ({
+    runLocal,
+  }: Parameters<typeof import("../../cli/local-state-owner.js").runWithLocalStateOwner>[0]) =>
+    runLocal({
+      env: process.env,
+      config: mocks.getConfig(),
+      signal: new AbortController().signal,
+      assertCurrent() {},
+    }),
+}));
 vi.mock("../../model-catalog/remote-refresh.js", () => ({
   refreshRemoteModelCatalog: mocks.refresh,
 }));
@@ -32,7 +43,7 @@ describe("models refresh", () => {
     });
     await modelsRefreshCommand({}, updatedRuntime);
     expect(updatedRuntime.log).toHaveBeenLastCalledWith(
-      "A running Gateway applies the updated catalog after its next restart.",
+      expect.stringContaining("Remote catalog refresh: updated"),
     );
 
     const freshRuntime = runtime();

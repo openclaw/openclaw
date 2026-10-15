@@ -37,7 +37,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
         reconcileChanged: false,
         reconcileCommitsManifest: false,
       };
-      let harness = createHarness(support.testState.stateDb, placements, harnessOptions);
+      let harness = await createHarness(support.testState.stateDb, placements, harnessOptions);
       const environmentId = harness.ready.environmentId;
       const build = {
         ...support.BOOTSTRAP_RECEIPT,
@@ -93,10 +93,10 @@ describe("placement reclaim with provider-owned node teardown", () => {
           runId: "pending-run",
           owner: { kind: "worker", environmentId, ownerEpoch: attached.ownerEpoch },
         });
-        placements.markWorkspaceResultPending(claim);
-        placements.startWorkspaceResultDrain(claim);
+        await placements.markWorkspaceResultPending(claim);
+        await placements.startWorkspaceResultDrain(claim);
         placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
-        harness = createHarness(support.testState.stateDb, placements, harnessOptions);
+        harness = await createHarness(support.testState.stateDb, placements, harnessOptions);
       }
       harness.markEnvironmentOwnerEpoch(attached.ownerEpoch);
       const transport = nodeSupport.transport();
@@ -312,7 +312,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
           expect.soft(outcome).toBe(primaryError);
         }
         expect(placements.get(active.sessionId)?.state).toBe("draining");
-        expect(placements.listPendingWorkspaceResults()).toEqual([
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([
           expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
         ]);
         expect(destroy).toHaveBeenCalledOnce();
@@ -323,7 +323,7 @@ describe("placement reclaim with provider-owned node teardown", () => {
           turnClaim: null,
           recoveryError: null,
         });
-        expect(placements.listPendingWorkspaceResults()).toEqual([]);
+        expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
         expect(service.get(environmentId)?.state).toBe("destroyed");
         expect(destroy).toHaveBeenCalledTimes(2);
         expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
@@ -352,7 +352,7 @@ describe("SSH placement cleanup after worker credential expiry", () => {
         database: support.testState.stateDb,
         now: () => support.testState.nowMs,
       });
-      const harness = createHarness(support.testState.stateDb, placements, {
+      const harness = await createHarness(support.testState.stateDb, placements, {
         workspacePath: support.testState.root,
       });
       const environmentId = harness.ready.environmentId;
@@ -408,6 +408,7 @@ describe("SSH placement cleanup after worker credential expiry", () => {
           placements,
           environments: service,
           dispatch: harness.service,
+          reportChanges: (sweep) => sweep(),
           getConfig: () => support.testState.config,
           now: () => support.testState.nowMs,
           info: vi.fn(),
@@ -424,7 +425,7 @@ describe("SSH placement cleanup after worker credential expiry", () => {
         state: operation === "move" ? "local" : "reclaimed",
         turnClaim: null,
       });
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     },
   );
 });

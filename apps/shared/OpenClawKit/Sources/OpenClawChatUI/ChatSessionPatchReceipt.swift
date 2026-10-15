@@ -5,6 +5,8 @@ public struct OpenClawChatSessionPatchReceipt: Decodable, Sendable {
         let category: String?
         let color: String?
         let pinnedAt: Double?
+        let snoozedUntil: Double?
+        let snoozedAt: Double?
         let archivedAt: Double?
         let archivedBy: OpenClawChatSessionEntry.CreatedActor?
         let archiveReason: String?
@@ -33,7 +35,6 @@ public struct OpenClawChatSessionPatchReceipt: Decodable, Sendable {
         field: OpenClawChatSessionSidebarData.Field,
         to row: OpenClawChatSessionEntry) -> OpenClawChatSessionEntry
     {
-        guard self.matches(row) else { return row }
         var row = row
         switch field {
         case .label:
@@ -49,26 +50,20 @@ public struct OpenClawChatSessionPatchReceipt: Decodable, Sendable {
             row.archivedAt = self.entry.archivedAt
             row.archivedBy = self.entry.archivedBy
             row.archiveReason = self.entry.archiveReason
-            if row.archived == true {
-                row.pinned = false
-                row.pinnedAt = nil
-            }
-        case .unread: return self.applyingRead(to: row)
+        case .snoozed:
+            row.snoozedUntil = self.entry.snoozedUntil
+            row.snoozedAt = self.entry.snoozedAt
+        case .unread:
+            guard (row.updatedAt ?? 0) <= (self.entry.updatedAt ?? 0) else { return row }
+            // src/shared/session-unread.ts:3 derives unread from the acknowledged entry, not the requested value.
+            let baseline = self.entry.lastReadAt ?? self.entry.createdAt
+            row.unread = self.entry.markedUnreadAt != nil || baseline.map {
+                max(self.entry.lastInteractionAt ?? 0, self.entry.lastActivityAt ?? 0) > $0
+            } == true
+            row.lastReadAt = self.entry.lastReadAt
+            row.markedUnreadAt = self.entry.markedUnreadAt
+            row.agentStatus = self.entry.agentStatus
         }
-        return row
-    }
-
-    func applyingRead(to row: OpenClawChatSessionEntry) -> OpenClawChatSessionEntry {
-        guard self.matches(row), (row.updatedAt ?? 0) <= (self.entry.updatedAt ?? 0) else { return row }
-        var row = row
-        // src/shared/session-unread.ts:3 derives unread from the acknowledged entry, not the requested value.
-        let baseline = self.entry.lastReadAt ?? self.entry.createdAt
-        row.unread = self.entry.markedUnreadAt != nil || baseline.map {
-            max(self.entry.lastInteractionAt ?? 0, self.entry.lastActivityAt ?? 0) > $0
-        } == true
-        row.lastReadAt = self.entry.lastReadAt
-        row.markedUnreadAt = self.entry.markedUnreadAt
-        row.agentStatus = self.entry.agentStatus
         return row
     }
 }

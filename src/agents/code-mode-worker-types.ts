@@ -23,6 +23,7 @@ type CodeModeBridgeMethod =
   | "agentSpawn"
   | "agentWait"
   | "skillsList"
+  | "skillsSearch"
   | "skillsRead"
   | "sleep"
   | "swarmNote";
@@ -66,6 +67,18 @@ type CodeModeWorkerInput<State> =
 export type CodeModeWorkerPayload<State> = CodeModeWorkerInput<State> & {
   /** Only interactive, non-replay cells can hand full final JSON to the run store. */
   retainFinalValue?: boolean;
+};
+
+export type CodeModeNodeInput = (
+  | (Omit<
+      Extract<CodeModeWorkerPayload<never>, { kind: "exec" }>,
+      "catalog" | "namespaces" | "apiFiles" | "swarmEnabled"
+    > & { initialization: SharedArrayBuffer })
+  | Omit<Extract<CodeModeWorkerPayload<never>, { kind: "resume" }>, "continuation">
+) & {
+  progress: SharedArrayBuffer;
+  inlineHost: boolean;
+  gcAttribution?: { workerId: string; runId?: string; sessionKeyHash?: string };
 };
 
 export type CodeModeSettlementMode =
@@ -118,7 +131,7 @@ type CodeModeWorkerOutcome<Output, Value, State> = { networkContentObserved?: tr
         | "timeout"
         | "snapshot_limit_exceeded"
         | "internal_error";
-      failurePhase: Extract<CodeModeFailurePhase, "input" | "guest" | "bridge">;
+      failurePhase: CodeModeFailurePhase;
       bridgeDispatchStarted: false;
       output: Output;
     }

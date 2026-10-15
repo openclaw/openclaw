@@ -1,65 +1,52 @@
-import {
-  normalizeConversationReadInvocationOrigin,
-  type ConversationReadInvocationOrigin,
-} from "../channels/plugins/conversation-read-origin.js";
-/**
- * Runtime context resolver for OpenClaw plugin tools.
- *
- * Normalizes workspace, delivery, browser, sandbox, and active-model inputs before plugin tool invocation.
- */
+import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  assertMemoryAudienceCurrent,
+  assertMemoryAudienceSession,
+} from "../plugins/memory-audience.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
-import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import { modelKey } from "./model-ref-shared.js";
-import type { ToolFsPolicy } from "./tool-fs-policy.js";
+import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
-/** Options provided by agent runtime callers when invoking OpenClaw plugin tools. */
-export type OpenClawPluginToolOptions = {
-  agentSessionKey?: string;
-  runSessionKey?: string;
-  runId?: string;
-  /** Host-bound standalone request/grant authority, never supplied by tool arguments. */
-  assertInvocationCurrent?: () => void;
-  assertInputCommitAllowed?: () => void;
-  agentChannel?: string;
-  agentAccountId?: string;
-  agentTo?: string;
-  /** Routable target for the current conversation when it differs from the native channel ID. */
-  currentMessagingTarget?: string;
-  /** Current routable conversation target when no explicit agent target is available. */
-  currentChannelId?: string;
-  agentThreadId?: string | number;
-  nativeChannelId?: string;
-  /** Opaque host-issued capability for current-turn channel message actions. */
-  messageActionTurnCapability?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  config?: OpenClawConfig;
-  fsPolicy?: ToolFsPolicy;
-  modelProvider?: string;
-  modelId?: string;
-  requesterSenderId?: string | null;
-  senderIsOwner?: boolean;
-  conversationReadOrigin?: ConversationReadInvocationOrigin;
-  requesterAgentIdOverride?: string;
-  sessionId?: string;
-  conversationRecall?: ConversationRecallContext;
-  /**
-   * Explicit one-shot local CLI runs should not keep plugin-owned process
-   * resources alive after emitting their result.
-   */
-  oneShotCliRun?: boolean;
-  sandboxBrowserBridgeUrl?: string;
-  allowHostBrowserControl?: boolean;
-  sandboxed?: boolean;
-  allowGatewaySubagentBinding?: boolean;
-  toolBindings?: Readonly<Record<string, unknown>>;
-  activeProjectKeys?: readonly string[];
-};
+export type OpenClawPluginToolOptions = Pick<
+  OpenClawToolsOptions,
+  | "agentSessionKey"
+  | "runSessionKey"
+  | "runId"
+  | "assertInvocationCurrent"
+  | "assertInputCommitAllowed"
+  | "agentChannel"
+  | "agentAccountId"
+  | "agentTo"
+  | "currentMessagingTarget"
+  | "currentChannelId"
+  | "agentThreadId"
+  | "nativeChannelId"
+  | "messageActionTurnCapability"
+  | "agentDir"
+  | "workspaceDir"
+  | "config"
+  | "fsPolicy"
+  | "modelProvider"
+  | "modelId"
+  | "requesterSenderId"
+  | "senderIsOwner"
+  | "memoryAudience"
+  | "memoryFlush"
+  | "conversationReadOrigin"
+  | "requesterAgentIdOverride"
+  | "sessionId"
+  | "conversationRecall"
+  | "oneShotCliRun"
+  | "sandboxBrowserBridgeUrl"
+  | "allowHostBrowserControl"
+  | "sandboxed"
+  | "allowGatewaySubagentBinding"
+  | "toolBindings"
+> & { activeProjectKeys?: readonly string[] };
 
-/** Resolves plugin-tool context inputs from runtime options and config state. */
 export function resolveOpenClawPluginToolInputs(params: {
   options?: OpenClawPluginToolOptions;
   resolvedConfig?: OpenClawConfig;
@@ -68,6 +55,9 @@ export function resolveOpenClawPluginToolInputs(params: {
 }) {
   const { options, resolvedConfig, runtimeConfig, getRuntimeConfig } = params;
   const sessionKey = options?.runSessionKey ?? options?.agentSessionKey;
+  if (options?.memoryAudience) {
+    assertMemoryAudienceSession(options.memoryAudience, sessionKey);
+  }
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey,
     config: resolvedConfig,
@@ -123,6 +113,11 @@ export function resolveOpenClawPluginToolInputs(params: {
       nativeChannelId: options?.nativeChannelId,
       requesterSenderId: options?.requesterSenderId ?? undefined,
       senderIsOwner: options?.senderIsOwner,
+      memoryAudience: options?.memoryAudience,
+      memoryFlush: options?.memoryFlush,
+      assertMemoryAudienceCurrent: options?.memoryAudience
+        ? () => assertMemoryAudienceCurrent(options.memoryAudience!)
+        : undefined,
       conversationReadOrigin: normalizeConversationReadInvocationOrigin(
         options?.conversationReadOrigin,
       ),

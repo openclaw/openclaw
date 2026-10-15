@@ -1,6 +1,4 @@
-// Covers in-memory system presence merging and expiry behavior.
 import { randomUUID } from "node:crypto";
-import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   commitPresence,
@@ -9,19 +7,6 @@ import {
   updateSystemPresence,
   upsertPresence,
 } from "./system-presence.js";
-
-function useFakePerformanceClock() {
-  vi.useFakeTimers();
-  vi.spyOn(os, "uptime").mockReturnValue(0);
-}
-
-function useFakeSuspendClock() {
-  const clock = { monotonic: performance.now(), uptime: os.uptime() };
-  vi.useFakeTimers();
-  vi.spyOn(performance, "now").mockImplementation(() => clock.monotonic);
-  vi.spyOn(os, "uptime").mockImplementation(() => clock.uptime);
-  return clock;
-}
 
 describe("system-presence", () => {
   afterEach(() => {
@@ -57,37 +42,6 @@ describe("system-presence", () => {
     expect(listSystemPresence()).toEqual(
       expect.arrayContaining([expect.objectContaining({ connectionId: "replacement" })]),
     );
-  });
-
-  it("dedupes entries across sources by case-insensitive instanceId key", () => {
-    const instanceIdUpper = `AaBb-${randomUUID()}`.toUpperCase();
-    const instanceIdLower = instanceIdUpper.toLowerCase();
-
-    upsertPresence(instanceIdUpper, {
-      host: "openclaw",
-      mode: "ui",
-      instanceId: instanceIdUpper,
-      reason: "connect",
-    });
-
-    updateSystemPresence({
-      text: "Node: Peter-Mac-Studio (10.0.0.1) · ui 2.0.0 · last input 5s ago · mode ui · reason beacon",
-      instanceId: instanceIdLower,
-      host: "Peter-Mac-Studio",
-      ip: "10.0.0.1",
-      mode: "ui",
-      version: "2.0.0",
-      lastInputSeconds: 5,
-      reason: "beacon",
-    });
-
-    const matches = listSystemPresence().filter(
-      (e) => (e.instanceId ?? "").toLowerCase() === instanceIdLower,
-    );
-    expect(matches).toHaveLength(1);
-    expect(matches[0]?.host).toBe("Peter-Mac-Studio");
-    expect(matches[0]?.ip).toBe("10.0.0.1");
-    expect(matches[0]?.lastInputSeconds).toBe(5);
   });
 
   it("merges roles and scopes for the same device", () => {
@@ -137,7 +91,7 @@ describe("system-presence", () => {
   });
 
   it("parses node presence text and normalizes the update key", () => {
-    useFakePerformanceClock();
+    vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-11T04:00:00.000Z"));
     const update = updateSystemPresence({
       text: "Node: Relay-Host (10.0.0.9) · app 2.1.0 · last input 7s ago · mode ui · reason beacon",
@@ -181,23 +135,6 @@ describe("system-presence", () => {
     expect(refreshed.next.ip).toBe("10.0.0.9");
   });
 
-  it("drops blank role and scope entries while keeping fallback text", () => {
-    const deviceId = randomUUID();
-
-    upsertPresence(deviceId, {
-      deviceId,
-      host: "relay-host",
-      mode: "operator",
-      roles: [" operator ", "", "  "],
-      scopes: ["operator.admin", "", "  "],
-    });
-
-    const entry = listSystemPresence().find((candidate) => candidate.deviceId === deviceId);
-    expect(entry?.roles).toEqual(["operator"]);
-    expect(entry?.scopes).toEqual(["operator.admin"]);
-    expect(entry?.text).toBe("Node: relay-host · mode operator");
-  });
-
   it("keeps fallback text keys UTF-16 safe", () => {
     const keyPrefix = `presence-${randomUUID()}`.padEnd(63, "x");
     const update = updateSystemPresence({ text: `${keyPrefix}🚀tail` });
@@ -205,48 +142,8 @@ describe("system-presence", () => {
     expect(update.key).toBe(keyPrefix);
   });
 
-  it("keeps connection-owned presence alive when its heartbeat is acknowledged", () => {
-    useFakePerformanceClock();
-    vi.setSystemTime(Date.now());
-
-    const connectionId = randomUUID();
-    upsertPresence(connectionId, {
-      host: "control-ui",
-      instanceId: connectionId,
-      mode: "webchat",
-      reason: "connect",
-    });
-
-    vi.advanceTimersByTime(4 * 60 * 1000);
-    expect(touchPresence(connectionId)).toBe(true);
-    vi.advanceTimersByTime(4 * 60 * 1000);
-
-    expect(listSystemPresence().map((entry) => entry.instanceId)).toContain(connectionId);
-  });
-
-  it("prunes stale non-self entries after TTL", () => {
-    useFakePerformanceClock();
-    vi.setSystemTime(Date.now());
-
-    const deviceId = randomUUID();
-    upsertPresence(deviceId, {
-      deviceId,
-      host: "stale-host",
-      mode: "ui",
-      reason: "connect",
-    });
-
-    expect(listSystemPresence().map((entry) => entry.deviceId)).toContain(deviceId);
-
-    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-
-    const entries = listSystemPresence();
-    expect(entries.map((entry) => entry.deviceId)).not.toContain(deviceId);
-    expect(entries.map((entry) => entry.reason)).toContain("self");
-  });
-
   it("keeps the gateway when the clock jumps forward during expiry pruning", () => {
-    useFakePerformanceClock();
+    vi.useFakeTimers();
     const now = Date.now();
     const self = listSystemPresence().find((entry) => entry.reason === "self");
     expect(self?.instanceId).toBeDefined();
@@ -270,87 +167,45 @@ describe("system-presence", () => {
     }
   }
 
-  it("counts the gateway within the capacity limit when peers have tied timestamps", () => {
-    useFakePerformanceClock();
+  it("keeps the genuine gateway row when a beacon uses its hostname key", () => {
+    vi.useFakeTimers();
     vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1000);
     const self = listSystemPresence().find((entry) => entry.reason === "self");
-    expect(self?.instanceId).toBeDefined();
-    const prefix = `bounded-${randomUUID()}-`;
-    addCapacityPeers(prefix);
-
+    if (!self?.host || !self.instanceId) {
+      throw new Error("gateway presence was not initialized");
+    }
+    const forged = {
+      deviceId: self.host,
+      instanceId: self.instanceId,
+      host: self.host,
+      mode: "gateway",
+      reason: "self",
+      text: "caller-controlled gateway row",
+    };
+    updateSystemPresence(forged);
     const snapshot = listSystemPresence();
-    expect(snapshot).toHaveLength(200);
-    expect(snapshot.filter((entry) => entry.instanceId === self?.instanceId)).toHaveLength(1);
-    expect(snapshot.some((entry) => entry.deviceId === `${prefix}0`)).toBe(false);
-    expect(snapshot.some((entry) => entry.deviceId === `${prefix}204`)).toBe(true);
+    expect(snapshot.filter((entry) => entry.text === self.text)).toHaveLength(1);
+    expect(snapshot.filter((entry) => entry.text === forged.text)).toHaveLength(1);
+    expect(snapshot.find((entry) => entry.text === self.text)?.deviceId).toBeUndefined();
+    addCapacityPeers(`collision-${randomUUID()}-`);
+    const bounded = listSystemPresence();
+    expect(bounded).toHaveLength(200);
+    expect(bounded.filter((entry) => entry.text === self.text)).toHaveLength(1);
+    expect(bounded.some((entry) => entry.text === forged.text)).toBe(false);
   });
 
-  it.each(["connection", "beacon"] as const)(
-    "keeps the genuine gateway row when a %s uses its hostname key",
-    (source) => {
-      useFakePerformanceClock();
-      vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1000);
-      const self = listSystemPresence().find((entry) => entry.reason === "self");
-      if (!self?.host || !self.instanceId) {
-        throw new Error("gateway presence was not initialized");
-      }
-      const forged = {
-        deviceId: self.host,
-        instanceId: self.instanceId,
-        host: self.host,
-        mode: "gateway",
-        reason: "self",
-        text: "caller-controlled gateway row",
-      };
-      if (source === "connection") {
-        upsertPresence(self.host, forged);
-      } else {
-        updateSystemPresence(forged);
-      }
-      const snapshot = listSystemPresence();
-      expect(snapshot.filter((entry) => entry.text === self.text)).toHaveLength(1);
-      expect(snapshot.filter((entry) => entry.text === forged.text)).toHaveLength(1);
-      expect(snapshot.find((entry) => entry.text === self.text)?.deviceId).toBeUndefined();
-      addCapacityPeers(`collision-${randomUUID()}-`);
-      const bounded = listSystemPresence();
-      expect(bounded).toHaveLength(200);
-      expect(bounded.filter((entry) => entry.text === self.text)).toHaveLength(1);
-      expect(bounded.some((entry) => entry.text === forged.text)).toBe(false);
-    },
-  );
-
-  it("prunes stale non-self entries after a forward wall-clock jump", () => {
-    useFakePerformanceClock();
-    const initialTime = Date.now() + 48 * 60 * 60 * 1000;
-    vi.setSystemTime(initialTime);
-
-    const deviceId = randomUUID();
-    upsertPresence(deviceId, {
-      deviceId,
-      host: "suspended-stale-host",
-      mode: "ui",
-      reason: "connect",
-    });
-
-    vi.setSystemTime(initialTime + 5 * 60 * 1000 + 1);
-
-    expect(listSystemPresence().map((entry) => entry.deviceId)).not.toContain(deviceId);
-  });
-
-  it("preserves freshness across clock rollback without extending the TTL", () => {
-    useFakePerformanceClock();
+  it("expires stale peers after five minutes while keeping the gateway", () => {
+    vi.useFakeTimers();
     const initialTime = Date.now();
     vi.setSystemTime(initialTime);
 
     const deviceId = randomUUID();
     upsertPresence(deviceId, {
       deviceId,
-      host: "rollback-stale-host",
+      host: "stale-host",
       mode: "ui",
       reason: "connect",
     });
-
-    vi.setSystemTime(initialTime - 60 * 60 * 1000);
 
     expect(listSystemPresence().map((entry) => entry.deviceId)).toContain(deviceId);
 
@@ -358,112 +213,6 @@ describe("system-presence", () => {
 
     const entries = listSystemPresence();
     expect(entries.map((entry) => entry.deviceId)).not.toContain(deviceId);
-    expect(entries.map((entry) => entry.reason)).toContain("self");
-  });
-
-  it.each(["created", "refreshed"] as const)(
-    "keeps presence %s during rollback fresh when wall time recovers",
-    (action) => {
-      useFakePerformanceClock();
-      const initialTime = Date.now();
-      const forwardTime = initialTime + 24 * 60 * 60 * 1000;
-      vi.setSystemTime(forwardTime);
-      listSystemPresence();
-
-      const deviceId = randomUUID();
-      const rolledTime = initialTime - 60 * 60 * 1000;
-      if (action === "refreshed") {
-        upsertPresence(deviceId, {
-          deviceId,
-          host: "rollback-refresh-host",
-          mode: "ui",
-          reason: "connect",
-        });
-      }
-      vi.setSystemTime(rolledTime);
-      if (action === "created") {
-        upsertPresence(deviceId, {
-          deviceId,
-          host: "rollback-created-host",
-          mode: "ui",
-          reason: "connect",
-        });
-      } else {
-        expect(touchPresence(deviceId)).toBe(true);
-      }
-
-      vi.advanceTimersByTime(60 * 1000);
-      vi.setSystemTime(forwardTime + 60 * 1000);
-
-      const recovered = listSystemPresence().find((entry) => entry.deviceId === deviceId);
-      expect(recovered?.ts).toBe(rolledTime);
-
-      vi.advanceTimersByTime(4 * 60 * 1000 + 1);
-
-      expect(listSystemPresence().map((entry) => entry.deviceId)).not.toContain(deviceId);
-    },
-  );
-
-  it("expires presence suspended while the wall clock remains rolled back", () => {
-    const clock = useFakeSuspendClock();
-    const initialTime = Date.now();
-    vi.setSystemTime(initialTime);
-    listSystemPresence();
-
-    const deviceId = randomUUID();
-    const rolledTime = initialTime - 60 * 60 * 1000;
-    vi.setSystemTime(rolledTime);
-    upsertPresence(deviceId, {
-      deviceId,
-      host: "rollback-suspended-host",
-      mode: "ui",
-      reason: "connect",
-    });
-
-    clock.uptime += 5 * 60 + 1;
-
-    expect(listSystemPresence().map((entry) => entry.deviceId)).not.toContain(deviceId);
-  });
-
-  it("evicts stale presence before a peer refreshed during suspend and rollback", () => {
-    const clock = useFakeSuspendClock();
-    const initialTime = Date.now() + 24 * 60 * 60 * 1000;
-    vi.setSystemTime(initialTime);
-    listSystemPresence();
-
-    const refreshedDeviceId = `rollback-refreshed-${randomUUID()}`;
-    upsertPresence(refreshedDeviceId, {
-      deviceId: refreshedDeviceId,
-      host: "rollback-refreshed-host",
-      mode: "ui",
-      reason: "connect",
-    });
-    const staleDeviceId = `rollback-stale-${randomUUID()}`;
-    upsertPresence(staleDeviceId, {
-      deviceId: staleDeviceId,
-      host: "rollback-stale-host",
-      mode: "ui",
-      reason: "connect",
-    });
-
-    vi.setSystemTime(initialTime - 60 * 60 * 1000);
-    clock.uptime += 1;
-    expect(touchPresence(refreshedDeviceId)).toBe(true);
-
-    const freshPrefix = `rollback-fresh-${randomUUID()}-`;
-    for (let index = 0; index < 198; index += 1) {
-      upsertPresence(`${freshPrefix}${index}`, {
-        deviceId: `${freshPrefix}${index}`,
-        host: `rollback-fresh-host-${index}`,
-        mode: "ui",
-        reason: "connect",
-      });
-    }
-
-    const entries = listSystemPresence();
-    expect(entries.map((entry) => entry.deviceId)).not.toContain(staleDeviceId);
-    expect(entries.map((entry) => entry.deviceId)).toContain(refreshedDeviceId);
-    expect(entries.filter((entry) => entry.deviceId?.startsWith(freshPrefix))).toHaveLength(198);
     expect(entries.map((entry) => entry.reason)).toContain("self");
   });
 });

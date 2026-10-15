@@ -154,6 +154,10 @@ export async function openOwnedGatewayNodeDuplex(options: {
       await endpoint.drain();
       return result;
     })
+    .catch((error: unknown) => {
+      controller.abort(error);
+      throw error;
+    })
     .finally(() => {
       signal.removeEventListener("abort", onAbort);
       endpoint.close();
@@ -162,7 +166,15 @@ export async function openOwnedGatewayNodeDuplex(options: {
   void closed.catch(ready.reject);
   await ready.promise;
   return {
-    send: (message) => endpoint.send(message),
+    async send(message) {
+      try {
+        await endpoint.send(message);
+      } catch (error) {
+        // Invocation rejection can close framing before the caller resumes setup.
+        assertRuntimeCurrent();
+        throw error;
+      }
+    },
     onMessage: (listener) => {
       assertRuntimeCurrent();
       return endpoint.onMessage(listener);
@@ -206,22 +218,4 @@ export function projectGatewayRuntimeNodes(
     );
     return Object.assign({}, nodeRecord, { invocableCommands });
   });
-}
-
-// The gateway context is optional (absent outside an in-process Gateway) and the
-// dispatcher enforces isolation + email content wrapping, so this only forwards the
-// host-bound plugin id.
-export function createGatewayHooksRuntime(
-  resolveGatewayContext?: GatewayContextResolver,
-): PluginRuntime["hooks"] {
-  return {
-    dispatchHookAgentTurn: async (params) => {
-      const pluginId = getPluginRuntimeGatewayRequestScope()?.pluginId;
-      const gatewayContext = resolveGatewayContext?.();
-      if (!pluginId || !gatewayContext?.dispatchHookAgentTurn) {
-        throw new Error("Plugin hook runtime requires an active Gateway and plugin identity.");
-      }
-      return await gatewayContext.dispatchHookAgentTurn(pluginId, params);
-    },
-  };
 }

@@ -1,10 +1,15 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { copyFileSync, renameSync } from "node:fs";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { runExec } from "../process/exec.js";
+import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
+import { createSpawnBrokerHost, type SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -30,6 +35,7 @@ import {
   snapshot,
   type Load,
 } from "./control-ui-session-pr-access.test-support.js";
+import { prepareControlUiSessionPrServiceTarget } from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
@@ -37,7 +43,7 @@ import { handleGatewayRequest } from "./server-methods.js";
 import { createControlUiHandlers } from "./server-methods/control-ui.js";
 import { createGatewayWsTestSocket } from "./server/ws-connection.test-helpers.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 
 const EVENT = "controlUi.sessionPullRequests.changed";
 
@@ -100,6 +106,66 @@ function expectedFrame(key: string, value: ControlUiSessionPullRequests = snapsh
   });
 }
 
+describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
+  "prepared session PR transport",
+  () => {
+    let ownerBroker: SpawnBrokerHost;
+    let callerBroker: SpawnBrokerHost;
+    beforeAll(async () => {
+      ownerBroker = createSpawnBrokerHost();
+      callerBroker = createSpawnBrokerHost();
+      await Promise.all([ownerBroker.ready(), callerBroker.ready()]);
+    });
+    afterAll(async () => {
+      await Promise.all([ownerBroker?.close(), callerBroker?.close()]);
+    });
+
+    it("keeps the owner's spawn broker while detaching the requesting caller", async ({
+      signal,
+    }) => {
+      const callerContext = new AsyncLocalStorage<string>();
+      // Shared stores outlive this suite's brokers; only the PR owner captures one.
+      sharedState ??= await createOpenClawTestState({ scenario: "minimal" });
+      await runWithSpawnBroker(ownerBroker, () =>
+        withFixture("operator.read", async (f) => {
+          const target = await prepareControlUiSessionPrServiceTarget(
+            () => getSessionRowProjection(f.context),
+            { sessionKey, agentId: "main" },
+          );
+          if (!target || target.source === null) {
+            throw new Error("Fixture has no workspace PR target");
+          }
+          const launched = createDeferredCore<{
+            parentPid: number;
+            caller: string | undefined;
+          }>();
+          f.load.mockImplementationOnce(async () => {
+            try {
+              const caller = callerContext.getStore();
+              const result = await runExec(process.execPath, ["-p", "process.ppid"], {
+                logOutput: false,
+                signal,
+              });
+              launched.resolve({ parentPid: Number(result.stdout.trim()), caller });
+              return snapshot;
+            } catch (error) {
+              launched.reject(error);
+              throw error;
+            }
+          });
+          callerContext.run("request-authority", () =>
+            runWithSpawnBroker(callerBroker, () => f.subscriptions.readPrepared(target)),
+          );
+          expect(await withinTest(launched.promise, signal)).toEqual({
+            parentPid: ownerBroker.pid,
+            caller: undefined,
+          });
+        }),
+      );
+    });
+  },
+);
+
 describe("registered session PR subscriptions", () => {
   it.each(["incarnation", "namespace", "repository"] as const)(
     "retires a captured private PR read after its %s changes",
@@ -143,9 +209,11 @@ describe("registered session PR subscriptions", () => {
               });
             } else {
               if (change === "namespace") {
-                const source = loadGatewaySessionEntryReadOnly(key, {
-                  agentId: "main",
-                }).readSource!;
+                const source = (
+                  await loadGatewaySessionEntryReadOnlyAsync(key, {
+                    agentId: "main",
+                  })
+                ).readSource!;
                 await closeOpenClawAgentDatabaseByPathAsync(source.path);
               }
               await f.seed(key, f.profile.id, {
@@ -167,36 +235,55 @@ describe("registered session PR subscriptions", () => {
     },
   );
 
-  it.each([false, true])(
-    "delivers an authorized private session (repository=%s)",
-    async (repository) => {
+  it.each(["private local", "private repository", "archived", "scoped global"] as const)(
+    "delivers an authorized %s session",
+    async (kind) => {
+      const privateRow = kind.startsWith("private");
       await withFixture(
-        "operator.admin",
+        privateRow ? "operator.admin" : "operator.read",
         async (f) => {
-          const key = "agent:main:dashboard:incognito-pr-reader";
-          const workspace = repository
-            ? await getSessionRepositoryWorkspaceStore().create({
-                agentId: "main",
-                sessionKey: key,
-                url: "https://github.com/synthetic/private",
-                branch: "private-change",
-                assertCurrent: () => {},
-              })
-            : undefined;
-          await f.seed(key, f.profile.id, {
-            incognito: true,
-            ...(workspace ? { repositoryWorkspaceId: workspace.workspaceId } : {}),
-          });
+          const key = privateRow
+            ? "agent:main:dashboard:incognito-pr-reader"
+            : kind === "scoped global"
+              ? "agent:main:global"
+              : sessionKey;
+          if (privateRow) {
+            const workspace =
+              kind === "private repository"
+                ? await getSessionRepositoryWorkspaceStore().create({
+                    agentId: "main",
+                    sessionKey: key,
+                    url: "https://github.com/synthetic/private",
+                    branch: "private-change",
+                    assertCurrent: () => {},
+                  })
+                : undefined;
+            await f.seed(key, f.profile.id, {
+              incognito: true,
+              ...(workspace ? { repositoryWorkspaceId: workspace.workspaceId } : {}),
+            });
+          } else if (kind === "scoped global") {
+            await f.seed("global");
+            await f.seed(key, f.profile.id, { sessionId: "separate-literal-global-row" });
+          }
           await f.subscribe([key]);
           await f.subscriptions.pollNow();
-          expect(frames(f.socket)).toContainEqual(expectedFrame(key));
-          expect(
-            getSessionRowProjection(f.context)
-              ?.selectEntries()
-              .map((row) => row.key),
-          ).not.toContain(key);
+          expect(f.load).toHaveBeenCalledWith(
+            { sessionKey: kind === "scoped global" ? "global" : key, agentId: "main" },
+            expect.any(AbortSignal),
+            expect.objectContaining({ assertCurrent: expect.any(Function) }),
+          );
+          expect(frames(f.socket)).toEqual([expectedFrame(key)]);
+          if (privateRow) {
+            expect(
+              getSessionRowProjection(f.context)
+                ?.selectEntries()
+                .map((row) => row.key),
+            ).not.toContain(key);
+          }
         },
-        true,
+        privateRow,
+        kind === "archived" ? { archivedAt: 1 } : {},
       );
     },
   );
@@ -320,62 +407,6 @@ describe("registered session PR subscriptions", () => {
       }
     },
   );
-  it("delivers an archived session that was cold at Gateway startup", async () => {
-    await withFixture(
-      "operator.read",
-      async (f) => {
-        const entered = createDeferredCore();
-        f.load.mockImplementationOnce(async () => {
-          entered.resolve();
-          return snapshot;
-        });
-        await f.subscribe();
-        await entered.promise;
-        await f.subscriptions.pollNow();
-        expect(f.load).toHaveBeenCalledWith(
-          { sessionKey, agentId: "main" },
-          expect.any(AbortSignal),
-          expect.objectContaining({ assertCurrent: expect.any(Function) }),
-        );
-        expect(frames(f.socket)).toContainEqual(expectedFrame(sessionKey));
-      },
-      false,
-      { archivedAt: 1 },
-    );
-  });
-
-  it.each(["operator.read", "operator.write", "operator.admin"] as const)(
-    "delivers the owned branch through the real broadcaster with %s",
-    async (scope) => {
-      await withFixture(scope, async (f) => {
-        await f.subscribe();
-        await f.subscriptions.pollNow();
-        expect(f.load).toHaveBeenCalledWith(
-          { sessionKey, agentId: "main" },
-          expect.any(AbortSignal),
-          expect.objectContaining({ assertCurrent: expect.any(Function) }),
-        );
-        expect(frames(f.socket)).toContainEqual(expectedFrame(sessionKey));
-      });
-    },
-  );
-
-  it("resolves a scoped global watch to its persisted global row", async () => {
-    await withFixture("operator.read", async (f) => {
-      const watchKey = "agent:main:global";
-      await f.seed("global");
-      await f.seed(watchKey, f.profile.id, { sessionId: "separate-literal-global-row" });
-      await f.subscribe([watchKey]);
-      await f.subscriptions.pollNow();
-      expect(f.load).toHaveBeenCalledWith(
-        { sessionKey: "global", agentId: "main" },
-        expect.any(AbortSignal),
-        expect.objectContaining({ assertCurrent: expect.any(Function) }),
-      );
-      expect(frames(f.socket)).toEqual([expectedFrame(watchKey)]);
-    });
-  });
-
   it.each(["draft", "incognito", "missing"] as const)(
     "does not load or deliver an inaccessible %s target",
     async (kind) => {
@@ -422,14 +453,9 @@ describe("registered session PR subscriptions", () => {
     },
   );
 
-  it.each([
-    { retired: "connection", delayed: false },
-    { retired: "grant", delayed: false },
-    { retired: "connection", delayed: true },
-    { retired: "grant", delayed: true },
-  ] as const)(
-    "keeps a shared load for an unchanged viewer when the other $retired retires (delayed=$delayed)",
-    async ({ retired, delayed }) => {
+  it.each([false, true])(
+    "keeps a shared load for an unchanged viewer when the other grant retires (delayed=%s)",
+    async (delayed) => {
       try {
         await withFixture("operator.read", async (f) => {
           const entered = createDeferredCore();
@@ -461,11 +487,7 @@ describe("registered session PR subscriptions", () => {
               await entered.promise;
               await f.subscribe([sessionKey], peer.client);
             }
-            if (retired === "connection") {
-              f.client.invalidated = true;
-            } else {
-              f.access.abort(new Error("Original access retired"));
-            }
+            f.access.abort(new Error("Original access retired"));
             if (delayed) {
               await f.clock.advanceBy(10_000);
               await entered.promise;
@@ -502,7 +524,9 @@ describe("registered session PR subscriptions", () => {
           new Set([sessionKey]),
         );
         f.socket.send.mockClear();
-        const original = loadGatewaySessionEntryReadOnly(sessionKey, { agentId: "main" });
+        const original = await loadGatewaySessionEntryReadOnlyAsync(sessionKey, {
+          agentId: "main",
+        });
         await expect(
           deleteSessionEntryLifecycle({
             agentId: "main",
@@ -533,61 +557,10 @@ describe("registered session PR subscriptions", () => {
 });
 
 describe("registered session PR check details", () => {
-  it("reads archived check details after archive cache invalidation", async () => {
-    await withFixture(
-      "operator.read",
-      async (f) => {
-        const projection = getSessionRowProjection(f.context);
-        if (!projection) {
-          throw new Error("Missing session projection for archived PR checks");
-        }
-        expect(projection.snapshot({ agentId: "main", key: sessionKey }).row).toBeDefined();
-        sessionChanges.emit({ all: true, scope: "catalog" });
-        await projection.ensureMaterialized();
-        expect(
-          projection.capture({ agentId: "main", key: sessionKey })?.materialized,
-        ).toBeUndefined();
-
-        const result: ControlUiSessionPullRequestCheckDetails = {
-          owner: "synthetic",
-          repo: "publication",
-          number: 1,
-          headSha: "a".repeat(40),
-          status: "ready",
-          rateLimited: false,
-          checks: [],
-        };
-        const load = vi.fn(async () => result);
-        const respond = vi.fn();
-        await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "archived-checks",
-            method: "controlUi.sessionPullRequests.checks",
-            params: {
-              sessionKey,
-              owner: result.owner,
-              repo: result.repo,
-              number: result.number,
-              headSha: result.headSha,
-            },
-          },
-          client: f.client,
-          context: f.context,
-          extraHandlers: createControlUiHandlers(undefined, undefined, load),
-          isWebchatConnect: () => false,
-          respond,
-        });
-        expect(load).toHaveBeenCalledOnce();
-        expect(respond).toHaveBeenCalledExactlyOnceWith(true, result, undefined);
-      },
-      false,
-      { archivedAt: 1 },
-    );
-  });
-
   it.each([
-    ...readerChanges,
+    "archived",
+    "unchanged",
+    "grant",
     "selection",
     "literal-global",
     "literal-global-visibility",
@@ -598,23 +571,36 @@ describe("registered session PR check details", () => {
       async (f) => {
         const key = change.startsWith("literal-global")
           ? "agent:main:global"
-          : "agent:main:shared-checks";
+          : change === "archived"
+            ? sessionKey
+            : "agent:main:shared-checks";
         if (change === "literal-global-visibility") {
           await f.seed("global", f.profile.id, { sessionId: "separate-global-row" });
         }
         const replacementKey = `${key}:replacement`;
         const projection = getSessionRowProjection(f.context);
+        if (change === "archived") {
+          if (!projection) {
+            throw new Error("Missing session projection for archived PR checks");
+          }
+          expect(projection.snapshot({ agentId: "main", key }).row).toBeDefined();
+          sessionChanges.emit({ all: true, scope: "catalog" });
+          await projection.ensureMaterialized();
+          expect(projection.capture({ agentId: "main", key })?.materialized).toBeUndefined();
+        }
         if (change === "selection") {
           await f.seed(replacementKey, f.other.id);
           await projection?.ensureMaterialized();
         }
         const mutation =
-          change === "literal-global"
+          change === "literal-global" || change === "archived"
             ? "unchanged"
             : change === "literal-global-visibility"
               ? "visibility"
               : change;
-        await f.seed(key, f.other.id);
+        if (change !== "archived") {
+          await f.seed(key, f.other.id);
+        }
         const params = {
           sessionKey: key,
           owner: "synthetic",
@@ -647,7 +633,7 @@ describe("registered session PR check details", () => {
           },
           client: f.client,
           context: f.context,
-          extraHandlers: createControlUiHandlers(undefined, undefined, load),
+          extraHandlers: createControlUiHandlers(undefined, load),
           isWebchatConnect: () => false,
           respond,
         });
@@ -659,7 +645,8 @@ describe("registered session PR check details", () => {
             }),
           ]);
           if (mutation === "store closure") {
-            const source = loadGatewaySessionEntryReadOnly(key, { agentId: "main" }).readSource;
+            const source = (await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" }))
+              .readSource;
             expect(source).toBeDefined();
             await closeOpenClawAgentDatabaseByPathAsync(source!.path);
           } else if (mutation === "selection") {
@@ -677,6 +664,7 @@ describe("registered session PR check details", () => {
           }
           held.resolve(result);
           await request;
+          expect(load).toHaveBeenCalledOnce();
           expect(respond).toHaveBeenCalledExactlyOnceWith(
             mutation === "unchanged",
             mutation === "unchanged" ? result : undefined,
@@ -695,6 +683,7 @@ describe("registered session PR check details", () => {
         }
       },
       change === "store closure",
+      change === "archived" ? { archivedAt: 1 } : {},
     );
   });
 });
@@ -718,25 +707,28 @@ it.each(["local", "repository"] as const)(
         await f.seed(sessionKey, f.profile.id, { repositoryWorkspaceId: repository.workspaceId });
       }
       await f.subscribe();
-      for (let index = 1; index < 20; index++) {
-        await f.subscribe([sessionKey], f.addReader(`warm-reader-${index}`).client);
-      }
-      await f.subscriptions.pollNow();
       const statements = observeSqliteReadSql(StatementSync.prototype);
-      f.load.mockClear();
       try {
+        for (let index = 1; index < 20; index++) {
+          await f.subscribe([sessionKey], f.addReader(`warm-reader-${index}`).client);
+        }
+        await f.subscriptions.pollNow();
+        expect(statements.queries.filter((sql) => /\buser_profiles\b/i.test(sql))).toEqual([]);
+        statements.queries.length = 0;
+        f.load.mockClear();
         for (let index = 0; index < 3; index++) {
           await f.subscriptions.pollNow();
         }
         const queries = statements.queries.map((sql) => sql.toLowerCase());
         expect({
           sessionReads: queries.filter((sql) => sql.includes("session_nodes")).length,
+          profileReads: queries.filter((sql) => sql.includes("user_profiles")).length,
           repositoryReads: queries.filter((sql) => sql.includes("session_repository_workspaces"))
             .length,
           freshnessReads: queries.filter(
             (sql) => sql.includes("pragma") || sql.includes("cache_generation"),
           ).length,
-        }).toEqual({ sessionReads: 0, repositoryReads: 0, freshnessReads: 0 });
+        }).toEqual({ sessionReads: 0, profileReads: 0, repositoryReads: 0, freshnessReads: 0 });
         expect(f.load).toHaveBeenCalledTimes(3);
         expect(frames(f.socket)).toEqual([expectedFrame(sessionKey)]);
       } finally {
@@ -868,7 +860,8 @@ it("drops cached subscription hydration after physical database replacement", as
           { payload: { sessions: { [sessionKey]: { pullRequests: [{ number: 300 }] } } } },
         ]);
         const requestsBeforeReplacement = provider.mock.calls.length;
-        const source = loadGatewaySessionEntryReadOnly(sessionKey, { agentId: "main" }).readSource;
+        const source = (await loadGatewaySessionEntryReadOnlyAsync(sessionKey, { agentId: "main" }))
+          .readSource;
         if (!source) {
           throw new Error("Missing session PR source after initial delivery");
         }
@@ -960,7 +953,8 @@ it.each(["concurrency limit", "earlier refresh", "refresh timer", "publication"]
             waitingOn === "earlier refresh" || waitingOn === "refresh timer"
               ? f.subscriptions.replace(f.client.connId!, keys, new Set(keys))
               : Promise.resolve();
-          const source = loadGatewaySessionEntryReadOnly(keys[0]!, { agentId: "main" }).readSource;
+          const source = (await loadGatewaySessionEntryReadOnlyAsync(keys[0]!, { agentId: "main" }))
+            .readSource;
           expect(source).toBeDefined();
           let retirement: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
           const peer = waitingOn === "publication" ? f.addReader("publication-peer") : undefined;

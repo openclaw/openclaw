@@ -14,7 +14,9 @@ import {
 afterEach(() => vi.unstubAllGlobals());
 
 function fixture() {
-  const sessions = createSessionCapabilityFixture();
+  const sessions = createSessionCapabilityFixture({
+    presentation: { result: null, agentId: "main" },
+  });
   const pane = createTestChatPane({ client: createGatewayBrowserClientFixture(), sessions });
   pane.state.chatMessages = [nativeHistoryMessage(1)];
   const selected: GatewaySessionRow = {
@@ -53,20 +55,6 @@ function fixture() {
 }
 
 describe("chat pane session presentation", () => {
-  it("keeps foreign roster facts current without redrawing an unchanged transcript", () => {
-    const f = fixture();
-    for (const updatedAt of [2, 3, 4]) {
-      const result = sessionsResult(
-        [f.selected, f.parent, { ...f.foreign, updatedAt, label: `Other ${updatedAt}` }],
-        updatedAt,
-      );
-      f.publish({ ...f.publication, result });
-      expect(f.state.sessionsResult).toBe(result);
-    }
-    expect(f.requestFrame).not.toHaveBeenCalled();
-    expect(f.requestUpdate).not.toHaveBeenCalled();
-  });
-
   it.each([
     "selected",
     "parent",
@@ -130,39 +118,63 @@ describe("chat pane session presentation", () => {
     expect(f.requestUpdate).toHaveBeenCalledOnce();
   });
 
-  it("keeps recent-session welcome content current when history is empty", () => {
+  it("redraws accepted roster title changes while the selected descriptor stays unchanged", () => {
     const f = fixture();
-    f.state.chatMessages = [];
+    f.sessions.presentation.result = sessionsResult(
+      [{ ...f.selected, label: "Accepted roster title" }],
+      2,
+    );
     f.publish(f.publication);
-    f.requestUpdate.mockClear();
-    f.publish({
-      ...f.publication,
-      result: sessionsResult([f.selected, f.parent, { ...f.foreign, label: "Recent renamed" }], 2),
-    });
     expect(f.requestUpdate).toHaveBeenCalledOnce();
+    f.requestUpdate.mockClear();
+    f.publish(f.publication);
+    expect(f.requestUpdate).not.toHaveBeenCalled();
   });
 
-  it("updates an approval requester's label when that other session changes", () => {
-    const f = fixture();
-    f.state.chatSessionApprovalQueue = [
-      {
-        id: "approval",
-        kind: "exec",
-        request: { command: "echo test", sessionKey: f.state.sessionKey },
-        sourceSessionKey: f.foreign.key,
-        createdAtMs: 1,
-        expiresAtMs: 10_000,
-      },
-    ];
-    f.publish(f.publication);
-    f.requestUpdate.mockClear();
-    f.publish({
-      ...f.publication,
-      result: sessionsResult(
-        [f.selected, f.parent, { ...f.foreign, label: "Requester renamed" }],
-        2,
-      ),
-    });
-    expect(f.requestUpdate).toHaveBeenCalledOnce();
-  });
+  it.each(["transcript", "welcome", "approval"] as const)(
+    "redraws foreign roster updates only when visible in the %s",
+    (surface) => {
+      const f = fixture();
+      if (surface === "welcome") {
+        f.state.chatMessages = [];
+      } else if (surface === "approval") {
+        f.state.chatSessionApprovalQueue = [
+          {
+            id: "approval",
+            kind: "exec",
+            request: { command: "echo test", sessionKey: f.state.sessionKey },
+            sourceSessionKey: f.foreign.key,
+            createdAtMs: 1,
+            expiresAtMs: 10_000,
+          },
+        ];
+      }
+      f.publish(f.publication);
+      f.requestUpdate.mockClear();
+      f.requestFrame.mockClear();
+      for (const updatedAt of [2, 3, 4]) {
+        const result = sessionsResult(
+          [
+            f.selected,
+            f.parent,
+            {
+              ...f.foreign,
+              ...(surface === "transcript" ? { updatedAt } : {}),
+              label: `Other ${updatedAt}`,
+            },
+          ],
+          updatedAt,
+        );
+        f.publish({ ...f.publication, result });
+        expect(f.state.sessionsResult).toBe(result);
+        if (surface === "transcript") {
+          expect(f.requestFrame).not.toHaveBeenCalled();
+          expect(f.requestUpdate).not.toHaveBeenCalled();
+        } else {
+          expect(f.requestUpdate).toHaveBeenCalledOnce();
+          f.requestUpdate.mockClear();
+        }
+      }
+    },
+  );
 });

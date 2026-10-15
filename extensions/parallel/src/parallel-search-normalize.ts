@@ -107,7 +107,10 @@ export async function executeParallelSearchRequest(params: {
   if ("error" in request) {
     return request.error;
   }
-  const cacheKey = buildParallelCacheKey({ endpoint: params.endpoint, ...request });
+  const cacheKey = buildSearchCacheKey([
+    "parallel",
+    JSON.stringify({ endpoint: params.endpoint, ...request }),
+  ]);
   const cacheTtlMs = resolveSearchCacheTtlMs(params.searchConfig);
   const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
@@ -118,15 +121,38 @@ export async function executeParallelSearchRequest(params: {
   const response = await params.search(request, resolveSearchTimeoutSeconds(params.searchConfig));
   // A provider can finish after its caller aborts; never cache that stale result.
   params.signal?.throwIfAborted();
-  const payload = buildParallelSearchPayload({
-    provider: params.provider,
-    objective: request.objective,
+  const results = mapParallelResults(response, request.count);
+  const payload: Record<string, unknown> = {
+    ...(request.objective ? { objective: request.objective } : {}),
     searchQueries: request.searchQueries,
-    count: request.count,
-    response,
-    start,
-  });
-  const cachePayload = request.sessionId ? payload : stripParallelGeneratedSessionId(payload);
+    provider: params.provider,
+    count: results.length,
+    tookMs: Date.now() - start,
+    externalContent: {
+      untrusted: true,
+      source: "web_search",
+      provider: params.provider,
+      wrapped: true,
+    },
+    results,
+  };
+  if (typeof response.search_id === "string") {
+    payload.searchId = response.search_id;
+  }
+  if (typeof response.session_id === "string") {
+    payload.sessionId = response.session_id;
+  }
+  if (Array.isArray(response.warnings) && response.warnings.length > 0) {
+    payload.warnings = response.warnings;
+  }
+  if (Array.isArray(response.usage) && response.usage.length > 0) {
+    payload.usage = response.usage;
+  }
+  // Generated session ids belong to this call, never to unrelated cache hits.
+  const cachePayload = !request.sessionId && "sessionId" in payload ? { ...payload } : payload;
+  if (!request.sessionId) {
+    delete cachePayload.sessionId;
+  }
   writeCachedSearchPayload(cacheKey, cachePayload, cacheTtlMs);
   return payload;
 }
@@ -152,14 +178,10 @@ function resolveParallelSearchCount(
 // trim, drop empties/duplicates, truncate over-long entries to the API's hard
 // limit, and cap to the API's maximum so a malformed call from the model
 // doesn't 422 the request. See https://docs.parallel.ai/search/best-practices.
-function normalizeParallelSearchQueries(value: unknown): string[] {
-  const candidates = Array.isArray(value) ? value : [];
+function normalizeParallelSearchQueries(candidates: string[] = []): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const entry of candidates) {
-    if (typeof entry !== "string") {
-      continue;
-    }
     const trimmed = entry.trim();
     if (!trimmed) {
       continue;
@@ -186,7 +208,6 @@ function invalidSearchQueriesPayload() {
   };
 }
 
-/** Maps a Parallel v1 response into wrapped `web_search` result entries. */
 function mapParallelResults(response: ParallelSearchResponse, count: number) {
   const rawResults = asOptionalObjectRecord(response)?.results;
   const results = Array.isArray(rawResults) ? rawResults.filter(isRecord) : [];
@@ -210,87 +231,4 @@ function mapParallelResults(response: ParallelSearchResponse, count: number) {
       excerpts.length > 0 ? { excerpts } : {},
     );
   });
-}
-
-function buildParallelSearchPayload(params: {
-  provider: "parallel" | "parallel-free";
-  objective?: string;
-  searchQueries: readonly string[];
-  count: number;
-  response: ParallelSearchResponse;
-  start: number;
-}): Record<string, unknown> {
-  const results = mapParallelResults(params.response, params.count);
-  const payload: Record<string, unknown> = {
-    ...(params.objective ? { objective: params.objective } : {}),
-    searchQueries: params.searchQueries,
-    provider: params.provider,
-    count: results.length,
-    tookMs: Date.now() - params.start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: params.provider,
-      wrapped: true,
-    },
-    results,
-  };
-  if (typeof params.response.search_id === "string") {
-    payload.searchId = params.response.search_id;
-  }
-  if (typeof params.response.session_id === "string") {
-    payload.sessionId = params.response.session_id;
-  }
-  if (Array.isArray(params.response.warnings) && params.response.warnings.length > 0) {
-    payload.warnings = params.response.warnings;
-  }
-  if (Array.isArray(params.response.usage) && params.response.usage.length > 0) {
-    payload.usage = params.response.usage;
-  }
-  return payload;
-}
-
-/**
- * Drops a Parallel-generated `sessionId` before caching. Identical queries from
- * unrelated tasks would otherwise share that id; caller-supplied session ids are
- * part of the cache key, so a cache hit only ever returns the matching id.
- */
-function stripParallelGeneratedSessionId(
-  payload: Record<string, unknown>,
-): Record<string, unknown> {
-  if (!("sessionId" in payload)) {
-    return payload;
-  }
-  const { sessionId: _omitted, ...rest } = payload;
-  void _omitted;
-  return rest;
-}
-
-function buildParallelCacheKey(params: {
-  endpoint: string;
-  objective?: string;
-  searchQueries: readonly string[];
-  count: number;
-  sessionId?: string;
-  clientModel?: string;
-}): string {
-  return buildSearchCacheKey([
-    "parallel",
-    // The transport endpoint (REST URL or the free MCP URL) partitions paid-REST
-    // vs free-MCP and REST endpoint overrides so transports never share cached
-    // payloads.
-    params.endpoint,
-    params.objective,
-    // Join with a NUL delimiter (can't appear in normalized queries) so distinct
-    // arrays like ["ab","c"] and ["a","bc"] don't collide on the same cache key.
-    params.searchQueries.join("\u0000"),
-    params.count,
-    // Different Parallel sessions can return different ranked excerpts for the
-    // same query set, so partition cached payloads by caller-provided session.
-    params.sessionId,
-    // Parallel tailors defaults/optimizations to client_model per its docs, so
-    // partition cached payloads by it; otherwise two models hitting the same
-    // query inside the cache TTL would silently share ranked excerpts.
-    params.clientModel,
-  ]);
 }

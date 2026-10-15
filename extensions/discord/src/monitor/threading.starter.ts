@@ -4,12 +4,6 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isDiscordThreadChannelType } from "../channel-type.js";
 import { ChannelType, DiscordError, getChannelMessage, type Client } from "../internal/discord.js";
 import {
-  resolveDiscordChannelIdSafe,
-  resolveDiscordChannelNameSafe,
-  resolveDiscordChannelParentIdSafe,
-  resolveDiscordChannelParentSafe,
-} from "./channel-access.js";
-import {
   resolveDiscordChannelInfo,
   resolveDiscordMessageChannelId,
 } from "./message-channel-info.js";
@@ -38,16 +32,6 @@ export function resolveDiscordThreadChannel(params: {
     return null;
   }
   const { message, channelInfo } = params;
-  const channel = "channel" in message ? (message as { channel?: unknown }).channel : undefined;
-  const isThreadChannel =
-    channel &&
-    typeof channel === "object" &&
-    "isThread" in channel &&
-    typeof (channel as { isThread?: unknown }).isThread === "function" &&
-    (channel as { isThread: () => boolean }).isThread();
-  if (isThreadChannel) {
-    return channel as unknown as DiscordThreadChannel;
-  }
   if (!isDiscordThreadChannelType(channelInfo?.type)) {
     return null;
   }
@@ -63,7 +47,6 @@ export function resolveDiscordThreadChannel(params: {
     id: messageChannelId,
     name: channelInfo?.name ?? undefined,
     parentId: channelInfo?.parentId ?? undefined,
-    parent: undefined,
     ownerId: channelInfo?.ownerId ?? undefined,
   };
 }
@@ -74,12 +57,7 @@ export async function resolveDiscordThreadParentInfo(params: {
   channelInfo: DiscordChannelInfo | null;
 }): Promise<DiscordThreadParentInfo> {
   const { threadChannel, channelInfo, client } = params;
-  const parent = resolveDiscordChannelParentSafe(threadChannel);
-  let parentId =
-    resolveDiscordChannelParentIdSafe(threadChannel) ??
-    resolveDiscordChannelIdSafe(parent) ??
-    channelInfo?.parentId ??
-    undefined;
+  let parentId = threadChannel.parentId ?? channelInfo?.parentId ?? undefined;
   if (!parentId && threadChannel.id) {
     const threadInfo = await resolveDiscordChannelInfo(client, threadChannel.id);
     parentId = threadInfo?.parentId ?? undefined;
@@ -87,9 +65,8 @@ export async function resolveDiscordThreadParentInfo(params: {
   if (!parentId) {
     return {};
   }
-  let parentName = resolveDiscordChannelNameSafe(parent);
   const parentInfo = await resolveDiscordChannelInfo(client, parentId);
-  parentName = parentName ?? parentInfo?.name;
+  const parentName = parentInfo?.name;
   const parentType = parentInfo?.type;
   return { id: parentId, name: parentName, type: parentType };
 }
@@ -124,9 +101,7 @@ export async function resolveDiscordThreadStarter(params: {
   try {
     return await pending;
   } finally {
-    if (IN_FLIGHT_DISCORD_THREAD_STARTERS.get(cacheKey) === pending) {
-      IN_FLIGHT_DISCORD_THREAD_STARTERS.delete(cacheKey);
-    }
+    IN_FLIGHT_DISCORD_THREAD_STARTERS.delete(cacheKey);
   }
 }
 
@@ -144,14 +119,12 @@ async function resolveDiscordThreadStarterUncached(
       messageChannelId,
       params.channel.id,
     )) as DiscordThreadStarterRestMessage | null;
-    if (!starter) {
-      cacheMiss();
-      return null;
-    }
-    const payload = buildDiscordThreadStarterPayload({
-      starter,
-      resolveTimestampMs: params.resolveTimestampMs,
-    });
+    const payload = starter
+      ? buildDiscordThreadStarterPayload({
+          starter,
+          resolveTimestampMs: params.resolveTimestampMs,
+        })
+      : null;
     if (!payload) {
       cacheMiss();
       return null;

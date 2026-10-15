@@ -1,5 +1,6 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 // Channel legacy config migration tests cover doctor repair of old channel config shapes.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../../../test-utils/prepare-compiled-subprocesses.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 
 const { applyPluginDoctorCompatibilityMigrations, collectRelevantDoctorPluginIds } = vi.hoisted(
@@ -111,50 +112,57 @@ describe("bundled channel legacy config migrations", () => {
     expect(slackAccounts.work?.heartbeatVisibility).toEqual({ showAlerts: false });
   });
 
-  it("prefers bundled channel doctor contract normalizers before plugin registry fallback", () => {
-    collectRelevantDoctorPluginIds.mockReturnValueOnce([]);
-    loadBundledChannelDoctorContractApi.mockImplementation((channelId: string) =>
-      channelId === "slack"
-        ? {
-            normalizeCompatibilityConfig: ({
-              cfg,
-            }: {
-              cfg: { channels?: { slack?: Record<string, unknown> } };
-            }) => ({
-              config: {
-                ...cfg,
-                channels: {
-                  ...cfg.channels,
-                  slack: {
-                    ...cfg.channels?.slack,
-                    normalizedByBundledContract: true,
+  it.each([false, true])(
+    "prefers bundled channel doctor contracts (pluginContracts=%s)",
+    (pluginContracts) => {
+      collectRelevantDoctorPluginIds.mockReturnValueOnce([]);
+      loadBundledChannelDoctorContractApi.mockImplementation((channelId: string) =>
+        channelId === "slack"
+          ? {
+              normalizeCompatibilityConfig: ({
+                cfg,
+              }: {
+                cfg: { channels?: { slack?: Record<string, unknown> } };
+              }) => ({
+                config: {
+                  ...cfg,
+                  channels: {
+                    ...cfg.channels,
+                    slack: {
+                      ...cfg.channels?.slack,
+                      normalizedByBundledContract: true,
+                    },
                   },
                 },
-              },
-              changes: ["Normalized channels.slack via bundled doctor contract."],
-            }),
-          }
-        : undefined,
-    );
-    getBootstrapChannelPlugin.mockReturnValue(undefined);
+                changes: ["Normalized channels.slack via bundled doctor contract."],
+              }),
+            }
+          : undefined,
+      );
+      getBootstrapChannelPlugin.mockReturnValue(undefined);
 
-    const result = applyChannelDoctorCompatibilityMigrations({
-      channels: {
-        slack: {
-          streaming: true,
+      const result = applyChannelDoctorCompatibilityMigrations(
+        {
+          channels: {
+            slack: {
+              streaming: true,
+            },
+          },
         },
-      },
-    });
+        { pluginContracts },
+      );
+      expect(collectRelevantDoctorPluginIds).toHaveBeenCalledTimes(pluginContracts ? 1 : 0);
 
-    expect(applyPluginDoctorCompatibilityMigrations).not.toHaveBeenCalled();
-    expect(loadBundledChannelDoctorContractApi).toHaveBeenCalledWith("slack");
-    const nextChannels = (result.next.channels ?? {}) as {
-      slack?: Record<string, unknown>;
-    };
-    expect(nextChannels.slack?.streaming).toBe(true);
-    expect(nextChannels.slack?.normalizedByBundledContract).toBe(true);
-    expect(result.changes).toEqual(["Normalized channels.slack via bundled doctor contract."]);
-  });
+      expect(applyPluginDoctorCompatibilityMigrations).not.toHaveBeenCalled();
+      expect(loadBundledChannelDoctorContractApi).toHaveBeenCalledWith("slack");
+      const nextChannels = (result.next.channels ?? {}) as {
+        slack?: Record<string, unknown>;
+      };
+      expect(nextChannels.slack?.streaming).toBe(true);
+      expect(nextChannels.slack?.normalizedByBundledContract).toBe(true);
+      expect(result.changes).toEqual(["Normalized channels.slack via bundled doctor contract."]);
+    },
+  );
 
   it("uses registry fallback when a bundled channel contract is unavailable", () => {
     collectRelevantDoctorPluginIds.mockReturnValueOnce(["mattermost"]);
@@ -216,6 +224,7 @@ describe("bundled channel legacy config migrations", () => {
     expect(migrationCall?.[1]).toStrictEqual({
       config,
       pluginIds: ["lossless-claw"],
+      historicalWebhookListeners: undefined,
     });
     expect(result.changes).toEqual(["Configured plugins.entries.lossless-claw.llm.allowedModels."]);
   });

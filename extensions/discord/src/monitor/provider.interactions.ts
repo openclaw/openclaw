@@ -48,7 +48,6 @@ export function createDiscordProviderInteractionSurface(params: {
   nativeEnabled: boolean;
   voiceEnabled: boolean;
   groupPolicy: "open" | "disabled" | "allowlist";
-  useAccessGroups: boolean;
   sessionPrefix: string;
   ephemeralDefault: boolean;
   threadBindings: ThreadBindingManager;
@@ -60,17 +59,16 @@ export function createDiscordProviderInteractionSurface(params: {
   channelRuntime?: PluginRuntime["channel"];
   abortSignal?: AbortSignal;
   createNativeCommand?: typeof createDiscordNativeCommand;
-}): {
-  commands: DiscordCommand[];
-  components: BaseMessageInteractiveComponent[];
-  modals: Modal[];
-} {
+}) {
   const createNativeCommand = params.createNativeCommand ?? createDiscordNativeCommand;
-  const commandContext: DiscordCommandArgContext = {
+  const accountContext = {
     readPolicy: params.readPolicy,
     cfg: params.cfg,
     discordConfig: params.discordConfig,
     accountId: params.accountId,
+  };
+  const commandContext: DiscordCommandArgContext = {
+    ...accountContext,
     sessionPrefix: params.sessionPrefix,
     threadBindings: params.threadBindings,
     buildContext: params.channelRuntime?.inbound.buildContext,
@@ -83,12 +81,8 @@ export function createDiscordProviderInteractionSurface(params: {
       spec.name === DISCORD_VOICE_COMMAND_SPEC.name
     ) {
       return createDiscordVoiceCommand({
-        readPolicy: params.readPolicy,
-        cfg: params.cfg,
-        discordConfig: params.discordConfig,
-        accountId: params.accountId,
+        ...accountContext,
         groupPolicy: params.groupPolicy,
-        useAccessGroups: params.useAccessGroups,
         getManager: () => params.voiceManagerRef.current,
         ephemeralDefault: params.ephemeralDefault,
       });
@@ -101,17 +95,13 @@ export function createDiscordProviderInteractionSurface(params: {
   });
 
   const execApprovalsConfig = params.discordConfig.execApprovals ?? {};
-  const execApprovalsEnabled = isDiscordExecApprovalClientEnabled({
+  const execApprovalOptions = {
     cfg: params.cfg,
     accountId: params.accountId,
     configOverride: execApprovalsConfig,
-  });
-  const approvalActionsEnabled =
-    getDiscordExecApprovalApprovers({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      configOverride: execApprovalsConfig,
-    }).length > 0;
+  };
+  const execApprovalsEnabled = isDiscordExecApprovalClientEnabled(execApprovalOptions);
+  const approvalActionsEnabled = getDiscordExecApprovalApprovers(execApprovalOptions).length > 0;
   if (execApprovalsEnabled) {
     registerChannelRuntimeContext({
       channelRuntime: params.channelRuntime,
@@ -127,10 +117,7 @@ export function createDiscordProviderInteractionSurface(params: {
   }
 
   const componentContext = {
-    readPolicy: params.readPolicy,
-    cfg: params.cfg,
-    accountId: params.accountId,
-    discordConfig: params.discordConfig,
+    ...accountContext,
     runtime: params.runtime,
     token: params.token,
     guildEntries: params.guildEntries,
@@ -173,8 +160,7 @@ export function createDiscordProviderInteractionSurface(params: {
     );
   }
 
-  const agentComponentsConfig = params.discordConfig.agentComponents ?? {};
-  if (agentComponentsConfig.enabled ?? true) {
+  if (params.discordConfig.agentComponents?.enabled ?? true) {
     components.push(...createAgentComponentControls.map((create) => create(componentContext)));
     components.push(...createDiscordComponentControls.map((create) => create(componentContext)));
     modals.push(createDiscordComponentModal(componentContext));

@@ -44,13 +44,11 @@ const profileRateLimiter = createFixedWindowRateLimiter({
 
 const publishLocks = new KeyedAsyncQueue();
 
-// NIP-05 format: user@domain.com
 const nip05FormatSchema = z
   .string()
   .regex(/^[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}$/i, "Invalid NIP-05 format (user@domain.com)")
   .optional();
 
-// LUD-16 Lightning address format: user@domain.com
 const lud16FormatSchema = z
   .string()
   .regex(/^[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}$/i, "Invalid Lightning address format")
@@ -101,14 +99,10 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-async function readJsonBody(
-  req: IncomingMessage,
-  maxBytes = 64 * 1024,
-  timeoutMs = 30_000,
-): Promise<unknown> {
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const result = await readJsonBodyWithLimit(req, {
-    maxBytes,
-    timeoutMs,
+    maxBytes: 64 * 1024,
+    timeoutMs: 30_000,
     emptyObjectOnEmpty: true,
   });
   if (result.ok) {
@@ -121,11 +115,6 @@ async function readJsonBody(
     throw new Error(requestBodyErrorToText(result.code));
   }
   throw new Error(result.code === "INVALID_JSON" ? "Invalid JSON" : result.error);
-}
-
-function parseAccountIdFromPath(pathname: string): string | null {
-  const match = pathname.match(/^\/api\/channels\/nostr\/([^/]+)\/profile/);
-  return match?.[1] ?? null;
 }
 
 function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
@@ -261,7 +250,7 @@ export function createNostrProfileHttpHandler(
       return false;
     }
 
-    const accountId = parseAccountIdFromPath(url.pathname);
+    const accountId = url.pathname.match(/^\/api\/channels\/nostr\/([^/]+)\/profile/)?.[1];
     if (!accountId) {
       return false;
     }
@@ -275,7 +264,14 @@ export function createNostrProfileHttpHandler(
 
     try {
       if (req.method === "GET" && !isImport) {
-        return await handleGetProfile(accountId, ctx, res);
+        const configProfile = ctx.getConfigProfile(accountId);
+        const publishState = await getNostrProfileState(accountId);
+        sendJson(res, 200, {
+          ok: true,
+          profile: configProfile ?? null,
+          publishState: publishState ?? null,
+        });
+        return true;
       }
 
       if ((req.method === "PUT" && !isImport) || (req.method === "POST" && isImport)) {
@@ -307,22 +303,6 @@ export function createNostrProfileHttpHandler(
       return true;
     }
   };
-}
-
-async function handleGetProfile(
-  accountId: string,
-  ctx: NostrProfileHttpContext,
-  res: ServerResponse,
-): Promise<true> {
-  const configProfile = ctx.getConfigProfile(accountId);
-  const publishState = await getNostrProfileState(accountId);
-
-  sendJson(res, 200, {
-    ok: true,
-    profile: configProfile ?? null,
-    publishState: publishState ?? null,
-  });
-  return true;
 }
 
 async function handleUpdateProfile(
@@ -378,7 +358,6 @@ async function handleUpdateProfile(
       return await publishNostrProfile(accountId, mergedProfile);
     });
 
-    // Only persist if at least one relay succeeded
     if (result.successes.length > 0) {
       await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
       await ctx.updateConfigProfile(accountId, mergedProfile);

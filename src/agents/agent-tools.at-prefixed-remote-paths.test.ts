@@ -13,6 +13,7 @@ import {
   wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuardWithOptions,
 } from "./agent-tools.read.js";
+import type { AnyAgentTool } from "./agent-tools.types.js";
 import { extractResolvedApplyPatchTargetPaths } from "./apply-patch-paths.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import { createMemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
@@ -93,7 +94,7 @@ describe.each(["portable", "Linux shell"] as const)("leading-@ remote paths (%s)
         createApplyPatchTool(patchOptions).execute(callId, {
           input: ["*** Begin Patch", ...lines, "*** End Patch"].join("\n"),
         });
-      const guard = (tool: ReturnType<typeof createSandboxedReadTool>) =>
+      const guard = <TDetails>(tool: AnyAgentTool<TDetails>) =>
         wrapToolWorkspaceRootGuardWithOptions(tool, hostRoot, {
           containerWorkdir,
           bridge,

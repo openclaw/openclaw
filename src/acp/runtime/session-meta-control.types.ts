@@ -1,10 +1,18 @@
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
-import type {
-  AcpSessionControlBinding,
-  AcpSessionRuntimeLocator,
-} from "./session-control-owner.js";
-import type { AcpSessionReadInput } from "./session-meta-keys.js";
+import type { AcpSessionReadInput } from "./session-meta-read.types.js";
+
+export type AcpSessionRuntimeLocator = Readonly<
+  Pick<SessionAcpMeta, "backend" | "runtimeSessionName">
+>;
+
+/** A cleanup target constraint; live task and actor authority remain separate. */
+export type AcpSessionControlBinding = Readonly<{
+  sessionId: string;
+  lifecycleRevision?: string;
+  sessionStartedAt?: number;
+  ownerKey: string;
+}>;
 
 export type AcpSessionSourceReadInput = {
   source: {

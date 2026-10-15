@@ -120,18 +120,17 @@ describe("Agent-specific tool filtering", () => {
 
   function createMainAgentConfig(params: {
     tools: NonNullable<OpenClawConfig["tools"]>;
-    agentTools?: NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number]["tools"];
+    agentTools?: NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string]["tools"];
   }): OpenClawConfig {
     return {
       tools: params.tools,
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             workspace: "~/openclaw",
             ...(params.agentTools ? { tools: params.agentTools } : {}),
           },
-        ],
+        },
       },
     };
   }
@@ -176,15 +175,13 @@ describe("Agent-specific tool filtering", () => {
   it("uses the configured default agent for lean local-model filtering on legacy session keys", () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [
-          {
-            id: "local",
-            default: true,
+        entries: {
+          local: {
             experimental: {
               localModelLean: true,
             },
           },
-        ],
+        },
       },
     };
 
@@ -259,16 +256,15 @@ describe("Agent-specific tool filtering", () => {
         deny: [],
       },
       agents: {
-        list: [
-          {
-            id: "restricted",
+        entries: {
+          restricted: {
             workspace: "~/openclaw-restricted",
             tools: {
               allow: ["read"], // Agent override: only read
               deny: ["exec", "write", "edit"],
             },
           },
-        ],
+        },
       },
     };
 
@@ -337,21 +333,19 @@ describe("Agent-specific tool filtering", () => {
   it("should resolve different tool policies for different agents", () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             workspace: "~/openclaw",
             // No tools restriction - all tools available
           },
-          {
-            id: "family",
+          family: {
             workspace: "~/openclaw-family",
             tools: {
               allow: ["read"],
               deny: ["exec", "write", "edit", "process"],
             },
           },
-        ],
+        },
       },
     };
 
@@ -506,9 +500,8 @@ describe("Agent-specific tool filtering", () => {
         },
       },
       agents: {
-        list: [
-          {
-            id: "trusted",
+        entries: {
+          trusted: {
             workspace: "~/openclaw-trusted",
             tools: {
               toolsBySender: {
@@ -516,7 +509,7 @@ describe("Agent-specific tool filtering", () => {
               },
             },
           },
-        ],
+        },
       },
     };
 
@@ -644,15 +637,14 @@ describe("Agent-specific tool filtering", () => {
         deny: ["browser"], // Global deny
       },
       agents: {
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             workspace: "~/openclaw-work",
             tools: {
               deny: ["exec", "process"], // Agent deny (override)
             },
           },
-        ],
+        },
       },
     };
 

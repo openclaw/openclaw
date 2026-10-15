@@ -6,19 +6,19 @@ import { createAbortError } from "../../infra/abort-signal.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { sanitizeRunStatusText } from "../run-status-text.js";
 import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
+import { resolveSubagentChildAgentId } from "../subagents/registry/subagent-child-owner-match.js";
 import {
   ensureSubagentControllerOwnsRun,
   listControlledSubagentRunFacts,
   resolveSubagentControllerIdentity,
-  type ResolvedSubagentController,
 } from "../subagents/registry/subagent-control-scope.js";
 import {
   DEFAULT_RECENT_MINUTES,
   killSubagentRunAdmin,
   buildControlledSubagentRunsReadContext,
   MAX_RECENT_MINUTES,
-  resolveSubagentController,
 } from "../subagents/registry/subagent-control.js";
+import type { ResolvedSubagentController } from "../subagents/registry/subagent-control.types.js";
 import { createSubagentControllerRead } from "../subagents/registry/subagent-controller-read.js";
 import { observeSubagentExecution } from "../subagents/registry/subagent-execution-observation.js";
 import {
@@ -27,14 +27,15 @@ import {
 } from "../subagents/registry/subagent-list.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "../subagents/registry/subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "../subagents/registry/subagent-registry-publication.js";
 import type { SubagentRunReadRecord } from "../subagents/registry/subagent-registry-read.types.js";
 import {
   getSubagentSessionListReadSnapshotIdentity,
-  onSubagentRegistryPersisted,
   prepareSubagentRunsSnapshotForRunIds,
   prepareSubagentSessionListReadCache,
 } from "../subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
+import { isSameSubagentRunOwner } from "../subagents/registry/subagent-run-generation.js";
 import {
   jsonResult,
   readNonNegativeIntegerParam,
@@ -204,7 +205,7 @@ function waitForSelectedRuns(params: {
         finish();
       });
     };
-    const unsubscribe = onSubagentRegistryPersisted(wake);
+    const unsubscribe = subscribeSubagentRunChanges("persistence", wake);
     params.signal?.addEventListener("abort", onAbort, { once: true });
     const timer = setTimeout(() => {
       timedOut = true;
@@ -220,58 +221,46 @@ function waitForSelectedRuns(params: {
 }
 
 export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTool {
-  const readScope = (readController?: ReturnType<typeof createSubagentControllerRead>["read"]) => {
+  const readScope = (readController: ReturnType<typeof createSubagentControllerRead>["read"]) => {
     const cfg = opts.config ?? getRuntimeConfig();
-    const controller = readController
-      ? readController()
-      : resolveSubagentController({
-          cfg,
-          agentSessionKey: opts.agentSessionKey,
-          agentId: opts.agentId,
-        });
+    const controller = readController();
     if (!controller.controllerAgentId) {
       throw new ToolInputError("Subagent controller agent required");
     }
-    const runs = listControlledSubagentRunFacts(
-      controller.controllerSessionKey,
-      controller.controllerAgentId,
-      cfg,
-    );
     const readable = new Map<string, SubagentRunReadRecord>();
     const controlled = new Set<string>();
-    const pending: Array<{
-      owner: Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">;
-      entries: SubagentRunReadRecord[];
-    }> = [{ owner: controller, entries: runs }];
+    const pending: Array<
+      Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">
+    > = [controller];
     const visited = new Set<string>();
     while (pending.length) {
       const current = pending.shift()!;
-      const identity = current.owner.controllerAgentId + "\0" + current.owner.controllerSessionKey;
+      const identity = current.controllerAgentId + "\0" + current.controllerSessionKey;
       if (visited.has(identity)) {
         continue;
       }
       visited.add(identity);
-      for (const entry of current.entries) {
+      const entries = listControlledSubagentRunFacts(
+        current.controllerSessionKey,
+        current.controllerAgentId,
+        cfg,
+      );
+      for (const entry of entries) {
         readable.set(entry.runId, entry);
         if (
           controller.controlScope !== "children" ||
-          ensureSubagentControllerOwnsRun({ cfg, controller: current.owner, entry })
+          ensureSubagentControllerOwnsRun({ cfg, controller: current, entry })
         ) {
           continue;
         }
         controlled.add(entry.runId);
-        const childController = resolveSubagentControllerIdentity({
-          cfg,
-          agentSessionKey: entry.childSessionKey,
-        });
-        pending.push({
-          owner: childController,
-          entries: listControlledSubagentRunFacts(
-            childController.controllerSessionKey,
-            childController.controllerAgentId,
+        pending.push(
+          resolveSubagentControllerIdentity({
             cfg,
-          ),
-        });
+            agentSessionKey: entry.childSessionKey,
+            agentId: entry.childAgentId,
+          }),
+        );
       }
     }
     return { cfg, controller, readable: [...readable.values()], controlled };
@@ -309,13 +298,18 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             entry,
             generation: entry.generation,
             createdAt: entry.createdAt,
-            ownership: subagentRuns.captureRegistrationOwnership(entry.childSessionKey, entry),
+            ownership: subagentRuns.captureRegistrationOwnership(
+              entry.childSessionKey,
+              entry,
+              entry.childAgentId,
+            ),
           };
         }
         if (selection) {
           selection.ownership.assertCurrent();
           if (
-            entry !== selection.entry ||
+            !entry ||
+            !isSameSubagentRunOwner(entry, selection.entry) ||
             entry.generation !== selection.generation ||
             entry.createdAt !== selection.createdAt
           ) {
@@ -323,22 +317,19 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
           }
         }
       };
-      const controllerRead =
-        action === "cancel"
-          ? createSubagentControllerRead({
-              config: () => opts.config ?? getRuntimeConfig(),
-              agentSessionKey: opts.agentSessionKey,
-              agentId: opts.agentId,
-              assertCurrent: assertSelection,
-            })
-          : undefined;
-      const readCurrentScope = () => readScope(controllerRead?.read);
+      const controllerRead = createSubagentControllerRead({
+        config: () => opts.config ?? getRuntimeConfig(),
+        agentSessionKey: opts.agentSessionKey,
+        agentId: opts.agentId,
+        assertCurrent: assertSelection,
+      });
+      const readCurrentScope = () => readScope(controllerRead.read);
       const prepareRead = () => {
         assertSelection();
         if (!getSubagentSessionListReadSnapshotIdentity()) {
           return prepareSubagentSessionListReadCache();
         }
-        return controllerRead?.prepare();
+        return controllerRead.prepare();
       };
       try {
         for (let pending = prepareRead(); pending; pending = prepareRead()) {
@@ -356,7 +347,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             ...(await waitForSelectedRuns({
               runIds,
               readRuns: (snapshot) => {
-                const visible = new Set(readScope().readable.map((entry) => entry.runId));
+                const visible = new Set(readCurrentScope().readable.map((entry) => entry.runId));
                 return [...snapshot.values()].filter((entry) => visible.has(entry.runId));
               },
               timeoutMs:
@@ -365,8 +356,9 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             })),
           });
         }
-        const { cfg, controller, readable, controlled } = readCurrentScope();
         if (action === "list") {
+          const cfg = opts.config ?? getRuntimeConfig();
+          const controller = controllerRead.read();
           const readContext = await buildControlledSubagentRunsReadContext(
             controller.controllerSessionKey,
             controller.controllerAgentId,
@@ -393,6 +385,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
           });
         }
         if (action === "cancel") {
+          const { cfg, controller, readable, controlled } = readCurrentScope();
           const runId = requestedRunId;
           if (!runId) {
             throw new ToolInputError("Subagent runId required");
@@ -408,7 +401,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             {
               cfg,
               sessionKey: target.childSessionKey,
-              agentId: target.requesterAgentId,
+              agentId: resolveSubagentChildAgentId(target),
               expectedRunId: target.runId,
               expectedTaskRunId: target.taskRunId ?? target.runId,
               expectedGeneration: target.generation,
@@ -436,7 +429,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         }
         throw new ToolInputError("Unsupported subagents action");
       } finally {
-        controllerRead?.release();
+        controllerRead.release();
         selection?.ownership.release();
       }
     },

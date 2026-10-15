@@ -7,17 +7,17 @@ import {
   getLoadedChannelPluginEntryById,
   listLoadedChannelPlugins,
 } from "./registry-loaded.js";
-import type { ChannelPlugin } from "./types.plugin.js";
+import type { AnyChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
 export { normalizeAnyChannelId as normalizeChannelId } from "../registry.js";
 
-export const listChannelPlugins = (): ChannelPlugin[] => listLoadedChannelPlugins();
+export const listChannelPlugins = (): AnyChannelPlugin[] => listLoadedChannelPlugins();
 
 /**
  * Returns a loaded channel plugin without falling back to bundled metadata.
  */
-export function getLoadedChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
+export function getLoadedChannelPlugin(id: ChannelId): AnyChannelPlugin | undefined {
   return getLoadedChannelPluginById(id);
 }
 
@@ -29,7 +29,7 @@ export function resolveChannelPluginRegistration(
   options: { loadedOnly?: boolean } = {},
 ):
   | {
-      plugin: ChannelPlugin;
+      plugin: AnyChannelPlugin;
       origin?: string;
       captureReadAuthority?: () => (() => boolean) | undefined;
       resolveChannelRuntime?: NonNullable<
@@ -51,7 +51,7 @@ export function resolveChannelPluginRegistration(
   if (loadedEntry) {
     const origin = normalizeOptionalString(loadedEntry.origin) ?? undefined;
     return {
-      plugin: loadedEntry.plugin as ChannelPlugin,
+      plugin: loadedEntry.plugin,
       ...(loadedEntry.resolveChannelRuntime
         ? { resolveChannelRuntime: loadedEntry.resolveChannelRuntime }
         : {}),
@@ -72,6 +72,6 @@ export function resolveChannelPluginRegistration(
 /**
  * Returns the active channel plugin, with bundled fallback for built-in channels.
  */
-export function getChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
+export function getChannelPlugin(id: ChannelId): AnyChannelPlugin | undefined {
   return resolveChannelPluginRegistration(id)?.plugin;
 }

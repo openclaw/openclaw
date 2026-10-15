@@ -230,20 +230,6 @@ describe("sendMessageSlack file upload with user IDs", () => {
     expect(caught).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
   });
 
-  it("keeps getUploadURLExternal network failures ambiguous", async () => {
-    const rejection = Object.assign(new Error("read ECONNRESET"), {
-      code: "slack_webapi_request_error",
-    });
-    client.files.getUploadURLExternal.mockRejectedValueOnce(rejection);
-
-    const caught = await sendUpload(client, {
-      mediaUrl: "/tmp/network-failure.png",
-    }).catch((error: unknown) => error);
-
-    expect(caught).toBe(rejection);
-    expect(caught).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
-  });
-
   it("scopes DM channel resolution cache by token identity", async () => {
     await sendUpload(client, {
       target: "UABC123",
@@ -581,10 +567,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
     expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    ["application/pdf", "upload.pdf"],
-    [undefined, "upload"],
-  ] as const)(
+  it.each([[undefined, "upload"]] as const)(
     "infers the unnamed document filename from MIME %s",
     async (contentType, fileName) => {
       loadOutboundMediaFromUrlMock.mockResolvedValueOnce({

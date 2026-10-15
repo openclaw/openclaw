@@ -8,7 +8,6 @@ import { buildPortHints } from "./ports-format.js";
 import {
   parseLsofListenerRecordsByPort,
   readLsofListenersForPort,
-  type LsofListenerRecord,
 } from "./ports-lsof-listeners.js";
 import { resolveLsofCommand } from "./ports-lsof.js";
 import {
@@ -32,29 +31,16 @@ import {
   getWindowsWmicExePath,
 } from "./windows-install-roots.js";
 
-type CommandResult = {
-  stdout: string;
-  stderr: string;
-  code: number;
-  error?: string;
-};
-
 type SocketReadResult<T extends PortListener> = {
   entries: T[];
   detail?: string;
   errors: string[];
 };
 
-type UnixListenerSnapshot = {
-  recordsByPort: Map<number, LsofListenerRecord[]>;
-  errors: string[];
-  lsofUnavailable: boolean;
-};
-
 // Each enrichment batch bounds its native process-metadata subprocesses.
 const PORT_PROCESS_ENRICHMENT_CONCURRENCY = 20;
 
-async function runCommandSafe(argv: string[], signal?: AbortSignal): Promise<CommandResult> {
+async function runCommandSafe(argv: string[], signal?: AbortSignal) {
   signal?.throwIfAborted();
   try {
     // env overrides alone would merge the ambient application environment back in.
@@ -78,25 +64,6 @@ async function runCommandSafe(argv: string[], signal?: AbortSignal): Promise<Com
       error: String(err),
     };
   }
-}
-
-function parseLsofFieldOutput(output: string): PortListener[] {
-  const lines = output.split(/\r?\n/).filter(Boolean);
-  const listeners: PortListener[] = [];
-  let processFields: Pick<PortListener, "pid" | "command"> = {};
-  for (const line of lines) {
-    if (line.startsWith("p")) {
-      const pid = parseStrictPositiveInteger(line.slice(1));
-      processFields = pid !== undefined ? { pid } : {};
-    } else if (line.startsWith("c")) {
-      processFields.command = line.slice(1);
-    } else if (line.startsWith("n")) {
-      // TCP 127.0.0.1:18789 (LISTEN)
-      // TCP *:18789 (LISTEN)
-      listeners.push({ ...processFields, address: line.slice(1) });
-    }
-  }
-  return listeners;
 }
 
 function parseLsofTcpConnectionAddress(
@@ -145,10 +112,19 @@ function resolveGatewayConnectionDirection(
 function parseLsofConnectionFieldOutput(output: string, port: number): PortConnection[] {
   const connections: PortConnection[] = [];
   const localAddresses = resolveLocalNetworkAddresses();
-  for (const entry of parseLsofFieldOutput(output)) {
-    const direction = resolveGatewayConnectionDirection(entry.address, port, localAddresses);
-    if (direction) {
-      connections.push({ ...entry, direction });
+  let processFields: Pick<PortListener, "pid" | "command"> = {};
+  for (const line of output.split(/\r?\n/)) {
+    if (line.startsWith("p")) {
+      const pid = parseStrictPositiveInteger(line.slice(1));
+      processFields = pid !== undefined ? { pid } : {};
+    } else if (line.startsWith("c")) {
+      processFields.command = line.slice(1);
+    } else if (line.startsWith("n")) {
+      const address = line.slice(1);
+      const direction = resolveGatewayConnectionDirection(address, port, localAddresses);
+      if (direction) {
+        connections.push({ ...processFields, address, direction });
+      }
     }
   }
   return connections;
@@ -240,14 +216,19 @@ async function readUnixSocketEntries<T extends PortListener>(
   argv: string[],
   parse: (output: string) => T[],
   signal?: AbortSignal,
+  fallbackErrors?: string[],
 ) {
   const result = await readUnixSocketOutput(argv, signal);
   const entries = result.stdout === undefined ? [] : parse(result.stdout);
+  const detail = result.stdout?.trim() || undefined;
   return {
     entries,
-    detail: result.stdout?.trim() || undefined,
-    errors: result.errors,
-    unavailable: result.unavailable,
+    detail: fallbackErrors && entries.length === 0 ? undefined : detail,
+    errors:
+      fallbackErrors && entries.length === 0
+        ? [...fallbackErrors, ...result.errors]
+        : result.errors,
+    ...(fallbackErrors ? {} : { unavailable: result.unavailable }),
   };
 }
 
@@ -262,15 +243,12 @@ async function readUnixEstablishedConnections(
   if (!primary.unavailable) {
     return primary;
   }
-  const fallback = await readUnixSocketEntries(
+  return await readUnixSocketEntries(
     ["ss", "-H", "-tnp", "state", "established", `( sport = :${port} or dport = :${port} )`],
     (output) => parseSsConnections(output, port),
+    undefined,
+    primary.errors,
   );
-  return {
-    entries: fallback.entries,
-    detail: fallback.entries.length > 0 ? fallback.detail : undefined,
-    errors: fallback.entries.length > 0 ? fallback.errors : [...primary.errors, ...fallback.errors],
-  };
 }
 
 async function resolveUnixProcessInfo(
@@ -305,10 +283,7 @@ function parseSsListeners(output: string, port: number): PortListener[] {
   return listeners;
 }
 
-async function readUnixListenerSnapshot(
-  port?: number,
-  signal?: AbortSignal,
-): Promise<UnixListenerSnapshot> {
+async function readUnixListenerSnapshot(port?: number, signal?: AbortSignal) {
   const lsof = await resolveLsofCommand(signal);
   // Keep single-port lifecycle checks targeted; batches share one all-port scan.
   const tcpSelector = port === undefined ? "-iTCP" : `-iTCP:${port}`;
@@ -317,8 +292,7 @@ async function readUnixListenerSnapshot(
     signal,
   );
   return {
-    recordsByPort:
-      result.stdout === undefined ? new Map() : parseLsofListenerRecordsByPort(result.stdout),
+    recordsByPort: parseLsofListenerRecordsByPort(result.stdout ?? ""),
     errors: result.errors,
     lsofUnavailable: result.unavailable,
   };
@@ -326,7 +300,7 @@ async function readUnixListenerSnapshot(
 
 async function readUnixListeners(
   port: number,
-  snapshot?: UnixListenerSnapshot,
+  snapshot?: Awaited<ReturnType<typeof readUnixListenerSnapshot>>,
   signal?: AbortSignal,
 ): Promise<SocketReadResult<PortListener>> {
   const listenerSnapshot = snapshot ?? (await readUnixListenerSnapshot(port, signal));
@@ -334,19 +308,12 @@ async function readUnixListeners(
     const { listeners, detail } = readLsofListenersForPort(listenerSnapshot.recordsByPort, port);
     return { entries: listeners, detail, errors: listenerSnapshot.errors };
   }
-  const fallback = await readUnixSocketEntries(
+  return await readUnixSocketEntries(
     ["ss", "-H", "-ltnp", `sport = :${port}`],
     (output) => parseSsListeners(output, port),
     signal,
+    listenerSnapshot.errors,
   );
-  return {
-    entries: fallback.entries,
-    detail: fallback.entries.length > 0 ? fallback.detail : undefined,
-    errors:
-      fallback.entries.length > 0
-        ? fallback.errors
-        : [...listenerSnapshot.errors, ...fallback.errors],
-  };
 }
 
 function parseNetstatConnections(output: string, port: number): PortConnection[] {

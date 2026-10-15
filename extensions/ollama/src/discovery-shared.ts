@@ -1,7 +1,10 @@
 import { isIPv4 } from "node:net";
 import type { ProviderCatalogResult } from "openclaw/plugin-sdk/plugin-entry";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import type {
+  ModelProviderConfig,
+  ProviderPlugin,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -10,6 +13,7 @@ import {
   OLLAMA_DEFAULT_API_KEY,
   OLLAMA_DEFAULT_BASE_URL,
 } from "./defaults.js";
+import { findAvailableOllamaModelName, normalizeOllamaWireModelId } from "./model-id.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
 import { resolveOllamaApiBase } from "./provider-models.js";
 
@@ -40,6 +44,19 @@ type OllamaDiscoveryContext = {
   };
 };
 
+export const getUnlistedOllamaConfiguredModelIds: NonNullable<
+  NonNullable<ProviderPlugin["catalog"]>["getUnlistedConfiguredModelIds"]
+> = (catalog, configuredModels) =>
+  configuredModels
+    .filter(
+      (model) =>
+        model.provider === OLLAMA_PROVIDER_ID &&
+        (!model.baseUrl ||
+          resolveOllamaApiBase(model.baseUrl) === resolveOllamaApiBase(catalog.baseUrl)) &&
+        !findAvailableOllamaModelName(normalizeOllamaWireModelId(model.modelId), catalog.modelIds),
+    )
+    .map((model) => model.modelId);
+
 export function readOllamaStringValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     return normalizeOptionalString(value);
@@ -50,7 +67,7 @@ export function readOllamaStringValue(value: unknown): string | undefined {
   return undefined;
 }
 
-function isOllamaApiKeyMarker(value: string): boolean {
+export function isOllamaApiKeyMarker(value: string | undefined): boolean {
   return value === "OLLAMA_API_KEY" || value === OLLAMA_DEFAULT_API_KEY;
 }
 
@@ -158,12 +175,8 @@ function isLoopbackOllamaBaseUrl(baseUrl: string | undefined | null): boolean {
 }
 
 function readOllamaHostname(baseUrl: string): string | undefined {
-  try {
-    const host = new URL(baseUrl).hostname.toLowerCase();
-    return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
-  } catch {
-    return undefined;
-  }
+  const host = URL.parse(baseUrl)?.hostname.toLowerCase();
+  return host?.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
 }
 
 function hasExplicitRemoteOllamaApiProvider(
@@ -233,7 +246,11 @@ export async function resolveOllamaDiscoveryResult(params: {
   pluginConfig: OllamaPluginConfig;
   buildProvider: (
     configuredBaseUrl?: string,
-    opts?: { apiKey?: string; discoveryMode?: "strict" },
+    opts?: {
+      apiKey?: string;
+      discoveryMode?: "strict";
+      onListedModels?: (names: string[]) => void;
+    },
   ) => Promise<ModelProviderConfig>;
 }): Promise<ProviderCatalogResult> {
   if (params.ctx.providerIds && !params.ctx.providerIds.includes(OLLAMA_PROVIDER_ID)) {
@@ -245,16 +262,14 @@ export async function resolveOllamaDiscoveryResult(params: {
   const hasRemoteOllamaApiProvider = hasExplicitRemoteOllamaApiProvider(
     params.ctx.config.models?.providers,
   );
-  const discoveryEnabled = params.pluginConfig.discovery?.enabled;
-  if (!hasExplicitModels && discoveryEnabled === false) {
-    return null;
-  }
-  // When the base URL points to hosted Ollama Cloud, skip auto-discovery.
-  // Cloud instances are shared tenants where available models are managed
-  // by the provider; only use explicitly configured models.
-  // Remote self-hosted Ollama endpoints still auto-discover as before.
+  // Hosted Ollama Cloud models are provider-managed, and the plugin can opt out of discovery;
+  // both use only configured models. Self-hosted endpoints always list `/api/tags`, so a model
+  // pulled after setup appears beside the configured rows instead of being pinned out.
   const configuredBaseUrl = readProviderBaseUrl(explicit);
-  if (!hasExplicitModels && configuredBaseUrl && isHostedOllamaCloud(configuredBaseUrl)) {
+  const skipDiscovery =
+    params.pluginConfig.discovery?.enabled === false ||
+    Boolean(configuredBaseUrl && isHostedOllamaCloud(configuredBaseUrl));
+  if (skipDiscovery && !hasExplicitModels) {
     return null;
   }
   const resolvedOllamaAuth = params.ctx.resolveProviderApiKey(OLLAMA_PROVIDER_ID);
@@ -270,7 +285,7 @@ export async function resolveOllamaDiscoveryResult(params: {
     return null;
   }
   const { apiKey, discoveryApiKey } = auth;
-  if (hasExplicitModels && explicit) {
+  if (skipDiscovery && explicit) {
     const discoveredBaseUrl = resolveOllamaApiBase(configuredBaseUrl);
     const api = explicit.api ?? "ollama";
     return {
@@ -293,14 +308,52 @@ export async function resolveOllamaDiscoveryResult(params: {
     providerId: OLLAMA_PROVIDER_ID,
     profileId: resolvedOllamaAuth.profileId,
     run: async () => {
+      let modelIds: string[] | undefined;
       const provider = await params.buildProvider(configuredBaseUrl, {
+        onListedModels: (names) => {
+          modelIds = names;
+        },
         discoveryMode: "strict",
         ...(discoveryApiKey ? { apiKey: discoveryApiKey } : {}),
       });
       const api = explicit?.api ?? provider.api;
+      // Keep configured settings, including tool workarounds, while filling missing native
+      // thinking metadata so mandatory-thinking models keep reasoning out of answer text.
+      const configuredModels = new Map(explicit?.models?.map((model) => [model.id, model]));
       return {
+        ...(modelIds
+          ? {
+              outcomes: [
+                {
+                  provider: OLLAMA_PROVIDER_ID,
+                  profileId: resolvedOllamaAuth.profileId,
+                  status: "ready" as const,
+                  modelIdCatalog: { baseUrl: resolveOllamaApiBase(configuredBaseUrl), modelIds },
+                },
+              ],
+            }
+          : {}),
         provider: {
           ...provider,
+          models: provider.models.flatMap((model) => {
+            const configured = configuredModels.get(model.id);
+            if (configured) {
+              const sameEndpoint =
+                !configured.baseUrl ||
+                resolveOllamaApiBase(configured.baseUrl) === resolveOllamaApiBase(provider.baseUrl);
+              return (configured.api ?? api) === "ollama" &&
+                sameEndpoint &&
+                configured.thinkingLevelMap === undefined &&
+                model.thinkingLevelMap
+                ? [{ ...configured, thinkingLevelMap: model.thinkingLevelMap }]
+                : [];
+            }
+            return [
+              api !== "ollama" && model.thinkingLevelMap
+                ? Object.assign({}, model, { thinkingLevelMap: undefined })
+                : model,
+            ];
+          }),
           baseUrl: resolveOllamaRuntimeBaseUrl({
             api,
             configuredBaseUrl,

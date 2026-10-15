@@ -39,88 +39,75 @@ describe("skills search CLI", () => {
     await program.parseAsync(args, { from: "user" });
   }
 
-  it("distinguishes duplicate ClawHub skill slugs by owner", async () => {
-    searchSkillsFromClawHubMock.mockResolvedValue([
-      {
-        slug: "calendar",
-        ownerHandle: "demo-owner",
-        installRef: "@demo-owner/calendar",
-        displayName: "Calendar",
-        summary: "CalDAV helpers",
-        version: "1.2.3",
-      },
-      {
-        slug: "calendar",
-        ownerHandle: "work-owner",
-        installRef: "@work-owner/calendar",
-        displayName: "Team Calendar",
-      },
-    ]);
-
-    await runCommand(["skills", "search", "calendar"]);
-
-    expect(searchSkillsFromClawHubMock).toHaveBeenCalledWith({
+  it.each([
+    {
+      name: "distinguishes duplicate slugs by owner",
       query: "calendar",
-      limit: undefined,
-    });
-    expect(runtimeLogs).toEqual([
-      "@demo-owner/calendar v1.2.3  Calendar  CalDAV helpers",
-      "@work-owner/calendar  Team Calendar",
-    ]);
-  });
-
-  it("keeps bare skill slugs when ClawHub omits the owner", async () => {
-    searchSkillsFromClawHubMock.mockResolvedValue([
-      {
-        slug: "legacy-calendar",
-        displayName: "Legacy Calendar",
-      },
-    ]);
-
-    await runCommand(["skills", "search", "calendar"]);
-
-    expect(runtimeLogs).toEqual(["legacy-calendar  Legacy Calendar"]);
-  });
-
-  it("shows skills.sh entries in normal ClawHub search results", async () => {
-    searchSkillsFromClawHubMock.mockResolvedValue([
-      {
-        slug: "weather",
-        installRef: "skills-sh:openclaw/skills/weather",
-        trustState: "not-scanned-by-clawhub",
-        displayName: "Weather",
-        summary: "Forecast helpers",
-      },
-    ]);
-
-    await runCommand(["skills", "search", "weather"]);
-
-    expect(searchSkillsFromClawHubMock).toHaveBeenCalledWith({
+      results: [
+        {
+          slug: "calendar",
+          ownerHandle: "demo-owner",
+          installRef: "@demo-owner/calendar",
+          displayName: "Calendar",
+          summary: "CalDAV helpers",
+          version: "1.2.3",
+        },
+        {
+          slug: "calendar",
+          ownerHandle: "work-owner",
+          installRef: "@work-owner/calendar",
+          displayName: "Team Calendar",
+        },
+      ],
+      lines: [
+        "@demo-owner/calendar v1.2.3  Calendar  CalDAV helpers",
+        "@work-owner/calendar  Team Calendar",
+      ],
+    },
+    {
+      name: "keeps bare slugs when the owner is missing",
+      query: "calendar",
+      results: [{ slug: "legacy-calendar", displayName: "Legacy Calendar" }],
+      lines: ["legacy-calendar  Legacy Calendar"],
+    },
+    {
+      name: "labels skills.sh entries as unscanned",
       query: "weather",
-      limit: undefined,
-    });
-    expect(runtimeLogs).toEqual([
-      "skills-sh:openclaw/skills/weather  Weather  Forecast helpers  Not scanned by ClawHub",
-    ]);
-  });
-
-  it("keeps multiline ClawHub search metadata on one terminal line", async () => {
-    searchSkillsFromClawHubMock.mockResolvedValue([
-      {
-        slug: "oauth-helper",
-        ownerHandle: "demo-owner",
-        installRef: "@demo-owner/oauth-helper",
-        displayName: "Oauth\nHelper",
-        summary:
-          "Automate OAuth login flows.\nSupports multiple providers.\n\nFeatures:\n- Confirm before authorizing",
-      },
-    ]);
-
-    await runCommand(["skills", "search", "oauth-helper"]);
-
-    expect(runtimeLogs).toEqual([
-      "@demo-owner/oauth-helper  Oauth Helper  Automate OAuth login flows. Supports multiple providers. Features: - Confirm before authorizing",
-    ]);
+      results: [
+        {
+          slug: "weather",
+          installRef: "skills-sh:openclaw/skills/weather",
+          trustState: "not-scanned-by-clawhub",
+          displayName: "Weather",
+          summary: "Forecast helpers",
+        },
+      ],
+      lines: [
+        "skills-sh:openclaw/skills/weather  Weather  Forecast helpers  Not scanned by ClawHub",
+      ],
+    },
+    {
+      name: "keeps multiline metadata on one terminal line",
+      query: "oauth-helper",
+      results: [
+        {
+          slug: "oauth-helper",
+          ownerHandle: "demo-owner",
+          installRef: "@demo-owner/oauth-helper",
+          displayName: "Oauth\nHelper",
+          summary:
+            "Automate OAuth login flows.\nSupports multiple providers.\n\nFeatures:\n- Confirm before authorizing",
+        },
+      ],
+      lines: [
+        "@demo-owner/oauth-helper  Oauth Helper  Automate OAuth login flows. Supports multiple providers. Features: - Confirm before authorizing",
+      ],
+    },
+  ])("$name", async ({ query, results, lines }) => {
+    searchSkillsFromClawHubMock.mockResolvedValue(results);
+    await runCommand(["skills", "search", query]);
+    expect(searchSkillsFromClawHubMock).toHaveBeenCalledWith({ query, limit: undefined });
+    expect(runtimeLogs).toEqual(lines);
   });
 
   it("formats ClawHub skill versions without changing JSON output", async () => {

@@ -3,7 +3,7 @@ import {
   asOptionalRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { isMainSessionRestartRecoveryInputProvenance } from "../../sessions/input-provenance.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../code-mode-control-tools.js";
 import {
@@ -411,22 +411,16 @@ export function resolveMainSessionResumePolicy(
     meaningfulMessages.shift();
   }
   const lastMeaningful = meaningfulMessages[0];
-  if (forceRestartSafeTools && isPendingAssistantToolCall(lastMeaningful)) {
-    return { action: "resume", forceRestartSafeTools: true };
-  }
-  if (isRestartAbortedWaitFailure(lastMeaningful)) {
+  if (
+    (forceRestartSafeTools && isPendingAssistantToolCall(lastMeaningful)) ||
+    isRestartAbortedWaitFailure(lastMeaningful)
+  ) {
     return { action: "resume", forceRestartSafeTools: true };
   }
   const waitCall = readCodeModeWaitCall(lastMeaningful);
-  if (waitCall) {
-    const checkpoint = readCodeModeCheckpoint(meaningfulMessages[1]);
-    return checkpoint?.replaySafe === true && checkpoint.runId === waitCall.runId
-      ? { action: "resume", forceRestartSafeTools: true, forceCodeModeTools: true }
-      : { action: "resume", forceRestartSafeTools: true };
-  }
-  const tailCheckpoint = readCodeModeCheckpoint(lastMeaningful);
-  if (tailCheckpoint) {
-    return tailCheckpoint.replaySafe
+  const checkpoint = readCodeModeCheckpoint(meaningfulMessages[waitCall ? 1 : 0]);
+  if (waitCall || checkpoint) {
+    return checkpoint?.replaySafe === true && (!waitCall || checkpoint.runId === waitCall.runId)
       ? { action: "resume", forceRestartSafeTools: true, forceCodeModeTools: true }
       : { action: "resume", forceRestartSafeTools: true };
   }

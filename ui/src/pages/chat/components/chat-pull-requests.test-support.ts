@@ -4,7 +4,8 @@ import type { GitHubPublicationView } from "../../../lib/sessions/github-publica
 export function publication(overrides: Partial<GitHubPublicationView> = {}): GitHubPublicationView {
   return {
     activity: null,
-    canWrite: true,
+    canPublishShared: true,
+    canPublishPersonal: true,
     locked: false,
     options: null,
     selection: {
@@ -14,6 +15,7 @@ export function publication(overrides: Partial<GitHubPublicationView> = {}): Git
     result: null,
     confirmation: null,
     error: null,
+    optionsUnavailable: false,
     personalReady: true,
     onPublish: () => {},
     onRefresh: () => {},

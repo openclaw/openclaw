@@ -44,7 +44,7 @@ Related: [Secrets Management](/gateway/secrets) · [1Password plugin](/plugins/o
 
 ## Shared secret store
 
-`openclaw secrets store` writes directly to the local shared state database. The store is Gateway-wide and team-scoped, and `--scope team` is the only accepted value. `--scope me` exits `2` with `Identity scope is not supported yet; use --scope team.`
+`openclaw secrets store` routes writes through the Gateway that owns the local state directory. With the Gateway stopped, it takes exclusive offline ownership until the write and cleanup settle. If the running Gateway is older or cannot be reached, the command refuses without a local fallback; update or stop that Gateway before retrying. The store is Gateway-wide and team-scoped, and `--scope team` is the only accepted value. `--scope me` exits `2` with `Identity scope is not supported yet; use --scope team.`
 
 Entries also arrive from **Settings -> Secrets** in the Control UI, and from the agent's [`secrets` tool](/tools/secrets). That tool asks you to type a credential into a masked prompt. It stores the credential without the value reaching the model.
 
@@ -62,7 +62,9 @@ Naming and value rules:
 - Values are limited to 64 KiB (65,536 UTF-8 bytes). An oversized value exits `2` whether it arrives from stdin, `--value`, or `--value-file`.
 - A `secret` entry may not be empty, because an empty credential cannot be diagnosed later. `get` refuses secret kinds, and listings mask them. `env` entries may be empty.
 - Known redaction placeholders such as `__OPENCLAW_REDACTED__` cannot be stored as values. CLI `set` and `import` skip redacted inputs for existing usable entries with an explicit unchanged message; a placeholder without a usable existing entry exits `2`.
-- `--kind secret|env` overrides automatic kind detection. Otherwise names ending in a common credential suffix such as `_API_KEY`, `_TOKEN`, `_PASSWORD`, `_PRIVATE_KEY`, or `_SECRET` become `secret`, and other names become `env`.
+- `--kind secret|env` explicitly changes an entry's kind. Otherwise `set` and `import` preserve the entry's current kind when saving, including protection changes made while input or confirmation is pending. Only new names use automatic detection: names ending in a common credential suffix such as `_API_KEY`, `_TOKEN`, `_PASSWORD`, `_PRIVATE_KEY`, or `_SECRET` become `secret`, and other names become `env`.
+
+File paths passed to `--value-file` or `--from` must identify regular files. Named pipes and device paths are rejected; use stdin for streamed input.
 
 ### Set values safely
 
@@ -72,7 +74,7 @@ Naming and value rules:
 openclaw secrets store set LOG_LEVEL --kind env --value debug
 ```
 
-For `secret` values, `--value` is refused with exit code `2` because command-line arguments can leak through shell history and process listings. Use one of the three safe inputs instead:
+For `secret` values, `--value` is refused with exit code `2` because command-line arguments can leak through shell history and process listings. It is also refused if another writer changes the entry to `secret` before the value is saved. Explicit `--kind env` still reclassifies the entry. Use one of the three safe inputs instead:
 
 - Pipe stdin when stdin is not a TTY.
 - Pass `--value-file <path>`. `--value-file -` means stdin.
@@ -89,14 +91,14 @@ openclaw secrets store set TLS_PRIVATE_KEY \
   --value-file ./client-key.pem
 ```
 
-`set` is idempotent and updates an existing name. Add `--dry-run` to validate and preview the operation without writing. A successful write reminds you to run `openclaw secrets reload` before a config-referenced value can take effect.
+`set` creates or updates a name without duplicate entries. Add `--dry-run` to validate and preview the operation without writing. An online write refreshes affected config references in the Gateway. If that refresh fails after saving, the error reports the saved change and directs you to `openclaw secrets reload`; it does not replay the write locally.
 
 `audit` reports previously stored or resolved placeholders as `PLACEHOLDER_VALUE`
 and counts them as unresolved credentials (exit `2`). For a corrupt store-backed
 Gateway token, run `openclaw doctor --fix`, restart the Gateway, and reconnect or
 re-pair devices. See [Gateway token recovery](/cli/doctor/recovery#invalid-gateway-tokens).
 
-Secret egress substitution fails closed until each secret has at least one exact allowed host. Bind or replace hosts with repeatable `--allow-host` flags. This policy-only form does not ask for or replace an existing secret value:
+Secret egress substitution is blocked until each secret has at least one exact allowed host. Bind or replace hosts with repeatable `--allow-host` flags. This policy-only form does not ask for or replace an existing secret value:
 
 ```bash
 openclaw secrets store set OPENAI_API_KEY --allow-host api.openai.com
@@ -132,7 +134,7 @@ openclaw secrets store rm OLD_TOKEN LEGACY_PASSWORD --yes
 openclaw secrets store rm OLD_TOKEN --dry-run
 ```
 
-Removal is idempotent, so a missing name succeeds quietly. Without `--yes`, the CLI asks for confirmation. Removed rows are soft-deleted and purged after 30 days.
+Removing a missing name succeeds quietly. Without `--yes`, the CLI asks for confirmation. Removed rows are soft-deleted and purged after 30 days.
 
 ### Import dotenv files
 
@@ -145,7 +147,7 @@ openclaw secrets store import --from .env --yes
 op read 'op://Engineering/service-account/dotenv' | openclaw secrets store import --yes
 ```
 
-The importer supports quoted values and multiline quoted values such as PEM keys. Use `--yes` to skip confirmation and `--dry-run` to inspect the import without writing. Kind detection follows the same name-based rule as `store set`.
+The importer supports quoted values and multiline quoted values such as PEM keys. Use `--yes` to skip confirmation and `--dry-run` to inspect the import without writing. Like `store set`, import preserves an existing entry's kind and uses the name-based rule only for new names. Pass `--kind secret|env` to explicitly reclassify all imported entries.
 
 The store CLI commands do not accept `--url` or `--token` and do not route through the Gateway. The Control UI uses the admin-scoped `secrets.store.*` RPC methods instead. Those methods refresh the runtime automatically when a changed name is referenced by active config.
 
@@ -222,7 +224,7 @@ Flags:
 Notes:
 
 - Requires an interactive TTY.
-- Targets secret-bearing fields in `openclaw.json` plus the selected agent's auth profile store. The canonical supported surface is [SecretRef Credential Surface](/reference/secretref-credential-surface).
+- Targets secret-bearing fields in `openclaw.json` plus the selected agent's auth profile store. The supported fields are listed in [SecretRef Credential Surface](/reference/secretref-credential-surface).
 - Supports creating new auth profile mappings directly in the picker flow.
 - Runs preflight resolution before apply.
 - Generated plans enable `scrubEnv` and `scrubAuthProfilesForProviderTargets`. `scrubLegacyAuthJson` stays disabled, because Doctor owns legacy `auth.json` migration. Apply is one-way for scrubbed plaintext values.
@@ -233,7 +235,7 @@ Notes:
 
 ### Exec provider safety
 
-Package managers often expose symlinked command paths. Resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute, non-symlink path. Use `trustedDirs` to restrict executables to approved directories. Run `openclaw config validate` on the Gateway host to check manual exec command paths without executing providers. On Windows, provider paths fail closed when ACL verification is unavailable, with no provider-level bypass.
+Package managers often expose symlinked command paths. Resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute, non-symlink path. Use `trustedDirs` to restrict executables to approved directories. Run `openclaw config validate` on the Gateway host to check manual exec command paths without executing providers. On Windows, provider paths are rejected when ACL verification is unavailable, with no provider-level bypass.
 
 ## Apply a saved plan
 

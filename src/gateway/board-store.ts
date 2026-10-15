@@ -1,6 +1,8 @@
+import { BoardValidationError } from "../boards/board-layout.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 
@@ -15,7 +17,7 @@ export function captureGatewaySessionStoreScope(sessionKey: string, explicitAgen
   return { agentId, storePath, sessionKey: canonicalKey };
 }
 
-export function resolveGatewaySessionDatabase(
+function resolveGatewaySessionDatabase(
   sessionKey: string,
   explicitAgentId?: string,
 ): {
@@ -38,5 +40,28 @@ export function resolveGatewaySessionDatabase(
 }
 
 export const boardStore = new SqliteBoardStore({
-  resolveSession: ({ sessionKey, agentId }) => resolveGatewaySessionDatabase(sessionKey, agentId),
+  resolveSession: ({ sessionKey, agentId }) => {
+    const scope = captureGatewaySessionStoreScope(sessionKey, agentId);
+    const assertCurrent = () => {
+      const current = captureGatewaySessionStoreScope(sessionKey, agentId);
+      if (
+        current.agentId !== scope.agentId ||
+        current.storePath !== scope.storePath ||
+        current.sessionKey !== scope.sessionKey
+      ) {
+        throw new BoardValidationError("invalid_operation", "board session changed; retry");
+      }
+    };
+    const memory = captureSessionActorStorageOwner(scope, {
+      assertCurrent,
+      authorize: assertCurrent,
+    });
+    const database = memory
+      ? { agentId: memory.agentId, path: memory.path, sessionKey: scope.sessionKey }
+      : resolveGatewaySessionDatabase(sessionKey, agentId);
+    return {
+      ...database,
+      assertCurrent,
+    };
+  },
 });

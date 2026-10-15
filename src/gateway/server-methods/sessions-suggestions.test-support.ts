@@ -54,9 +54,7 @@ export async function call(
   requestClient: GatewayClient | null,
   requestContext = context(),
 ) {
-  if (method === "session.typing") {
-    await initializeSessionReadContext(requestContext);
-  }
+  await initializeSessionReadContext(requestContext);
   const responses: Parameters<RespondFn>[] = [];
   await sessionSuggestionHandlers[method]?.({
     req: { type: "req", id: "request-1", method, params },

@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildAgentHookContextIdentityFields } from "../../plugins/hook-agent-context.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
+import {
+  assertMemoryAudienceCurrent,
+  assertMemoryAudienceSession,
+} from "../../plugins/memory-audience.js";
 
 /**
  * Input facts used to build the agent portion of plugin hook events.
@@ -10,13 +14,21 @@ import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
  */
 export type AgentHarnessHookContext = Omit<
   PluginHookAgentContext,
-  "activeProjectKeys" | "senderExternalId" | "toolAuthority" | "hookInvocation"
+  | "activeProjectKeys"
+  | "senderExternalId"
+  | "toolAuthority"
+  | "hookInvocation"
+  | "assertMemoryAudienceCurrent"
 > & {
   config?: OpenClawConfig;
 };
 
 /** Builds the sparse hook context object passed to agent harness plugin hooks. */
 export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHookAgentContext {
+  const { memoryAudience } = params;
+  if (memoryAudience) {
+    assertMemoryAudienceSession(memoryAudience, params.sessionKey);
+  }
   return {
     ...(params.runId ? { runId: params.runId } : {}),
     ...(params.trace ? { trace: params.trace } : {}),
@@ -24,6 +36,14 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+    // The host derives the audience guard from the audience, so hooks never receive one without it.
+    ...(memoryAudience
+      ? {
+          memoryAudience,
+          assertMemoryAudienceCurrent: () => assertMemoryAudienceCurrent(memoryAudience),
+        }
+      : {}),
+    ...(params.sandboxed !== undefined ? { sandboxed: params.sandboxed } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     ...(params.modelProviderId ? { modelProviderId: params.modelProviderId } : {}),
     ...(params.modelId ? { modelId: params.modelId } : {}),

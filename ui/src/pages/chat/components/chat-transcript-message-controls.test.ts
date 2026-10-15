@@ -5,7 +5,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { renderTranscriptSearch, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
-import { renderChatThread } from "./chat-thread.ts";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -167,7 +167,9 @@ describe("chat transcript message controls", () => {
             expect.objectContaining({ sourceMessageId: "timestamp-answer", text }),
           );
           if (index === 1) {
-            expect(requireElement(group, ".chat-work-group").textContent).toContain("35m 17s");
+            expect(requireElement(group, ".chat-work-group").textContent).toContain(
+              "Worked for 35 minutes, 17 seconds",
+            );
           }
           await vi.advanceTimersByTimeAsync(1_500);
         } finally {

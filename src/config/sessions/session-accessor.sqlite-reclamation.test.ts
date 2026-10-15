@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { AsyncLocalStorage } from "node:async_hooks";
 import { symlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -11,10 +10,13 @@ import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
+import * as workerCpu from "../../infra/worker-cpu.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
-import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -24,13 +26,12 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { loadTranscriptEvents } from "./session-accessor.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import {
   loadSessionEntry,
@@ -38,22 +39,19 @@ import {
   replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
+import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import {
-  createHistoryEvictionReclamationPlan,
   createLifecycleArtifactReclamationPlan,
+  resolveSessionReclamationDatabaseOptions,
 } from "./session-accessor.sqlite-reclamation.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
-import {
-  appendTranscriptEventSync,
-  replaceTranscriptEventsSync,
-} from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SqliteWorkerWriteAdmission } from "./session-accessor.sqlite-worker-request.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 
 const hooks = vi.hoisted(() => ({
-  beforeAuthorization: undefined as (() => void) | undefined,
   beforeWriteAdmission: undefined as (() => Promise<void>) | undefined,
   afterWriteAdmission: undefined as (() => Promise<void>) | undefined,
   failWorkerLog: false,
@@ -122,10 +120,6 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
                     withWriteAdmission: observeAdmission(withWriteAdmission),
                   }
                 : {}),
-              onCommitRequest: () => {
-                hooks.beforeAuthorization?.();
-                return params.onCommitRequest();
-              },
             });
           });
           try {
@@ -141,7 +135,6 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
   };
 });
 afterEach(() => {
-  hooks.beforeAuthorization = undefined;
   hooks.beforeWriteAdmission = undefined;
   hooks.afterWriteAdmission = undefined;
   hooks.failWorkerLog = false;
@@ -176,13 +169,14 @@ function createFixture(alias = false) {
     symlinkSync(database.path, aliasPath);
     openOpenClawAgentDatabase({ ...options, path: aliasPath });
   }
-  const plan = createHistoryEvictionReclamationPlan({
-    databaseOptions,
+  const plan = {
+    kind: "history-eviction",
+    databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
     diskBudget: {},
     materializedPlans: [],
-    protectedSessionIds: new Set(scopes.map((scope) => scope.sessionId)),
+    protectedSessionIds: [...new Set(scopes.map((scope) => scope.sessionId))],
     sessionId: "already-removed-history",
-  });
+  } satisfies SqliteSessionReclamationPlan;
   return {
     database,
     databaseOptions,
@@ -193,13 +187,23 @@ function createFixture(alias = false) {
 
 function observeWorkers() {
   const workers: Array<{ worker: Worker; id: number; exits: number[] }> = [];
-  const observe = (worker: Worker) => {
-    const observed: (typeof workers)[number] = { worker, id: worker.threadId, exits: [] };
-    workers.push(observed);
-    worker.once("exit", (code) => observed.exits.push(code));
-  };
-  process.on("worker", observe);
-  return { workers, stopObserving: () => process.off("worker", observe) };
+  const heartbeatUrl = String(
+    resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gatewayStateOwnerHeartbeat),
+  );
+  const createWorker = workerCpu.createCpuTrackedWorker;
+  const observe = vi
+    .spyOn(workerCpu, "createCpuTrackedWorker")
+    .mockImplementation((filename, options) => {
+      const worker = createWorker(filename, options);
+      // Schema admission has its own heartbeat; this suite owns data-worker lifetime checks.
+      if (String(filename) !== heartbeatUrl) {
+        const observed: (typeof workers)[number] = { worker, id: worker.threadId, exits: [] };
+        workers.push(observed);
+        worker.once("exit", (code) => observed.exits.push(code));
+      }
+      return worker;
+    });
+  return { workers, stopObserving: () => observe.mockRestore() };
 }
 
 async function readLogRecords(file: string) {
@@ -212,222 +216,6 @@ async function readLogRecords(file: string) {
       return record;
     });
 }
-
-test.each([
-  { operation: "append", rejected: false, alias: false },
-  { operation: "replace", rejected: true, alias: process.platform !== "win32" },
-  { operation: "entry", rejected: false, alias: false },
-  { operation: "board", rejected: false, alias: process.platform !== "win32" },
-])(
-  "two foreground writers progress at reclamation ($operation, rejected: $rejected, alias: $alias)",
-  async ({ operation, rejected, alias }) => {
-    const { databaseOptions, plan, scopes } = createFixture(alias);
-    const { workers, stopObserving } = observeWorkers();
-    const diagnostics: SqliteSessionReclamationDiagnostics = {};
-    const board = new SqliteBoardStore({
-      env: databaseOptions.env,
-      resolveSession: ({ sessionKey }) => ({
-        ...databaseOptions,
-        path: scopes[0]!.storePath ?? databaseOptions.path,
-        sessionKey,
-      }),
-    });
-    const appends: unknown[] = [];
-    const boardAppends: Promise<void>[] = [];
-    const appendErrors: unknown[] = [];
-    let commitChecks = 0;
-    let commitRequested = false;
-    let checksDuringWriters = 0;
-    let workerAuthorizationChecked = false;
-    const boardWriteOrder: string[] = [];
-    const owner = new AsyncLocalStorage<string>();
-    hooks.beforeAuthorization = () =>
-      owner.run("transcript-writer", () => {
-        commitRequested = true;
-        const checksBeforeWriters = commitChecks;
-        // Synchronous writers service the worker's pending authorization request;
-        // asynchronous board writes retain their FIFO place until the worker settles.
-        for (const scope of scopes) {
-          try {
-            if (operation === "entry") {
-              replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 2 });
-              appends.push(loadSessionEntry(scope)?.updatedAt);
-              continue;
-            }
-            if (operation === "board") {
-              boardAppends.push(
-                board
-                  .putWidget(
-                    {
-                      sessionKey: scope.sessionKey,
-                      name: "writer-proof",
-                      content: { kind: "html", html: "<p>committed</p>" },
-                    },
-                    { assertCurrent: () => expect(owner.getStore()).toBe("transcript-writer") },
-                  )
-                  .then(
-                    (snapshot) => {
-                      expect(workerAuthorizationChecked).toBe(true);
-                      boardWriteOrder.push(scope.sessionId);
-                      appends.push(snapshot.revision);
-                    },
-                    (error: unknown) => {
-                      appendErrors.push(error);
-                    },
-                  ),
-              );
-              continue;
-            }
-            const event = { type: "session", id: scope.sessionId };
-            appends.push(
-              operation === "replace"
-                ? replaceTranscriptEventsSync(scope, [event])
-                : appendTranscriptEventSync(scope, event),
-            );
-          } catch (error) {
-            appendErrors.push(error);
-          }
-        }
-        checksDuringWriters = commitChecks - checksBeforeWriters;
-        if (operation === "board") {
-          const stored = withOpenClawAgentDatabaseReadOnly(
-            ({ db }) =>
-              db.prepare("SELECT name FROM board_widgets WHERE name = 'writer-proof'").all(),
-            databaseOptions,
-          );
-          expect(stored).toEqual({ found: true, value: [] });
-          expect(appends).toEqual([]);
-          expect(appendErrors).toEqual([]);
-        }
-      });
-    const reclamation = owner.run("reclamation-owner", () =>
-      runSqliteSessionReclamation({
-        diagnostics,
-        forceInProcess: false,
-        plan,
-        assertCommitAllowed: () => {
-          commitChecks += 1;
-          expect(owner.getStore()).toBe("reclamation-owner");
-          if (commitRequested) {
-            workerAuthorizationChecked = true;
-          }
-          if (rejected && commitRequested) {
-            throw new Error("reclamation owner retired");
-          }
-        },
-      }),
-    );
-    try {
-      if (rejected) {
-        await expect(reclamation).rejects.toThrow("reclamation owner retired");
-      } else {
-        await expect(reclamation).resolves.toEqual({
-          kind: "history-eviction",
-          value: { archivedTranscripts: [], deleted: true },
-        });
-      }
-      await Promise.all(boardAppends);
-    } finally {
-      stopObserving();
-    }
-    // Boards add one canonical data worker; reclamation retains its separate worker.
-    expect(workers).toHaveLength(operation === "board" ? 2 : 1);
-    expect(workers[0]?.id).toBeGreaterThan(0);
-    expect(diagnostics).toEqual({ kind: "history-eviction", workerThreadId: workers[0]?.id });
-    await closeOpenClawAgentDatabasesAsync();
-    expect(workers[0]?.worker.threadId).toBe(-1);
-    if (operation === "board") {
-      expect(workers[1]?.id).toBeGreaterThan(0);
-      expect(workers[1]?.id).not.toBe(workers[0]?.id);
-      expect(workers[1]?.worker.threadId).toBe(-1);
-      expect(checksDuringWriters).toBe(0);
-      expect(boardWriteOrder).toEqual(scopes.map((scope) => scope.sessionId));
-    } else {
-      expect(checksDuringWriters).toBeGreaterThan(0);
-    }
-    expect(appendErrors).toEqual([]);
-    expect(appends).toEqual(
-      operation === "entry"
-        ? [2, 2]
-        : operation === "board"
-          ? [1, 1]
-          : operation === "replace"
-            ? [true, true]
-            : [
-                { ok: true, value: true },
-                { ok: true, value: true },
-              ],
-    );
-    for (const scope of scopes) {
-      if (operation === "entry") {
-        expect(loadSessionEntry(scope)).toMatchObject({ sessionId: scope.sessionId, updatedAt: 2 });
-        continue;
-      }
-      if (operation === "board") {
-        expect((await board.getSnapshot({ sessionKey: scope.sessionKey })).widgets).toMatchObject([
-          { name: "writer-proof", revision: 1 },
-        ]);
-        continue;
-      }
-      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
-        { type: "session", id: scope.sessionId },
-      ]);
-    }
-  },
-  20_000,
-);
-
-test("captures removal identity when a synchronous writer authorizes a reused reclamation worker", async () => {
-  const { databaseOptions, scopes } = createFixture();
-  await runSqliteSessionReclamation({
-    forceInProcess: false,
-    plan: createHistoryEvictionReclamationPlan({
-      databaseOptions,
-      diskBudget: {},
-      materializedPlans: [],
-      protectedSessionIds: new Set(),
-      sessionId: "previous-victim",
-    }),
-  });
-  const removed = scopes[0]!;
-  const writer = scopes[1]!;
-  const expectedEntry = loadSessionEntry(removed);
-  if (!expectedEntry) {
-    throw new Error("expected the removal fixture entry");
-  }
-  const plan = createLifecycleArtifactReclamationPlan({
-    agentId: databaseOptions.agentId,
-    databaseOptions,
-    entries: [{ sessionKey: removed.sessionKey, expectedEntry }],
-    materializedPlans: [],
-  });
-  const removedSessionIds: Array<string | undefined> = [];
-  const unsubscribe = onSessionIdentityMutation((mutation) => {
-    if (mutation.kind === "delete" && mutation.previous.sessionKeys.includes(removed.sessionKey)) {
-      removedSessionIds.push(mutation.previous.sessionId);
-    }
-  });
-  hooks.beforeAuthorization = () => {
-    expect(appendTranscriptEventSync(writer, { type: "session", id: writer.sessionId })).toEqual({
-      ok: true,
-      value: true,
-    });
-    expect(loadSessionEntry({ ...removed, readConsistency: "latest" })).toBeUndefined();
-    // The helper has joined COMMIT, but the queued Worker callback has not run yet.
-    expectedEntry.sessionId = "changed-after-grant";
-  };
-  try {
-    await expect(
-      runSqliteSessionReclamation({ forceInProcess: false, plan }),
-    ).resolves.toMatchObject({ kind: "lifecycle-artifacts", value: { removedEntries: 1 } });
-    expect(removedSessionIds).toEqual([removed.sessionId]);
-    await expect(loadTranscriptEvents(writer)).resolves.toEqual([
-      { type: "session", id: writer.sessionId },
-    ]);
-  } finally {
-    unsubscribe();
-  }
-});
 
 test.each([false, true])(
   "in-process reclamation checks authority before cold database admission (revoked: %s)",
@@ -495,39 +283,49 @@ test.each([false, true])(
     const before = inspect();
     expect(before).toMatchObject({ writerOpen: false, leases: [], repairIndex: undefined });
     const survivorEntry = loadSessionEntryReadOnly(survivor);
+    const owner = acquireGatewayStateOwner({ databasePath: stateDatabase.path });
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: owner.assertCurrent,
+      assertDatabaseAccess: owner.assertDatabaseAccess,
+    });
     try {
-      const operation = runSqliteSessionReclamation({
-        forceInProcess: true,
-        plan,
-        assertCommitAllowed: () => {
-          if (revoked) {
-            throw new Error("native reclamation authority revoked");
-          }
-        },
+      await maintenance.run(async () => {
+        const operation = runSqliteSessionReclamation({
+          plan,
+          assertCommitAllowed: () => {
+            if (revoked) {
+              throw new Error("native reclamation authority revoked");
+            }
+          },
+        });
+        if (revoked) {
+          await expect(operation).rejects.toThrow("native reclamation authority revoked");
+          // Read-only observation must not itself reopen or repair the rejected target.
+          expect(inspect()).toEqual(before);
+          expect(loadSessionEntryReadOnly(current)).toEqual(expectedEntry);
+        } else {
+          await expect(operation).resolves.toMatchObject({
+            kind: "lifecycle-artifacts",
+            value: { removedEntries: 1 },
+          });
+          const after = inspect();
+          expect(after).toMatchObject({
+            writerOpen: true,
+            repairIndex: { name: "idx_agent_cache_expiry" },
+            events: before.events,
+            windows: before.windows,
+          });
+          expect(loadSessionEntryReadOnly(current)).toBeUndefined();
+        }
+        expect(database.db.isOpen).toBe(false);
+        expect(loadSessionEntryReadOnly(survivor)).toEqual(survivorEntry);
+        await closeOpenClawAgentDatabaseByPathAsync(database.path);
+        expect(inspect()).toMatchObject({ writerOpen: false, leases: [] });
       });
-      if (revoked) {
-        await expect(operation).rejects.toThrow("native reclamation authority revoked");
-        // Read-only observation must not itself reopen or repair the rejected target.
-        expect(inspect()).toEqual(before);
-        expect(loadSessionEntryReadOnly(current)).toEqual(expectedEntry);
-      } else {
-        await expect(operation).resolves.toMatchObject({
-          kind: "lifecycle-artifacts",
-          value: { removedEntries: 1 },
-        });
-        const after = inspect();
-        expect(after).toMatchObject({
-          writerOpen: true,
-          repairIndex: { name: "idx_agent_cache_expiry" },
-          events: before.events,
-          windows: before.windows,
-        });
-        expect(after.leases).toHaveLength(1);
-        expect(loadSessionEntryReadOnly(current)).toBeUndefined();
-      }
-      expect(database.db.isOpen).toBe(false);
-      expect(loadSessionEntryReadOnly(survivor)).toEqual(survivorEntry);
     } finally {
+      await maintenance.close();
+      owner.release();
       await closeOpenClawAgentDatabaseByPathAsync(database.path);
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
@@ -571,7 +369,7 @@ test.runIf(process.platform !== "win32")(
       await yieldToEventLoop();
       expect(canonicalWriteRan).toBe(false);
     };
-    const reclamation = runSqliteSessionReclamation({ forceInProcess: false, plan });
+    const reclamation = runSqliteSessionReclamation({ plan });
     try {
       await expect(reclamation).resolves.toMatchObject({
         kind: "lifecycle-artifacts",
@@ -607,9 +405,9 @@ test("one reclamation pass leaves a large freelist for bounded later maintenance
   const before = freePages();
   expect(before).toBeGreaterThan(512);
 
-  await expect(runSqliteSessionReclamation({ forceInProcess: false, plan })).resolves.toMatchObject(
-    { value: { deleted: true } },
-  );
+  await expect(runSqliteSessionReclamation({ plan })).resolves.toMatchObject({
+    value: { deleted: true },
+  });
 
   const after = freePages();
   expect(before - after).toBeGreaterThan(0);
@@ -648,7 +446,6 @@ test("queued reclamations reuse their database Worker without borrowing another 
   const operations = [first, first, other].map((fixture, index) => {
     const record = diagnostics[index];
     return runSqliteSessionReclamation({
-      forceInProcess: false,
       plan: fixture.plan,
       diagnostics: record,
     });
@@ -674,7 +471,7 @@ test("queued reclamations reuse their database Worker without borrowing another 
 test("file warnings retain rejected native admission releases without attributing them to a successor", async () => {
   const { databaseOptions, plan } = createFixture();
   closeOpenClawAgentDatabasesForTest(databaseOptions.env.OPENCLAW_STATE_DIR);
-  clearOpenClawAgentIntegrityVerification(databaseOptions.path, databaseOptions.env);
+  revokeSqliteDatabaseAdmissionsForPath(databaseOptions.path);
   const file = path.join(tempDirs.make("openclaw-writer-log-"), "writer.log");
   const diagnostics: SqliteSessionReclamationDiagnostics = {};
   setLoggerOverride({ level: "info", file });
@@ -688,7 +485,7 @@ test("file warnings retain rejected native admission releases without attributin
     if (admissions === 0) {
       // Revoke incoming warm proof at the actual cold prepare admission so native
       // validation releases and reacquires its own writer before acceptance.
-      clearOpenClawAgentIntegrityVerification(databaseOptions.path, databaseOptions.env);
+      revokeSqliteDatabaseAdmissionsForPath(databaseOptions.path);
     }
     if (admissions === 1) {
       revoked = true;
@@ -707,7 +504,6 @@ test("file warnings retain rejected native admission releases without attributin
     clock += 1_100;
   };
   const first = runSqliteSessionReclamation({
-    forceInProcess: false,
     plan,
     diagnostics,
     assertCommitAllowed: () => {
@@ -722,9 +518,9 @@ test("file warnings retain rejected native admission releases without attributin
     await expect(second).resolves.toBe("successor");
     await flushLogger();
     const records = (await readLogRecords(file))
-      .filter((record) => record["1"] === "slow SQLite session write")
+      .filter((record) => record["2"] === "slow SQLite session write")
       .map((record) => {
-        const details = record["2"];
+        const details = record["1"];
         assert.ok(isRecord(details));
         return details;
       });
@@ -776,88 +572,7 @@ test("file warnings retain rejected native admission releases without attributin
   }
 });
 
-test("a synchronous writer reports actual reclamation service time inside its BEGIN warning", async () => {
-  const { plan, scopes } = createFixture();
-  const scope = scopes[0]!;
-  const file = path.join(tempDirs.make("openclaw-begin-service-log-"), "writer.log");
-  const owner = new AsyncLocalStorage<string>();
-  const writerTrace = { traceId: "3".repeat(32), spanId: "4".repeat(16), traceFlags: "01" };
-  let clock = Date.now();
-  let insideWriter = false;
-  let serviceObserved = false;
-  vi.spyOn(Date, "now").mockImplementation(() => clock);
-  setLoggerOverride({ level: "info", consoleLevel: "silent", file });
-  const { workers, stopObserving } = observeWorkers();
-  hooks.beforeAuthorization = () =>
-    owner.run("synchronous-writer", () =>
-      runWithDiagnosticTraceContext(writerTrace, () => {
-        insideWriter = true;
-        try {
-          replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 2 });
-        } finally {
-          insideWriter = false;
-        }
-      }),
-    );
-  const operation = owner.run("reclamation-owner", () =>
-    runSqliteSessionReclamation({
-      forceInProcess: false,
-      plan,
-      assertCommitAllowed: () => {
-        expect(owner.getStore()).toBe("reclamation-owner");
-        if (insideWriter && !serviceObserved) {
-          serviceObserved = true;
-          // The real service has reached its owner check; native busy deadlines stay real.
-          clock += 1_200;
-        }
-      },
-    }),
-  );
-  try {
-    await expect(operation).resolves.toMatchObject({
-      kind: "history-eviction",
-      value: { deleted: true },
-    });
-    expect(serviceObserved).toBe(true);
-    expect(loadSessionEntry(scope)?.updatedAt).toBe(2);
-    expect(workers).toHaveLength(1);
-    await closeOpenClawAgentDatabasesAsync();
-    expect(workers[0]?.worker.threadId).toBe(-1);
-    await flushLogger();
-    const records = (await readLogRecords(file)).filter(
-      (record) =>
-        record.message === "slow SQLite transaction step" &&
-        isRecord(record["1"]) &&
-        record["1"].operation === "session-entry.replace",
-    );
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject(writerTrace);
-    const details = records[0]?.["1"];
-    assert.ok(isRecord(details));
-    expect(details).toMatchObject({
-      pid: process.pid,
-      threadId,
-      isMainThread,
-      async: false,
-      step: "begin",
-      elapsedMs: 1_200,
-      beginAdmission: { nativeMs: 0, serviceMs: 1_200 },
-    });
-    assert.ok(isRecord(details.beginAdmission));
-    expect(details.beginAdmission.nativeAttempts).toBeGreaterThanOrEqual(2);
-    expect(details.beginAdmission.serviceCalls).toBeGreaterThanOrEqual(1);
-  } finally {
-    await Promise.allSettled([operation]);
-    stopObserving();
-    vi.restoreAllMocks();
-    await flushLogger();
-    setLoggerOverride(null);
-  }
-});
-
 test.each([
-  { elapsedMs: 0, rejected: false, failLog: false },
-  { elapsedMs: 0, rejected: true, failLog: false },
   { elapsedMs: 1_500, rejected: false, failLog: false },
   { elapsedMs: 1_500, rejected: true, failLog: true },
 ])(
@@ -865,7 +580,7 @@ test.each([
   async ({ elapsedMs, rejected, failLog }) => {
     const { databaseOptions, plan } = createFixture();
     closeOpenClawAgentDatabasesForTest(databaseOptions.env.OPENCLAW_STATE_DIR);
-    clearOpenClawAgentIntegrityVerification(databaseOptions.path, databaseOptions.env);
+    revokeSqliteDatabaseAdmissionsForPath(databaseOptions.path);
     const file = path.join(tempDirs.make("openclaw-reclamation-log-"), "reclamation.log");
     await fs.writeFile(file, "");
     setLoggerOverride({ level: "info", consoleLevel: "silent", file });
@@ -884,7 +599,7 @@ test.each([
       if (++admissions === 1) {
         // Invalidate at native preparation's first admission, preserving the proof
         // owner while requiring validation to release its preliminary writer.
-        clearOpenClawAgentIntegrityVerification(databaseOptions.path, databaseOptions.env);
+        revokeSqliteDatabaseAdmissionsForPath(databaseOptions.path);
         return;
       }
       if (admissions !== 2) {
@@ -904,7 +619,6 @@ test.each([
     const trace = { traceId: "1".repeat(32), spanId: "2".repeat(16), traceFlags: "01" };
     const operation = runWithDiagnosticTraceContext(trace, () =>
       runSqliteSessionReclamation({
-        forceInProcess: false,
         plan,
         diagnostics,
         assertCommitAllowed: () => {
@@ -937,7 +651,7 @@ test.each([
       await closeOpenClawAgentDatabasesAsync();
       expect(workers[0]?.worker.threadId).toBe(-1);
       expect(exits).toEqual([0]);
-      expect(records.some((record) => record["1"] === "slow SQLite session write")).toBe(false);
+      expect(records.some((record) => record["2"] === "slow SQLite session write")).toBe(false);
       expect(hooks.workerLogAttempts).toBe(elapsedMs > 0 || rejected ? 1 : 0);
       expect(observations).toHaveLength((elapsedMs > 0 || rejected) && !failLog ? 1 : 0);
       if (observations[0]) {

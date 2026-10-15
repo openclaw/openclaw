@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { stateMigrations } from "../../doctor-contract-api.js";
 import { setDiscordRuntime } from "../runtime.js";
 import {
   readDiscordModelPickerRecentModels,
@@ -178,5 +179,69 @@ describe("discord model picker preferences", () => {
       "openai/gpt-5.6",
       "openai/gpt-5.5",
     ]);
+  });
+
+  it("retires the July command cache while preserving July SQLite state", async () => {
+    const env = await createStateEnv();
+    const stateDir = env.OPENCLAW_STATE_DIR!;
+    const migration = stateMigrations.find((entry) => entry.id === "discord-legacy-state")!;
+    const input = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "credentials"),
+      context: {
+        openPluginStateKeyedStore: vi.fn(() => {
+          throw new Error("cache retirement must not open canonical stores");
+        }),
+      },
+    };
+    const preferences = createPluginStateKeyedStoreForTests("discord", {
+      namespace: "model-picker-preferences",
+      maxEntries: 2_000,
+      env: input.env,
+    });
+    const bindings = createPluginStateKeyedStoreForTests("discord", {
+      namespace: "thread-bindings",
+      maxEntries: 10_000,
+      env: input.env,
+    });
+    const preference = {
+      scopeKey: "discord:default:dm:user:123",
+      modelRef: "openai/gpt-4.1",
+      updatedAt: "2026-07-01T00:00:00.000Z",
+    };
+    const binding = {
+      accountId: "default",
+      channelId: "parent-1",
+      threadId: "july-thread",
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:july",
+      agentId: "main",
+      boundBy: "system",
+      boundAt: 1_782_864_000_000,
+      lastActivityAt: 1_782_864_000_000,
+      idleTimeoutMs: 0,
+      maxAgeMs: 0,
+    };
+    await preferences.register(
+      "v1:d5899e380e110de25e5bfcc71b9ea6c2:c8893463e7ced4209fdb0702",
+      preference,
+    );
+    await bindings.register("default:july-thread", binding);
+    const sourcePath = path.join(input.stateDir, "discord", "command-deploy-cache.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "{malformed rebuildable cache");
+
+    const result = await migration.migrateLegacyState(input);
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([expect.stringContaining(sourcePath)]);
+    await expect(fs.lstat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(
+      await preferences.lookup("v1:d5899e380e110de25e5bfcc71b9ea6c2:c8893463e7ced4209fdb0702"),
+    ).toEqual(preference);
+    expect(await bindings.lookup("default:july-thread")).toEqual(binding);
+    expect(await migration.detectLegacyState(input)).toBeNull();
   });
 });

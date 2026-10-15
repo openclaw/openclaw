@@ -7,6 +7,7 @@ import { prepareDeferredPluginMigrationRuntime } from "../../infra/deferred-plug
 await prepareDeferredPluginMigrationRuntime();
 
 export { executeMutableUpdate } from "./update-command-execution.js";
+export { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 export { finishAlreadyCurrentUpdate } from "./update-command-noop.js";
 export {
   continueMigratedUpdateInFreshProcess,

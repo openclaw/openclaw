@@ -5,17 +5,16 @@ import net, { type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { promisify } from "node:util";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createChromeMcpSession } from "./chrome-mcp-connect.js";
 import type { ChromeMcpSession } from "./chrome-mcp-contracts.js";
-import { parseChromeMcpUnixProcessListForTest } from "./chrome-mcp-process.js";
-import {
-  getChromeMcpSessionOwner,
-  setChromeMcpProcessCleanupDepsForTest,
-  setChromeMcpSessionFactoryForTest,
-} from "./chrome-mcp-session.js";
+import { getChromeMcpSessionOwner } from "./chrome-mcp-session.js";
+import { setChromeMcpSessionFactoryForTest } from "./chrome-mcp.test-support.js";
+
+const { mockChromeMcpProcesses, resetChromeMcpProcessMocks } = await vi.hoisted(
+  () => import("./chrome-mcp-process.test-support.js"),
+);
 
 vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>()),
@@ -23,7 +22,7 @@ vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => ({
 }));
 
 afterEach(() => {
-  setChromeMcpProcessCleanupDepsForTest(null);
+  resetChromeMcpProcessMocks();
   setChromeMcpSessionFactoryForTest(null);
   vi.restoreAllMocks();
 });
@@ -78,7 +77,7 @@ async function createHeldStdioPeer({
   });
   let child: ChildProcess | undefined;
   let childClosed: Promise<unknown> | undefined;
-  const resources: { creation?: ReturnType<typeof createChromeMcpSession> } = {};
+  const resources: { session?: ChromeMcpSession } = {};
   let disposing: Promise<void> | undefined;
   const options = { command: process.execPath, args: [script] };
   const owner = getChromeMcpSessionOwner("cleanup-fixture", options);
@@ -91,10 +90,9 @@ async function createHeldStdioPeer({
         socket.end("release\n");
       }
       let session: ChromeMcpSession | undefined;
-      if (resources.creation) {
-        session = await resources.creation.promise;
+      if (resources.session) {
+        session = resources.session;
         await owner.close(session).catch(() => {});
-        await resources.creation.cleanup;
       }
       await childClosed;
       await Promise.all(socketClosures);
@@ -161,8 +159,8 @@ if (!descendant) {
     }
     return spawned;
   });
-  resources.creation = createChromeMcpSession(owner, "cleanup-fixture", options);
-  const session = await resources.creation.promise;
+  const session = createChromeMcpSession(owner, "cleanup-fixture", options);
+  resources.session = session;
   if (!child) {
     throw new Error("SDK did not spawn the fixture child");
   }
@@ -202,7 +200,7 @@ describe.skipIf(process.platform === "win32")("Chrome MCP SDK-initiated cleanup"
         ),
       );
       void cleanup.catch(() => {});
-      const replacementFactory = vi.fn(async () => {
+      const replacementFactory = vi.fn(() => {
         throw new Error("replacement admitted");
       });
       setChromeMcpSessionFactoryForTest(replacementFactory);
@@ -239,17 +237,10 @@ describe.skipIf(process.platform === "win32")("Chrome MCP SDK-initiated cleanup"
   it("does not admit initialize after close interrupts the initial process snapshot", async () => {
     const scanStarted = createDeferred<void>();
     const releaseScan = createDeferred<void>();
-    setChromeMcpProcessCleanupDepsForTest({
-      listProcesses: async () => {
-        const { stdout } = await promisify(childProcess.execFile)(
-          "ps",
-          ["-axww", "-o", "pid=,ppid=,lstart=,command="],
-          { env: { ...process.env, LC_ALL: "C", TZ: "UTC" }, maxBuffer: 4 * 1024 * 1024 },
-        );
-        const snapshots = parseChromeMcpUnixProcessListForTest(stdout, process.platform);
+    mockChromeMcpProcesses({
+      afterCensus: async () => {
         scanStarted.resolve();
         await releaseScan.promise;
-        return snapshots;
       },
     });
     const fixture = await createHeldStdioPeer({ releaseCapture: releaseScan.resolve });
@@ -274,8 +265,8 @@ describe.skipIf(process.platform === "win32")("Chrome MCP SDK-initiated cleanup"
   it("retains failed initial capture after the child exits with an untracked descendant", async () => {
     const scanStarted = createDeferred<void>();
     const releaseScan = createDeferred<void>();
-    setChromeMcpProcessCleanupDepsForTest({
-      listProcesses: async () => {
+    mockChromeMcpProcesses({
+      afterCensus: async () => {
         scanStarted.resolve();
         await releaseScan.promise;
         throw new Error("fixture process census failed");
@@ -304,7 +295,7 @@ describe.skipIf(process.platform === "win32")("Chrome MCP SDK-initiated cleanup"
       await expect(fixture.owner.close(fixture.session)).rejects.toThrow(
         "subprocess tree cleanup could not be verified",
       );
-      const replacementFactory = vi.fn(async () => {
+      const replacementFactory = vi.fn(() => {
         throw new Error("replacement admitted");
       });
       setChromeMcpSessionFactoryForTest(replacementFactory);
@@ -319,20 +310,12 @@ describe.skipIf(process.platform === "win32")("Chrome MCP SDK-initiated cleanup"
   });
 });
 
-it.each([
-  { name: "native argument validation", command: process.execPath, args: ["\0"] },
-  {
-    name: "missing executable",
-    command: path.join(os.tmpdir(), "absent-chrome-mcp", "missing"),
-    args: [],
-  },
-])("settles cleanup after $name fails without a child", async (options) => {
+it("settles cleanup after native argument validation fails without a child", async () => {
+  const options = { command: process.execPath, args: ["\0"] };
   const owner = getChromeMcpSessionOwner("failed-spawn", options);
-  const creation = createChromeMcpSession(owner, "failed-spawn", options);
-  const session = await creation.promise;
+  const session = createChromeMcpSession(owner, "failed-spawn", options);
   await expect(session.ready).rejects.toThrow();
   await owner.close(session);
-  await creation.cleanup;
   expect(session.processCleanup?.status).toBe("closed");
   expect(session.transport.pid).toBeNull();
 });

@@ -1,5 +1,8 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import type { PreparedGitHubToolEnvironment } from "../github-tool-identity.types.js";
+import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
 import type {
   CreateSandboxBackendParams,
@@ -63,14 +66,7 @@ type SandboxBackendRegistrationGeneration = {
 // Only explicit overrides need process-wide generations. Built-in defaults stay
 // module-local so repeated imports neither retain old graphs nor replace overrides.
 function getSandboxBackendFactories(): Map<SandboxBackendId, SandboxBackendRegistrationGeneration> {
-  const globalStore = globalThis as typeof globalThis & {
-    [SANDBOX_BACKEND_FACTORIES_STATE_KEY]?: Map<
-      SandboxBackendId,
-      SandboxBackendRegistrationGeneration
-    >;
-  };
-  globalStore[SANDBOX_BACKEND_FACTORIES_STATE_KEY] ??= new Map();
-  return globalStore[SANDBOX_BACKEND_FACTORIES_STATE_KEY];
+  return resolveGlobalMap(SANDBOX_BACKEND_FACTORIES_STATE_KEY);
 }
 
 function normalizeSandboxBackendId(id: string): SandboxBackendId {
@@ -175,8 +171,18 @@ export function requireSandboxBackendFactory(id: string): SandboxBackendFactory 
 export async function createSandboxBackend(
   params: CreateSandboxBackendParams,
   operatorAuthority?: AdmittedRunOperatorAuthority,
+  githubIdentity?: PreparedGitHubToolEnvironment,
+  guard?: WorkspaceStateGuard,
 ): Promise<SandboxBackendHandle> {
+  params.assertRuntimeCurrent?.();
   const factory = requireSandboxBackendFactory(params.cfg.backend);
+  if (
+    githubIdentity &&
+    factory !== createDockerSandboxBackend &&
+    factory !== createPodmanSandboxBackend
+  ) {
+    throw new Error("Sandbox GitHub identity requires the built-in Docker or Podman backend.");
+  }
   const reserveRuntimeId = resolveSandboxBackendRegistration(params.cfg.backend)?.reserveRuntimeId;
   const toEntry = (backend: SandboxBackendHandle): SandboxRegistryEntry => ({
     containerName: backend.runtimeId,
@@ -193,32 +199,42 @@ export async function createSandboxBackend(
     // A plugin overriding the same backend ID retains its own lifecycle contract.
     const backend =
       factory === createDockerSandboxBackend
-        ? await createDockerSandboxBackend(params, operatorAuthority)
+        ? await createDockerSandboxBackend(params, operatorAuthority, githubIdentity)
         : factory === createPodmanSandboxBackend
-          ? await createPodmanSandboxBackend(params, operatorAuthority)
+          ? await createPodmanSandboxBackend(params, operatorAuthority, githubIdentity)
           : await factory(params);
-    await updateRegistry(toEntry(backend));
+    await updateRegistry(toEntry(backend), {
+      ...guard,
+      beforeLegacyApply: params.assertRuntimeCurrent,
+    });
     return backend;
   }
   for (let attempt = 0; ; attempt++) {
-    const reservation = reserveSandboxRegistryEntry({
-      containerName: reserveRuntimeId(params),
-      backendId: params.cfg.backend,
-      sessionKey: params.scopeKey,
-      createdAtMs: Date.now(),
-      lastUsedAtMs: Date.now(),
-      image: params.cfg.docker.image,
-      workspaceDir: params.workspaceDir,
-    });
+    params.assertRuntimeCurrent?.();
+    const reservation = await reserveSandboxRegistryEntry(
+      {
+        containerName: reserveRuntimeId(params),
+        backendId: params.cfg.backend,
+        sessionKey: params.scopeKey,
+        createdAtMs: Date.now(),
+        lastUsedAtMs: Date.now(),
+        image: params.cfg.docker.image,
+        workspaceDir: params.workspaceDir,
+      },
+      { ...guard, beforeLegacyApply: params.assertRuntimeCurrent },
+    );
     try {
       return await withSandboxRegistryEntryLock(reservation, async () => {
-        assertSandboxRegistryEntryCurrent(reservation);
+        const assertCurrent = () => {
+          params.assertRuntimeCurrent?.();
+          assertSandboxRegistryEntryCurrent(reservation);
+        };
         try {
           const backend = await factory({
             ...params,
             workspaceDir: reservation.workspaceDir ?? params.workspaceDir,
             runtimeId: reservation.containerName,
-            assertRuntimeCurrent: () => assertSandboxRegistryEntryCurrent(reservation),
+            assertRuntimeCurrent: assertCurrent,
           });
           if (
             backend.runtimeId !== reservation.containerName ||
@@ -226,14 +242,21 @@ export async function createSandboxBackend(
           ) {
             throw new Error("Sandbox backend returned a runtime outside its reserved generation.");
           }
-          await completeSandboxRegistryReservation(toEntry(backend));
+          await completeSandboxRegistryReservation(
+            { ...reservation, ...toEntry(backend), createdAtMs: reservation.createdAtMs },
+            false,
+            { ...guard, beforeLegacyApply: params.assertRuntimeCurrent },
+          );
           return backend;
         } catch (error) {
           if (
             error instanceof SandboxRuntimeRetiredError &&
             error.runtimeId === reservation.containerName
           ) {
-            await completeSandboxRegistryReservation(reservation, true);
+            await completeSandboxRegistryReservation(reservation, true, {
+              ...guard,
+              beforeLegacyApply: params.assertRuntimeCurrent,
+            });
           }
           throw error;
         }

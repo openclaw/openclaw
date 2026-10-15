@@ -51,20 +51,16 @@ export function resolveWritableSandboxBindHostRoots(
 ): string[] {
   const parsedBinds = parseSandboxBindMounts(binds);
   const readonlyRoots = parsedBinds.filter((bind) => !bind.writable).map((bind) => bind.hostRoot);
-  const roots: string[] = [];
-  const seen = new Set<string>();
-  for (const parsed of parsedBinds) {
-    if (
-      !parsed.writable ||
-      seen.has(parsed.hostRoot) ||
-      readonlyRoots.some((root) => isPathInside(parsed.hostRoot, root))
-    ) {
-      continue;
-    }
-    seen.add(parsed.hostRoot);
-    roots.push(parsed.hostRoot);
-  }
-  return roots;
+  return [
+    ...new Set(
+      parsedBinds
+        .filter(
+          (bind) =>
+            bind.writable && !readonlyRoots.some((root) => isPathInside(bind.hostRoot, root)),
+        )
+        .map((bind) => bind.hostRoot),
+    ),
+  ];
 }
 
 export function hasSandboxBindContainerPathAliases(binds: readonly string[] | undefined): boolean {
@@ -125,120 +121,50 @@ export function resolveSandboxFsPathWithMounts(params: {
     );
     if (containerMount) {
       resolveSandboxFsMount(mountsByContainer, inputPosix, params.containerOnlyMounts);
-      return resolveMountedContainerPath({
-        mount: containerMount,
-        containerPath: inputPosix,
-        defaultContainerRoot: params.defaultContainerRoot,
-      });
+      return resolveMountedContainerPath(containerMount, inputPosix, params.defaultContainerRoot);
     }
   }
 
   if (!isSandboxHostPathAbsolute(inputPosix)) {
-    const containerCandidate = resolveRelativeContainerCandidate({
-      inputPosix,
-      cwd: params.cwd,
-      defaultContainerRoot: params.defaultContainerRoot,
-      mountsByHost,
-    });
+    const cwdMount = findMountByHostPath(mountsByHost, path.resolve(params.cwd));
+    const cwd = cwdMount ? mountedHostPathToContainer(cwdMount) : normalizePosixInput(params.cwd);
+    const containerCandidate = normalizeContainerPathCore(
+      path.posix.resolve(
+        cwdMount || path.posix.isAbsolute(cwd) ? cwd : params.defaultContainerRoot,
+        inputPosix,
+      ),
+    );
     const containerMount = resolveSandboxFsMount(
       mountsByContainer,
       containerCandidate,
       params.containerOnlyMounts,
     );
     if (containerMount) {
-      return resolveMountedContainerPath({
-        mount: containerMount,
-        containerPath: containerCandidate,
-        defaultContainerRoot: params.defaultContainerRoot,
-      });
+      return resolveMountedContainerPath(
+        containerMount,
+        containerCandidate,
+        params.defaultContainerRoot,
+      );
     }
   }
 
   const hostResolved = resolveSandboxInputPath(input, params.cwd);
   const hostMount = findMountByHostPath(mountsByHost, hostResolved);
   if (hostMount) {
-    const relHost = hostMount.relativeHostPath;
-    const relPosix = relHost ? relHost.split(path.sep).join(path.posix.sep) : "";
-    const containerPath = relPosix
-      ? path.posix.join(hostMount.mount.containerRoot, relPosix)
-      : hostMount.mount.containerRoot;
+    const containerPath = mountedHostPathToContainer(hostMount);
     const visibleMount = resolveSandboxFsMount(
       mountsByContainer,
       containerPath,
       params.containerOnlyMounts,
     );
     if (visibleMount) {
-      return resolveMountedContainerPath({
-        mount: visibleMount,
-        containerPath,
-        defaultContainerRoot: params.defaultContainerRoot,
-      });
+      return resolveMountedContainerPath(visibleMount, containerPath, params.defaultContainerRoot);
     }
   }
 
   if (path.posix.isAbsolute(inputPosix)) {
     resolveSandboxFsMount(mountsByContainer, inputPosix, params.containerOnlyMounts);
   }
-  const escapeMessage = formatSandboxRootEscapeMessage({
-    input,
-    defaultWorkspaceRoot: params.defaultWorkspaceRoot,
-    defaultContainerRoot: params.defaultContainerRoot,
-  });
-  throw new Error(escapeMessage);
-}
-
-function resolveMountedContainerPath(params: {
-  mount: SandboxFsMount;
-  containerPath: string;
-  defaultContainerRoot: string;
-}): SandboxResolvedFsPath {
-  const rel = path.posix.relative(params.mount.containerRoot, params.containerPath);
-  const hostPath = rel
-    ? path.resolve(params.mount.hostRoot, ...rel.split("/").filter(Boolean))
-    : params.mount.hostRoot;
-  const containerPath = rel
-    ? path.posix.join(params.mount.containerRoot, rel)
-    : params.mount.containerRoot;
-  return {
-    hostPath,
-    containerPath,
-    relativePath: toDisplayRelative({
-      containerPath,
-      defaultContainerRoot: params.defaultContainerRoot,
-    }),
-    writable: params.mount.writable,
-  };
-}
-
-function resolveRelativeContainerCandidate(params: {
-  inputPosix: string;
-  cwd: string;
-  defaultContainerRoot: string;
-  mountsByHost: SandboxFsMount[];
-}): string {
-  const cwdMount = findMountByHostPath(params.mountsByHost, path.resolve(params.cwd));
-  if (cwdMount) {
-    const relHost = cwdMount.relativeHostPath;
-    const relPosix = relHost ? relHost.split(path.sep).join(path.posix.sep) : "";
-    const containerCwd = relPosix
-      ? path.posix.join(cwdMount.mount.containerRoot, relPosix)
-      : cwdMount.mount.containerRoot;
-    return normalizeContainerPathCore(path.posix.resolve(containerCwd, params.inputPosix));
-  }
-  const cwdPosix = normalizePosixInput(params.cwd);
-  if (path.posix.isAbsolute(cwdPosix)) {
-    return normalizeContainerPathCore(path.posix.resolve(cwdPosix, params.inputPosix));
-  }
-  return normalizeContainerPathCore(
-    path.posix.resolve(params.defaultContainerRoot, params.inputPosix),
-  );
-}
-
-function formatSandboxRootEscapeMessage(params: {
-  input: string;
-  defaultWorkspaceRoot: string;
-  defaultContainerRoot: string;
-}): string {
   const containerRoot = normalizeContainerPathCore(params.defaultContainerRoot);
   let workspaceRoot = shortenPathWithHome(path.resolve(params.defaultWorkspaceRoot), {
     home: os.homedir(),
@@ -247,7 +173,28 @@ function formatSandboxRootEscapeMessage(params: {
   if (workspaceRoot.startsWith(`~${path.sep}`)) {
     workspaceRoot = workspaceRoot.replaceAll(path.sep, path.posix.sep);
   }
-  return `Path escapes sandbox root (${workspaceRoot}; container root ${containerRoot}): ${params.input}. Use a path under ${containerRoot}/ instead.`;
+  throw new Error(
+    `Path escapes sandbox root (${workspaceRoot}; container root ${containerRoot}): ${input}. Use a path under ${containerRoot}/ instead.`,
+  );
+}
+
+function resolveMountedContainerPath(
+  mount: SandboxFsMount,
+  requestedPath: string,
+  defaultContainerRoot: string,
+): SandboxResolvedFsPath {
+  const rel = path.posix.relative(mount.containerRoot, requestedPath);
+  const hostPath = rel
+    ? path.resolve(mount.hostRoot, ...rel.split("/").filter(Boolean))
+    : mount.hostRoot;
+  const containerPath = rel ? path.posix.join(mount.containerRoot, rel) : mount.containerRoot;
+  const relativePath = path.posix.relative(defaultContainerRoot, containerPath);
+  return {
+    hostPath,
+    containerPath,
+    relativePath: relativePathEscapesContainerRoot(relativePath) ? containerPath : relativePath,
+    writable: mount.writable,
+  };
 }
 
 function compareMountsByContainerPath(a: SandboxFsMount, b: SandboxFsMount): number {
@@ -337,12 +284,13 @@ function relativePathInsideHost(root: string, target: string): string | null {
     : null;
 }
 
-function toDisplayRelative(params: {
-  containerPath: string;
-  defaultContainerRoot: string;
+function mountedHostPathToContainer(params: {
+  mount: SandboxFsMount;
+  relativeHostPath: string;
 }): string {
-  const rel = path.posix.relative(params.defaultContainerRoot, params.containerPath);
-  return relativePathEscapesContainerRoot(rel) ? params.containerPath : rel;
+  return params.relativeHostPath
+    ? path.posix.join(params.mount.containerRoot, normalizePosixInput(params.relativeHostPath))
+    : params.mount.containerRoot;
 }
 
 function normalizePosixInput(value: string): string {

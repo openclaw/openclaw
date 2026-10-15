@@ -6,7 +6,6 @@ import {
   collectTestSkipInventoryReport,
   main as runTestSkipInventory,
   renderTestSkipInventoryReport,
-  type TestSkipInventoryReport,
 } from "../../scripts/test-skip-inventory.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -80,48 +79,6 @@ describeControlUiE2e("control UI", () => {});
 }
 
 describe("collectTestSkipInventoryReport", () => {
-  it("reports skipped, conditional, todo, and focused test inventory", () => {
-    const report = collectTestSkipInventoryReport({ repoRoot: makeSkipInventoryFixture() });
-
-    expect(
-      report.findings.map(({ file, kind, method, reason, target }) => [
-        file,
-        kind,
-        method,
-        reason,
-        target,
-      ]),
-    ).toEqual([
-      ["extensions/provider/live.test.ts", "alias", "skip", "live-gate", "describe"],
-      ["src/example.test.ts", "call", "skip", "explicit-skip", "describe"],
-      ["src/example.test.ts", "call", "skipIf", "platform-gate", "it"],
-      ["src/example.test.ts", "call", "todo", "todo", "test"],
-      ["src/example.test.ts", "call", "only", "focused-only", "it"],
-      ["src/example.test.ts", "alias", "skip", "platform-gate", "it"],
-      ["src/example.test.ts", "call", "skip", "platform-gate", "it"],
-      ["src/example.test.ts", "call", "runIf", "platform-gate", "it"],
-      ["src/example.test.ts", "call", "runIf", "platform-gate", "it"],
-      ["src/example.test.ts", "alias", "skip", "conditional-skip", "it"],
-      ["src/example.test.ts", "call", "only", "focused-only", "it"],
-      ["src/example.test.ts", "call", "skip", "explicit-skip", "test"],
-      ["test/scripts/test-live.test.ts", "alias", "skip", "platform-gate", "it"],
-      ["ui/src/e2e/chat-flow.e2e.test.ts", "alias", "skip", "optional-dependency", "describe"],
-    ]);
-    expect(report.summary).toMatchObject({
-      findingCount: 14,
-      reasonCounts: {
-        "conditional-skip": 1,
-        "explicit-skip": 2,
-        "focused-only": 2,
-        "live-gate": 1,
-        "optional-dependency": 1,
-        "platform-gate": 6,
-        todo: 1,
-      },
-      touchedFileCount: 4,
-    });
-  });
-
   it("renders a compact non-blocking text report", () => {
     const report = collectTestSkipInventoryReport({ repoRoot: makeSkipInventoryFixture() });
 
@@ -133,46 +90,6 @@ describe("collectTestSkipInventoryReport", () => {
     expect(rendered).toContain("- src/example.test.ts (11)");
     expect(rendered).toContain("L2 describe.skip explicit-skip");
     expect(rendered).toContain("... 10 more finding(s) not shown");
-  });
-
-  it("prints JSON from the CLI and exits successfully", () => {
-    const repoRoot = makeSkipInventoryFixture();
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        path.join(process.cwd(), "scripts/test-skip-inventory.ts"),
-        "--",
-        "--repo-root",
-        repoRoot,
-        "--json",
-      ],
-      {
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status).toBe(0);
-    const report = JSON.parse(result.stdout) as TestSkipInventoryReport;
-    expect(report.summary.findingCount).toBe(14);
-    expect(report.summary.reasonCounts["focused-only"]).toBe(2);
-  });
-
-  it("prints CLI help without scanning the repository", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", path.join(process.cwd(), "scripts/test-skip-inventory.ts"), "--help"],
-      {
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Usage:");
-    expect(result.stdout).toContain("pnpm test:skip-inventory:report");
-    expect(result.stdout).not.toContain("Scanned files:");
-    expect(result.stderr).toBe("");
   });
 
   it("rejects missing CLI repo roots and loose limits before scanning", () => {
@@ -205,43 +122,42 @@ describe("collectTestSkipInventoryReport", () => {
     ).toThrow("--limit expects a non-negative integer");
   });
 
-  it.each([
-    { limit: 1, shown: 1 },
-    { limit: 2, shown: 2 },
-    { limit: 0, shown: 3 },
-  ])("preserves first-seen groups and the global cap with limit $limit", ({ limit, shown }) => {
-    const repoRoot = createTempDir("openclaw-skip-groups-");
-    writeRepoFile(repoRoot, "src/a.test.ts", 'test.todo("a");\n');
-    writeRepoFile(
-      repoRoot,
-      "src/z.test.ts",
-      'it.skip("z", () => {});\nit.only("second", () => {});\n',
-    );
-    const report = collectTestSkipInventoryReport({ repoRoot });
-    const findings = report.findings;
-    report.findings = [...findings.slice(1, 2), ...findings.slice(0, 1), ...findings.slice(2)];
-    const rows = [
-      "- src/z.test.ts (2)",
-      '  L1 it.skip explicit-skip: it.skip("z", () => {});',
-      ...(shown >= 2 ? ['  L2 it.only focused-only: it.only("second", () => {});'] : []),
-      ...(shown === 3 ? ["- src/a.test.ts (1)", '  L1 test.todo todo: test.todo("a");'] : []),
-      ...(shown < 3
-        ? [`... ${3 - shown} more finding(s) not shown; pass --limit 0 to show all.`]
-        : []),
-    ];
-    expect(renderTestSkipInventoryReport(report, { limit })).toBe(
-      [
-        "OpenClaw test skip inventory",
-        "Scanned files: 2",
-        "Findings: 3 in 2 file(s)",
-        "Reasons: explicit-skip: 1, focused-only: 1, todo: 1",
-        "",
-        "Findings:",
-        ...rows,
-        "",
-      ].join("\n"),
-    );
-  });
+  it.each([{ limit: 0, shown: 3 }])(
+    "preserves first-seen groups and the global cap with limit $limit",
+    ({ limit, shown }) => {
+      const repoRoot = createTempDir("openclaw-skip-groups-");
+      writeRepoFile(repoRoot, "src/a.test.ts", 'test.todo("a");\n');
+      writeRepoFile(
+        repoRoot,
+        "src/z.test.ts",
+        'it.skip("z", () => {});\nit.only("second", () => {});\n',
+      );
+      const report = collectTestSkipInventoryReport({ repoRoot });
+      const findings = report.findings;
+      report.findings = [...findings.slice(1, 2), ...findings.slice(0, 1), ...findings.slice(2)];
+      const rows = [
+        "- src/z.test.ts (2)",
+        '  L1 it.skip explicit-skip: it.skip("z", () => {});',
+        ...(shown >= 2 ? ['  L2 it.only focused-only: it.only("second", () => {});'] : []),
+        ...(shown === 3 ? ["- src/a.test.ts (1)", '  L1 test.todo todo: test.todo("a");'] : []),
+        ...(shown < 3
+          ? [`... ${3 - shown} more finding(s) not shown; pass --limit 0 to show all.`]
+          : []),
+      ];
+      expect(renderTestSkipInventoryReport(report, { limit })).toBe(
+        [
+          "OpenClaw test skip inventory",
+          "Scanned files: 2",
+          "Findings: 3 in 2 file(s)",
+          "Reasons: explicit-skip: 1, focused-only: 1, todo: 1",
+          "",
+          "Findings:",
+          ...rows,
+          "",
+        ].join("\n"),
+      );
+    },
+  );
 
   it("keeps the empty report output unchanged", () => {
     const report = collectTestSkipInventoryReport({

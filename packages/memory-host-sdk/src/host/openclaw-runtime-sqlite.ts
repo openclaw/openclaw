@@ -2,6 +2,28 @@
 // Kysely-backed query helpers live in openclaw-runtime-kysely.ts so this
 // bridge stays off the kysely value graph for schema/transaction consumers.
 
-export { migrateSqliteSchemaToStrict } from "../../../../src/infra/sqlite-strict.js";
-export { assertSqliteSchemaContains } from "../../../../src/infra/sqlite-schema-contract.js";
+export {
+  migrateSqliteSchemaToStrict,
+  migrateSqliteSchemaToStrictInTransaction,
+} from "../../../../src/infra/sqlite-strict.js";
+export {
+  assertSqliteSchemaContains,
+  createSqliteTableContractReader,
+  type SqliteTableContractReader,
+} from "../../../../src/infra/sqlite-schema-contract.js";
+export {
+  canReuseSqliteSchemaInTransaction,
+  getAdmittedSqliteSchemaFacts,
+} from "../../../../src/infra/sqlite-schema-facts.js";
+export { createSqliteSchemaEnsurer } from "../../../../src/infra/sqlite-schema-ensure.js";
+export {
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseAdmissionKey,
+} from "../../../../src/infra/sqlite-database-admission.js";
 export { runSqliteImmediateTransactionSync } from "../../../../src/infra/sqlite-transaction.js";
+export { stageSqliteTransactionState } from "../../../../src/infra/sqlite-post-commit.js";
+export {
+  sqlPublicationAnchor,
+  type PostgresSqlConnection,
+} from "../../../../src/infra/sql-connection.js";

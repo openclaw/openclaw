@@ -55,10 +55,10 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@a0102e0972be65f351c307e2d64b9314a57c8073 # v1.324.0
+        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
         with:
-          ruby-version: "3.4.10"
-          bundler: "4.0.21"
+          ruby-version: "3.4.11"
+          bundler: "4.0.22"
           bundler-cache: false
           working-directory: apps/ios
 
@@ -66,9 +66,9 @@ jobs:
         working-directory: apps/ios
         run: |
           set -euo pipefail
-          bundle _4.0.21_ install --jobs 4 --retry 3
-          bundle _4.0.21_ check
-          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
+          bundle _4.0.22_ install --jobs 4 --retry 3
+          bundle _4.0.22_ check
+          test "$(bundle _4.0.22_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
 
       - name: Select Xcode and install pinned native tools
         run: |
@@ -92,7 +92,7 @@ jobs:
 
       - name: Retain screenshots and sanitized diagnostics
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-screenshots-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -153,10 +153,10 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@a0102e0972be65f351c307e2d64b9314a57c8073 # v1.324.0
+        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
         with:
-          ruby-version: "3.4.10"
-          bundler: "4.0.21"
+          ruby-version: "3.4.11"
+          bundler: "4.0.22"
           bundler-cache: false
           working-directory: apps/ios
 
@@ -164,9 +164,9 @@ jobs:
         working-directory: apps/ios
         run: |
           set -euo pipefail
-          bundle _4.0.21_ install --jobs 4 --retry 3
-          bundle _4.0.21_ check
-          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
+          bundle _4.0.22_ install --jobs 4 --retry 3
+          bundle _4.0.22_ check
+          test "$(bundle _4.0.22_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
 
       - name: Select Xcode
         run: |
@@ -251,7 +251,7 @@ jobs:
 
       - name: Retain release plan and notes
         if: always() && steps.release.outcome != 'skipped'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-release-recovery-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -264,7 +264,7 @@ jobs:
       - name: Retain signed release artifacts
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-release-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -279,7 +279,7 @@ jobs:
       - name: Retain sanitized screenshot diagnostics
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-release-screenshot-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

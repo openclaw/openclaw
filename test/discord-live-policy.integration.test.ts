@@ -33,10 +33,11 @@ import { createTempDirTracker } from "./helpers/temp-dir.js";
 
 const tempDirs = createTempDirTracker();
 let registrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
+let stateDir: string;
 
 beforeEach(() => {
   registrySnapshot = captureActivePluginRegistrySnapshot();
-  const stateDir = tempDirs.make("discord-live-policy-");
+  stateDir = tempDirs.make("discord-live-policy-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
   vi.stubEnv("OPENCLAW_SKIP_CHANNELS", undefined);
@@ -197,6 +198,7 @@ describe("Discord admission through Gateway policy publication", () => {
       heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() },
       cronState: createLazyGatewayCronState({
         scheduler,
+        storePath: path.join(stateDir, "cron", "jobs.json"),
         cfg,
         deps: {},
         broadcast: vi.fn(),

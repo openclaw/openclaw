@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import { sha256File } from "./directory-durability.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { copySqliteFile } from "./sqlite-file-copy.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { withPreparedSqliteSnapshot } from "./sqlite-readonly-location-cleanup.js";
-import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
+import { prepareSqliteReadOnlyCopyInProcess } from "./sqlite-readonly-location.js";
 import {
   assertSqliteSchemaContains,
   createSqliteTableContractReader,
@@ -21,17 +22,14 @@ export async function prepareUpdateDatabaseRestoreSourceInProcess(params: {
   stagingRoot: string;
 }): Promise<{ sha256: string; sizeBytes: number; userVersion: number }> {
   // Copy the physical family: opening the live database would contend with the parent's exclusion.
-  const snapshot = prepareSqliteReadOnlyLocationSyncInProcess(
-    params.currentPath,
-    params.stagingRoot,
-  );
+  const snapshot = await prepareSqliteReadOnlyCopyInProcess(params.currentPath, params.stagingRoot);
   return await withPreparedSqliteSnapshot(snapshot, async (location) => {
     const current = openNodeSqliteDatabase(location, { readOnly: true });
     try {
-      await fs.copyFile(
+      await copySqliteFile(
         params.baseline.snapshotPath,
         params.targetPath,
-        fs.constants.COPYFILE_EXCL,
+        await fs.lstat(params.baseline.snapshotPath, { bigint: true }),
       );
       const copied = await sha256File(params.targetPath);
       if (copied.digest !== params.baseline.sha256 || copied.bytes !== params.baseline.sizeBytes) {
@@ -60,11 +58,9 @@ export async function prepareUpdateDatabaseRestoreSourceInProcess(params: {
             `SELECT rowid AS restore_rowid, ${selected} FROM update_runs`,
           );
           rows.setReadBigInts(true);
+          const placeholders = Array.from({ length: columns.length + 1 }, () => "?").join(", ");
           const insert = target.prepare(
-            `INSERT INTO update_runs (rowid, ${selected}) VALUES (${columns
-              .map(() => "?")
-              .concat("?")
-              .join(", ")})`,
+            `INSERT INTO update_runs (rowid, ${selected}) VALUES (${placeholders})`,
           );
           target.exec("BEGIN IMMEDIATE");
           try {

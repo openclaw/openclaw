@@ -5,7 +5,7 @@ import { withTempHome } from "../../config/home-env.test-harness.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plugins/installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndex } from "../../plugins/installed-plugin-index-store-write.js";
 import { loadInstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
@@ -158,7 +158,9 @@ describe("/plugins live owner authority", () => {
             }),
           ]);
           expect(fs.readFileSync(configPath, "utf8")).toBe(originalConfig);
-          expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual(installRecords);
+          expect(await readPersistedInstalledPluginIndexInstallRecordsAsync()).toEqual(
+            installRecords,
+          );
           if (action === "install") {
             expect(fs.existsSync(installedDir)).toBe(false);
             expect(fs.readdirSync(extensionsDir).length).toBeGreaterThan(0);
@@ -179,7 +181,9 @@ describe("/plugins live owner authority", () => {
           expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toMatchObject({
             plugins: { entries: { [pluginId]: { enabled: true } } },
           });
-          expect(readPersistedInstalledPluginIndexInstallRecords()?.[pluginId]).toMatchObject({
+          expect(
+            (await readPersistedInstalledPluginIndexInstallRecordsAsync())?.[pluginId],
+          ).toMatchObject({
             installPath: installedDir,
             acceptedSurfaceHash: expect.stringMatching(/^[a-f\d]{64}$/),
           });
@@ -188,7 +192,9 @@ describe("/plugins live owner authority", () => {
             "owner authority revoked",
           );
           expect(fs.readFileSync(configPath, "utf8")).toBe(originalConfig);
-          expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual(installRecords);
+          expect(await readPersistedInstalledPluginIndexInstallRecordsAsync()).toEqual(
+            installRecords,
+          );
         }
         // The command must settle its private staged artifact even after caller authority is lost.
         expect(fs.readdirSync(extensionsDir)).toEqual(

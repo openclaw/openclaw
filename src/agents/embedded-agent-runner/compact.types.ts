@@ -2,12 +2,12 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import type { ExecToolDefaults } from "../bash-tools.exec-types.js";
+import type { ModelCallUrgency } from "../run-trigger.js";
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
 
 export type CompactEmbeddedAgentSessionParams = Pick<
   import("./run/params.js").RunEmbeddedAgentParams,
   | "requireWorkspaceOnly"
-  | "requireWritableSandbox"
   | "sessionTarget"
   | "sessionId"
   | "sessionKey"
@@ -69,6 +69,10 @@ export type CompactEmbeddedAgentSessionParams = Pick<
   /** Explicit session owner captured before fallback agent resolution. */
   contextEngineAgentId?: string;
   runId?: string;
+  /** Host-resolved memory partition inherited from the compacted session. */
+  memoryAudience?: import("../../plugins/memory-provider-types.js").MemoryAudience;
+  /** Host-resolved sandbox fact paired with the compacted session authority. */
+  memorySandboxed?: boolean;
   /** Trusted sender id from inbound context for scoped message-tool discovery. */
   senderId?: string;
   senderName?: string;
@@ -108,6 +112,8 @@ export type CompactEmbeddedAgentSessionParams = Pick<
   /** Diagnostic trigger that made preflight compaction mandatory. */
   preflightCompactionTrigger?: "tokens" | "transcript_bytes";
   trigger?: "budget" | "overflow" | "manual";
+  /** Source-turn urgency survives replacing its trigger with a compaction reason. */
+  modelCallUrgency?: ModelCallUrgency;
   /**
    * Preflight callers can allow native/current-session harness compaction but
    * move plugin-owned budget compaction onto background turn maintenance.
@@ -118,6 +124,8 @@ export type CompactEmbeddedAgentSessionParams = Pick<
   maxAttempts?: number;
   /** @internal Refreshes the host watchdog when delegated native compaction makes progress. */
   compactionTimeoutReset?: () => void;
+  /** @internal Host watchdog ceiling (epoch ms); the summary request ends one window before it. */
+  compactionDeadlineAt?: number;
   onCompactionHookMessages?: (payload: {
     phase: "before" | "after";
     messages: string[];
@@ -132,12 +140,4 @@ export type CompactEmbeddedAgentSessionRuntimeParams = Omit<
 > & {
   /** Deprecated file-backed artifact target. Prefer sessionTarget for new callers. */
   sessionFile?: string;
-};
-
-export type CompactionMessageMetrics = {
-  messages: number;
-  historyTextChars: number;
-  toolResultChars: number;
-  estTokens?: number;
-  contributors: Array<{ role: string; chars: number; tool?: string }>;
 };

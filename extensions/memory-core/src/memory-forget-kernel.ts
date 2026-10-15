@@ -12,7 +12,7 @@ import {
   type MemoryForgetLineage,
   type MemoryForgetLineageResult,
 } from "./memory-entry-origins-task.js";
-import type { ForgetDatabase } from "./memory-forget-index-sources.js";
+import type { ForgetDatabase } from "./memory-forget-index-task.js";
 import { recordMemorySessionTombstonesInDatabase } from "./memory-session-tombstones.js";
 
 function checkLineage(db: DatabaseSync, input: MemoryForgetLineage): MemoryForgetLineageResult {

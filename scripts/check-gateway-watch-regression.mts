@@ -33,7 +33,6 @@ const DEFAULTS = {
   cpuFailMs: 8_000,
   distRuntimeFileGrowthMax: 200,
   distRuntimeByteGrowthMax: 2 * 1024 * 1024,
-  keepLogs: true,
   skipBuild: false,
 };
 const NUMERIC_FLAGS = Object.entries({
@@ -180,7 +179,7 @@ export function updateWatchBuildDetection(
 ): { buffer: string; triggered: boolean; reason: string | null } {
   const combined = `${state.buffer ?? ""}${String(chunk)}`;
   const next = appendBoundedWatchLog("", combined, WATCH_BUILD_DETECTION_MAX_CHARS);
-  const reason = detectWatchBuildReason(combined, "");
+  const reason = combined.match(/Building TypeScript \(dist is stale: ([a-z_]+)/)?.[1] ?? null;
   const triggered = state.triggered || combined.includes("Building TypeScript (dist is stale");
   return {
     buffer: next.text,
@@ -219,14 +218,6 @@ export function parseArgs(argv: string[]): WatchOptions {
     }
   }
   return options;
-}
-
-function ensureDir(dirPath: string) {
-  fs.mkdirSync(dirPath, { recursive: true });
-}
-
-function removePathIfExists(targetPath: string) {
-  fs.rmSync(targetPath, { recursive: true, force: true });
 }
 
 function lstatIfExists(targetPath: string): {
@@ -347,7 +338,7 @@ function writeSnapshot(snapshotDir: string): {
   dist: TreeSnapshot;
   distRuntime: TreeSnapshot;
 } {
-  ensureDir(snapshotDir);
+  fs.mkdirSync(snapshotDir, { recursive: true });
   const pathEntries = [...listTreeEntries("dist"), ...listTreeEntries("dist-runtime")];
   fs.writeFileSync(path.join(snapshotDir, "paths.txt"), `${pathEntries.join("\n")}\n`, "utf8");
 
@@ -567,7 +558,7 @@ export async function runTimedWatch(
     const stdoutPath = path.join(outputDir, "watch.stdout.log");
     const stderrPath = path.join(outputDir, "watch.stderr.log");
     for (const stalePath of [pidFilePath, timeFilePath, stdoutPath, stderrPath]) {
-      removePathIfExists(stalePath);
+      fs.rmSync(stalePath, { recursive: true, force: true });
     }
     const port = await allocatePort();
     fs.writeFileSync(path.join(outputDir, "watch.port.txt"), `${String(port)}\n`, "utf8");
@@ -863,7 +854,7 @@ function parsePathFile(filePath: string): string[] {
 
 function writeDiffArtifacts(outputDir: string, preDir: string, postDir: string) {
   const diffDir = path.join(outputDir, "diff");
-  ensureDir(diffDir);
+  fs.mkdirSync(diffDir, { recursive: true });
   const prePaths = parsePathFile(path.join(preDir, "paths.txt"));
   const postPaths = parsePathFile(path.join(postDir, "paths.txt"));
   const preSet = new Set(prePaths);
@@ -884,17 +875,11 @@ function warn(message: string) {
   console.error(`WARN: ${message}`);
 }
 
-function detectWatchBuildReason(stdout: string, stderr: string): string | null {
-  const combined = `${stdout}\n${stderr}`;
-  const match = combined.match(/Building TypeScript \(dist is stale: ([a-z_]+)/);
-  return match?.[1] ?? null;
-}
-
-function buildRunNodeDeps(env: NodeJS.ProcessEnv) {
+function buildRunNodeDeps() {
   const cwd = process.cwd();
   return {
     cwd,
-    env,
+    env: process.env,
     fs,
     spawnSync,
     distRoot: path.join(cwd, "dist"),
@@ -1047,7 +1032,7 @@ function printWatchLogDiagnostics(watchResult: TimedWatchResult) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  ensureDir(options.outputDir);
+  fs.mkdirSync(options.outputDir, { recursive: true });
   if (!options.skipBuild) {
     runCheckedCommand("node", ["--import", "tsx", "scripts/build-all.mts", "gatewayWatch"]);
     // The watch harness must start from a completed dist/runtime baseline.
@@ -1060,7 +1045,7 @@ async function main() {
     refreshLocalBuildStampTimes();
   }
 
-  let preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
+  let preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps());
   if (
     shouldRefreshBuildStampForRestoredArtifacts({
       skipBuild: options.skipBuild,
@@ -1071,7 +1056,7 @@ async function main() {
     // Refresh the stamps so checkout mtimes for package/config files do not
     // force a duplicate build during the bounded gateway:watch window.
     refreshLocalBuildStampTimes();
-    preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
+    preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps());
   }
   if (preflightBuildRequirement.shouldBuild) {
     const summary = {
@@ -1096,7 +1081,7 @@ async function main() {
   const pre = writeSnapshot(preDir);
 
   const watchDir = path.join(options.outputDir, "watch");
-  ensureDir(watchDir);
+  fs.mkdirSync(watchDir, { recursive: true });
   const watchResult = await runTimedWatch(options, watchDir);
 
   const postDir = path.join(options.outputDir, "post");

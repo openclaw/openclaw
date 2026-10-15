@@ -1,5 +1,6 @@
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import type { ModelRef } from "../agents/model-ref-shared.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   isCliProvider,
@@ -9,22 +10,17 @@ import {
   type CliProviderClassifier,
 } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-type SessionDisplayModelRow = {
+type SessionDisplayModelRow = Pick<
+  SessionEntry,
+  "model" | "modelProvider" | "modelOverride" | "providerOverride"
+> & {
   key: string;
-  model?: string;
-  modelProvider?: string;
-  modelOverride?: string;
-  providerOverride?: string;
 };
 
-type SessionDisplayModelRef = { provider: string; model: string };
-
-export function resolveSessionDisplayDefaults(
-  cfg: OpenClawConfig,
-  agentId?: string,
-): SessionDisplayModelRef {
+function resolveSessionDisplayDefaults(cfg: OpenClawConfig, agentId?: string): ModelRef {
   const primary =
     (agentId
       ? resolveAgentModelPrimaryValue(resolveAgentConfig(cfg, agentId)?.model)
@@ -42,10 +38,10 @@ export function resolveSessionDisplayDefaults(
 function normalizeCliRuntimeDisplayRef(
   cfg: OpenClawConfig,
   agentId: string | undefined,
-  ref: SessionDisplayModelRef,
-  defaultRef: SessionDisplayModelRef,
+  ref: ModelRef,
+  defaultRef: ModelRef,
   classifyCliProvider: CliProviderClassifier,
-): SessionDisplayModelRef {
+): ModelRef {
   if (!classifyCliProvider(ref.provider)) {
     return ref;
   }
@@ -85,7 +81,7 @@ export function resolveSessionDisplayModelRef(
   row: SessionDisplayModelRow,
   classifyCliProvider: CliProviderClassifier = (provider) => isCliProvider(provider, cfg),
   ownerAgentId?: string,
-): SessionDisplayModelRef {
+): ModelRef {
   const agentId =
     ownerAgentId ?? (row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined);
   const defaultRef = resolveSessionDisplayDefaults(cfg, agentId);

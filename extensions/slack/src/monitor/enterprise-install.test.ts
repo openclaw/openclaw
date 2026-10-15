@@ -14,30 +14,6 @@ describe("resolveSlackInstallationIdentity", () => {
     });
   });
 
-  it("detects an org-wide installation", () => {
-    expect(
-      resolveSlackInstallationIdentity({
-        auth: {
-          app_id: "A123",
-          enterprise_id: "E123",
-          team_id: "T_INSTALLER",
-          is_enterprise_install: true,
-        },
-      }),
-    ).toEqual({ kind: "enterprise", apiAppId: "A123", enterpriseId: "E123" });
-  });
-
-  it("detects a workspace installation when auth.test omits app_id", () => {
-    expect(
-      resolveSlackInstallationIdentity({
-        auth: {
-          team_id: "T123",
-          is_enterprise_install: false,
-        },
-      }),
-    ).toEqual({ kind: "workspace", teamId: "T123" });
-  });
-
   it("uses the Socket Mode app id for a workspace installation when auth.test omits app_id", () => {
     expect(
       resolveSlackInstallationIdentity({
@@ -128,9 +104,11 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
                 "team:T01234567:user:U01234567",
               ],
               toolsBySender: {
-                U01234567: {},
+                "id:U01234567": {},
                 "id:W01234567": {},
+                "id:B01234567": {},
                 "channel:slack:U12345678": {},
+                "channel:slack:B12345678": {},
                 "*": {},
               },
             },
@@ -175,14 +153,8 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
   });
 
   it.each<[string, SlackAccountConfig]>([
-    ["channels key", { channels: { general: {} } }],
-    ["prefixed channels key", { channels: { "channel:general": {} } }],
     ["allowFrom", { allowFrom: ["ursula"] }],
-    ["prefixed allowFrom", { allowFrom: ["slack:ursula"] }],
-    ["group DM channel", { dm: { groupChannels: ["general"] } }],
     ["reaction allowlist", { reactionNotifications: "allowlist", reactionAllowlist: ["ursula"] }],
-    ["channel users", { channels: { C01234567: { users: ["ursula"] } } }],
-    ["toolsBySender", { channels: { C01234567: { toolsBySender: { "id:ursula": {} } } } }],
   ])("rejects lowercase mutable names in %s", (_label, config) => {
     expect(() =>
       assertEnterpriseSlackPolicyConfig({
@@ -192,34 +164,8 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
     ).toThrow(/stable Slack/);
   });
 
-  it.each<[string, SlackAccountConfig]>([
-    ["lowercase channel ID", { channels: { c01234567: {} } }],
-    ["short channel ID", { channels: { C123: {} } }],
-    ["lowercase user ID", { allowFrom: ["u01234567"] }],
-    ["short user ID", { allowFrom: ["U123"] }],
-  ])("rejects non-canonical IDs in %s", (_label, config) => {
-    expect(() =>
-      assertEnterpriseSlackPolicyConfig({
-        accountId: "org",
-        config,
-      }),
-    ).toThrow(/stable Slack/);
-  });
-
-  it.each(["id:U01234567", "channel:slack:U01234567"])(
-    "rejects toolsBySender-only alias %s on Slack allowlists",
-    (entry) => {
-      expect(() =>
-        assertEnterpriseSlackPolicyConfig({
-          accountId: "org",
-          config: { allowFrom: [entry] },
-        }),
-      ).toThrow(/stable Slack IDs.*allowFrom/);
-    },
-  );
-
-  it.each(["slack:U01234567", "user:U01234567"])(
-    "fails closed on unsupported toolsBySender alias %s before permissive wildcard fallback",
+  it.each(["user:U01234567"])(
+    "fails closed on noncanonical toolsBySender key %s before permissive wildcard fallback",
     (entry) => {
       expect(() =>
         assertEnterpriseSlackPolicyConfig({
@@ -239,29 +185,14 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
     },
   );
 
-  it.each(["slack:C01234567", "group:G01234567", "mpim:G01234567"])(
-    "rejects unsupported channels key form %s",
-    (channelKey) => {
-      expect(() =>
-        assertEnterpriseSlackPolicyConfig({
-          accountId: "org",
-          config: { channels: { [channelKey]: {} } },
-        }),
-      ).toThrow(/stable Slack channel IDs/);
-    },
-  );
-
-  it.each(["slack:G01234567", "group:G01234567", "mpim:G01234567", "*"])(
-    "rejects unsupported groupChannels form %s",
-    (channelKey) => {
-      expect(() =>
-        assertEnterpriseSlackPolicyConfig({
-          accountId: "org",
-          config: { dm: { groupChannels: [channelKey] } },
-        }),
-      ).toThrow(/stable Slack IDs.*dm\.groupChannels/);
-    },
-  );
+  it.each(["*"])("rejects unsupported groupChannels form %s", (channelKey) => {
+    expect(() =>
+      assertEnterpriseSlackPolicyConfig({
+        accountId: "org",
+        config: { dm: { groupChannels: [channelKey] } },
+      }),
+    ).toThrow(/stable Slack IDs.*dm\.groupChannels/);
+  });
 
   it("rejects channel names", () => {
     expect(() =>

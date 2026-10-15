@@ -1,8 +1,6 @@
 // Creates Claw-owned bootstrap and supporting files inside the new agent workspace.
-import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { resolve, sep } from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { Selectable } from "kysely";
 import { root as fsSafeRoot, FsSafeError, type Root } from "../infra/fs-safe.js";
@@ -12,6 +10,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -20,6 +19,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { digestClawBytes } from "./digest.js";
 import { clawContainedRelativePath } from "./path-containment.js";
 import { parseClawMarkdown } from "./reader.js";
 import type { ClawAddPlan, ClawAddPlanAction, ClawDiagnostic } from "./types.js";
@@ -56,7 +56,7 @@ class ClawWorkspaceSourceAliasError extends Error {}
 type WorkspaceDatabase = Pick<DB, "claw_workspace_files">;
 type WorkspaceFileRow = Selectable<DB["claw_workspace_files"]>;
 
-function selectWorkspaceFiles(db: DatabaseSync) {
+function selectWorkspaceFiles(db: EngineConnection) {
   return getNodeSqliteKysely<WorkspaceDatabase>(db)
     .selectFrom("claw_workspace_files")
     .select([
@@ -114,15 +114,11 @@ function diagnostic(action: ClawAddPlanAction, code: string, message: string): C
   };
 }
 
-function contentDigest(content: Uint8Array): string {
-  return `sha256:${createHash("sha256").update(content).digest("hex")}`;
-}
-
 export async function readClawWorkspaceActionSource(params: {
   action: ClawAddPlanAction;
   packageRoot: string;
   sourceRoot: Root;
-}): Promise<{ content: Buffer; sourcePath: string; sourceRelative: string }> {
+}): Promise<{ content: Buffer; sourceRelative: string }> {
   if (!params.action.source) {
     throw new Error("Workspace file action lacks a source.");
   }
@@ -142,13 +138,13 @@ export async function readClawWorkspaceActionSource(params: {
     );
   }
   if (params.action.sourceKind !== "clawMarkdownBody") {
-    return { content: read.buffer, sourcePath, sourceRelative };
+    return { content: read.buffer, sourceRelative };
   }
   const parsed = parseClawMarkdown(read.buffer, sourcePath);
   if (!parsed.ok) {
     throw new Error(parsed.diagnostics.map((item) => item.message).join("; "));
   }
-  return { content: parsed.body, sourcePath, sourceRelative };
+  return { content: parsed.body, sourceRelative };
 }
 
 function persistWorkspaceFile(
@@ -359,7 +355,7 @@ export async function createClawWorkspaceFiles(
         packageRoot,
         sourceRoot: source,
       });
-      const digest = contentDigest(resolvedSource.content);
+      const digest = digestClawBytes(resolvedSource.content);
       if (digest !== action.digest) {
         throw writeError(
           "workspace_source_changed",
@@ -400,7 +396,7 @@ export async function createClawWorkspaceFiles(
           maxBytes: MAX_CLAW_WORKSPACE_FILE_BYTES,
           symlinks: "reject",
         });
-        if (contentDigest(existingTarget.buffer) !== expectedRecord.contentDigest) {
+        if (digestClawBytes(existingTarget.buffer) !== expectedRecord.contentDigest) {
           throw writeError(
             "workspace_file_drift",
             `Claw-owned workspace destination ${JSON.stringify(targetRelative)} no longer matches its recorded content.`,

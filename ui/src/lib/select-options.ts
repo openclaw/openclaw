@@ -1,5 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-
 type SelectOption = {
   value: string;
   label: string;
@@ -15,7 +13,7 @@ export function pushUniqueTrimmedSelectOption(
   if (!trimmed) {
     return;
   }
-  const key = normalizeLowercaseStringOrEmpty(trimmed);
+  const key = trimmed.toLowerCase();
   if (seen.has(key)) {
     return;
   }

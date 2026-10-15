@@ -1,5 +1,8 @@
+import "./session-accessor.sqlite-replacement-publication.test-support.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSessionMembershipProjection } from "../../gateway/session-membership-projection.js";
+import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
+import * as logging from "../../logging/logger.js";
 import {
   onSessionIdentityMutation,
   type SessionIdentityMutation,
@@ -9,504 +12,276 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
-  readCommittedSessionEntryCache,
+  projectSessionSharingEntry,
   readSessionEntryCache,
   retainPreparedSessionSharingFacts,
   retainSessionEntryWorkerPublication,
-  projectSessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.js";
 import {
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { readCommittedIncognitoSessionSharing } from "./session-accessor.sqlite-incognito-sharing.js";
-import {
-  applySessionEntryCanonicalReplacements,
-  applySessionEntryExactReplacements,
-} from "./session-accessor.sqlite-replacement-projection.js";
+import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
-import { captureSessionEntryCurrentRead } from "./session-entry-current-runtime.js";
-import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
-import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
-import type { InternalSessionEntry } from "./types.js";
 
-// The canonical executor still owns real SQL, admission, and settlement; only reply delivery changes.
-const delivery = vi.hoisted(() => ({
-  afterResult: undefined as (() => void | Promise<void>) | undefined,
-  releaseFailure: undefined as Error | undefined,
-}));
-vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
-  return {
-    ...actual,
-    captureOpenClawAgentDatabaseExecution: (
-      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
-      const owned = actual.captureOpenClawAgentDatabaseExecution(...args);
-      return {
-        ...owned,
-        runExisting: (source, operation, options) =>
-          owned.runExisting(
-            source,
-            (scope) =>
-              operation({
-                execute: async (command, commandOptions) => {
-                  const result = await scope.execute(command, commandOptions);
-                  if (command.type === "session.entries.replace") {
-                    await delivery.afterResult?.();
-                  }
-                  return result;
-                },
-              }),
-            options,
-          ),
-        release: async () => {
-          await owned.release();
-          if (delivery.releaseFailure) {
-            throw delivery.releaseFailure;
-          }
-        },
-      };
-    },
-  };
-});
+const { getReplacementPublicationDelivery } =
+  await import("./session-accessor.sqlite-replacement-publication.test-support.js");
+const delivery = getReplacementPublicationDelivery();
 
 afterEach(() => {
-  delivery.afterResult = undefined;
-  delivery.releaseFailure = undefined;
+  vi.restoreAllMocks();
 });
 
-it("fences a delivery generation during native writes and restores it only on rollback", async () => {
+it("settles publication before a successor writer and preserves metadata after worker retirement", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const options = { agentId: "main", path: database.path };
-    const sessionKey = "agent:main:native-generation-publication";
-    const original = {
-      sessionId: "native-generation",
-      lifecycleRevision: "original-generation",
-      updatedAt: 1,
-    };
-    writeSessionEntry(database, sessionKey, original);
-    const originalRow = readExactSessionEntryRow(database, sessionKey);
-    expect(originalRow).toBeDefined();
-    const generation = await prepareSessionDeliveryGeneration({
-      agentId: options.agentId,
-      storePath: database.path,
-      sessionKey,
-      sessionId: original.sessionId,
-      lifecycleRevision: original.lifecycleRevision,
-    });
-    const rollback = new Error("roll back staged generation");
-    try {
-      generation.assertCurrent();
-      expect(() =>
-        runOpenClawAgentWriteTransaction((writer) => {
-          writeSessionEntry(writer, sessionKey, {
-            ...original,
-            lifecycleRevision: "uncommitted-generation",
-            updatedAt: 2,
-          });
-          expect(writer.db.isTransaction).toBe(true);
-          expect(readExactSessionEntryRow(writer, sessionKey)?.entry.lifecycleRevision).toBe(
-            "uncommitted-generation",
-          );
-          expect(generation.assertCurrent).toThrow(
-            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-          );
-          throw rollback;
-        }, options),
-      ).toThrow(rollback);
-      expect(database.db.isTransaction).toBe(false);
-      expect(readExactSessionEntryRow(database, sessionKey)).toEqual(originalRow);
-      generation.assertCurrent();
-
-      runOpenClawAgentWriteTransaction((writer) => {
-        writeSessionEntry(writer, sessionKey, {
-          ...original,
-          lifecycleRevision: "committed-replacement",
-          updatedAt: 3,
-        });
-      }, options);
-      expect(readExactSessionEntryRow(database, sessionKey)?.entry.lifecycleRevision).toBe(
-        "committed-replacement",
-      );
-      // Restoring the old values cannot restore a generation already replaced at COMMIT.
-      runOpenClawAgentWriteTransaction((writer) => {
-        writeSessionEntry(writer, sessionKey, original);
-      }, options);
-      expect(generation.assertCurrent).toThrow(
-        expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
-      );
-    } finally {
-      generation.release();
-    }
-  });
-});
-
-it("uses incognito transaction postimages for currency while delivery retains committed facts", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const agentId = "main";
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: state.env });
-    const options = { agentId, path: storePath, env: state.env };
     const scope = {
-      agentId,
-      storePath,
-      env: state.env,
-      sessionKey: "agent:main:subagent:incognito-currency",
+      agentId: "main",
+      sessionKey: "agent:main:successor-worker",
+      storePath: database.path,
     };
-    const originalCurrency = {
-      sessionId: "incognito-currency-session",
-      lifecycleRevision: "incognito-currency-lifecycle",
-      lifecycleRunId: "original-run",
-      activeWriterRunId: "original-writer",
-      subagentRecovery: { lastRunId: "original-hidden-run" },
-    };
-    const original = {
-      ...originalCurrency,
-      incognito: true,
+    replaceSessionEntrySync(scope, {
+      sessionId: "successor-worker",
       updatedAt: 1,
-    } satisfies InternalSessionEntry;
-    const database = openOpenClawAgentDatabase(options);
-    runOpenClawAgentWriteTransaction(
-      (writer) => writeSessionEntry(writer, scope.sessionKey, original),
-      options,
-    );
-    const reader = await withSessionEntryReadOnlyInWorker(
-      scope,
-      () => {},
-      async (read, owner) => {
-        expect(read.ok).toBe(true);
-        return captureSessionEntryCurrentRead(scope, owner);
-      },
-    );
-    if (reader.source) {
-      throw new Error("Expected a process-held incognito currency reader");
-    }
-    const generation = await prepareSessionDeliveryGeneration({
-      agentId,
-      storePath,
-      sessionKey: scope.sessionKey,
-      sessionId: original.sessionId,
-      lifecycleRevision: original.lifecycleRevision,
+      label: "initial",
     });
-    const rollback = new Error("roll back incognito currency postimage");
-    try {
-      expect(reader.readCurrent()).toMatchObject(originalCurrency);
-      expect(() =>
-        runOpenClawAgentWriteTransaction((writer) => {
-          writeSessionEntry(writer, scope.sessionKey, {
-            ...original,
-            lifecycleRunId: "pending-run",
-            activeWriterRunId: "pending-writer",
-            subagentRecovery: { lastRunId: "pending-hidden-run" },
-            updatedAt: 2,
-          });
-          // A later field publication must retain the staged entry's currency fields.
-          addSessionMember(scope, { identityId: "member", addedBy: "operator" });
-          expect(reader.readCurrent()).toMatchObject({
-            lifecycleRunId: "pending-run",
-            activeWriterRunId: "pending-writer",
-            subagentRecovery: { lastRunId: "pending-hidden-run" },
-          });
-          expect(() => readCommittedIncognitoSessionSharing(writer.db, scope.sessionKey)).toThrow(
-            "publication is pending",
-          );
-          expect(generation.assertCurrent).toThrow(
-            expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-          );
-          throw rollback;
-        }, options),
-      ).toThrow(rollback);
-      expect(database.db.isTransaction).toBe(false);
-      expect(reader.readCurrent()).toMatchObject(originalCurrency);
-      generation.assertCurrent();
-      runOpenClawAgentWriteTransaction(
-        (writer) =>
-          writeSessionEntry(writer, scope.sessionKey, {
-            ...original,
-            lifecycleRunId: "committed-run",
-            subagentRecovery: { lastRunId: "committed-hidden-run" },
-            updatedAt: 3,
-          }),
-        options,
-      );
-      expect(reader.readCurrent()).toMatchObject({
-        lifecycleRunId: "committed-run",
-        subagentRecovery: { lastRunId: "committed-hidden-run" },
+    const projection = await createSessionRowProjection({ cfg: {} });
+    const replace = (label: string) =>
+      applySessionEntryExactReplacements({
+        agentId: scope.agentId,
+        storePath: scope.storePath,
+        sessionKeys: [scope.sessionKey],
+        update: ([row]) => ({
+          result: undefined,
+          replacements: [{ sessionKey: scope.sessionKey, entry: { ...row!.entry, label } }],
+        }),
       });
-      // Delivery owns session/lifecycle identity, not recovery's execution predicate.
-      generation.assertCurrent();
+    let successor: Promise<void> | undefined;
+    delivery.afterRelease = async () => {
+      successor = replace("successor");
+    };
+    try {
+      await replace("retired");
+      expect(successor).toBeDefined();
+      await successor;
+      const query = { agentId: scope.agentId, key: scope.sessionKey, storePath: scope.storePath };
+      expect(projection.capture(query)?.storedEntry?.label).toBe("successor");
+      expect(projection.sharingTarget(query)?.entry.sessionId).toBe("successor-worker");
+      await closeOpenClawAgentDatabaseByPathAsync(database.path);
+      await replace("new generation");
+      await projection.ensureMaterialized();
+      expect(projection.capture(query)?.storedEntry?.label).toBe("new generation");
     } finally {
-      generation.release();
+      projection.dispose();
     }
   });
 });
 
-it.each([
-  "lost result",
-  "release failure",
-  "newer native write",
-  "newer native write after reset",
-  "late writer",
-] as const)("preserves replacement publication through %s", async (boundary) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const options = { agentId: "main", path: database.path };
-    const sessionKey = "agent:main:replacement-settlement";
-    const reset = boundary === "newer native write after reset";
-    const newerNative = boundary === "newer native write" || reset;
-    const original = {
-      sessionId: "settlement",
-      lifecycleRevision: "initial-lifecycle",
-      updatedAt: 1,
-      visibility: "shared" as const,
-      label: "before",
-      category: "before",
-    };
-    writeSessionEntry(database, sessionKey, original);
-    const identity = readOpenClawAgentDatabaseIdentity(database).identity;
-    if (typeof identity !== "string") {
-      throw new Error("Expected durable fixture");
-    }
-    const sharing = retainPreparedSessionSharingFacts({
-      databaseIdentity: `file:${identity}`,
-      sessionKey,
-      entry: projectSessionSharingEntry(original),
-      membership: new Set(["member"]),
-    });
-    const generation = await prepareSessionDeliveryGeneration({
-      agentId: "main",
-      storePath: database.path,
-      sessionKey,
-      sessionId: original.sessionId,
-      lifecycleRevision: original.lifecycleRevision,
-    });
-    generation.assertCurrent();
-    const projection = createSessionMembershipProjection();
-    projection.updateTargets([
-      { ...options, storePath: database.path, ...readOpenClawAgentDatabaseIdentity(database) },
-    ]);
-    const stopFacts = sessionChanges.subscribeFacts(projection.invalidate);
-    await projection.prepare();
-    expect([...projection.groupTargets().keys()]).toEqual(["before"]);
-    let writer = database;
-    if (boundary === "late writer") {
-      await closeOpenClawAgentDatabaseByPathAsync(database.path);
-    } else {
-      readSessionEntryCache(writer, { cache: true });
-    }
-    const observed: Array<string | undefined> = [];
-    const caches: unknown[] = [];
-    const mutations: SessionIdentityMutation[] = [];
-    const stopIdentity = onSessionIdentityMutation((mutation) => mutations.push(mutation));
-    const stop = sessionChanges.subscribe((change) => {
-      if ("sessionKey" in change && change.sessionKey === sessionKey) {
-        observed.push(sharing.readCurrent()?.entry?.visibility);
-        caches.push(readCommittedSessionEntryCache(writer.db)?.get(sessionKey)?.label);
-      }
-    });
-    let executions = 0;
-    let whileWaiting: ReturnType<typeof sharing.readCurrent>;
-    const failure = new Error(`synthetic ${boundary}`);
-    delivery.afterResult = () => {
-      executions++;
-      whileWaiting = sharing.readCurrent();
-      expect(generation.assertCurrent).toThrow(
-        expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-      );
-      if (boundary === "lost result") {
-        throw failure;
-      }
-      if (newerNative) {
-        replaceSessionEntrySync(
-          { agentId: "main", storePath: database.path, sessionKey },
-          {
-            ...readExactSessionEntryRow(database, sessionKey)!.entry,
-            updatedAt: 3,
-            visibility: "draft",
-            label: "newer",
-            category: "newer",
-          },
-        );
-      }
-    };
-    if (boundary === "release failure") {
-      delivery.releaseFailure = failure;
-    }
-    try {
-      const operation = applySessionEntryExactReplacements({
-        storePath: database.path,
-        sessionKeys: [sessionKey],
-        update: ([row]) => {
-          if (boundary === "late writer") {
-            writer = openOpenClawAgentDatabase(options);
-            readSessionEntryCache(writer, { cache: true });
+it.each(["metadata only", "lost result", "callback failure", "release failure"] as const)(
+  "preserves replacement publication through %s",
+  async (boundary) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cleanupWarnings: unknown[][] = [];
+      const getChildLogger = logging.getChildLogger;
+      vi.spyOn(logging, "getChildLogger").mockImplementation((...args) => {
+        const logger = getChildLogger(...args);
+        const warn = logger.warn.bind(logger);
+        vi.spyOn(logger, "warn").mockImplementation((...values) => {
+          if (values[0] === "Session mutation completed before executor cleanup failed") {
+            cleanupWarnings.push(values);
           }
-          return {
-            result: undefined,
-            replacements: [
-              {
-                sessionKey,
-                entry: {
-                  ...row!.entry,
-                  visibility: "read-only",
-                  label: "worker",
-                  category: "worker",
-                  ...(reset ? { lifecycleRevision: "next-lifecycle" } : {}),
-                },
-              },
-            ],
-          };
-        },
+          return warn(...values);
+        });
+        return logger;
       });
-      if (boundary === "lost result" || boundary === "release failure") {
-        await expect(operation).rejects.toBe(failure);
-      } else {
-        await operation;
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const options = { agentId: "main", path: database.path };
+      const sessionKey = "agent:main:replacement-settlement";
+      const metadataOnly = boundary.startsWith("metadata");
+      const workerVisibility = metadataOnly ? "shared" : "read-only";
+      const workerCategory = metadataOnly ? "before" : "worker";
+      const original = {
+        sessionId: "settlement",
+        lifecycleRevision: "initial-lifecycle",
+        updatedAt: 1,
+        visibility: "shared" as const,
+        label: "before",
+        category: "before",
+      };
+      writeSessionEntry(database, sessionKey, original);
+      addSessionMember(
+        { agentId: "main", storePath: database.path, sessionKey },
+        { identityId: "member", addedBy: "owner", addedAt: 1 },
+      );
+      const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+      if (typeof identity !== "string") {
+        throw new Error("Expected durable fixture");
       }
-      expect(executions).toBe(1);
-      if (boundary !== "late writer") {
-        expect(whileWaiting).toBeUndefined();
+      const sharing = retainPreparedSessionSharingFacts({
+        databaseIdentity: `file:${identity}`,
+        sessionKey,
+        entry: projectSessionSharingEntry(original),
+        membership: new Set(["member"]),
+      });
+      const generation = await prepareSessionDeliveryGeneration({
+        agentId: "main",
+        storePath: database.path,
+        sessionKey,
+        sessionId: original.sessionId,
+        lifecycleRevision: original.lifecycleRevision,
+      });
+      generation.assertCurrent();
+      const projection = createSessionMembershipProjection();
+      projection.updateTargets([
+        { ...options, storePath: database.path, ...readOpenClawAgentDatabaseIdentity(database) },
+      ]);
+      let callbackPublication: ReturnType<typeof readPreparedSessionEntryChange>;
+      const stopFacts = sessionChanges.subscribeFacts((change) => {
+        projection.invalidate(change);
+        if (
+          boundary === "callback failure" &&
+          "sessionKey" in change &&
+          change.sessionKey === sessionKey
+        ) {
+          callbackPublication = readPreparedSessionEntryChange(change, sessionKey);
+        }
+      });
+      await projection.prepare();
+      expect([...projection.groupTargets().keys()]).toEqual(["before"]);
+      expect(projection.membership(database.path, sessionKey)).toEqual(["member"]);
+      const writer = database;
+      readSessionEntryCache(writer, { cache: true });
+      const observed: Array<string | undefined> = [];
+      const mutations: SessionIdentityMutation[] = [];
+      const stopIdentity = onSessionIdentityMutation((mutation) => mutations.push(mutation));
+      const stop = sessionChanges.subscribe((change) => {
+        if ("sessionKey" in change && change.sessionKey === sessionKey) {
+          observed.push(sharing.readCurrent()?.entry?.visibility);
+        }
+      });
+      let executions = 0;
+      let whileWaiting: ReturnType<typeof sharing.readCurrent>;
+      const failure = new Error(`synthetic ${boundary}`);
+      delivery.afterResult = () => {
+        executions++;
+        whileWaiting = sharing.readCurrent();
+        generation.assertCurrent();
+        if (boundary === "lost result") {
+          throw failure;
+        }
+      };
+      if (boundary === "release failure") {
+        delivery.releaseFailure = failure;
       }
-      if (reset) {
-        expect(sharing.readCurrent()).toBeUndefined();
-      } else {
+      try {
+        const operation = applySessionEntryExactReplacements({
+          storePath: database.path,
+          sessionKeys: [sessionKey],
+          ...(boundary === "callback failure" && {
+            onLifecycleCommitted: () => {
+              throw failure;
+            },
+          }),
+          update: ([row]) => {
+            return {
+              result: undefined,
+              replacements: [
+                {
+                  sessionKey,
+                  entry: {
+                    ...row!.entry,
+                    visibility: workerVisibility,
+                    label: "worker",
+                    category: workerCategory,
+                  },
+                },
+              ],
+            };
+          },
+        });
+        if (boundary === "lost result" || boundary === "callback failure") {
+          await expect(operation).rejects.toBe(failure);
+        } else {
+          await operation;
+        }
+        if (boundary === "callback failure") {
+          expect(callbackPublication?.entry).toMatchObject({
+            sessionId: original.sessionId,
+            label: "worker",
+            category: "worker",
+          });
+          expect(callbackPublication?.source).toMatchObject({
+            identity,
+            revision: expect.any(Number),
+          });
+        }
+        expect(executions).toBe(1);
+        expect(cleanupWarnings).toEqual(
+          boundary === "release failure"
+            ? [
+                [
+                  "Session mutation completed before executor cleanup failed",
+                  { errors: [failure.message] },
+                ],
+              ]
+            : [],
+        );
+        if (metadataOnly) {
+          expect(whileWaiting).toMatchObject({
+            entry: { visibility: "shared" },
+            membership: new Set(["member"]),
+          });
+        } else {
+          expect(whileWaiting).toBeUndefined();
+        }
         expect(sharing.readCurrent()).toMatchObject({
-          entry: { visibility: newerNative ? "draft" : "read-only" },
+          entry: { visibility: workerVisibility },
           membership: new Set(["member"]),
         });
-      }
-      if (reset) {
-        expect(generation.assertCurrent).toThrow(
-          expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" }),
-        );
-      } else if (boundary === "late writer") {
-        expect(generation.assertCurrent).toThrow(
-          expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
-        );
-      } else {
         generation.assertCurrent();
+        expect(mutations).toEqual([]);
+        expect(readExactSessionEntryRow(writer, sessionKey)?.entry.label).toBe("worker");
+        expect(projection.needsPreparation).toBe(false);
+        expect(projection.membership(database.path, sessionKey)).toEqual(["member"]);
+        await projection.prepare();
+        expect([...projection.groupTargets()]).toEqual([
+          [workerCategory, [{ sessionKey, agentId: "main" }]],
+        ]);
+        expect(observed).toEqual([workerVisibility]);
+      } finally {
+        delivery.afterResult = undefined;
+        delivery.releaseFailure = undefined;
+        stop();
+        stopIdentity();
+        stopFacts();
+        projection.dispose();
+        sharing.release();
+        generation.release();
       }
-      expect(mutations).toEqual(
-        reset
-          ? [
-              {
-                agentId: "main",
-                databaseIdentity: identity,
-                kind: "reset",
-                previous: { sessionId: "settlement", sessionKeys: [sessionKey] },
-                current: { sessionId: "settlement", sessionKeys: [sessionKey] },
-              },
-            ]
-          : [],
-      );
-      expect(readExactSessionEntryRow(writer, sessionKey)?.entry.label).toBe(
-        newerNative ? "newer" : "worker",
-      );
-      await projection.prepare();
-      expect([...projection.groupTargets()]).toEqual([
-        [newerNative ? "newer" : "worker", [{ sessionKey, agentId: "main" }]],
-      ]);
-      expect(observed).toEqual([reset ? undefined : newerNative ? "draft" : "read-only"]);
-      if (boundary === "late writer") {
-        expect(caches).toEqual([undefined]);
-      }
-    } finally {
-      delivery.afterResult = undefined;
-      delivery.releaseFailure = undefined;
-      stop();
-      stopIdentity();
-      stopFacts();
-      projection.dispose();
-      sharing.release();
-      generation.release();
-    }
-  });
-});
+    });
+  },
+);
 
-it("keeps uncertain alias membership unavailable after newer native metadata settles", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const sessionKey = "agent:main:replacement-unknown-membership";
-    const entry = {
-      sessionId: "unknown-membership",
-      lifecycleRevision: "unchanged-lifecycle",
-      updatedAt: 1,
-      visibility: "shared" as const,
-    };
-    writeSessionEntry(database, sessionKey, entry);
-    const identity = readOpenClawAgentDatabaseIdentity(database).identity;
-    if (typeof identity !== "string") {
-      throw new Error("Expected durable fixture");
-    }
-    const sharing = retainPreparedSessionSharingFacts({
-      databaseIdentity: `file:${identity}`,
-      sessionKey,
-      entry: projectSessionSharingEntry(entry),
-      membership: new Set(["previous-member"]),
-    });
-    const publication = retainSessionEntryWorkerPublication({
-      agentId: "main",
-      storePath: database.path,
-      databaseIdentity: identity,
-    });
-    const invalidations: Array<{ sessionKey: string; scope: string | undefined }> = [];
-    const stop = sessionChanges.subscribeFacts((change) => {
-      if ("sessionKey" in change && change.sessionKey === sessionKey && change.factsInvalidated) {
-        invalidations.push({ sessionKey: change.sessionKey, scope: change.scope });
-      }
-    });
-    try {
-      publication.begin([sessionKey], [sessionKey]);
-      replaceSessionEntrySync(
-        { agentId: "main", storePath: database.path, sessionKey },
-        { ...entry, updatedAt: 2, visibility: "draft" },
-      );
-      expect(sharing.readCurrent()).toBeUndefined();
-      expect(invalidations).toEqual([]);
-      publication.settle(undefined, true);
-      expect(sharing.readCurrent()).toBeUndefined();
-      expect(invalidations).toEqual([{ sessionKey, scope: undefined }]);
-      expect(readExactSessionEntryRow(database, sessionKey)?.entry.visibility).toBe("draft");
-    } finally {
-      publication.settle(undefined, false);
-      stop();
-      sharing.release();
-    }
-  });
-});
-
-it.each([false, true])(
-  "invalidates rehomed membership while preserving newer native metadata (%s)",
-  async (newerNative) => {
+it.each(["alias membership", "metadata only"] as const)(
+  "invalidates unknown %s publication without a receipt",
+  async (boundary) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const metadataOnly = boundary === "metadata only";
       const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const sessionKey = "agent:main:replacement-member-target";
-      const aliasKey = "agent:main:replacement-member-alias";
+      const sessionKey = "agent:main:replacement-unknown-membership";
       const entry = {
-        sessionId: "member-target",
+        sessionId: "unknown-membership",
         lifecycleRevision: "unchanged-lifecycle",
-        updatedAt: 2,
+        updatedAt: 1,
         visibility: "shared" as const,
       };
       writeSessionEntry(database, sessionKey, entry);
-      writeSessionEntry(database, aliasKey, { sessionId: "member-alias", updatedAt: 1 });
-      for (const [key, identityId] of [
-        [sessionKey, "target-member"],
-        [aliasKey, "alias-member"],
-      ] as const) {
-        addSessionMember(
-          { agentId: "main", storePath: database.path, sessionKey: key },
-          { identityId, addedBy: "owner", addedAt: 1 },
-        );
-      }
       const identity = readOpenClawAgentDatabaseIdentity(database).identity;
       if (typeof identity !== "string") {
         throw new Error("Expected durable fixture");
@@ -515,46 +290,51 @@ it.each([false, true])(
         databaseIdentity: `file:${identity}`,
         sessionKey,
         entry: projectSessionSharingEntry(entry),
-        membership: new Set(
-          listSessionMembersInDatabase(database, sessionKey).map((member) => member.identityId),
-        ),
+        membership: new Set(["previous-member"]),
       });
-      expect(sharing.readCurrent()?.membership).toEqual(new Set(["target-member"]));
-      delivery.afterResult = () => {
-        if (newerNative) {
+      const publication = retainSessionEntryWorkerPublication({
+        agentId: "main",
+        storePath: database.path,
+        databaseIdentity: identity,
+      });
+      const invalidations: Array<{ sessionKey: string; scope: string | undefined }> = [];
+      const stop = sessionChanges.subscribeFacts((change) => {
+        if ("sessionKey" in change && change.sessionKey === sessionKey && change.factsInvalidated) {
+          invalidations.push({ sessionKey: change.sessionKey, scope: change.scope });
+        }
+      });
+      try {
+        publication.begin(
+          [sessionKey],
+          metadataOnly ? [] : [sessionKey],
+          metadataOnly ? [sessionKey] : [],
+        );
+        if (metadataOnly) {
+          expect(sharing.readCurrent()?.entry?.visibility).toBe("shared");
+        } else {
           replaceSessionEntrySync(
             { agentId: "main", storePath: database.path, sessionKey },
-            { ...entry, updatedAt: 3, visibility: "draft" },
+            { ...entry, updatedAt: 2, visibility: "draft" },
           );
           expect(sharing.readCurrent()).toBeUndefined();
         }
-      };
-      try {
-        await applySessionEntryCanonicalReplacements({
-          storePath: database.path,
-          sessionKeys: [sessionKey, aliasKey],
-          update: () => ({
-            result: undefined,
-            replacements: [{ sessionKey, previousSessionKeys: [aliasKey], entry }],
-          }),
-        });
-        expect(readExactSessionEntryRow(database, aliasKey)).toBeUndefined();
-        expect(readExactSessionEntryRow(database, sessionKey)?.entry.visibility).toBe(
-          newerNative ? "draft" : "shared",
-        );
-        expect(
-          listSessionMembersInDatabase(database, sessionKey).map((member) => member.identityId),
-        ).toEqual(["alias-member", "target-member"]);
+        expect(invalidations).toEqual([]);
+        publication.settle(undefined, true);
         expect(sharing.readCurrent()).toBeUndefined();
+        expect(invalidations).toEqual([{ sessionKey, scope: undefined }]);
+        expect(readExactSessionEntryRow(database, sessionKey)?.entry.visibility).toBe(
+          metadataOnly ? "shared" : "draft",
+        );
       } finally {
-        delivery.afterResult = undefined;
+        publication.settle(undefined, false);
+        stop();
         sharing.release();
       }
     });
   },
 );
 
-it("fences inline maintenance rows and preserves a newer native publication for them", async () => {
+it("refreshes inline maintenance rows", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { resetConfigRuntimeState, setRuntimeConfigSnapshot } = await import("../config.js");
     const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -563,7 +343,11 @@ it("fences inline maintenance rows and preserves a newer native publication for 
     const archivedKey = "agent:main:replacement-maintenance-old";
     writeSessionEntry(database, activeKey, { sessionId: "active", updatedAt: Date.now() });
     writeSessionEntry(database, siblingKey, { sessionId: "sibling", updatedAt: Date.now() });
-    const original = { sessionId: "maintenance-old", updatedAt: 1, visibility: "shared" as const };
+    const original = {
+      sessionId: "maintenance-old",
+      updatedAt: 1,
+      visibility: "shared" as const,
+    };
     writeSessionEntry(database, archivedKey, original);
     const identity = readOpenClawAgentDatabaseIdentity(database).identity;
     if (typeof identity !== "string") {
@@ -576,9 +360,13 @@ it("fences inline maintenance rows and preserves a newer native publication for 
       membership: new Set(["member"]),
     });
     const config = {
-      session: { maintenance: { mode: "enforce" as const, maxEntries: 1, pruneAfter: "1000000d" } },
+      session: {
+        maintenance: { mode: "enforce" as const, maxEntries: 1, pruneAfter: "1000000d" },
+      },
     };
     setRuntimeConfigSnapshot(config, config);
+    const projection = await createSessionRowProjection({ cfg: config, modelCatalog: [] });
+    await projection.ensureMaterialized();
     const replacementKeys = [activeKey, siblingKey];
     const factKeys = new Set<string>();
     const observerFacts: string[][] = [];
@@ -598,10 +386,6 @@ it("fences inline maintenance rows and preserves a newer native publication for 
         expect.any(Number),
       );
       whileWaiting = sharing.readCurrent();
-      replaceSessionEntrySync(
-        { agentId: "main", storePath: database.path, sessionKey: archivedKey },
-        { ...original, updatedAt: Date.now(), visibility: "draft", label: "newer maintenance row" },
-      );
     };
     try {
       await applySessionEntryExactReplacements({
@@ -619,15 +403,28 @@ it("fences inline maintenance rows and preserves a newer native publication for 
       });
       expect(observerFacts).toEqual([replacementKeys.toSorted(), replacementKeys.toSorted()]);
       expect(whileWaiting).toBeUndefined();
-      expect(sharing.readCurrent()).toMatchObject({
-        entry: { visibility: "draft" },
-        membership: new Set(["member"]),
+      const current = readExactSessionEntryRow(database, archivedKey)?.entry;
+      expect(current).toMatchObject({ archivedAt: expect.any(Number) });
+      if (!current) {
+        throw new Error("Expected committed archived entry");
+      }
+      expect(sharing.readCurrent()).toEqual({
+        entry: projectSessionSharingEntry(current),
+        membership: new Set(),
       });
-      expect(readExactSessionEntryRow(database, archivedKey)?.entry.label).toBe(
-        "newer maintenance row",
-      );
+      await projection.ensureMaterialized();
+      for (const key of [...replacementKeys, archivedKey]) {
+        const committed = readExactSessionEntryRow(database, key)?.entry;
+        expect(committed).toBeDefined();
+        const resident = projection.capture({ agentId: "main", key })?.entry;
+        expect(resident).toBeDefined();
+        expect(resident?.sessionId).toBe(committed?.sessionId);
+        expect(resident?.archivedAt).toBe(committed?.archivedAt);
+        expect(resident?.label).toBe(committed?.label);
+      }
     } finally {
       delivery.afterResult = undefined;
+      projection.dispose();
       resetConfigRuntimeState();
       stopObserver();
       stopFacts();

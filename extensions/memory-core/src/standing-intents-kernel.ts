@@ -33,17 +33,28 @@ type StandingIntentMatchDatabase = StandingIntentDatabase & {
   };
 };
 
-function shouldRearm(
-  row: Pick<StandingIntentRow, "status" | "last_fired_at" | "cooldown_seconds">,
-  nowMs: number,
-): boolean {
-  if (row.status !== "fired" || row.last_fired_at === null) {
-    return false;
-  }
-  return row.last_fired_at + row.cooldown_seconds * 1_000 <= nowMs;
+const lifecycleDeadlines = new WeakMap<
+  DatabaseSync,
+  { observedAt: number; nextDueAt: number; hasActiveIntents: boolean }
+>();
+
+export function invalidateStandingIntentLifecycle(db: DatabaseSync): void {
+  lifecycleDeadlines.delete(db);
+}
+
+export function getStandingIntentLifecycleDeadline(db: DatabaseSync): number | null {
+  return lifecycleDeadlines.get(db)?.nextDueAt ?? null;
+}
+
+export function hasNoActiveStandingIntents(db: DatabaseSync): boolean {
+  return lifecycleDeadlines.get(db)?.hasActiveIntents === false;
 }
 
 export function maintainStandingIntentLifecycle(db: DatabaseSync, nowMs: number): void {
+  const deadline = lifecycleDeadlines.get(db);
+  if (deadline && nowMs >= deadline.observedAt && nowMs < deadline.nextDueAt) {
+    return;
+  }
   const kysely = getNodeSqliteKysely<StandingIntentDatabase>(db);
   executeSqliteQuerySync(
     db,
@@ -73,7 +84,12 @@ export function maintainStandingIntentLifecycle(db: DatabaseSync, nowMs: number)
       .where("expires_at", ">", nowMs)
       .whereRef("fire_count", "<", "max_fires"),
   ).rows;
-  const readyIds = fired.filter((row) => shouldRearm(row, nowMs)).map((row) => row.id);
+  const readyIds = fired
+    .filter(
+      (row) =>
+        row.last_fired_at !== null && row.last_fired_at + row.cooldown_seconds * 1_000 <= nowMs,
+    )
+    .map((row) => row.id);
   if (readyIds.length > 0) {
     executeSqliteQuerySync(
       db,
@@ -84,6 +100,30 @@ export function maintainStandingIntentLifecycle(db: DatabaseSync, nowMs: number)
         .where("status", "=", "fired"),
     );
   }
+  const expiry = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("standing_intents")
+      // Binary64 preserves millisecond deadlines without decoding unsafe stored integers.
+      .select((eb) =>
+        eb.fn.min(eb.cast<number>("expires_at", "double precision")).as("next_expiry"),
+      )
+      .where("status", "in", ["pending", "armed", "fired"]),
+  );
+  let nextDueAt = expiry?.next_expiry ?? Infinity;
+  for (const row of fired) {
+    if (row.last_fired_at !== null) {
+      const rearmAt = row.last_fired_at + row.cooldown_seconds * 1_000;
+      if (rearmAt > nowMs) {
+        nextDueAt = Math.min(nextDueAt, rearmAt);
+      }
+    }
+  }
+  lifecycleDeadlines.set(db, {
+    observedAt: nowMs,
+    nextDueAt,
+    hasActiveIntents: expiry?.next_expiry != null,
+  });
 }
 
 export function createStandingIntentInDatabase(
@@ -91,6 +131,7 @@ export function createStandingIntentInDatabase(
   row: StandingIntentRow,
 ): StandingIntent {
   const kysely = getNodeSqliteKysely<StandingIntentDatabase>(db);
+  invalidateStandingIntentLifecycle(db);
   executeSqliteQuerySync(db, kysely.insertInto("standing_intents").values(row));
   return rowToIntent(row);
 }
@@ -117,6 +158,7 @@ export function cancelStandingIntentInDatabase(
   params: StandingIntentOperations["cancel"]["input"],
 ): StandingIntent | null {
   const kysely = getNodeSqliteKysely<StandingIntentDatabase>(db);
+  invalidateStandingIntentLifecycle(db);
   const result = executeSqliteQuerySync(
     db,
     kysely
@@ -144,38 +186,22 @@ function triggerMatchesPrompt(row: StandingIntentRow, promptTokens: ReadonlySet<
     );
 }
 
-function scopesMatch(
-  row: StandingIntentRow,
-  channelScopes: ReadonlySet<string>,
-  senderScope: string | undefined,
-): boolean {
-  return (
-    (row.channel_scope === null || channelScopes.has(row.channel_scope)) &&
-    (row.sender_scope === null || row.sender_scope === senderScope)
-  );
-}
-
-function canFire(row: StandingIntentRow, nowMs: number): boolean {
-  return (
-    row.status === "armed" &&
-    row.expires_at > nowMs &&
-    row.fire_count < row.max_fires &&
-    (row.last_fired_at === null || row.last_fired_at + row.cooldown_seconds * 1_000 <= nowMs)
-  );
-}
-
 export function matchStandingIntentsInDatabase(
   db: DatabaseSync,
   params: StandingIntentMatchInput,
 ): StandingIntent[] {
   const promptTokens = new Set(params.promptTokens);
-  const channelScopes = new Set(params.channelScopes);
+  const channelScopes = params.channelScopes;
   const ftsQuery = params.ftsQuery;
   const storedSenderScope = params.senderScope;
   const nowMs = params.nowMs ?? Date.now();
   maintainStandingIntentLifecycle(db, nowMs);
-  const matchDb = getNodeSqliteKysely<StandingIntentMatchDatabase>(db);
-  let candidatesQuery = matchDb
+  // The lifecycle owner invalidates this absence fact on every write and rollback.
+  if (hasNoActiveStandingIntents(db)) {
+    return [];
+  }
+  const kysely = getNodeSqliteKysely<StandingIntentMatchDatabase>(db);
+  let candidatesQuery = kysely
     .selectFrom("standing_intents as intent")
     .innerJoin("standing_intents_fts as fts", "fts.rowid", "intent.intent_key")
     .selectAll("intent")
@@ -184,24 +210,20 @@ export function matchStandingIntentsInDatabase(
     .where("intent.creator_sender", "is not", null)
     .where("intent.expires_at", ">", nowMs)
     .whereRef("intent.fire_count", "<", "intent.max_fires");
-  candidatesQuery =
-    channelScopes.size > 0
-      ? candidatesQuery.where((expression) =>
-          expression.or([
-            expression("intent.channel_scope", "is", null),
-            ...[...channelScopes].map((scope) => expression("intent.channel_scope", "=", scope)),
-          ]),
-        )
-      : candidatesQuery.where("intent.channel_scope", "is", null);
-  candidatesQuery = storedSenderScope
-    ? candidatesQuery.where((expression) =>
-        expression.or([
-          expression("intent.sender_scope", "is", null),
-          expression("intent.sender_scope", "=", storedSenderScope),
-        ]),
-      )
-    : candidatesQuery.where("intent.sender_scope", "is", null);
-  const kysely = getNodeSqliteKysely<StandingIntentDatabase>(db);
+  for (const [column, scopes] of [
+    ["intent.channel_scope", channelScopes],
+    ["intent.sender_scope", storedSenderScope ? [storedSenderScope] : []],
+  ] as const) {
+    candidatesQuery =
+      scopes.length > 0
+        ? candidatesQuery.where((expression) =>
+            expression.or([
+              expression(column, "is", null),
+              ...scopes.map((scope) => expression(column, "=", scope)),
+            ]),
+          )
+        : candidatesQuery.where(column, "is", null);
+  }
   const fired: StandingIntent[] = [];
   let scannedCandidates = 0;
   let cursor: { createdAt: number; id: string } | undefined;
@@ -247,31 +269,28 @@ export function matchStandingIntentsInDatabase(
       // This write transaction's page stays current: firing only changes the selected row.
       if (
         !readKnownCreatorSender(current.creator_sender) ||
-        !canFire(current, nowMs) ||
-        !scopesMatch(current, channelScopes, storedSenderScope) ||
+        (current.last_fired_at !== null &&
+          !(current.last_fired_at + current.cooldown_seconds * 1_000 <= nowMs)) ||
         !triggerMatchesPrompt(current, promptTokens)
       ) {
         continue;
       }
       const nextFireCount = current.fire_count + 1;
-      const firedIntent = rowToIntent({
-        ...current,
+      const firedState = {
         fire_count: nextFireCount,
         last_fired_at: nowMs,
         status: nextFireCount >= current.max_fires ? "done" : "fired",
-      });
+      } satisfies Pick<StandingIntentRow, "fire_count" | "last_fired_at" | "status">;
+      const firedIntent = rowToIntent({ ...current, ...firedState });
       if (!standingIntentsFitContext([...fired, firedIntent])) {
         continue;
       }
+      invalidateStandingIntentLifecycle(db);
       executeSqliteQuerySync(
         db,
         kysely
           .updateTable("standing_intents")
-          .set({
-            fire_count: nextFireCount,
-            last_fired_at: nowMs,
-            status: nextFireCount >= current.max_fires ? "done" : "fired",
-          })
+          .set(firedState)
           .where("id", "=", current.id)
           .where("status", "=", "armed"),
       );

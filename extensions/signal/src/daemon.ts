@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { spawnOomScoreAdjusted as spawn } from "openclaw/plugin-sdk/process-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   ensurePortAvailable,
@@ -27,10 +27,8 @@ type SignalDaemonOpts = {
 };
 
 export type SignalDaemonHandle = {
-  pid?: number;
   stop: () => Promise<void>;
   exited: Promise<SignalDaemonExitEvent>;
-  isExited: () => boolean;
 };
 
 const SIGNAL_DAEMON_STOP_KILL_TIMEOUT_MS = 1_500;
@@ -89,8 +87,6 @@ export async function waitForSignalDaemonReady(params: {
   baseUrl: string;
   abortSignal?: AbortSignal;
   startupDeadlineMs: number;
-  logAfterMs: number;
-  logIntervalMs?: number;
   runtime: RuntimeEnv;
   waitForTransportReadyFn?: typeof waitForTransportReady;
 }): Promise<void> {
@@ -99,8 +95,8 @@ export async function waitForSignalDaemonReady(params: {
   await waitForTransportReadyFn({
     label: "signal daemon",
     timeoutMs,
-    logAfterMs: params.logAfterMs,
-    logIntervalMs: params.logIntervalMs,
+    logAfterMs: 10_000,
+    logIntervalMs: 10_000,
     pollIntervalMs: 150,
     abortSignal: params.abortSignal,
     runtime: params.runtime,
@@ -269,9 +265,7 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
   });
 
   return {
-    pid: child.pid ?? undefined,
     exited: exitedPromise,
-    isExited: () => exited,
     stop: () => {
       if (exited) {
         return Promise.resolve();
@@ -286,23 +280,19 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
           error(`signal-cli stop error: ${String(err)}`);
         }
       }
-      stopPromise = new Promise<void>((resolve) => {
-        const timeout = setTimeout(() => {
-          if (!exited) {
-            try {
-              child.kill("SIGKILL");
-            } catch (err) {
-              error(`signal-cli force-stop error: ${String(err)}`);
-            }
+      const timeout = setTimeout(() => {
+        if (!exited) {
+          try {
+            child.kill("SIGKILL");
+          } catch (err) {
+            error(`signal-cli force-stop error: ${String(err)}`);
           }
-        }, SIGNAL_DAEMON_STOP_KILL_TIMEOUT_MS);
-        timeout.unref?.();
-        // Do not resolve merely because SIGKILL was sent: monitor lifetime prevents the gateway
-        // from starting a replacement before the old daemon releases its port and config lock.
-        void exitedPromise.then(() => {
-          clearTimeout(timeout);
-          resolve();
-        });
+        }
+      }, SIGNAL_DAEMON_STOP_KILL_TIMEOUT_MS);
+      timeout.unref?.();
+      // Wait for actual exit before a replacement can use the port and config lock.
+      stopPromise = exitedPromise.then(() => {
+        clearTimeout(timeout);
       });
       return stopPromise;
     },

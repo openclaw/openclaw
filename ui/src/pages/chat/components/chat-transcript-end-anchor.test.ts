@@ -31,7 +31,63 @@ describe("native composer end anchoring", () => {
     };
   }
 
-  it("does not measure the transcript for native edits that keep the editor height", () => {
+  it.each([
+    ["unchanged viewport", 600, 600, 400, true, 600, false],
+    ["end", 600, 600, 300, true, 700, false],
+    ["near end", 594, 594, 300, true, 700, false],
+    ["reader", 200, 200, 300, true, 200, false],
+    ["native return", 0, 600, 300, false, 700, true],
+    ["ancestor displacement", 600, 572, 376, true, 624, false],
+  ] as const)(
+    "preserves composer resize intent after %s",
+    (_, offset, before, height, canFollow, after, resumeFollow) => {
+      const { element, anchor, commit, resize } = fixture(offset);
+      const resized = vi.fn();
+      const unsubscribe = subscribeTranscriptScroll(element, resized);
+      try {
+        if (resumeFollow) {
+          element.scrollTop = before;
+        }
+        anchor.invalidateComposerResize(true);
+        element.scrollTop = before;
+        resize(height);
+        expect(commit(true, canFollow)).toEqual({ before, after, resumeFollow });
+        expect(element.scrollTop).toBe(after);
+        if (height === 400) {
+          expect(resized).not.toHaveBeenCalled();
+        }
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "preserves follow permission across shrink and regrowth: %s",
+    (canFollow) => {
+      const { element, anchor, commit, resize } = fixture(canFollow ? 600 : 550);
+      anchor.invalidateComposerResize(canFollow);
+      resize(500);
+      element.scrollTop = 500;
+      expect(commit(true, canFollow)).toEqual({
+        before: canFollow ? 600 : 500,
+        after: 500,
+        resumeFollow: false,
+      });
+      if (!canFollow) {
+        anchor.reconcile(element, false, false, vi.fn());
+      }
+      anchor.invalidateComposerResize(canFollow);
+      resize(canFollow ? 450 : 400);
+      expect(commit(true, canFollow)).toEqual({
+        before: 500,
+        after: canFollow ? 550 : 500,
+        resumeFollow: false,
+      });
+    },
+  );
+
+  it("preserves a capped editor's end intent until late native ancestor scrolling settles", () => {
     const { element, anchor, commit, readHeight, readContent } = fixture();
     for (let index = 0; index < 10; index += 1) {
       anchor.invalidateComposerResize(true);
@@ -40,102 +96,6 @@ describe("native composer end anchoring", () => {
     expect(readHeight).not.toHaveBeenCalled();
     expect(readContent).not.toHaveBeenCalled();
     expect(element.scrollTop).toBe(600);
-  });
-
-  it("does not publish an unchanged viewport when a structural commit settles a native edit", () => {
-    const { element, anchor, commit } = fixture();
-    const resized = vi.fn();
-    const unsubscribe = subscribeTranscriptScroll(element, resized);
-    try {
-      anchor.invalidateComposerResize(true);
-      expect(commit(true, true)).toEqual({ before: 600, after: 600, resumeFollow: false });
-      expect(resized).not.toHaveBeenCalled();
-    } finally {
-      unsubscribe();
-    }
-  });
-
-  it.each([600, 594, 200])("preserves end versus reader position at %ipx", (offset) => {
-    const { element, anchor, commit, resize } = fixture(offset);
-    anchor.invalidateComposerResize(true);
-    resize(300);
-    const after = offset >= 592 ? 700 : offset;
-    expect(commit(true, true)).toEqual({
-      before: offset,
-      after,
-      resumeFollow: false,
-    });
-    expect(element.scrollTop).toBe(after);
-  });
-
-  it("recognizes a native return to the old end before its scroll event arrives", () => {
-    const { element, anchor, commit, resize } = fixture(0);
-    element.scrollTop = 600;
-    anchor.invalidateComposerResize(true);
-    resize(300);
-    expect(commit(true, false)).toEqual({
-      before: 600,
-      after: 700,
-      resumeFollow: true,
-    });
-  });
-
-  it("commits a clamped shrink before a structural transition grows the viewport again", () => {
-    const { element, anchor, commit, resize } = fixture();
-    anchor.invalidateComposerResize(true);
-    resize(500);
-    element.scrollTop = 500;
-    expect(commit(true, true)).toEqual({
-      before: 600,
-      after: 500,
-      resumeFollow: false,
-    });
-    anchor.invalidateComposerResize(true);
-    resize(450);
-    expect(commit(true, true)).toEqual({
-      before: 500,
-      after: 550,
-      resumeFollow: false,
-    });
-  });
-
-  it("does not promote a reader clamped by shrink into following on later growth", () => {
-    const { element, anchor, commit, resize } = fixture(550);
-    anchor.invalidateComposerResize(false);
-    resize(500);
-    element.scrollTop = 500;
-    expect(commit(true, false)).toEqual({
-      before: 500,
-      after: 500,
-      resumeFollow: false,
-    });
-    anchor.reconcile(element, false, false, vi.fn());
-    anchor.invalidateComposerResize(false);
-    resize(400);
-    expect(commit(true, false)).toEqual({
-      before: 500,
-      after: 500,
-      resumeFollow: false,
-    });
-  });
-
-  it("retains committed end intent when native editing scrolls an ancestor", () => {
-    const { element, anchor, commit, resize } = fixture();
-    anchor.invalidateComposerResize(true);
-    element.scrollTop = 572;
-    resize(376);
-    expect(commit(true, true)).toEqual({
-      before: 572,
-      after: 624,
-      resumeFollow: false,
-    });
-  });
-
-  it("preserves a capped editor's end intent until late native ancestor scrolling settles", () => {
-    const { element, anchor, commit, readContent } = fixture();
-    anchor.invalidateComposerResize(true);
-    expect(commit(false, true)).toBeNull();
-    expect(readContent).not.toHaveBeenCalled();
     element.scrollTop = 500;
     expect(commit(true, true)).toEqual({
       before: 500,

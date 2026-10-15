@@ -1,7 +1,3 @@
-/* ===========================================
-   Logbook Tab - automatic work journal timeline
-   =========================================== */
-
 .logbook {
   display: flex;
   flex-direction: column;
@@ -91,8 +87,6 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
-
-/* ---- Timeline ---- */
 
 .logbook__timeline {
   display: flex;
@@ -284,8 +278,6 @@
     padding-left: 12px;
   }
 }
-
-/* ---- Side panel ---- */
 
 .logbook__side {
   display: flex;

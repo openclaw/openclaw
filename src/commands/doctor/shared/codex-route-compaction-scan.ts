@@ -5,11 +5,8 @@ import { dedupeByKey } from "../../../shared/dedupe-by-key.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import {
   agentUsesCodexRuntimeForCompaction,
-  asAgentRuntimePolicyConfig,
   normalizeDefaultProviderModelRef,
   readAgentPrimaryModelRef,
-  readLegacyDefaultsRuntime,
-  resolveRuntime,
   toCanonicalOpenAIModelRef,
 } from "./codex-route-model-ref.js";
 import type {
@@ -28,7 +25,6 @@ type AgentCompactionScanParams = {
   agent: unknown;
   path: string;
   agentId?: string;
-  currentRuntime?: string;
   inheritedModelRef?: string;
   inheritedCompaction?: unknown;
   inheritedCompactionPath?: string;
@@ -37,9 +33,19 @@ type AgentCompactionScanParams = {
 
 type CompactionScanParams = {
   cfg: OpenClawConfig;
-  ignoreLegacyAgentRuntimePins?: boolean;
   env?: NodeJS.ProcessEnv;
 };
+
+function readCompactionSlot(params: AgentCompactionScanParams, key: CompactionOverrideKey) {
+  const local = asMutableRecord(asMutableRecord(params.agent)?.compaction)?.[key];
+  const hasLocal = typeof local === "string" && local.trim();
+  const localPath = `${params.path}.compaction`;
+  return {
+    key,
+    value: hasLocal ? local : asMutableRecord(params.inheritedCompaction)?.[key],
+    path: `${hasLocal ? localPath : (params.inheritedCompactionPath ?? localPath)}.${key}`,
+  };
+}
 
 function collectUnsupportedCodexCompactionOverridesForAgent(
   params: AgentCompactionScanParams,
@@ -47,84 +53,32 @@ function collectUnsupportedCodexCompactionOverridesForAgent(
   const agent = asMutableRecord(params.agent);
   const compaction = asMutableRecord(agent?.compaction);
   const inheritedCompaction = asMutableRecord(params.inheritedCompaction);
-  if (
-    !agentUsesCodexRuntimeForCompaction({
-      cfg: params.cfg,
-      agent,
-      agentId: params.agentId,
-      currentRuntime: params.currentRuntime,
-      inheritedModelRef: params.inheritedModelRef,
-      env: params.env,
-    })
-  ) {
-    return [];
-  }
   const providerValue = compaction?.provider ?? inheritedCompaction?.provider;
   if (normalizeString(providerValue) === LOSSLESS_CONTEXT_ENGINE_ID) {
     return [];
   }
-  const candidates = COMPACTION_OVERRIDE_KEYS.map((key) => {
-    const localValue = compaction?.[key];
-    const hasLocalValue = typeof localValue === "string" && localValue.trim();
-    return {
-      key,
-      value: hasLocalValue ? localValue : inheritedCompaction?.[key],
-      path: hasLocalValue
-        ? `${params.path}.compaction.${key}`
-        : params.inheritedCompactionPath
-          ? `${params.inheritedCompactionPath}.${key}`
-          : `${params.path}.compaction.${key}`,
-    };
-  });
-  return candidates.flatMap(({ key, path, value }) =>
-    typeof value === "string" && value.trim() ? [{ path, key, value: value.trim() }] : [],
+  return COMPACTION_OVERRIDE_KEYS.map((key) => readCompactionSlot(params, key)).flatMap(
+    ({ key, path, value }) =>
+      typeof value === "string" && value.trim() ? [{ path, key, value: value.trim() }] : [],
   );
 }
 
 function collectLegacyLosslessCompactionForAgent(
   params: AgentCompactionScanParams,
 ): LegacyLosslessCompactionConfig[] {
-  const agent = asMutableRecord(params.agent);
-  const compaction = asMutableRecord(agent?.compaction);
-  const inheritedCompaction = asMutableRecord(params.inheritedCompaction);
-  if (
-    !agentUsesCodexRuntimeForCompaction({
-      cfg: params.cfg,
-      agent,
-      agentId: params.agentId,
-      currentRuntime: params.currentRuntime,
-      inheritedModelRef: params.inheritedModelRef,
-      env: params.env,
-    })
-  ) {
+  const provider = readCompactionSlot(params, "provider");
+  if (normalizeString(provider.value) !== LOSSLESS_CONTEXT_ENGINE_ID) {
     return [];
   }
-  const localProvider = compaction?.provider;
-  const hasLocalProvider = typeof localProvider === "string" && localProvider.trim();
-  const providerValue = hasLocalProvider ? localProvider : inheritedCompaction?.provider;
-  if (normalizeString(providerValue) !== LOSSLESS_CONTEXT_ENGINE_ID) {
-    return [];
-  }
-  const compactionPath = hasLocalProvider
-    ? `${params.path}.compaction`
-    : (params.inheritedCompactionPath ?? `${params.path}.compaction`);
-  const localModel = compaction?.model;
-  const hasLocalModel = typeof localModel === "string" && localModel.trim();
-  const inheritedModel = inheritedCompaction?.model;
-  const modelValue = hasLocalModel ? localModel : inheritedModel;
-  const modelCompactionPath = hasLocalModel
-    ? `${params.path}.compaction`
-    : (params.inheritedCompactionPath ?? compactionPath);
+  const model = readCompactionSlot(params, "model");
   return [
     {
-      path: params.path,
-      compactionPath,
-      providerPath: `${compactionPath}.provider`,
-      providerValue: String(providerValue).trim(),
-      ...(typeof modelValue === "string" && modelValue.trim()
+      providerPath: provider.path,
+      providerValue: String(provider.value).trim(),
+      ...(typeof model.value === "string" && model.value.trim()
         ? {
-            modelPath: `${modelCompactionPath}.model`,
-            modelValue: modelValue.trim(),
+            modelPath: model.path,
+            modelValue: model.value.trim(),
           }
         : {}),
     },
@@ -133,19 +87,22 @@ function collectLegacyLosslessCompactionForAgent(
 
 function collectCompactionConfigs<T>(
   params: CompactionScanParams,
-  collectForAgent: (params: AgentCompactionScanParams) => T[],
+  collect: (params: AgentCompactionScanParams) => T[],
 ): T[] {
+  const collectForAgent = (agentParams: AgentCompactionScanParams) =>
+    agentUsesCodexRuntimeForCompaction({
+      ...agentParams,
+      agent: asMutableRecord(agentParams.agent),
+    })
+      ? collect(agentParams)
+      : [];
   const defaults = params.cfg.agents?.defaults;
-  const defaultsRuntime = params.ignoreLegacyAgentRuntimePins
-    ? undefined
-    : readLegacyDefaultsRuntime(defaults);
   const defaultModelRef = readAgentPrimaryModelRef(defaults);
   const defaultCompaction = asMutableRecord(defaults?.compaction);
   const hits = collectForAgent({
     cfg: params.cfg,
     agent: defaults,
     path: "agents.defaults",
-    currentRuntime: resolveRuntime({ defaultsRuntime }),
     env: params.env,
   });
   for (const { agent: agentRecord, agentId: id, path } of listMutableCodexRouteAgentEntries(
@@ -157,12 +114,6 @@ function collectCompactionConfigs<T>(
         agent: agentRecord,
         path,
         agentId: id,
-        currentRuntime: resolveRuntime({
-          agentRuntime: params.ignoreLegacyAgentRuntimePins
-            ? undefined
-            : asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
-          defaultsRuntime,
-        }),
         inheritedModelRef: defaultModelRef,
         inheritedCompaction: defaultCompaction,
         inheritedCompactionPath: "agents.defaults.compaction",
@@ -179,7 +130,7 @@ export function collectLegacyLosslessCompactionConfigs(
   return dedupeByKey(
     collectCompactionConfigs(params, collectLegacyLosslessCompactionForAgent),
     (hit) =>
-      `${hit.compactionPath}\0${hit.providerValue}\0${hit.modelPath ?? ""}\0${hit.modelValue ?? ""}`,
+      `${hit.providerPath}\0${hit.providerValue}\0${hit.modelPath ?? ""}\0${hit.modelValue ?? ""}`,
   );
 }
 
@@ -208,22 +159,14 @@ export function getSharedDefaultCompactionOverrideConsumers(
   if (!hasDefaultModel && !hasDefaultProvider) {
     return consumers;
   }
-  const defaultsRuntime = readLegacyDefaultsRuntime(defaults);
   const inheritedModelRef = readAgentPrimaryModelRef(defaults);
   const defaultUsesCodexCompaction = agentUsesCodexRuntimeForCompaction({
     cfg: params.cfg,
     agent: defaults,
-    currentRuntime: resolveRuntime({
-      defaultsRuntime: params.ignoreLegacyAgentRuntimePins ? undefined : defaultsRuntime,
-    }),
     env: params.env,
   });
   if (!defaultUsesCodexCompaction) {
-    consumers.model ||= Boolean(hasDefaultModel);
-    consumers.provider ||= Boolean(hasDefaultProvider);
-    if ((!hasDefaultModel || consumers.model) && (!hasDefaultProvider || consumers.provider)) {
-      return consumers;
-    }
+    return { model: Boolean(hasDefaultModel), provider: Boolean(hasDefaultProvider) };
   }
   for (const { agent: agentRecord, agentId: id } of listMutableCodexRouteAgentEntries(params.cfg)) {
     const compaction = asMutableRecord(agentRecord.compaction);
@@ -240,12 +183,6 @@ export function getSharedDefaultCompactionOverrideConsumers(
       cfg: params.cfg,
       agent: agentRecord,
       agentId: id,
-      currentRuntime: resolveRuntime({
-        agentRuntime: params.ignoreLegacyAgentRuntimePins
-          ? undefined
-          : asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
-        defaultsRuntime: params.ignoreLegacyAgentRuntimePins ? undefined : defaultsRuntime,
-      }),
       inheritedModelRef,
       env: params.env,
     });
@@ -272,50 +209,11 @@ export function sharedDefaultLosslessCompactionHasNonCodexConsumer(
   if (!hasDefaultLosslessProvider && !hasDefaultModel) {
     return false;
   }
-  const defaultsRuntime = params.ignoreLegacyAgentRuntimePins
-    ? undefined
-    : readLegacyDefaultsRuntime(defaults);
-  if (
-    !agentUsesCodexRuntimeForCompaction({
-      cfg: params.cfg,
-      agent: defaults,
-      currentRuntime: resolveRuntime({ defaultsRuntime }),
-      env: params.env,
-    })
-  ) {
-    return true;
-  }
-  const inheritedModelRef = readAgentPrimaryModelRef(defaults);
-  for (const { agent: agentRecord, agentId: id } of listMutableCodexRouteAgentEntries(params.cfg)) {
-    const compaction = asMutableRecord(agentRecord.compaction);
-    const inheritsDefaultProvider =
-      hasDefaultLosslessProvider &&
-      !(typeof compaction?.provider === "string" && compaction.provider.trim());
-    const inheritsDefaultModel =
-      Boolean(hasDefaultModel) &&
-      !(typeof compaction?.model === "string" && compaction.model.trim());
-    if (!inheritsDefaultProvider && !inheritsDefaultModel) {
-      continue;
-    }
-    if (
-      !agentUsesCodexRuntimeForCompaction({
-        cfg: params.cfg,
-        agent: agentRecord,
-        agentId: id,
-        env: params.env,
-        currentRuntime: resolveRuntime({
-          agentRuntime: params.ignoreLegacyAgentRuntimePins
-            ? undefined
-            : asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
-          defaultsRuntime,
-        }),
-        inheritedModelRef,
-      })
-    ) {
-      return true;
-    }
-  }
-  return false;
+  const consumers = getSharedDefaultCompactionOverrideConsumers(params);
+  return (
+    (hasDefaultLosslessProvider && consumers.provider) ||
+    (Boolean(hasDefaultModel) && consumers.model)
+  );
 }
 
 export function legacyLosslessSummaryModels(

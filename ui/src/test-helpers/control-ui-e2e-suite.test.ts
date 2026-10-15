@@ -112,10 +112,11 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
             return { failureSummary: { available: true } };
           },
         });
-        context = {
+        context = Object.assign(new EventEmitter(), {
           setDefaultTimeout() {},
+          addInitScript: async () => {},
           pages: () => pageClosed ? [] : [page],
-          newPage: async () => page,
+          newPage: async () => { context.emit("page", page); return page; },
           browser: () => ({ isConnected: () => true }),
           unrouteAll: async () => { state.events.push("drain"); record(); },
           close: async () => {
@@ -126,7 +127,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
             state.pendingPageReject?.(new Error("synthetic page closed"));
             record();
           },
-        };
+        });
         return context;
       }
       if (${JSON.stringify(mode)} === "held-route-drain") {
@@ -186,10 +187,11 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
             return settled;
           },
         });
-        context = {
+        context = Object.assign(new EventEmitter(), {
           setDefaultTimeout() {},
+          addInitScript: async () => {},
           pages: () => [page],
-          newPage: async () => page,
+          newPage: async () => { context.emit("page", page); return page; },
           route: async (pattern, handler) => { contextHandlers.push({ pattern, handler }); },
           unrouteAll: async (options) => {
             expect(options).toEqual({ behavior: "wait" });
@@ -206,13 +208,14 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
             state.contextCleanupStarted.resolve("close");
             record();
           },
-        };
+        });
         return context;
       }
-      return {
+      const context = Object.assign(new EventEmitter(), {
         setDefaultTimeout() {},
+        addInitScript: async () => {},
         pages: () => [],
-        newPage: async () => closedPage,
+        newPage: async () => { context.emit("page", closedPage); return closedPage; },
         unrouteAll: async () => {},
         close: () => {
           state.closeCalls++;
@@ -221,7 +224,8 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
           return ${JSON.stringify(mode)} === "concurrent-close" && state.closeCalls === 1
             ? state.gate : Promise.resolve();
         }
-      };
+      });
+      return context;
     },
     close: async () => { state.browserClosed = true; record(); },
   };
@@ -315,9 +319,32 @@ suite.define(() => {
     });
   } else if (${JSON.stringify(mode)}.startsWith("diagnostic-")) {
     it("retains the native page timeout", async (context) => {
-      const run = () => suite.withPage({}, async () => {
+      const awaitTimeout = async (page) => {
+        expect(page.listenerCount("websocket"), "one RPC observer owns each page").toBe(1);
+        const socket = new EventEmitter();
+        page.emit("websocket", socket);
+        const frame = (direction, value) => socket.emit(direction, { payload: JSON.stringify(value) });
+        for (const method of ["agents.files.get",
+          "chat.history", "chat.startup", "sessions.list", "sessions.subscribe",
+          "sessions.unsubscribe", "sessions.messages.subscribe", "sessions.messages.unsubscribe",
+          "connect", "private-unknown-method"]) {
+          for (const ok of [true, false]) {
+            frame("framesent", { type: "req", id: "private-request-id", method,
+              params: { token: "private-token", sessionKey: "private-session", text: "private-content" } });
+            frame("framereceived", { type: "res", id: "private-request-id", ok,
+              payload: { text: "private-content" }, error: { message: "private-error" } });
+          }
+        }
         await new Promise((resolve, reject) => { state.pendingPageReject = reject; });
-      });
+      };
+      const run = async () => {
+        if (${JSON.stringify(mode)} === "diagnostic-page-timeout") {
+          await suite.withPage({}, ({ page }) => awaitTimeout(page));
+        } else {
+          const browserContext = await suite.newBrowserContext({});
+          await awaitTimeout(await browserContext.newPage());
+        }
+      };
       if (${JSON.stringify(mode)} === "diagnostic-scenario-timeout") {
         await suite.runScenario(context, { run });
       } else {
@@ -520,11 +547,14 @@ beforeAll(async () => {
     path.join(fixtureRoot, "vitest.config.ts"),
     `
 import { defineConfig } from "vitest/config";
-import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.shared.config.ts"))};
+import { createVitestResolveConfig } from ${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.resolve.ts"))};
+if (process.versions.bun) {
+  await import(${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.sqlite-preload.mts"))});
+}
 const hookTimeout = Number(process.env.UI_LIFETIME_HOOK_TIMEOUT_MS);
 export default defineConfig({
   cacheDir: ${JSON.stringify(path.join(fixtureRoot, ".vite"))},
-  resolve: sharedVitestConfig.resolve,
+  resolve: createVitestResolveConfig(${JSON.stringify(repoRoot)}),
   test: { pool: "forks", isolate: true, maxWorkers: 1, fileParallelism: false,
     fsModuleCache: true,
     fsModuleCachePath: ${JSON.stringify(path.join(fixtureRoot, "transforms"))},
@@ -630,7 +660,11 @@ async function runFixture(mode: FixtureMode, signal: AbortSignal) {
       );
     }
     const captures: Array<{
-      public: { hostBeforeRead: { pageClosed: boolean }; rendererRead: string };
+      public: {
+        hostBeforeRead: { pageClosed: boolean };
+        rendererRead: string;
+        gatewayRpc: Array<{ method: string; outcome: string }>;
+      };
       private: { failure: { message: string } };
     }> = [];
     if (mode.startsWith("diagnostic-")) {
@@ -719,6 +753,24 @@ it.for([
       hostBeforeRead: { pageClosed: false },
       rendererRead: "completed",
     });
+    expect(result.captures[0]?.public.gatewayRpc).toEqual(
+      [
+        "agents.files.get",
+        "chat.history",
+        "chat.startup",
+        "sessions.list",
+        "sessions.subscribe",
+        "sessions.unsubscribe",
+        "sessions.messages.subscribe",
+        "sessions.messages.unsubscribe",
+      ].flatMap((method) => [
+        { method, outcome: "sent" },
+        { method, outcome: "ok" },
+        { method, outcome: "sent" },
+        { method, outcome: "error" },
+      ]),
+    );
+    expect(JSON.stringify(result.captures[0]?.public)).not.toContain("private-");
     expect(result.captures[0]?.private.failure.message).toContain("Test timed out in 50ms");
     expect(result.journal).toMatchObject({
       closeCalls: 1,
@@ -764,26 +816,38 @@ it("drains held modules and cancels unrequested observations during cleanup", (c
     });
   }));
 
-it.for(["concurrent-close", "close-failure", "late-context"] as const)(
+it.for([
+  ["concurrent-close", true, 1],
+  ["close-failure", false, 1],
+  ["late-context", true, 1],
+  ["tracked-close-success", true, 2],
+  ["tracked-close-failure", false, 1],
+] as const)(
   "preserves native browser resource ownership: %s",
-  (mode, context) =>
+  ([mode, success, closeCalls], context) =>
     runJoinedShutdownTest(context, async () => {
       const result = await runFixture(mode, context.signal);
-      expect(result.code, result.output).toBe(mode === "close-failure" ? 1 : 0);
-      expect(result.report?.numPassedTests, result.output).toBe(mode === "close-failure" ? 0 : 1);
-      expect(result.report?.numFailedTests, result.output).toBe(mode === "close-failure" ? 2 : 0);
+      const tracked = mode.startsWith("tracked-");
+      expect(result.code, result.output).toBe(success ? 0 : 1);
       expect(result.journal).toMatchObject({
-        closeCalls: 1,
-        arrived: true,
-        published: false,
-        browserClosed: mode !== "close-failure",
-        serverClosed: mode !== "close-failure",
+        closeCalls,
+        browserClosed: success,
+        serverClosed: success,
       });
-      if (mode === "close-failure") {
+      if (!tracked) {
+        expect(result.report.numPassedTests, result.output).toBe(success ? 1 : 0);
+        expect(result.report.numFailedTests, result.output).toBe(success ? 0 : 2);
+        expect(result.journal).toMatchObject({ arrived: true, published: false });
+      }
+      if (tracked || !success) {
+        expect(result.successorStarted, result.output).toBe(success);
+      }
+      if (!success) {
         expect(result.output).toContain("synthetic context close failure");
-        expect(result.journal.heldBodyErrorRetained).toBe(true);
-        expect(result.successorStarted).toBe(false);
         expect(result.output).toContain("retiring owned fork");
+      }
+      if (mode === "close-failure") {
+        expect(result.journal.heldBodyErrorRetained).toBe(true);
       }
     }),
 );
@@ -801,59 +865,56 @@ it("joins late suite setup before closing its acquired server", (context) =>
     });
   }));
 
-it("joins a native test timeout before the next state-owning attempt", (context) =>
-  runJoinedShutdownTest(context, async () => {
-    const result = await runFixture("scenario-timeout", context.signal);
-    expect(result.code, result.output).toBe(0);
-    expect(result.report?.numPassedTests, result.output).toBe(2);
-    expect(result.report?.numFailedTests, result.output).toBe(0);
-    expect(result.journal.events).toEqual(["acquired", "gateway closed", "released"]);
-    expect(result.retainedExists).toBe(false);
-    expect(result.successorStarted).toBe(true);
-  }));
-
-it.for(["scenario-noncooperative", "scenario-late-close", "scenario-close-failure"] as const)(
-  "ends only the unsafe native fork and retains its state: %s",
-  (mode, context) =>
+it.for([
+  ["scenario-timeout", undefined],
+  ["scenario-noncooperative", "scenario cleanup did not settle within 500ms"],
+  ["scenario-late-close", "scenario cleanup did not settle within 500ms"],
+  ["scenario-close-failure", "synthetic gateway close failure"],
+] as const)(
+  "joins scenario cleanup or retires the unsafe fork and retains its state: %s",
+  ([mode, failure], context) =>
     runJoinedShutdownTest(context, async () => {
       const result = await runFixture(mode, context.signal);
-      expect(result.code, result.output).toBe(1);
-      expect(result.report.numFailedTests, result.output).toBeGreaterThan(0);
-      expect(result.output).toContain("retiring owned fork");
-      expect(result.output).toContain(
-        mode === "scenario-close-failure"
-          ? "synthetic gateway close failure"
-          : "scenario cleanup did not settle within 500ms",
-      );
-      expect(result.retainedExists).toBe(true);
-      expect(result.successorStarted).toBe(false);
-      expect(result.journal.events).not.toContain("released");
+      expect(result.code, result.output).toBe(failure ? 1 : 0);
+      expect(result.retainedExists).toBe(Boolean(failure));
+      expect(result.successorStarted).toBe(!failure);
+      if (failure) {
+        expect(result.report.numFailedTests, result.output).toBeGreaterThan(0);
+        expect(result.output).toContain("retiring owned fork");
+        expect(result.output).toContain(failure);
+        expect(result.journal.events).not.toContain("released");
+      } else {
+        expect(result.report.numPassedTests, result.output).toBe(2);
+        expect(result.report.numFailedTests, result.output).toBe(0);
+        expect(result.journal.events).toEqual(["acquired", "gateway closed", "released"]);
+      }
       if (mode === "scenario-late-close") {
         expect(result.journal.events).toContain("late close settled");
       }
     }),
 );
 
-it("does not clean up suite resources whose acquisition never started", (context) =>
-  runJoinedShutdownTest(context, async () => {
-    const result = await runFixture("resources-browser-failure", context.signal);
-    expect(result.code, result.output).toBe(1);
-    expect(result.output).toContain("synthetic browser startup failure");
-    expect(result.journal.events).toEqual([]);
-    expect(result.retainedExists).toBe(false);
-  }));
-
-it.for(["resources-success", "resources-close-failure", "resources-late-setup"] as const)(
+it.for([
+  ["resources-success", false, undefined],
+  ["resources-close-failure", true, "synthetic shared resource close failure"],
+  ["resources-late-setup", true, "Hook timed out"],
+  ["resources-browser-failure", false, "synthetic browser startup failure"],
+] as const)(
   "owns shared state through native suite cleanup: %s",
-  (mode, context) =>
+  ([mode, retained, failure], context) =>
     runJoinedShutdownTest(context, async () => {
       const result = await runFixture(mode, context.signal);
-      const success = mode === "resources-success";
-      expect(result.code, result.output).toBe(success ? 0 : 1);
-      expect(result.report.success, result.output).toBe(success);
-      expect(result.retainedExists).toBe(!success);
+      expect(result.code, result.output).toBe(failure ? 1 : 0);
+      expect(result.retainedExists).toBe(retained);
+      if (failure) {
+        expect(result.output).toContain(failure);
+      }
+      if (mode === "resources-browser-failure") {
+        expect(result.journal.events).toEqual([]);
+        return;
+      }
+      expect(result.report.success, result.output).toBe(!failure);
       if (mode === "resources-late-setup") {
-        expect(result.output).toContain("Hook timed out");
         expect(result.journal.events).toEqual(["resource acquired", "resource closed"]);
       } else {
         expect(result.report.numPassedTests, result.output).toBe(2);
@@ -862,31 +923,8 @@ it.for(["resources-success", "resources-close-failure", "resources-late-setup"] 
           "first",
           "second",
           "resource closed",
-          ...(success ? ["released"] : []),
+          ...(failure ? [] : ["released"]),
         ]);
-      }
-      if (mode === "resources-close-failure") {
-        expect(result.output).toContain("synthetic shared resource close failure");
-      }
-    }),
-);
-
-it.for(["tracked-close-success", "tracked-close-failure"] as const)(
-  "fences ordinary cases after failed per-test cleanup: %s",
-  (mode, context) =>
-    runJoinedShutdownTest(context, async () => {
-      const result = await runFixture(mode, context.signal);
-      const success = mode === "tracked-close-success";
-      expect(result.code, result.output).toBe(success ? 0 : 1);
-      expect(result.successorStarted, result.output).toBe(success);
-      expect(result.journal).toMatchObject({
-        closeCalls: success ? 2 : 1,
-        browserClosed: success,
-        serverClosed: success,
-      });
-      if (!success) {
-        expect(result.output).toContain("synthetic context close failure");
-        expect(result.output).toContain("retiring owned fork");
       }
     }),
 );

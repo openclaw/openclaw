@@ -151,7 +151,7 @@ private actor GatewayEndpointRemoteEnsureGate {
     }
 }
 
-@Suite(.gatewayTLSStoreIsolated)
+@Suite(.gatewayTLSStoreIsolated, .testWaitLimit)
 struct GatewayEndpointStoreTests {
     @MainActor
     @Test func `live local source uses canonical default and named profile ports`() async throws {
@@ -1172,16 +1172,14 @@ extension GatewayEndpointStoreTests {
 
             // Observe publication only. Another endpoint read would hide this bug by
             // completing the abandoned waiter's ready/error publication itself.
-            let outcome = try? await AsyncTimeout.withTimeout(
-                seconds: 1,
-                onTimeout: { CancellationError() },
-                operation: { () async -> GatewayEndpointState? in
-                    for await state in stream where state.routeRevision == connecting.routeRevision {
-                        if case .connecting = state { continue }
-                        return state
-                    }
-                    return nil
-                })
+            let outcome: GatewayEndpointState? = try await {
+                for await state in stream where state.routeRevision == connecting.routeRevision {
+                    if case .connecting = state { continue }
+                    return state
+                }
+                Issue.record("Still waiting for remote recovery publication")
+                throw CancellationError()
+            }()
             if fails {
                 #expect(outcome == .unavailable(
                     mode: .remote,

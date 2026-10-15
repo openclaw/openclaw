@@ -10,6 +10,7 @@ import {
 } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { DeleteSessionEntryLifecycleParams } from "./session-accessor.sqlite-contract.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import { sqliteLifecycleTargetSnapshotsEqual } from "./session-accessor.sqlite-entry-equality.js";
 import { readLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-store.js";
 import {
@@ -19,7 +20,6 @@ import {
 import {
   collectSessionStateIdsForEntry,
   shouldRemoveSessionEntry,
-  planSessionStateDeleteIfUnreferenced,
   readSessionGenerationIdsForKeys,
   planSessionStateAfterEntryRemoval,
   readReferencedSessionIdsAfterTargetMutation,

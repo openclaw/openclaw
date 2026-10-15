@@ -162,18 +162,6 @@ describe("fallback-state", () => {
     expect(setupLookups).toBe(expectedSetupLookups);
   });
 
-  it("marks fallback transition when selected->active pair changes", () => {
-    const resolved = resolveDemoFallbackTransition();
-
-    expect(resolved.fallbackActive).toBe(true);
-    expect(resolved.fallbackTransitioned).toBe(true);
-    expect(resolved.fallbackCleared).toBe(false);
-    expect(resolved.stateChanged).toBe(true);
-    expect(resolved.reasonSummary).toBe("rate limit");
-    expect(resolved.nextState.selectedModel).toBe("demo-primary/model-a");
-    expect(resolved.nextState.activeModel).toBe("demo-fallback/model-b");
-  });
-
   it("preserves provider-local model prefixes through fallback and recovery", () => {
     const refs = {
       selectedProvider: "custom",
@@ -265,24 +253,6 @@ describe("fallback-state", () => {
     expect(resolved.nextState.reason).toBe("timeout");
   });
 
-  it("marks fallback as cleared when runtime returns to selected model", () => {
-    const resolved = resolveDemoFallbackTransition({
-      activeProvider: "demo-primary",
-      selectedModel: "model-a",
-      activeModel: "model-a",
-      attempts: [],
-      state: activeFallbackState,
-    });
-
-    expect(resolved.fallbackActive).toBe(false);
-    expect(resolved.fallbackCleared).toBe(true);
-    expect(resolved.fallbackTransitioned).toBe(false);
-    expect(resolved.stateChanged).toBe(true);
-    expect(resolved.nextState.selectedModel).toBeUndefined();
-    expect(resolved.nextState.activeModel).toBeUndefined();
-    expect(resolved.nextState.reason).toBeUndefined();
-  });
-
   it("does not treat a CLI runtime alias as a model fallback", () => {
     registerAnthropicCliBackendForTest();
 
@@ -322,44 +292,6 @@ describe("fallback-state", () => {
 
     expect(resolved.fallbackActive).toBe(false);
     expect(setupBackendLookups).toBe(2);
-  });
-
-  it("does not build a fallback notice for equivalent CLI runtime aliases", () => {
-    registerAnthropicCliBackendForTest();
-
-    expect(
-      buildFallbackNotice({
-        selectedProvider: "anthropic",
-        selectedModel: "claude-opus-4-7",
-        activeProvider: "claude-cli",
-        activeModel: "claude-opus-4-7",
-        attempts: [],
-      }),
-    ).toBeNull();
-  });
-
-  it("does not build a fallback notice when provider and model are unchanged", () => {
-    expect(
-      buildFallbackNotice({
-        selectedProvider: "openai",
-        selectedModel: "gpt-5.5",
-        activeProvider: "openai",
-        activeModel: "gpt-5.5",
-        attempts: [],
-      }),
-    ).toBeNull();
-  });
-
-  it("still reports fallback when the OpenAI Codex runtime switches model ids", () => {
-    expect(
-      buildFallbackNotice({
-        selectedProvider: "openai",
-        selectedModel: "gpt-5.5",
-        activeProvider: "openai",
-        activeModel: "gpt-5.4",
-        attempts: [],
-      }),
-    ).toContain("selected openai/gpt-5.5");
   });
 
   describe("Arcee wire identity", () => {

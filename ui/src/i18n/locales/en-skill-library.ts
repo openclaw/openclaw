@@ -18,11 +18,8 @@ const enSkillLibrary = {
     create: "Create skill",
     import: "Import skill",
     save: "Save skill",
-    propose: "Save workspace proposal",
-    apply: "Apply to workspace",
     slug: "Skill name",
     slugHelp: "Use 1–63 lowercase letters, digits, or hyphens; start with a letter or digit.",
-    description: "Description",
     file: "File",
     newFile: "New text file path",
     addFile: "Add file",
@@ -34,7 +31,6 @@ const enSkillLibrary = {
     readOnly: "You can read this skill. Only its owner or an authorized administrator can edit it.",
     personalTarget:
       "My skills. Save to your personal library; existing session selections change only when you explicitly attach or refresh.",
-    workspaceTarget: "Workspace: {agent}. Save creates a Workshop proposal; apply it after review.",
     technicalDetails: "Skill details",
     skillId: "Skill ID",
     command: "Command",
@@ -73,26 +69,17 @@ const enSkillLibrary = {
     discard: "Discard your unsaved skill changes?",
     conflict:
       "This skill changed since you opened it. Your draft is preserved. Copy your changes, then close and reopen the skill to review the current revision before saving.",
-    signIn:
-      "Sign in with a Gateway profile to create personal skills. Administrators can still create skills in the selected agent workspace.",
+    signIn: "Sign in with a Gateway profile to create personal skills.",
     connectionChanged: "The Gateway connection changed. Reopen the skill before saving.",
-    selectAgent: "Select an agent workspace before creating a skill.",
-    workspaceTextOnly:
-      "Workshop imports support UTF-8 text files. Keep executable and binary assets in the file-authored workspace workflow.",
     bundleLimit: "Use at most 256 files, 1 MiB per file, and 8 MiB per bundle or ZIP.",
     missingSkill:
       "Choose SKILL.md together with its supporting files, or a folder containing SKILL.md at its root.",
     uploadFailed:
       "The Gateway did not confirm the upload. Check your library before retrying the import.",
-    pending:
-      "Proposal {id} saved for workspace {agent}. It is pending review and is not active yet.",
-    workspaceSaved: "Workspace {agent}: {state}. Start a new session to use the skill.",
     importHelp: "Import a skill into your private library.",
-    importWorkspace: "Prepare a skill for review in the selected workspace.",
     importClawHub: "Import {source} into your private library.",
     files: "Files",
     filesHelp: "SKILL.md with supporting files, a folder, or a ZIP (saved on import).",
-    workspaceFilesHelp: "SKILL.md with supporting text files, or a folder.",
     chooseFilesButton: "Choose files",
     chooseFolderButton: "Choose folder",
     noFilesSelected: "No files selected.",

@@ -20,7 +20,7 @@ export function parsePrNumberList(value) {
     ...new Set(
       text
         .split(/[\s,]+/u)
-        .map((part) => part.trim().replace(/^#/u, ""))
+        .map((part) => part.replace(/^#/u, ""))
         .filter(Boolean)
         .map((part) => {
           if (!/^\d+$/u.test(part)) {
@@ -62,7 +62,6 @@ export function parseArgs(argv, env = process.env) {
     } else if (arg === "--labels") {
       args.labels = next()
         .split(/[\s,]+/u)
-        .map((label) => label.trim())
         .filter(Boolean);
     } else if (arg === "--help" || arg === "-h") {
       help = true;

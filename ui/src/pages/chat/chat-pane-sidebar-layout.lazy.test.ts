@@ -2,14 +2,16 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { openSlot } from "./sidebar-layout.ts";
+import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
+import { openSlot, promoteSidebarPanel } from "./sidebar-layout.ts";
 
 const lazyMocks = vi.hoisted(() => ({
   importAttempts: 0,
   retryDocument: vi.fn(async () => true),
 }));
 
-vi.mock("./components/chat-sidebar-region.runtime.ts", () => {
+// mock-isolation: the failed lazy-import fixture must throw before registering or exporting the real region.
+vi.mock("./components/chat-sidebar-region.runtime.tsx", () => {
   lazyMocks.importAttempts += 1;
   throw new Error("Failed to fetch dynamically imported module: sidebar-region.js");
 });
@@ -28,17 +30,19 @@ afterEach(() => {
 });
 
 describe("chat pane lazy sidebar failures", () => {
-  it("keeps primary chat visible and offers document-level recovery", async () => {
+  it("places lazy panels in their final regions before offering document-level recovery", async () => {
     vi.stubGlobal("customElements", { get: vi.fn(() => undefined) });
     const container = document.createElement("div");
     document.body.append(container);
-    const layout = openSlot({ columns: [] }, "detail");
+    let layout = promoteSidebarPanel(
+      openSlot(openSlot({ columns: [] }, "dashboard"), "detail"),
+      "dashboard",
+    );
     const renderCurrent = () => {
       render(
         renderSidebarRegion({
           presentationId: "sidebar-layout-fixture",
           availableWidth: 1_400,
-          availableSlots: ["detail"],
           callbacks: {
             activatePanel: vi.fn(),
             togglePanelExpanded: vi.fn(),
@@ -50,8 +54,12 @@ describe("chat pane lazy sidebar failures", () => {
           },
           layout,
           narrow: false,
-          panelActions: {},
-          panelTemplates: { detail: html`<aside>Review</aside>` },
+          panelDefinitions: sidebarPanelDefinitions().map((definition) =>
+            Object.assign(definition, {
+              available: definition.slot === "detail",
+              content: definition.slot === "detail" ? html`<aside>Review</aside>` : null,
+            }),
+          ),
           primary: html`<main data-primary>Primary chat</main>`,
           requestUpdate: renderCurrent,
         }),
@@ -60,6 +68,23 @@ describe("chat pane lazy sidebar failures", () => {
     };
 
     renderCurrent();
+
+    const placeholders = [...container.querySelectorAll(".side-panel__panel")];
+    expect(placeholders.map((panel) => panel.getAttribute("data-region"))).toEqual(["main"]);
+    expect(placeholders[0]?.querySelector("openclaw-panel-loading-skeleton")?.variant).toBe(
+      "board",
+    );
+    expect(container.querySelector(".sidebar-region__primary")?.getAttribute("data-region")).toBe(
+      "side",
+    );
+    expect(container.querySelector(".sidebar-region__primary")?.hasAttribute("hidden")).toBe(false);
+    layout = openSlot(layout, "detail");
+    renderCurrent();
+    expect(
+      [...container.querySelectorAll(".side-panel__panel")].map((panel) =>
+        panel.getAttribute("data-region"),
+      ),
+    ).toEqual(["main", "side"]);
 
     await vi.waitFor(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
     expect(container.querySelectorAll('[role="alert"]')).toHaveLength(1);

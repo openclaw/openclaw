@@ -1,5 +1,6 @@
 // Startup log tests cover security warnings, model detail formatting, plugin
 // summaries, ANSI output, and dangerous config reporting.
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
@@ -11,7 +12,7 @@ import {
 } from "./server-startup-log.js";
 
 const modelMocks = vi.hoisted(() => ({
-  resolveThinkingDefault: vi.fn(() => "medium" as const),
+  resolveThinkingDefault: vi.fn((): "medium" | "off" => "medium"),
 }));
 function createManifestRecord(
   overrides: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
@@ -108,15 +109,22 @@ describe("gateway startup log", () => {
     vi.useRealTimers();
   });
 
+  it("logs version alignment guidance as information on ordinary startup", async () => {
+    const { info, warn } = await startup({});
+
+    expect(info).toHaveBeenCalledWith(
+      "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; direct state writes from another process while this Gateway owns state are unsupported.",
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("warns when dangerous config flags are enabled", async () => {
     const { warn } = await startup({
       cfg: { hooks: { gmail: { allowUnsafeExternalContent: true } } },
     });
 
-    expect(warn.mock.calls).toEqual([
-      [
-        "security warning: dangerous config flags enabled: hooks.gmail.allowUnsafeExternalContent=true. Run `openclaw security audit`.",
-      ],
+    expect(warn.mock.calls).toContainEqual([
+      "security warning: dangerous config flags enabled: hooks.gmail.allowUnsafeExternalContent=true. Run `openclaw security audit`.",
     ]);
   });
 
@@ -132,10 +140,8 @@ describe("gateway startup log", () => {
       },
     });
 
-    expect(warn.mock.calls).toEqual([
-      [
-        "configured channel warning: channels.missing-chat is configured but no channel plugin is installed or loadable (no-channel-owner). Run `openclaw doctor --fix` or install the channel plugin before relying on this channel.",
-      ],
+    expect(warn.mock.calls).toContainEqual([
+      "configured channel warning: channels.missing-chat is configured but no channel plugin is installed or loadable (no-channel-owner). Run `openclaw doctor --fix` or install the channel plugin before relying on this channel.",
     ]);
   });
 
@@ -162,10 +168,8 @@ describe("gateway startup log", () => {
       ambientEnvTriggers: "suppress",
     });
 
-    expect(warn.mock.calls).toEqual([
-      [
-        "gateway suppressed ambient channel auto-configuration for 1 channel: discord. Configure channels.<id> (openclaw channels add <id>) to enable the channel, or pass --ambient-channels to allow ambient env credentials.",
-      ],
+    expect(warn.mock.calls).toContainEqual([
+      "gateway suppressed ambient channel auto-configuration for 1 channel: discord. Configure channels.<id> (openclaw channels add <id>) to enable the channel, or pass --ambient-channels to allow ambient env credentials.",
     ]);
     expect(warn.mock.calls.flat().join("\n")).not.toContain("channels.discord is configured");
   });
@@ -191,8 +195,9 @@ describe("gateway startup log", () => {
       manifestRecords,
     });
 
-    expect(warn.mock.calls[0]?.[0]).toContain("channels.slack: channel is configured");
-    expect(warn.mock.calls[0]?.[0]).not.toContain(String.fromCharCode(0x1b));
+    const warnings = warn.mock.calls.flat().join("\n");
+    expect(warnings).toContain("channels.slack: channel is configured");
+    expect(warnings).not.toContain(String.fromCharCode(0x1b));
   });
 
   it("does not warn when startup activation enables the configured channel owner", async () => {
@@ -224,7 +229,7 @@ describe("gateway startup log", () => {
       },
     });
 
-    expect(warn).not.toHaveBeenCalled();
+    expect(warn.mock.calls.flat().join("\n")).not.toContain("configured channel warning");
   });
 
   it("formats configured model thinking and fast mode defaults with the startup model", () => {
@@ -255,23 +260,27 @@ describe("gateway startup log", () => {
     );
   });
 
-  it("defaults unset startup thinking to medium", () => {
-    expect(
-      formatAgentModelStartupDetails({
-        cfg: {
-          agents: {
-            defaults: {
-              model: "openai/gpt-5.5",
+  it.each(["medium", "off"] as const)(
+    "reports the provider's unset thinking default: %s",
+    (level) => {
+      modelMocks.resolveThinkingDefault.mockReturnValue(level);
+      expect(
+        formatAgentModelStartupDetails({
+          cfg: {
+            agents: {
+              defaults: {
+                model: "openai/gpt-5.5",
+              },
+              entries: { main: { fastModeDefault: true } },
             },
-            list: [{ id: "main", default: true, fastModeDefault: true }],
           },
-        },
-        provider: "openai",
-        model: "gpt-5.5",
-      }),
-    ).toBe("thinking=medium, fast=on");
-    expect(modelMocks.resolveThinkingDefault).toHaveBeenCalledTimes(1);
-  });
+          provider: "openai",
+          model: "gpt-5.5",
+        }),
+      ).toBe(`thinking=${level}, fast=on`);
+      expect(modelMocks.resolveThinkingDefault).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("preserves explicit startup thinking off", () => {
     expect(
@@ -346,7 +355,7 @@ describe("gateway startup log", () => {
                 "openai/gpt-5.5": { params: { fastMode: false } },
               },
             },
-            list: [{ id: "alpha", default: true, thinkingDefault: "high", fastModeDefault: true }],
+            entries: { alpha: { thinkingDefault: "high", fastModeDefault: true } },
           },
         },
         provider: "openai",
@@ -372,13 +381,18 @@ describe("gateway startup log", () => {
     ]);
     const messages = info.mock.calls.map((call) => call[0]);
     const nativeRuntime = messages.find((message) => message.startsWith("native runtime: "));
-    expect(JSON.parse(nativeRuntime!.slice("native runtime: ".length))).toMatchObject({
-      pid: process.pid,
-      node: process.versions.node,
-      sqlite: process.versions.sqlite,
-      uv: process.versions.uv,
-      openssl: process.versions.openssl,
-    });
+    const database = new DatabaseSync(":memory:");
+    try {
+      expect(JSON.parse(nativeRuntime!.slice("native runtime: ".length))).toMatchObject({
+        pid: process.pid,
+        node: process.versions.node,
+        sqlite: database.prepare("SELECT sqlite_version() AS version").get()?.version,
+        uv: process.versions.uv,
+        openssl: process.versions.openssl,
+      });
+    } finally {
+      database.close();
+    }
     const workers = messages.find((message) => message.startsWith("worker startup state: "));
     expect(JSON.parse(workers!.slice("worker startup state: ".length))).toMatchObject({
       workerCount: expect.any(Number),

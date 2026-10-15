@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveLegacyAuthProfilesPath as resolveAuthStorePath } from "../../commands/doctor-auth-legacy-paths.js";
+import { AuthStorage } from "../../plugin-sdk/agent-sessions.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -79,16 +80,13 @@ it.each(["shared", "missing", "missing-row", "empty", "present", "unreadable"] a
       if (mode === "unreadable") {
         fs.writeFileSync(databasePath, "not a SQLite database");
       }
-      const context = captureOpenClawStateWorkerContext({ env: state.env });
       const sql = observeMainThreadSql();
       sql.calibrate();
       let displayPath: string;
       try {
-        displayPath = await withPreparedAuthStorePathForDisplay(
+        displayPath = await AuthStorage.resolvePathForDisplayAsync(
           mode === "shared" ? undefined : agentDir,
           state.env,
-          () => context.admission.assertCurrent(),
-          (pathname) => pathname,
         );
         sql.expectIdle();
       } finally {
@@ -106,79 +104,67 @@ it.each(["shared", "missing", "missing-row", "empty", "present", "unreadable"] a
   },
 );
 
-it.each(["source-close", "caller-withdrawn"] as const)(
-  "refuses a display source withdrawn after its actual worker read (%s)",
-  async (withdrawal) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      await state.writeAuthProfiles({ version: 1, profiles: {} });
-      await closeOpenClawAgentDatabasesAsync(state.stateDir);
-      closeAuthProfileReadPool();
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
-      const original = sqliteRead.prepareAgentAuthProfileRowsRead;
-      const held = vi
-        .spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead")
-        .mockImplementation((options) => {
-          const reader = original(options);
-          return {
-            ...reader,
-            async read() {
-              const rows = await reader.read();
-              entered.resolve();
-              await resume.promise;
-              return rows;
-            },
-          };
-        });
-      const context = captureOpenClawStateWorkerContext({ env: state.env });
-      const withdrawn = new Error("Model build authority was withdrawn");
-      let current = true;
-      const consume = vi.fn((pathname: string) => pathname);
-      const reading = withPreparedAuthStorePathForDisplay(
-        state.agentDir(),
-        state.env,
-        () => {
-          context.admission.assertCurrent();
-          if (!current) {
-            throw withdrawn;
-          }
-        },
-        consume,
-      );
-      const result = reading.then(
-        (value) => ({ ok: true as const, value }),
-        (error: unknown) => ({ ok: false as const, error }),
-      );
-      try {
-        await Promise.race([
-          entered.promise,
-          result.then(() => {
-            throw new Error("Display preparation settled before its worker read gate");
-          }),
-        ]);
-        if (withdrawal === "source-close") {
-          await closeOpenClawAgentDatabasesAsync(state.stateDir);
-        } else {
-          current = false;
+it("does not invoke a withdrawn model build after its display worker read", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await state.writeAuthProfiles({ version: 1, profiles: {} });
+    await closeOpenClawAgentDatabasesAsync(state.stateDir);
+    closeAuthProfileReadPool();
+    const entered = createDeferredCore();
+    const resume = createDeferredCore();
+    const original = sqliteRead.prepareAgentAuthProfileRowsRead;
+    const held = vi
+      .spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead")
+      .mockImplementation((options) => {
+        const reader = original(options);
+        return {
+          ...reader,
+          async read() {
+            const rows = await reader.read();
+            entered.resolve();
+            await resume.promise;
+            return rows;
+          },
+        };
+      });
+    const context = captureOpenClawStateWorkerContext({ env: state.env });
+    const withdrawn = new Error("Model build authority was withdrawn");
+    let current = true;
+    const consume = vi.fn((pathname: string) => pathname);
+    const reading = withPreparedAuthStorePathForDisplay(
+      state.agentDir(),
+      state.env,
+      () => {
+        context.admission.assertCurrent();
+        if (!current) {
+          throw withdrawn;
         }
-        resume.resolve();
-        const outcome = await result;
-        expect(outcome.ok).toBe(false);
-        expect(consume).not.toHaveBeenCalled();
-        if (outcome.ok) {
-          throw new Error("Withdrawn source produced a display path");
-        }
-        if (withdrawal === "caller-withdrawn") {
-          expect(outcome.error).toBe(withdrawn);
-        } else {
-          expect(outcome.error).toBeInstanceOf(Error);
-          expect(outcome.error).toMatchObject({ message: expect.stringMatching(/revoked|closed/) });
-        }
-      } finally {
-        resume.resolve();
-        await result;
-        held.mockRestore();
+      },
+      consume,
+    );
+    const result = reading.then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    try {
+      await Promise.race([
+        entered.promise,
+        result.then(() => {
+          throw new Error("Display preparation settled before its worker read gate");
+        }),
+      ]);
+      current = false;
+      resume.resolve();
+      const outcome = await result;
+      expect(outcome.ok).toBe(false);
+      expect(consume).not.toHaveBeenCalled();
+      if (outcome.ok) {
+        throw new Error("Withdrawn source produced a display path");
       }
-    });
-  },
-);
+      expect(outcome.error).toBe(withdrawn);
+    } finally {
+      resume.resolve();
+      await result;
+      held.mockRestore();
+    }
+  });
+});

@@ -87,25 +87,25 @@ class CommandPaletteLogicTest {
 
   @Test
   fun workspacePageRemainsReachableThroughPagesMenuAndSearchWithBackToOrigin() {
-    val workshop = nativeString("Skill Workshop")
-    val workshopDescription = nativeString("Review generated skill proposals before they become live skills.")
+    val page = nativeString("Dreaming")
+    val pageDescription = nativeString("Memory consolidation and dream diary.")
     withShell(HomeDestination.Connect) { backDispatcher, assertRuntimeUnchanged ->
       composeRule.onNodeWithTag("sidebar-open-overview").performClick()
       composeRule.onNodeWithTag("sidebar-pages-menu").performClick()
-      composeRule.onNodeWithText(workshop).performScrollTo().performClick()
-      composeRule.onNodeWithText(workshopDescription).assertIsDisplayed()
+      composeRule.onNodeWithText(page).performScrollTo().performClick()
+      composeRule.onNodeWithText(pageDescription).assertIsDisplayed()
       assertRuntimeUnchanged()
       composeRule.runOnIdle { backDispatcher.onBackPressed() }
       composeRule.onNodeWithTag("sidebar-open-overview").assertIsDisplayed()
 
       composeRule.onNodeWithContentDescription(nativeString("Search")).performClick()
-      composeRule.onNode(hasSetTextAction()).performTextReplacement(workshop)
+      composeRule.onNode(hasSetTextAction()).performTextReplacement(page)
       val searchResults = hasScrollAction() and hasAnyDescendant(hasSetTextAction())
       composeRule
-        .onNode(hasText(workshop) and hasClickAction() and hasSetTextAction().not() and hasAnyAncestor(searchResults))
+        .onNode(hasText(page) and hasClickAction() and hasSetTextAction().not() and hasAnyAncestor(searchResults))
         .performScrollTo()
         .performClick()
-      composeRule.onNodeWithText(workshopDescription).assertIsDisplayed()
+      composeRule.onNodeWithText(pageDescription).assertIsDisplayed()
       composeRule.onNodeWithContentDescription(nativeString("Back")).performClick()
       composeRule.onNodeWithTag("sidebar-open-overview").assertIsDisplayed()
       assertRuntimeUnchanged()
@@ -167,7 +167,7 @@ class CommandPaletteLogicTest {
     assertEquals(providerSubtitle, categoryMatches.single { it.action == providerAction }.subtitle.resolveNativeText())
     val workspaceMatches = commandItems(query = nativeString("Workspace"), desktopObserveAvailable = false, providerSubtitle = providerSubtitle)
     assertTrue(workspaceMatches.any { it.action == CommandAction.Settings(SettingsRoute.CronJobs) })
-    assertTrue(workspaceMatches.any { it.action == CommandAction.Settings(SettingsRoute.SkillWorkshop) })
+    assertTrue(workspaceMatches.any { it.action == CommandAction.Settings(SettingsRoute.Dreaming) })
     assertFalse(workspaceMatches.any { it.action == providerAction })
 
     // These destinations are outside the main Settings row group but still own routes.

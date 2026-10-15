@@ -3,14 +3,18 @@ import type { WorkerDesktopEndpoint } from "../../plugins/types.js";
 import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 
 describe("worker desktop endpoint", () => {
+  const terminal = { id: "terminal", executablePath: "/usr/bin/xfce4-terminal" };
+  const browser = {
+    id: "browser",
+    executablePath: "/usr/local/bin/openclaw-worker-browser",
+    cdpPort: 9222,
+  };
+
   it.each([
     ["a non-array app list", "browser", "desktop apps must be an array"],
     [
       "more than eight apps",
-      Array.from({ length: 9 }, () => ({
-        id: "terminal",
-        executablePath: "/usr/bin/xfce4-terminal",
-      })),
+      Array.from({ length: 9 }, () => terminal),
       "desktop apps cannot exceed 8",
     ],
     [
@@ -20,49 +24,27 @@ describe("worker desktop endpoint", () => {
     ],
     [
       "duplicate app ids",
-      [
-        { id: "terminal", executablePath: "/usr/bin/xfce4-terminal" },
-        { id: "terminal", executablePath: "/usr/local/bin/openclaw-worker-terminal" },
-      ],
+      [terminal, { ...terminal, executablePath: "/usr/local/bin/openclaw-worker-terminal" }],
       "desktop app id terminal must be unique",
     ],
     [
       "a relative executable path",
-      [{ id: "terminal", executablePath: "bin/xfce4-terminal" }],
+      [{ ...terminal, executablePath: "bin/xfce4-terminal" }],
       "desktop app executable path must be absolute",
     ],
     [
       "an invalid browser CDP port",
-      [
-        {
-          id: "browser",
-          executablePath: "/usr/local/bin/openclaw-worker-browser",
-          cdpPort: 65_536,
-        },
-      ],
+      [{ ...browser, cdpPort: 65_536 }],
       "browser CDP port must be an integer",
     ],
     [
       "an unknown browser field",
-      [
-        {
-          id: "browser",
-          executablePath: "/usr/local/bin/openclaw-worker-browser",
-          cdpPort: 9222,
-          shell: true,
-        },
-      ],
+      [{ ...browser, shell: true }],
       "browser desktop app contains unknown fields",
     ],
     [
       "an unknown terminal field",
-      [
-        {
-          id: "terminal",
-          executablePath: "/usr/local/bin/openclaw-worker-terminal",
-          env: { DISPLAY: ":99" },
-        },
-      ],
+      [{ ...terminal, env: { DISPLAY: ":99" } }],
       "terminal desktop app contains unknown fields",
     ],
   ])("rejects %s", (_name, apps, error) => {

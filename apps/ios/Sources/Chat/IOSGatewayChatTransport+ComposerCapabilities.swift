@@ -30,22 +30,25 @@ extension IOSGatewayChatTransport {
 
         async let configRequest = self.composerResponse(
             OpenClawChatGatewayRequests.composerConfigGet(),
+            as: ComposerConfigSnapshot.self,
             canRead: canRead,
             route: route)
         async let skillsRequest = self.composerResponse(
             OpenClawChatGatewayRequests.composerSkillsStatus(agentID: targetAgentID),
+            as: SkillsStatusReport.self,
             canRead: canRead,
             route: route)
         async let toolsRequest = self.composerResponse(
             OpenClawChatGatewayRequests.composerToolsEffective(
                 sessionKey: target.sessionKey,
                 agentID: target.agentID),
+            as: ToolsEffectiveResult.self,
             canRead: canRead,
             route: route)
         let (
-            configResponse,
-            skillsResponse,
-            toolsResponse,
+            configSurface,
+            skillsSurface,
+            toolsSurface,
             patchCapability,
             settingsSupport) = await (
             configRequest,
@@ -59,9 +62,6 @@ extension IOSGatewayChatTransport {
         guard await self.gateway.currentRoute() == route else {
             return OpenClawChatComposerCapabilityCatalog()
         }
-        let configSurface = Self.decodeComposerResponse(configResponse, as: ComposerConfigSnapshot.self)
-        let skillsSurface = Self.decodeComposerResponse(skillsResponse, as: SkillsStatusReport.self)
-        let toolsSurface = Self.decodeComposerResponse(toolsResponse, as: ToolsEffectiveResult.self)
         let config = configSurface.value
         let skillsReport = skillsSurface.value
         let effectiveTools = toolsSurface.value
@@ -132,41 +132,23 @@ extension IOSGatewayChatTransport {
         target.agentID ?? OpenClawChatSessionKey.agentID(from: target.sessionKey)
     }
 
-    private func composerResponse(
+    private func composerResponse<T: Decodable & Sendable>(
         _ request: OpenClawChatGatewayRequest,
+        as type: T.Type,
         canRead: Bool,
-        route: GatewayNodeSessionRoute) async -> ComposerResponse
+        route: GatewayNodeSessionRoute) async -> ComposerSurface<T>
     {
         guard canRead,
               await self.gateway.supportsServerMethod(request.method, ifCurrentRoute: route) == true
-        else { return .unavailable }
+        else { return .init(value: nil, failed: false) }
         do {
             let data = try await self.gateway.request(
                 request,
                 ifCurrentRoute: route,
                 distinguishPreDispatchRouteChange: true)
-            return .loaded(data)
+            return try .init(value: JSONDecoder().decode(type, from: data), failed: false)
         } catch {
-            return .failed
-        }
-    }
-
-    private static func decodeComposerResponse<T: Decodable>(
-        _ response: ComposerResponse,
-        as type: T.Type) -> ComposerSurface<T>
-    {
-        switch response {
-        case let .loaded(data):
-            do {
-                let value = try JSONDecoder().decode(type, from: data)
-                return .init(value: value, loaded: true, failed: false)
-            } catch {
-                return .init(value: nil, loaded: false, failed: true)
-            }
-        case .failed:
-            return .init(value: nil, loaded: false, failed: true)
-        case .unavailable:
-            return .init(value: nil, loaded: false, failed: false)
+            return .init(value: nil, failed: true)
         }
     }
 
@@ -263,8 +245,7 @@ extension IOSGatewayChatTransport {
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        let route = await self.currentSessionMutationRoute()
-        guard let route,
+        guard let route = await self.currentSessionMutationRoute(),
               let supportsRoutingContract = await gateway.supportsServerCapability(
                   .chatSendRoutingContract,
                   ifCurrentRoute: route)
@@ -344,43 +325,40 @@ extension IOSGatewayChatTransport {
     }
 }
 
-private enum ComposerResponse {
-    case unavailable
-    case failed
-    case loaded(Data)
-}
-
-private struct ComposerSurface<Value> {
+private struct ComposerSurface<Value: Sendable>: Sendable {
     let value: Value?
-    let loaded: Bool
     let failed: Bool
+
+    var loaded: Bool {
+        self.value != nil
+    }
 }
 
-private struct ComposerConfigSnapshot: Decodable {
+private struct ComposerConfigSnapshot: Decodable, Sendable {
     let runtimeConfig: ComposerRuntimeConfig
 }
 
-private struct ComposerRuntimeConfig: Decodable {
+private struct ComposerRuntimeConfig: Decodable, Sendable {
     let mcp: ComposerMCPConfig?
     let tools: ComposerToolsConfig?
 }
 
-private struct ComposerMCPConfig: Decodable {
+private struct ComposerMCPConfig: Decodable, Sendable {
     let servers: [String: ComposerMCPServer]?
 }
 
-private struct ComposerMCPServer: Decodable {
+private struct ComposerMCPServer: Decodable, Sendable {
     let enabled: Bool?
 }
 
-private struct ComposerToolsConfig: Decodable {
+private struct ComposerToolsConfig: Decodable, Sendable {
     let web: ComposerWebToolsConfig?
 }
 
-private struct ComposerWebToolsConfig: Decodable {
+private struct ComposerWebToolsConfig: Decodable, Sendable {
     let search: ComposerWebSearchConfig?
 }
 
-private struct ComposerWebSearchConfig: Decodable {
+private struct ComposerWebSearchConfig: Decodable, Sendable {
     let enabled: Bool?
 }

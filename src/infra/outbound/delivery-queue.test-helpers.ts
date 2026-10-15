@@ -3,16 +3,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { deriveDeliveryQueueRetentionColumns } from "../delivery-queue-retention-columns.js";
 import {
   claimDeliveryQueueEntryPlatformSendInDatabase,
   renewDeliveryQueueEntryPlatformSendLeaseInDatabase,
 } from "../delivery-queue-sqlite-claim.kernel.js";
 import { loadDeliveryQueueEntries } from "../delivery-queue-sqlite.js";
+import { isPostgresSqlConnection } from "../sql-connection.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import type { DeliverFn, RecoveryLogger } from "./delivery-queue-recovery.js";
@@ -52,7 +52,10 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
   let fixtureCount = 0;
 
   beforeAll(() => {
-    fixtureRoot = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-dq-suite-"));
+    fixtureRoot = fs.realpathSync.native(
+      // openclaw-temp-dir: allow suite-owned queues drain their agent stores before removal
+      fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-dq-suite-")),
+    );
   });
 
   beforeEach(() => {
@@ -61,17 +64,15 @@ export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => stri
   });
 
   afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    if (tmpDir) {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-      tmpDir = "";
-    }
+    await closeStateDatabaseForTest();
+    tmpDir = "";
   });
 
   afterAll(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    if (fixtureRoot) {
+      await closeOpenClawAgentDatabasesAsync(fixtureRoot);
+    }
+    await closeStateDatabaseForTest();
     if (!fixtureRoot) {
       return;
     }
@@ -152,6 +153,10 @@ export function setQueuedEntryState(
     entry.availableAt = state.availableAt;
   }
   const { db } = openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir } });
+  const entryJson = JSON.stringify(entry);
+  if (isPostgresSqlConnection(db)) {
+    throw new Error("Delivery queue fixture mutation requires a SQLite database");
+  }
   db.prepare(
     `
       UPDATE delivery_queue_entries
@@ -162,17 +167,21 @@ export function setQueuedEntryState(
              platform_send_started_at = ?,
              recovery_state = ?,
              entry_json = ?,
+             retention_id_prefix = @retention_id_prefix,
+             retention_max_age_ms = @retention_max_age_ms,
+             retention_max_entries = @retention_max_entries,
              updated_at = ?
        WHERE queue_name = ? AND id = ?
     `,
   ).run(
+    deriveDeliveryQueueRetentionColumns(id, entryJson),
     state.retryCount,
     state.enqueuedAt ?? Number(entry.enqueuedAt ?? 0),
     state.lastAttemptAt ?? null,
     state.lastError ?? null,
     state.platformSendStartedAt ?? null,
     state.recoveryState ?? null,
-    JSON.stringify(entry),
+    entryJson,
     Date.now(),
     OUTBOUND_DELIVERY_QUEUE_NAME,
     id,
@@ -194,3 +203,10 @@ export function createRecoveryLog(): RecoveryLogger & {
 export function asDeliverFn(deliver: ReturnType<typeof vi.fn>): DeliverFn {
   return deliver as DeliverFn;
 }
+
+export const RECOVERY_SUMMARY = {
+  empty: { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 },
+  failed: { recovered: 0, failed: 1, skippedMaxRetries: 0, deferredBackoff: 0 },
+  recovered: { recovered: 1, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 },
+  recoveredWithDeferred: { recovered: 1, failed: 0, skippedMaxRetries: 0, deferredBackoff: 1 },
+} as const;

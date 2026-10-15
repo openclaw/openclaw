@@ -6,14 +6,12 @@ import {
   normalizeStringEntries,
   normalizeUniqueStringEntries,
 } from "@openclaw/normalization-core/string-normalization";
+import { isOsRequirementSatisfied } from "../../shared/requirements.js";
 import type { SkillEntry } from "../types.js";
 
 export function extractErrorMessage(err: unknown): string | undefined {
   if (!err) {
     return undefined;
-  }
-  if (typeof err === "string") {
-    return err;
   }
   if (err instanceof Error) {
     return err.message;
@@ -21,11 +19,14 @@ export function extractErrorMessage(err: unknown): string | undefined {
   if (typeof err === "object" && "message" in err && typeof err.message === "string") {
     return err.message;
   }
-  if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
+  if (
+    typeof err === "string" ||
+    typeof err === "number" ||
+    typeof err === "boolean" ||
+    typeof err === "bigint" ||
+    typeof err === "symbol"
+  ) {
     return String(err);
-  }
-  if (typeof err === "symbol") {
-    return err.toString();
   }
   if (typeof err === "object") {
     try {
@@ -67,7 +68,7 @@ export function isRemoteSkillEligibilityNode(
 export function collectRequiredBins(entries: SkillEntry[], targetPlatform: string): string[] {
   return normalizeUniqueStringEntries(
     entries.flatMap(({ metadata }) =>
-      metadata?.os?.length && !metadata.os.includes(targetPlatform)
+      !isOsRequirementSatisfied(metadata?.os ?? [], [targetPlatform])
         ? []
         : [...(metadata?.requires?.bins ?? []), ...(metadata?.requires?.anyBins ?? [])],
     ),

@@ -18,6 +18,7 @@ import type {
   PluginManifestMcpServer,
 } from "./manifest.js";
 import { isPluginLifecycleTraceEnabled } from "./plugin-lifecycle-trace.js";
+import { groupPluginRecords } from "./record-groups.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   formatPluginVerificationDiagnostic,
@@ -282,14 +283,9 @@ export function recordPluginError(params: {
 
 /** Groups failed plugin ids by loader phase for compact startup summaries. */
 export function formatPluginFailureSummary(failedPlugins: PluginRecord[]): string {
-  const grouped = new Map<NonNullable<PluginRecord["failurePhase"]>, string[]>();
-  for (const plugin of failedPlugins) {
-    const phase = plugin.failurePhase ?? "load";
-    const ids = grouped.get(phase) ?? [];
-    ids.push(plugin.id);
-    grouped.set(phase, ids);
-  }
-  return [...grouped.entries()].map(([phase, ids]) => `${phase}: ${ids.join(", ")}`).join("; ");
+  return [...groupPluginRecords(failedPlugins, (plugin) => plugin.failurePhase ?? "load")]
+    .map(([phase, plugins]) => `${phase}: ${plugins.map((plugin) => plugin.id).join(", ")}`)
+    .join("; ");
 }
 
 function describePluginModuleExportShape(

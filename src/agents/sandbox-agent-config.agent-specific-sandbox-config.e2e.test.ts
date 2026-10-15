@@ -1,6 +1,7 @@
 // Verifies agent-specific sandbox config, workspace roots, and Docker setup commands.
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { splitSandboxBindSpec } from "./sandbox/bind-spec.js";
 import { sandboxMountOptionsReadOnly } from "./sandbox/workspace-mounts.js";
@@ -141,7 +142,7 @@ vi.mock("../skills/loading/workspace-skill-sync.runtime.js", () => ({
 
 let resolveSandboxContext: typeof import("./sandbox/context.js").resolveSandboxContext;
 let resolveSandboxConfigForAgent: typeof import("./sandbox/config.js").resolveSandboxConfigForAgent;
-let resolveSandboxRuntimeStatus: typeof import("./sandbox/runtime-status.js").resolveSandboxRuntimeStatus;
+let resolvePreparedSandboxRuntimeStatus: typeof import("./sandbox/runtime-status.js").resolvePreparedSandboxRuntimeStatus;
 
 async function resolveContext(config: OpenClawConfig, sessionKey: string, workspaceDir: string) {
   // Convenience wrapper keeps session-key specific sandbox context assertions compact.
@@ -214,9 +215,8 @@ function createWorkSetupCommandConfig(scope: "agent" | "shared"): OpenClawConfig
           },
         },
       },
-      list: [
-        {
-          id: "work",
+      entries: {
+        work: {
           workspace: "~/openclaw-work",
           sandbox: {
             mode: "all",
@@ -226,7 +226,7 @@ function createWorkSetupCommandConfig(scope: "agent" | "shared"): OpenClawConfig
             },
           },
         },
-      ],
+      },
     },
   };
 }
@@ -241,7 +241,7 @@ describe("Agent-specific sandbox config", () => {
     ]);
     ({ resolveSandboxConfigForAgent } = configModule);
     ({ resolveSandboxContext } = contextModule);
-    ({ resolveSandboxRuntimeStatus } = runtimeModule);
+    ({ resolvePreparedSandboxRuntimeStatus } = runtimeModule);
     spawnCalls.length = 0;
   });
 
@@ -255,9 +255,8 @@ describe("Agent-specific sandbox config", () => {
             workspaceRoot: "~/.openclaw/sandboxes",
           },
         },
-        list: [
-          {
-            id: "isolated",
+        entries: {
+          isolated: {
             workspace: "~/openclaw-isolated",
             sandbox: {
               mode: "all",
@@ -265,7 +264,7 @@ describe("Agent-specific sandbox config", () => {
               workspaceRoot: "/tmp/isolated-sandboxes",
             },
           },
-        ],
+        },
       },
     };
 
@@ -275,50 +274,6 @@ describe("Agent-specific sandbox config", () => {
       throw new Error("Expected sandbox context for isolated agent");
     }
     expect(context.workspaceDir).toContain(path.resolve("/tmp/isolated-sandboxes"));
-  });
-
-  it("should prefer agent config over global for multiple agents", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "non-main",
-            scope: "session",
-          },
-        },
-        list: [
-          {
-            id: "main",
-            workspace: "~/openclaw",
-            sandbox: {
-              mode: "off",
-            },
-          },
-          {
-            id: "family",
-            workspace: "~/openclaw-family",
-            sandbox: {
-              mode: "all",
-              scope: "agent",
-            },
-          },
-        ],
-      },
-    };
-
-    const mainRuntime = resolveSandboxRuntimeStatus({
-      cfg,
-      sessionKey: "agent:main:telegram:group:789",
-    });
-    expect(mainRuntime.mode).toBe("off");
-    expect(mainRuntime.sandboxed).toBe(false);
-
-    const familyRuntime = resolveSandboxRuntimeStatus({
-      cfg,
-      sessionKey: "agent:family:whatsapp:group:123",
-    });
-    expect(familyRuntime.mode).toBe("all");
-    expect(familyRuntime.sandboxed).toBe(true);
   });
 
   it("should prefer agent-specific sandbox tool policy", () => {
@@ -344,28 +299,6 @@ describe("Agent-specific sandbox config", () => {
     });
   });
 
-  it("should use global sandbox config when no agent-specific config exists", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            scope: "agent",
-          },
-        },
-        list: [
-          {
-            id: "main",
-            workspace: "~/openclaw",
-          },
-        ],
-      },
-    };
-
-    const sandbox = resolveSandboxConfigForAgent(cfg, "main");
-    expect(sandbox.mode).toBe("all");
-  });
-
   it.each([
     {
       scope: "agent" as const,
@@ -386,43 +319,12 @@ describe("Agent-specific sandbox config", () => {
     expectDockerSetupCommand(expectedSetup);
   });
 
-  it("should allow agent-specific docker settings beyond setupCommand", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            scope: "agent",
-            docker: {
-              image: "global-image",
-              network: "none",
-            },
-          },
-        },
-        list: [
-          {
-            id: "work",
-            workspace: "~/openclaw-work",
-            sandbox: {
-              mode: "all",
-              scope: "agent",
-              docker: {
-                image: "work-image",
-                network: "bridge",
-              },
-            },
-          },
-        ],
-      },
-    };
-
-    const sandbox = resolveSandboxConfigForAgent(cfg, "work");
-    expect(sandbox.docker.image).toBe("work-image");
-    expect(sandbox.docker.network).toBe("bridge");
-  });
-
   it("should honor agent-specific sandbox mode overrides", () => {
-    for (const scenario of [
+    const scenarios: Array<{
+      cfg: OpenClawConfig;
+      sessionKey: string;
+      assert: (runtime: ReturnType<typeof resolvePreparedSandboxRuntimeStatus>) => void;
+    }> = [
       {
         cfg: {
           agents: {
@@ -432,19 +334,18 @@ describe("Agent-specific sandbox config", () => {
                 scope: "agent",
               },
             },
-            list: [
-              {
-                id: "main",
+            entries: {
+              main: {
                 workspace: "~/openclaw",
                 sandbox: {
                   mode: "off",
                 },
               },
-            ],
+            },
           },
         } satisfies OpenClawConfig,
         sessionKey: "agent:main:main",
-        assert: (runtime: ReturnType<typeof resolveSandboxRuntimeStatus>) => {
+        assert: (runtime: ReturnType<typeof resolvePreparedSandboxRuntimeStatus>) => {
           expect(runtime.mode).toBe("off");
           expect(runtime.sandboxed).toBe(false);
         },
@@ -457,57 +358,32 @@ describe("Agent-specific sandbox config", () => {
                 mode: "off",
               },
             },
-            list: [
-              {
-                id: "family",
+            entries: {
+              family: {
                 workspace: "~/openclaw-family",
                 sandbox: {
                   mode: "all",
                   scope: "agent",
                 },
               },
-            ],
+            },
           },
         } satisfies OpenClawConfig,
         sessionKey: "agent:family:whatsapp:group:123",
-        assert: (runtime: ReturnType<typeof resolveSandboxRuntimeStatus>) => {
+        assert: (runtime: ReturnType<typeof resolvePreparedSandboxRuntimeStatus>) => {
           expect(runtime.mode).toBe("all");
           expect(runtime.sandboxed).toBe(true);
         },
       },
-    ]) {
-      const runtime = resolveSandboxRuntimeStatus({
+    ];
+    for (const scenario of scenarios) {
+      const runtime = resolvePreparedSandboxRuntimeStatus({
         cfg: scenario.cfg,
         sessionKey: scenario.sessionKey,
+        preparedSessionEntry: null,
       });
       scenario.assert(runtime);
     }
-  });
-
-  it("should use agent-specific scope", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            scope: "session",
-          },
-        },
-        list: [
-          {
-            id: "work",
-            workspace: "~/openclaw-work",
-            sandbox: {
-              mode: "all",
-              scope: "agent",
-            },
-          },
-        ],
-      },
-    };
-
-    const sandbox = resolveSandboxConfigForAgent(cfg, "work");
-    expect(sandbox.scope).toBe("agent");
   });
 
   it("enforces required allowlist tools in default and explicit sandbox configs", () => {

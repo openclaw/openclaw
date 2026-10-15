@@ -11,14 +11,13 @@ import * as systemdFiles from "../../daemon/systemd-service-files.js";
 import * as systemdSystem from "../../daemon/systemd-system.js";
 import { buildSystemdUnit } from "../../daemon/systemd-unit.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
-import {
-  swapStagedPackageInstall,
-  type PackageUpdateTransaction,
-} from "../../infra/package-update-swap.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import * as candidateState from "../../infra/update-candidate-state.js";
 import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
 import { prepareNativePackageStage } from "../../infra/update-native-package-stage.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../../version.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
@@ -312,14 +311,9 @@ export function registerPackageRootRollbackTests(
       expect(argv).toContain("--preserve-definition");
       expect(await fs.readFile(command.sourcePath, "utf8")).toBe(previousDefinition);
       mocks.running = true;
-      return {
-        code: 0,
+      return commandResult({
         stdout: JSON.stringify({ action: "restart", ok: true, result: "restarted" }),
-        stderr: "",
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
+      });
     });
     if (scenario === "backup restore failed") {
       vi.spyOn(systemdExec, "reloadSystemdUserManager").mockRejectedValueOnce(

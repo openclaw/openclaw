@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { OpenClawConfig } from "../config/types.js";
 
 const resolveManifestModelIdNormalizationPoliciesMock = vi.hoisted(() => vi.fn());
@@ -42,6 +43,77 @@ describe("statusSummaryRuntime configured model normalization", () => {
       }),
     ).toEqual({ provider: "openai-codex", model: "gpt-5.5" });
 
+    expect(resolveManifestModelIdNormalizationPoliciesMock).not.toHaveBeenCalled();
+    expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves agent-local aliases without model normalization", async () => {
+    const { statusSummaryRuntime } = await import("../status/summary.runtime.js");
+    const cases: Array<{
+      name: string;
+      defaults: Record<string, { alias?: string }>;
+      models: Record<string, { alias?: string }>;
+      primary?: string;
+      expected: { provider: string; model: string };
+    }> = [
+      {
+        name: "agent-only alias",
+        defaults: {},
+        models: { "anthropic/fixture-local": { alias: "fast" } },
+        primary: "fast",
+        expected: { provider: "anthropic", model: "fixture-local" },
+      },
+      {
+        name: "agent alias shadows the global alias",
+        defaults: { "openai/fixture-global": { alias: "fast" } },
+        models: { "anthropic/fixture-local": { alias: "fast" } },
+        primary: "fast",
+        expected: { provider: "anthropic", model: "fixture-local" },
+      },
+      {
+        name: "inherited primary uses the agent alias",
+        defaults: { "openai/fixture-global": { alias: "fast" } },
+        models: { "anthropic/fixture-local": { alias: "fast" } },
+        expected: { provider: "anthropic", model: "fixture-local" },
+      },
+      {
+        name: "empty agent alias clears the inherited alias",
+        defaults: { "openai/fixture-global": { alias: "fast" } },
+        models: { "openai/fixture-global": { alias: "" } },
+        expected: { provider: "openai", model: "fast" },
+      },
+      {
+        name: "omitted agent alias keeps the inherited alias",
+        defaults: { "openai/fixture-global": { alias: "fast" } },
+        models: { "openai/fixture-global": {} },
+        expected: { provider: "openai", model: "fixture-global" },
+      },
+      {
+        name: "agent alias matching ignores case and whitespace",
+        defaults: {},
+        models: { "anthropic/fixture-local": { alias: " fast " } },
+        primary: "  FAST  ",
+        expected: { provider: "anthropic", model: "fixture-local" },
+      },
+    ];
+    for (const { name, defaults, models, primary, expected } of cases) {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { model: "fast", models: defaults },
+          entries: { work: { ...(primary ? { model: primary } : {}), models } },
+        },
+      };
+
+      expect(
+        statusSummaryRuntime.resolveConfiguredStatusModelRef({
+          cfg,
+          agentId: "work",
+          defaultProvider: "openai",
+          defaultModel: "fixture-fallback",
+        }),
+        name,
+      ).toEqual(expected);
+    }
     expect(resolveManifestModelIdNormalizationPoliciesMock).not.toHaveBeenCalled();
     expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
   });

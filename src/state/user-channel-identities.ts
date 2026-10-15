@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -13,6 +12,7 @@ import type { GatewayConfig } from "../config/types.gateway.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
@@ -93,7 +93,7 @@ export function resolveUserChannelAuthorizationPolicy(
 ): UserChannelAuthorizationPolicy {
   return { roles: gateway?.roles ?? null, identityScopes: gateway?.auth?.identityScopes ?? null };
 }
-function matchesPolicy(db: DatabaseSync, policy: UserChannelAuthorizationPolicy): boolean {
+function matchesPolicy(db: EngineConnection, policy: UserChannelAuthorizationPolicy): boolean {
   const row = readConfigMachineStateRowInDatabase(db, POLICY_KEY);
   return (
     row !== undefined && isDeepStrictEqual(splitPolicy(JSON.parse(row.value_json)).policy, policy)
@@ -102,7 +102,7 @@ function matchesPolicy(db: DatabaseSync, policy: UserChannelAuthorizationPolicy)
 
 /** Activation and rollback retire old references before their exact authorization policy is published. */
 export function publishUserChannelPolicyInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   policy: UserChannelAuthorizationPolicy,
   configuredOwnersHash?: string,
 ) {
@@ -149,7 +149,7 @@ export function publishUserChannelPolicyInDatabase(
 
 /** The reference names this uninterrupted channel link; it carries no permission by itself. */
 export function authorizeUserChannelIdentityInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: {
     identity: UserChannelIdentity;
     profileId: string;
@@ -193,7 +193,11 @@ export function authorizeUserChannelIdentityInDatabase(
   return { version: 1, id };
 }
 
-function readAuthorization(db: DatabaseSync, id: string, policy: UserChannelAuthorizationPolicy) {
+function readAuthorization(
+  db: EngineConnection,
+  id: string,
+  policy: UserChannelAuthorizationPolicy,
+) {
   if ((getAdmittedSqliteSchemaFacts(db)?.userVersion ?? 0) < 19 || !matchesPolicy(db, policy)) {
     return undefined;
   }
@@ -237,7 +241,7 @@ function readIdentity(subject: string): UserChannelIdentity | undefined {
   return Check(UserChannelIdentitySchema, identity) ? identity : undefined;
 }
 
-function selectLink(db: DatabaseSync, subject: string) {
+function selectLink(db: EngineConnection, subject: string) {
   return executeSqliteQueryTakeFirstSync(
     db,
     userProfilesDb(db)
@@ -248,7 +252,7 @@ function selectLink(db: DatabaseSync, subject: string) {
   );
 }
 
-function requirePerson(db: DatabaseSync, profileId: string) {
+function requirePerson(db: EngineConnection, profileId: string) {
   const profile = requireResolvedUserProfileMetadataById(db, profileId);
   if (profileId === GATEWAY_OWNER_PROFILE_ID || profile.id === GATEWAY_OWNER_PROFILE_ID) {
     throw new UserProfileOwnerError("merge");
@@ -256,7 +260,7 @@ function requirePerson(db: DatabaseSync, profileId: string) {
   return profile;
 }
 
-function publishIdentityChange(db: DatabaseSync, profileId: string, subject: string) {
+function publishIdentityChange(db: EngineConnection, profileId: string, subject: string) {
   publishUserChannelIdentityAuthorityChange(db, subject);
   publishUserProfilesChange(db, profileId);
   deferSqlitePostCommitPublication(db, publishUserProfileAliasChange);
@@ -266,7 +270,7 @@ function publishIdentityChange(db: DatabaseSync, profileId: string, subject: str
 export function linkUserChannelIdentity(
   profileId: string,
   identity: UserChannelIdentity,
-  options: OpenClawStateDatabaseOptions & { beforeChange?: (db: DatabaseSync) => void } = {},
+  options: OpenClawStateDatabaseOptions & { beforeChange?: (db: EngineConnection) => void } = {},
 ): UserChannelIdentityLink {
   const subject = userChannelIdentitySubject(identity);
   ensureUserProfilesSchema(options);
@@ -303,7 +307,7 @@ export function linkUserChannelIdentity(
 export function unlinkUserChannelIdentity(
   profileId: string,
   identity: UserChannelIdentity,
-  options: OpenClawStateDatabaseOptions & { beforeChange?: (db: DatabaseSync) => void } = {},
+  options: OpenClawStateDatabaseOptions & { beforeChange?: (db: EngineConnection) => void } = {},
 ): boolean {
   const subject = userChannelIdentitySubject(identity);
   ensureUserProfilesSchema(options);
@@ -333,13 +337,13 @@ export function unlinkUserChannelIdentity(
   );
 }
 
-function hasIdentityTables(db: DatabaseSync): boolean {
+function hasIdentityTables(db: EngineConnection): boolean {
   const tables = getAdmittedSqliteSchemaFacts(db)?.tables;
   return tables?.has("user_profiles") === true && tables.has("user_profile_identities");
 }
 
 export function listUserChannelIdentitiesInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   profileId: string,
 ): UserChannelIdentityLink[] {
   return runSqliteDeferredTransactionSync(db, () => {
@@ -364,67 +368,75 @@ export function listUserChannelIdentitiesInDatabase(
 
 /** Reads the current person and login grant subjects; channel links never become login aliases. */
 export function resolveUserChannelIdentityInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   identity: UserChannelIdentitySelector,
 ): UserChannelIdentityAuthorityFacts | undefined {
-  return runSqliteDeferredTransactionSync(db, () => {
-    if (!hasIdentityTables(db)) {
-      return undefined;
-    }
-    let authorization: UserChannelAuthorization | undefined;
-    let subject: string;
-    if ("authorizationId" in identity) {
-      authorization = readAuthorization(db, identity.authorizationId, identity.policy);
-      if (!authorization) {
+  return runSqliteDeferredTransactionSync(
+    db,
+    () => {
+      if (!hasIdentityTables(db)) {
         return undefined;
       }
-      subject = authorization.subject;
-    } else {
-      subject = userChannelIdentitySubject(identity);
-    }
-    const link = selectLink(db, subject);
-    const profile = link ? selectResolvedUserProfileMetadataById(db, link.profile_id) : undefined;
-    if (!profile || profile.id === GATEWAY_OWNER_PROFILE_ID) {
-      return undefined;
-    }
-    const kysely = userProfilesDb(db);
-    const emails = selectUserProfileEmails(db, profile.id);
-    const loginEmails = emails.filter((email) => {
-      const login = classifyTailscaleLogin(email);
-      // Legacy email-shaped GitHub aliases must not revive a renamed login's grant.
-      return login.kind !== "provider" || login.provider !== "github";
-    });
-    const providerLogins = executeSqliteQuerySync(
-      db,
-      kysely
-        .selectFrom("user_profile_identities")
-        .select(["provider", "subject"])
-        .where("profile_id", "=", profile.id)
-        .where("canonical_login", "is", null),
-    )
-      // Retired attribution rows are not authenticated provider-login aliases.
-      .rows.filter(
-        (row) =>
-          row.provider !== "github" &&
-          row.provider !== "github-attribution" &&
-          !row.provider.includes("."),
+      let authorization: UserChannelAuthorization | undefined;
+      let subject: string;
+      if ("authorizationId" in identity) {
+        authorization = readAuthorization(db, identity.authorizationId, identity.policy);
+        if (!authorization) {
+          return undefined;
+        }
+        subject = authorization.subject;
+      } else {
+        subject = userChannelIdentitySubject(identity);
+      }
+      const link = selectLink(db, subject);
+      const profile = link ? selectResolvedUserProfileMetadataById(db, link.profile_id) : undefined;
+      if (!profile || profile.id === GATEWAY_OWNER_PROFILE_ID) {
+        return undefined;
+      }
+      const kysely = userProfilesDb(db);
+      const emails = selectUserProfileEmails(db, profile.id);
+      const loginEmails = emails.filter((email) => {
+        const login = classifyTailscaleLogin(email);
+        // Legacy email-shaped GitHub aliases must not revive a renamed login's grant.
+        return login.kind !== "provider" || login.provider !== "github";
+      });
+      const providerLogins = executeSqliteQuerySync(
+        db,
+        kysely
+          .selectFrom("user_profile_identities")
+          .select(["provider", "subject"])
+          .where("profile_id", "=", profile.id)
+          .where("canonical_login", "is", null),
       )
-      .map((row) => `${row.subject}@${row.provider}`);
-    const githubLogins =
-      selectStoredGitHubIdentities(db, [profile.id])
-        .get(profile.id)
-        ?.accounts.map((account) => `${account.login.toLowerCase()}@github`) ?? [];
-    return {
-      ...(authorization ? { authorization } : {}),
-      profileId: profile.id,
-      displayName: profile.display_name,
-      role: profile.role ?? null,
-      emails,
-      loginIdentities: [
-        ...new Set([...loginEmails, ...providerLogins, ...githubLogins]),
-      ].toSorted(),
-    };
-  });
+        // Retired attribution rows are not authenticated provider-login aliases.
+        .rows.filter(
+          (row) =>
+            row.provider !== "github" &&
+            row.provider !== "github-attribution" &&
+            !row.provider.includes("."),
+        )
+        .map((row) => `${row.subject}@${row.provider}`);
+      const githubIdentity = selectStoredGitHubIdentities(db, [profile.id]).get(profile.id);
+      const githubAccounts = githubIdentity?.accounts;
+      const githubLogins =
+        githubAccounts?.map((account) => `${account.login.toLowerCase()}@github`) ?? [];
+      return {
+        ...(authorization ? { authorization } : {}),
+        profileId: profile.id,
+        displayName: profile.display_name,
+        role: profile.role ?? null,
+        emails,
+        ...(githubAccounts?.length
+          ? { githubAccountIds: githubAccounts.map(({ accountId }) => accountId) }
+          : {}),
+        ...(githubIdentity?.primary ? { githubLogin: githubIdentity.primary.login } : {}),
+        loginIdentities: [
+          ...new Set([...loginEmails, ...providerLogins, ...githubLogins]),
+        ].toSorted(),
+      };
+    },
+    { operationLabel: "user-channel-identities.resolve" },
+  );
 }
 
 export function resolveUserChannelIdentity(

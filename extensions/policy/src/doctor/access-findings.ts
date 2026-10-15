@@ -1,17 +1,19 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createOrderedPolicyShape } from "./ordered-shape.js";
-import { SUPPORTED_AUTH_PROFILE_METADATA } from "./policy-constants.js";
+import { SUPPORTED_AUTH_PROFILE_METADATA, SUPPORTED_TOOL_METADATA } from "./policy-constants.js";
 import { isChannelDenyRule } from "./shape-helpers.js";
 
-export function authProfileMetadataRequirementFindings(
+export function metadataRequirementShapeFindings(
   policy: unknown,
   policyPath: string,
   policyDocName: string,
+  path: "tools.requireMetadata" | "auth.profiles.requireMetadata",
 ): readonly HealthFinding[] {
   const shape = createOrderedPolicyShape(policy, { policyPath, policyDocName });
-  const finding = shape.list("auth.profiles.requireMetadata", {
-    allowed: SUPPORTED_AUTH_PROFILE_METADATA,
+  const finding = shape.list(path, {
+    allowed:
+      path === "tools.requireMetadata" ? SUPPORTED_TOOL_METADATA : SUPPORTED_AUTH_PROFILE_METADATA,
     normalize: "lower",
     array: {
       message: "{policy} {property} must be an array of metadata keys.",

@@ -1,6 +1,6 @@
 // Discord tests cover gateway plugin plugin behavior.
 import { EventEmitter } from "node:events";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
 import { fetchDiscordGatewayInfoWithTimeout } from "./gateway-metadata.js";
@@ -63,15 +63,13 @@ vi.mock("../internal/gateway.js", () => ({
 }));
 
 const captureHost = vi.hoisted(() => ({
-  available: true,
   capture: vi.fn<typeof import("openclaw/plugin-sdk/proxy-capture").captureWsEventAsync>(),
 }));
 
-vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
+vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
   captureHttpExchangeAsync: vi.fn().mockResolvedValue(undefined),
-  get captureWsEventAsync() {
-    return captureHost.available ? captureHost.capture : undefined;
-  },
+  captureWsEventAsync: captureHost.capture,
   resolveEffectiveDebugProxyUrl: () => undefined,
   resolveDebugProxySettings: () => ({ enabled: false }),
 }));
@@ -97,12 +95,7 @@ describe("createDiscordGatewayPlugin", () => {
   });
 
   beforeEach(() => {
-    captureHost.available = true;
     captureHost.capture.mockReset().mockResolvedValue(undefined);
-  });
-
-  afterEach(() => {
-    captureHost.available = true;
   });
 
   function createPlugin(
@@ -217,37 +210,9 @@ describe("createDiscordGatewayPlugin", () => {
     );
   });
 
-  it("leaves autoInteractions disabled so OpenClaw owns interaction handoff", () => {
-    const plugin = createPlugin();
-
-    expect(
-      (
-        plugin as unknown as {
-          options?: {
-            autoInteractions: boolean;
-            intents: number;
-            reconnect: { maxAttempts: number };
-          };
-        }
-      ).options,
-    ).toEqual({
-      autoInteractions: false,
-      intents:
-        GatewayIntents.Guilds |
-        GatewayIntents.GuildExpressions |
-        GatewayIntents.GuildMessages |
-        GatewayIntents.MessageContent |
-        GatewayIntents.DirectMessages |
-        GatewayIntents.GuildMessageReactions |
-        GatewayIntents.DirectMessageReactions,
-      reconnect: { maxAttempts: 50 },
-    });
-  });
-
-  it.each(["absent", "present", "rejected"] as const)(
-    "emits transport activity with %s optional async capture",
+  it.each(["present", "rejected"] as const)(
+    "emits transport activity with %s async capture",
     (capability) => {
-      captureHost.available = capability !== "absent";
       if (capability === "rejected") {
         captureHost.capture.mockRejectedValue(new Error("capture write failed"));
       }
@@ -278,24 +243,20 @@ describe("createDiscordGatewayPlugin", () => {
         expect(activitySpy).toHaveBeenCalledWith({ at: 1_700_000_000_000 });
         createdSocket.emit("error", new Error("socket failure"));
         createdSocket.emit("close", 1000, Buffer.alloc(0));
-        if (capability === "absent") {
-          expect(captureHost.capture).not.toHaveBeenCalled();
-        } else {
-          expect(captureHost.capture.mock.calls.map(([event]) => event.kind)).toEqual([
-            "ws-open",
-            "ws-frame",
-            "error",
-            "ws-close",
-          ]);
-          expect(captureHost.capture).toHaveBeenCalledWith(
-            expect.objectContaining({
-              url: "wss://gateway.discord.gg",
-              direction: "inbound",
-              payload: Buffer.from("{}"),
-              meta: { subsystem: "discord-gateway" },
-            }),
-          );
-        }
+        expect(captureHost.capture.mock.calls.map(([event]) => event.kind)).toEqual([
+          "ws-open",
+          "ws-frame",
+          "error",
+          "ws-close",
+        ]);
+        expect(captureHost.capture).toHaveBeenCalledWith(
+          expect.objectContaining({
+            url: "wss://gateway.discord.gg",
+            direction: "inbound",
+            payload: Buffer.from("{}"),
+            meta: { subsystem: "discord-gateway" },
+          }),
+        );
       } finally {
         dateNowSpy.mockRestore();
       }

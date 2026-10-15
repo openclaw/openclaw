@@ -55,13 +55,30 @@ export function createToolPolicyMatcher(
   });
   return (name: string) => {
     const normalized = normalizeToolPolicyName(name);
-    if (matchesAnyGlobPattern(normalized, deny)) {
+    // Shipped wildcard policies (for example tool_*) also govern the renamed dispatcher.
+    const legacyDispatcher = normalized === "dispatch_action";
+    if (
+      matchesAnyGlobPattern(normalized, deny) ||
+      (legacyDispatcher && matchesAnyGlobPattern("tool_call", deny))
+    ) {
       return false;
     }
     if (allow.length === 0) {
       return true;
     }
-    if (matchesAnyGlobPattern(normalized, allow)) {
+    if (
+      matchesAnyGlobPattern(normalized, allow) ||
+      (legacyDispatcher && matchesAnyGlobPattern("tool_call", allow))
+    ) {
+      return true;
+    }
+    // Code Mode shipped whole skill reads under the ordinary read grant.
+    // The separately named tool keeps that grant; explicit denials still win.
+    if (
+      normalized === "skills_read" &&
+      matchesAnyGlobPattern("read", allow) &&
+      !matchesAnyGlobPattern("read", deny)
+    ) {
       return true;
     }
     // Runtime policy historically treats `write` as covering `apply_patch`.
@@ -79,16 +96,16 @@ export function createToolPolicyMatcher(
 
 /** Return whether one tool name is allowed by a single sandbox policy. */
 export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPolicy): boolean {
-  if (!policy) {
-    return true;
-  }
   return createToolPolicyMatcher(policy)(name);
 }
 
 /** Runtime caps deny empty lists and preserve every independently merged restriction. */
-export function createRuntimeToolMatcher(toolsAllow?: string[], writeAllowsApplyPatch = true) {
+export function createRuntimeToolMatcher(
+  toolsAllow?: readonly string[],
+  writeAllowsApplyPatch = true,
+) {
   const matchers = (
-    toolsAllow === undefined ? [] : (readToolAllowlistIntersection(toolsAllow) ?? [toolsAllow])
+    toolsAllow === undefined ? [] : (readToolAllowlistIntersection(toolsAllow) ?? [[...toolsAllow]])
   ).map((allow) =>
     allow.length > 0 ? createToolPolicyMatcher({ allow }, writeAllowsApplyPatch) : () => false,
   );
@@ -96,12 +113,7 @@ export function createRuntimeToolMatcher(toolsAllow?: string[], writeAllowsApply
 }
 
 export function isRuntimeToolAllowed(name: string, toolsAllow?: readonly string[]): boolean {
-  return (
-    toolsAllow === undefined ||
-    (readToolAllowlistIntersection(toolsAllow) ?? [[...toolsAllow]]).every(
-      (allow) => allow.length > 0 && isToolAllowedByPolicyName(name, { allow }),
-    )
-  );
+  return createRuntimeToolMatcher(toolsAllow)(name);
 }
 
 /** Filter runtime tools by policy without rebuilding its patterns for each tool. */

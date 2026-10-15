@@ -14,7 +14,7 @@ type BlockedInboundAccessControlResult = {
   admission?: never;
 };
 
-export type AcceptedInboundAccessControlResult = {
+type AcceptedInboundAccessControlResult = {
   allowed: true;
   shouldMarkRead: true;
   isSelfChat: boolean;
@@ -58,7 +58,6 @@ export async function checkInboundAccessControl(params: {
   isFromMe: boolean;
   messageTimestampMs?: number;
   connectedAtMs?: number;
-  pairingGraceMs?: number;
   verbose?: boolean;
   sock: {
     sendMessage: (jid: string, content: { text: string }) => Promise<unknown>;
@@ -70,14 +69,10 @@ export async function checkInboundAccessControl(params: {
     accountId: params.accountId,
     selfE164: params.selfE164,
   });
-  const pairingGraceMs =
-    typeof params.pairingGraceMs === "number" && params.pairingGraceMs > 0
-      ? params.pairingGraceMs
-      : PAIRING_REPLY_HISTORY_GRACE_MS;
   const suppressPairingReply =
     typeof params.connectedAtMs === "number" &&
     typeof params.messageTimestampMs === "number" &&
-    params.messageTimestampMs < params.connectedAtMs - pairingGraceMs;
+    params.messageTimestampMs < params.connectedAtMs - PAIRING_REPLY_HISTORY_GRACE_MS;
 
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied: policy.providerMissingFallbackApplied,

@@ -1,14 +1,14 @@
 // Preserve the real registry fixture before importing its runtime consumers.
 // oxfmt-ignore
-import { useSubagentControlFixture } from "./subagent-control.test-support.js";
+import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { existsSync } from "node:fs";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
   observeParentSqlite,
 } from "../../../../test/helpers/sqlite-parent-observer.js";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
   loadExactSessionEntryReadOnly,
@@ -29,17 +29,30 @@ import { withEnvAsync } from "../../../test-utils/env.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
-import { createOpenClawTools } from "../../openclaw-tools.js";
+import { createOpenClawToolsAsync } from "../../openclaw-tools.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
+import {
+  createSubagentRunRecord,
+  isSubagentRegistryWriteCommand,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
+import { withPreparedSessionCapabilityRead } from "../spawn/subagent-session-store.js";
 import { holdQueuedSwarmRun, releaseSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "./subagent-registry-persistence.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import * as registryState from "./subagent-registry-state.js";
 import { registerSubagentRun } from "./subagent-registry.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
+import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 
 const fixture = useSubagentControlFixture();
-const nativeState = await vi.importActual<typeof registryState>("./subagent-registry-state.js");
+
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
 
 it.each(["caller admission", "session generation"] as const)(
   "releases an acknowledged native claim when %s retires before publication",
@@ -54,6 +67,8 @@ it.each(["caller admission", "session generation"] as const)(
     await registerSubagentRun({
       runId,
       childSessionKey: sessionKey,
+      childAgentId: "main",
+      sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry,
       requesterSessionKey: "agent:main:main",
       requesterAgentId: "main",
       requesterDisplayKey: "main",
@@ -66,34 +81,42 @@ it.each(["caller admission", "session generation"] as const)(
     const handle = createEmbeddedRunHandle({ runId, abort });
     setActiveEmbeddedRun(sessionId, handle, sessionKey);
     let retiredAfterAck = false;
-    vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
-      (runs, ids, options) => {
-        const claim = runs.get(runId)?.killIntent;
-        return nativeState.persistSubagentRunsToDiskAsyncOrThrow(runs, ids, {
-          ...options,
-          onCommitted() {
-            if (claim && !retiredAfterAck) {
-              retiredAfterAck = true;
-              if (retirement === "caller admission") {
-                caller.abort(new Error("Caller retired after commit"));
-              } else {
-                replaceSessionEntrySync(
-                  { agentId: "main", sessionKey },
-                  { sessionId, updatedAt: Date.now(), lifecycleRevision: "replacement" },
-                );
+    fixture.worker.mockImplementation((context, operation, options) =>
+      runSubagentStateWorkerOperation(
+        context,
+        (scope) =>
+          operation({
+            execute: async (command, commandOptions) => {
+              const row = isSubagentRegistryWriteCommand(command)
+                ? command.input.values.find((candidate) => candidate.run_id === runId)
+                : undefined;
+              const claim = row && rowToSubagentRunRecord(row)?.killIntent;
+              const receipt = await scope.execute(command, commandOptions);
+              if (claim && !retiredAfterAck) {
+                retiredAfterAck = true;
+                if (retirement === "caller admission") {
+                  caller.abort(new Error("Caller retired after commit"));
+                } else {
+                  replaceSessionEntrySync(
+                    { agentId: "main", sessionKey },
+                    { sessionId, updatedAt: Date.now(), lifecycleRevision: "replacement" },
+                  );
+                }
               }
-            }
-            options.onCommitted?.();
-          },
-        });
-      },
+              return receipt;
+            },
+          }),
+        options,
+      ),
     );
-    const tool = createOpenClawTools({
-      config: getRuntimeConfig(),
-      agentSessionKey: "agent:main:main",
-      workspaceDir: fixture.stateDir,
-      disableMessageTool: true,
-    }).find((candidate) => candidate.name === "subagents");
+    const tool = (
+      await createOpenClawToolsAsync({
+        config: getRuntimeConfig(),
+        agentSessionKey: "agent:main:main",
+        workspaceDir: fixture.stateDir,
+        disableMessageTool: true,
+      })
+    ).find((candidate) => candidate.name === "subagents");
     if (!tool) {
       throw new Error("Missing registered subagents tool");
     }
@@ -144,9 +167,6 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
   "preserves registered Stop selection across %s",
   async (kind) => {
     await withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
-      vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
-        nativeState.persistSubagentRunsToDiskAsyncOrThrow,
-      );
       const runId = "replace-during-control-preparation";
       const sessionKey = `agent:main:subagent:${runId}`;
       const sessionId = `${runId}-session`;
@@ -157,6 +177,8 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
       const registration = {
         runId,
         childSessionKey: sessionKey,
+        childAgentId: "main",
+        sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry,
         requesterSessionKey: "agent:main:main",
         requesterAgentId: "main",
         requesterDisplayKey: "main",
@@ -169,23 +191,26 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
       if (kind === "cold hydration") {
         subagentRuns.clear();
       }
-      const tool = createOpenClawTools({
-        config: getRuntimeConfig(),
-        agentSessionKey: "agent:main:main",
-        workspaceDir: fixture.stateDir,
-        disableMessageTool: true,
-      }).find((candidate) => candidate.name === "subagents");
+      const tool = (
+        await createOpenClawToolsAsync({
+          config: getRuntimeConfig(),
+          agentSessionKey: "agent:main:main",
+          workspaceDir: fixture.stateDir,
+          disableMessageTool: true,
+        })
+      ).find((candidate) => candidate.name === "subagents");
       if (!tool) {
         throw new Error("Missing registered subagents tool");
       }
       registryState.clearSubagentRunsReadCacheForTest();
       const entered = createDeferred();
       const release = createDeferred();
-      vi.mocked(registryState.prepareSubagentSessionListReadCache).mockImplementationOnce(
+      const prepareReadCache = registryState.prepareSubagentSessionListReadCache;
+      vi.spyOn(registryState, "prepareSubagentSessionListReadCache").mockImplementationOnce(
         async () => {
           entered.resolve();
           await release.promise;
-          await nativeState.prepareSubagentSessionListReadCache();
+          await prepareReadCache();
         },
       );
       const abort = vi.fn(() => clearActiveEmbeddedRun(sessionId, handle, sessionKey));
@@ -204,9 +229,7 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
           await registerSubagentRun({ ...registration, task: "successor" });
         } else {
           // The existing startup owner hydrates the persisted row; this is not an absence witness.
-          expect(
-            await nativeState.restoreSubagentRunsFromDisk({ runs: subagentRuns }),
-          ).toBeGreaterThan(0);
+          expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBeGreaterThan(0);
         }
         const successor = subagentRuns.get(runId)!;
         expect(successor).not.toBe(original);
@@ -222,7 +245,7 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
         if (kind === "same-ID replacement") {
           expect(abort, "Stop must not transfer to newly registered work").not.toHaveBeenCalled();
           expect(outcome).toBeInstanceOf(Error);
-          expect(successor.execution.endedAt).toBeUndefined();
+          expect(subagentRuns.get(runId)?.execution.endedAt).toBeUndefined();
         } else {
           expect(outcome).toMatchObject({ details: { found: true, killed: true } });
           expect(abort).toHaveBeenCalledOnce();
@@ -248,9 +271,6 @@ it.each([
   "earlier success",
 ] as const)("settles registered runId Stop for an %s native child", async (kind) =>
   withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
-    vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
-      nativeState.persistSubagentRunsToDiskAsyncOrThrow,
-    );
     const runId = `native-run-stop-${kind.replaceAll(" ", "-")}`;
     const siblingId = `${runId}-untouched`;
     const missingStore = kind === "queued without child store";
@@ -318,7 +338,9 @@ it.each([
         );
       }
       expect(
-        resolveStoredSubagentCapabilities(requester, { cfg: config, agentId: "main" }),
+        await withPreparedSessionCapabilityRead(() =>
+          resolveStoredSubagentCapabilities(requester, { cfg: config, agentId: "main" }),
+        ),
       ).toMatchObject({ controlScope: "children" });
     }
     const terminalEntered = createDeferred();
@@ -327,22 +349,29 @@ it.each([
     let admission: SessionWorkAdmissionLease | undefined;
     let runnerSettlement: Promise<void> | undefined;
     if (completesDuringStop) {
-      vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
-        (runs, ids, options) => {
-          if (
-            !heldTerminal &&
-            ids.includes(runId) &&
-            runs.get(runId)?.execution.status === "terminal"
-          ) {
-            heldTerminal = true;
-            const snapshot = structuredClone(runs);
-            terminalEntered.resolve();
-            return terminalRelease.promise.then(() =>
-              nativeState.persistSubagentRunsToDiskAsyncOrThrow(snapshot, ids, options),
-            );
-          }
-          return nativeState.persistSubagentRunsToDiskAsyncOrThrow(runs, ids, options);
-        },
+      fixture.worker.mockImplementation((context, operation, options) =>
+        runSubagentStateWorkerOperation(
+          context,
+          (scope) =>
+            operation({
+              execute: async (command, commandOptions) => {
+                const row = isSubagentRegistryWriteCommand(command)
+                  ? command.input.values.find((candidate) => candidate.run_id === runId)
+                  : undefined;
+                if (
+                  !heldTerminal &&
+                  row &&
+                  rowToSubagentRunRecord(row)?.execution.status === "terminal"
+                ) {
+                  heldTerminal = true;
+                  terminalEntered.resolve();
+                  await terminalRelease.promise;
+                }
+                return scope.execute(command, commandOptions);
+              },
+            }),
+          options,
+        ),
       );
     }
     if (queued) {
@@ -356,23 +385,42 @@ it.each([
       ).toBe(true);
     }
     for (const id of [runId, siblingId]) {
-      // Fixture seeding ends before the observed Stop, without scheduling maintenance tails.
-      if (!missingStore || id !== runId) {
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: key(id) },
-          {
-            sessionId: `${id}-session`,
-            updatedAt: Date.now(),
-            lifecycleRevision: `${id}-revision`,
-            inputTokens: 11,
-            outputTokens: 7,
-            totalTokens: 18,
-          },
-        );
+      if (missingStore && id === runId) {
+        const retained = createSubagentRunRecord({
+          runId: id,
+          childSessionKey: key(id),
+          childAgentId: "missing",
+          childSessionIdentity: undefined,
+          requesterSessionKey: requester,
+          requesterAgentId: "main",
+          execution: { status: "queued" },
+          collect: true,
+          expectsCompletionMessage: false,
+        });
+        await mutateSubagentRuns([id], () => ({
+          value: undefined,
+          postimages: new Map([[id, retained]]),
+        }));
+        continue;
       }
+      // Fixture seeding ends before the observed Stop, without scheduling maintenance tails.
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: key(id) },
+        {
+          sessionId: `${id}-session`,
+          updatedAt: Date.now(),
+          lifecycleRevision: `${id}-revision`,
+          inputTokens: 11,
+          outputTokens: 7,
+          totalTokens: 18,
+        },
+      );
       await registerSubagentRun({
         runId: id,
         childSessionKey: key(id),
+        childAgentId: "main",
+        sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", sessionKey: key(id) })
+          ?.entry,
         requesterSessionKey: requester,
         requesterAgentId: "main",
         requesterDisplayKey: "main",
@@ -395,12 +443,14 @@ it.each([
         setActiveEmbeddedRun(sessionId, handle, key(id));
         return { id, sessionId, handle, abort };
       });
-    const tool = createOpenClawTools({
-      config,
-      agentSessionKey: requester,
-      workspaceDir: fixture.stateDir,
-      disableMessageTool: true,
-    }).find((candidate) => candidate.name === "subagents");
+    const tool = (
+      await createOpenClawToolsAsync({
+        config,
+        agentSessionKey: requester,
+        workspaceDir: fixture.stateDir,
+        disableMessageTool: true,
+      })
+    ).find((candidate) => candidate.name === "subagents");
     expect(tool, "core must register the native subagents tool").toBeDefined();
     if (!tool) {
       throw new Error("Missing registered subagents tool");
@@ -489,6 +539,12 @@ it.each([
     }
     try {
       const persisted = loadSubagentRegistryFromSqlite();
+      if (missingStore) {
+        expect(persisted.get(runId)?.childSessionIdentity).toBeUndefined();
+        expect(persisted.get(runId)).toMatchObject({
+          execution: { suppressSessionEffects: true },
+        });
+      }
       expect(persisted.get(runId)).toMatchObject({
         execution: {
           status: "terminal",

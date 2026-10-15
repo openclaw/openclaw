@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -18,6 +19,10 @@ import {
   pluginSourceIdentityChangedOnlyByCtime,
   pluginSourceStatIdentity,
 } from "./plugin-source-file.js";
+
+export type NativeReferenceProgress = { pluginId: string; completed: number };
+export const nativeReferenceProgress = channel("openclaw.plugin-native-reference");
+let verifiedMembers = 0;
 
 /** A hardlink needs the owner's complete-directory check before the generation is exposed. */
 export function linkPluginNativeReference(
@@ -68,56 +73,102 @@ function resolveNativeHost(filename: string): string | undefined {
   return undefined;
 }
 
+/** Verdicts belong to one capture; replacement namespaces and placements must be admitted again. */
+export function createPluginNativeReferenceValidator(boundary: string, pluginId: string) {
+  const admitted = new WeakMap<
+    PluginNativeNamespaceFact,
+    { placements: Set<string>; members: Set<string> }
+  >();
+  return (
+    target: string,
+    fact: PluginNativeArtifactFact,
+    namespace: PluginNativeNamespaceFact,
+    expectedHost?: string,
+  ): void => {
+    const directory = path.dirname(
+      pluginNativeNamespaceMemberRelativePath(namespace, fact.capturedPath),
+    );
+    const placement = `${directory}\0${path.dirname(target)}`;
+    let verdict = admitted.get(namespace);
+    try {
+      if (!verdict?.placements.has(placement)) {
+        if (!verdict) {
+          verdict = { placements: new Set(), members: new Set() };
+          admitted.set(namespace, verdict);
+        }
+        assertPluginNativeReferenceDirectory(
+          target,
+          namespace,
+          boundary,
+          directory,
+          verdict.members,
+          pluginId,
+        );
+        verdict.placements.add(placement);
+      }
+      if (expectedHost && resolveNativeHost(target) !== expectedHost) {
+        throw new Error("The native companion directory resolves a different OpenClaw host");
+      }
+    } catch (cause) {
+      throw new Error(
+        "Native plugin companions cannot be preserved without file symlinks. Enable file symlink support for this filesystem, then reload the plugin.",
+        { cause },
+      );
+    }
+  };
+}
+
 /** Hardlinks keep bytes but not realpath parents; only a coherent captured directory can use them. */
-export function assertPluginNativeReferenceNamespace(
+function assertPluginNativeReferenceDirectory(
   target: string,
-  fact: PluginNativeArtifactFact,
   namespace: PluginNativeNamespaceFact,
   boundary: string,
-  expectedHost?: string,
+  directory: string,
+  admittedMembers: Set<string>,
+  pluginId: string,
 ): void {
-  const relative = pluginNativeNamespaceMemberRelativePath(namespace, fact.capturedPath);
-  const directory = path.dirname(relative);
-  try {
-    for (const [name, member] of Object.entries(namespace.members)) {
-      if (!isPathInside(directory, name || ".")) {
-        continue;
+  nativeReferenceProgress.publish({
+    pluginId,
+    completed: verifiedMembers,
+  } satisfies NativeReferenceProgress);
+  for (const [name, member] of Object.entries(namespace.members)) {
+    if (!isPathInside(directory, name || ".")) {
+      continue;
+    }
+    const memberPath = path.join(path.dirname(target), path.relative(directory, name || "."));
+    // Parent and child native directories can cover the same member at the same placement.
+    const memberKey = `${name}\0${memberPath}`;
+    if (admittedMembers.has(memberKey)) {
+      continue;
+    }
+    const filename = fs.realpathSync(memberPath);
+    if (
+      !isPathInside(boundary, filename) &&
+      !isPathInside(pluginNativeNamespaceBoundary(namespace), filename)
+    ) {
+      throw new Error(`Companion ${name} leaves the captured generation`);
+    }
+    const current = fs.statSync(filename, { bigint: true });
+    if (member.sizeBytes === undefined) {
+      if (!current.isDirectory()) {
+        throw new Error(`Companion ${name} is not a directory`);
       }
-      const filename = fs.realpathSync(
-        path.join(path.dirname(target), path.relative(directory, name || ".")),
-      );
-      if (
-        !isPathInside(boundary, filename) &&
-        !isPathInside(pluginNativeNamespaceBoundary(namespace), filename)
-      ) {
-        throw new Error(`Companion ${name} leaves the captured generation`);
-      }
-      const current = fs.statSync(filename, { bigint: true });
-      if (member.sizeBytes === undefined) {
-        if (!current.isDirectory()) {
-          throw new Error(`Companion ${name} is not a directory`);
-        }
-        continue;
-      }
+    } else {
       const captured = fs.statSync(pluginNativeNamespaceMemberPath(namespace, name), {
         bigint: true,
       });
-      if (current.dev === captured.dev && current.ino === captured.ino) {
-        continue;
-      }
-      const content = hashPluginSourceFile(filename, path.dirname(filename));
-      if (content.contentHash !== member.contentHash || content.sizeBytes !== member.sizeBytes) {
-        throw new Error(`Companion ${name} differs from its captured bytes`);
+      if (current.dev !== captured.dev || current.ino !== captured.ino) {
+        const content = hashPluginSourceFile(filename, path.dirname(filename));
+        if (content.contentHash !== member.contentHash || content.sizeBytes !== member.sizeBytes) {
+          throw new Error(`Companion ${name} differs from its captured bytes`);
+        }
       }
     }
-    if (expectedHost && resolveNativeHost(target) !== expectedHost) {
-      throw new Error("The native companion directory resolves a different OpenClaw host");
-    }
-  } catch (cause) {
-    throw new Error(
-      "Native plugin companions cannot be preserved without file symlinks. Enable file symlink support for this filesystem, then reload the plugin.",
-      { cause },
-    );
+    admittedMembers.add(memberKey);
+    nativeReferenceProgress.publish({
+      pluginId,
+      completed: ++verifiedMembers,
+    } satisfies NativeReferenceProgress);
   }
 }
 

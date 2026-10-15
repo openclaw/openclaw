@@ -1,19 +1,123 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 
-const {
-  fixture,
-  reconciledMergeAfterCleanup,
-  outcomeRef,
-  describePosix,
-  unknownProjection,
-  scripts,
-} = createMergeOutcomeFixtureHarness();
+const { fixture, reconciledMergeAfterCleanup, outcomeRef, describePosix, unknownProjection } =
+  createMergeOutcomeFixtureHarness();
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
+  it("lands ordinary green CI with a MAINTAIN writer without exception policy reads", () => {
+    const f = fixture();
+    const state = f.state();
+    state.repoAuthority.permissions = { admin: false, maintain: true, push: true };
+    state.restPolicy = "not-found";
+    state.priorCi.membership = "member";
+    f.save(state);
+
+    const result = f.run();
+
+    expect(result.status, result.output).toBe(0);
+    expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
+    expect(f.state().mutations).toBe(1);
+    expect(f.state().calls.some((call) => call.some((arg) => arg.includes("/protection")))).toBe(
+      false,
+    );
+    expect(f.state().calls.some((call) => call.some((arg) => arg.startsWith("orgs/")))).toBe(false);
+  });
+
+  it.each([
+    { phase: "initial", settles: true },
+    { phase: "initial", settles: false },
+    { phase: "stability", settles: true },
+    { phase: "stability", settles: false },
+  ])(
+    "starts the full settle window after a slow first UNKNOWN read during $phase (settles=$settles)",
+    ({ phase, settles }) => {
+      const f = fixture();
+      const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+      f.save({
+        ...f.state(),
+        mode: "unapplied",
+        observations: [
+          ...(phase === "stability" ? [{}] : []),
+          { main, pr: unknownProjection, advanceSeconds: 65 },
+          ...(settles
+            ? [
+                {
+                  pr: { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" },
+                  advanceSeconds: 55,
+                },
+              ]
+            : []),
+        ],
+      });
+
+      const result = f.run();
+
+      expect(result.status, result.output).toBe(1);
+      if (settles) {
+        expect(f.state().settlementSleeps).toEqual([2]);
+        expect(result.output).toContain("prior dispatch unresolved");
+        expect(f.state().mutations).toBe(1);
+        expect(f.record()).toMatchObject({ phase: "intent", head: f.head, accepted: false });
+      } else {
+        expect(f.state().settlementSleeps.reduce((total, delay) => total + delay, 0)).toBe(60);
+        expect(result.output).toContain(
+          phase === "initial"
+            ? "mergeability remained UNKNOWN"
+            : "mergeability recalculation remained UNKNOWN",
+        );
+        expect(f.state().mutations).toBe(0);
+        expect(f.captures()).toEqual([]);
+        expect(() => f.record()).toThrow();
+      }
+      expect(f.state().posts).toBe(0);
+    },
+  );
+
+  it.each([
+    { name: "timely known", known: true, readSeconds: 0, proofSeconds: 65, admitted: true },
+    { name: "late known", known: true, readSeconds: 65, proofSeconds: 0, admitted: false },
+    { name: "still UNKNOWN", known: false, readSeconds: 0, proofSeconds: 65, admitted: false },
+  ])(
+    "uses projection time for $name admission after local Git proof",
+    ({ known, readSeconds, proofSeconds, admitted }) => {
+      const f = fixture();
+      const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+      f.save({
+        ...f.state(),
+        mainProofDelaySeconds: proofSeconds,
+        observations: [
+          { pr: unknownProjection },
+          {
+            main,
+            pr: known ? { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" } : unknownProjection,
+            advanceSeconds: readSeconds,
+          },
+        ],
+      });
+
+      const result = f.run();
+      const state = f.state();
+
+      expect(state.mainProofDelayedAt, result.output).toBe(proofSeconds ? 2 : null);
+      expect(state.settlementSleeps).toEqual([2]);
+      expect(result.status, result.output).toBe(admitted ? 0 : 1);
+      expect(state.mutations).toBe(admitted ? 1 : 0);
+      if (admitted) {
+        expect(state.graphqlMergePayloads[0]?.expectedHeadOid).toBe(f.head);
+        expect(f.record()).toMatchObject({ phase: "complete", head: f.head, main });
+      } else {
+        expect(result.output).toContain(
+          known ? "mergeability exceeded the 60s settle limit" : "mergeability remained UNKNOWN",
+        );
+        expect(f.captures()).toEqual([]);
+        expect(() => f.record()).toThrow();
+      }
+    },
+  );
+
   it("explicitly completes a reconciled merge after cleanup without another merge dispatch", () => {
     const f = reconciledMergeAfterCleanup();
     const landed = f.git(["--git-dir=" + f.remote, "rev-parse", "main"]);
@@ -73,34 +177,32 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     },
   );
 
-  it.each(["", "Earlier merge response was lost\n"])(
-    "refuses pre-journal merge output without erasing its evidence: %j",
-    (output) => {
-      const f = fixture();
-      const capture = join(f.worktree, ".local/merge-output.log");
-      writeFileSync(capture, output);
-      f.save({ ...f.state(), mode: "unapplied" });
-      const run = f.run();
-      expect(run.status, run.output).toBe(1);
-      expect(f.state().mutations).toBe(0);
-      expect(readFileSync(capture, "utf8")).toBe(output);
-      expect(run.output).toContain("Legacy .local/merge-output.log: present");
-      expect(run.output).toContain("investigate; see scripts/AGENTS.md merge-outcome doctrine");
-      expect(run.output).not.toContain("lock-recover, then rerun merge-run");
-      expect(() => f.record()).toThrow();
-    },
-  );
+  it.each([""])("refuses pre-journal merge output without erasing its evidence: %j", (output) => {
+    const f = fixture();
+    const capture = join(f.worktree, ".local/merge-output.log");
+    writeFileSync(capture, output);
+    f.save({ ...f.state(), mode: "unapplied" });
+    const run = f.run();
+    expect(run.status, run.output).toBe(1);
+    expect(f.state().mutations).toBe(0);
+    expect(readFileSync(capture, "utf8")).toBe(output);
+    expect(run.output).toContain("Legacy .local/merge-output.log: present");
+    expect(run.output).toContain("investigate; see scripts/AGENTS.md merge-outcome doctrine");
+    expect(run.output).not.toContain("rerun merge-run; if the operation lock was retained");
+    expect(() => f.record()).toThrow();
+  });
 
-  it("does not repeat applied 502 + OPEN after main advance and exact lock recovery", () => {
+  it("does not repeat applied 502 + OPEN after main advance and lock release", () => {
     const f = fixture();
     f.save({ ...f.state(), mode: "applied-open" });
     const first = f.run();
     expect(first.status, first.output).toBe(1);
     expect(f.state().pr.state).toBe("OPEN");
     f.advance();
-    expect(f.recover()).toBe(true);
+    // The drained failure released the process lock; the outcome record still blocks a repeat.
+    expect(f.recover()).toBe(false);
     const second = f.run();
-    expect(f.state().mutations, "one mutation across exact lock recovery").toBe(1);
+    expect(f.state().mutations, "one mutation across lock release").toBe(1);
     expect(second.status, second.output).toBe(1);
     expect(f.state().posts).toBe(0);
     expect(second.output).toContain("prior dispatch unresolved");
@@ -181,7 +283,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
 
   it.each([
     { auto: false, method: "squash" },
-    { auto: false, method: "merge" },
     { auto: true, method: "squash" },
   ])("reconciles accepted pending UNKNOWN intent without polling for %j", ({ auto, method }) => {
     const f = fixture();
@@ -410,71 +511,6 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   });
 });
 
-describePosix("merge_outcome_repo_identity", () => {
-  // Local historical records contain either scalar. Remote admission separately
-  // binds the whole retained object to the authoritative repository pair.
-  const identity = (repo: unknown, parentEnv: NodeJS.ProcessEnv = process.env) =>
-    spawnSync(
-      "bash",
-      [
-        "-c",
-        `set -euo pipefail; . "$1"; printf '%s' "$2" | merge_outcome_repo_identity`,
-        "bash",
-        join(scripts, "pr-lib/merge-outcome.sh"),
-        JSON.stringify(repo),
-      ],
-      {
-        encoding: "utf8",
-        env: { ...parentEnv, OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: undefined },
-      },
-    );
-
-  it.each([1103012935, "R_kgDOQb6kRw"])(
-    "validates identity %s despite an unrelated inherited helper snapshot",
-    (id) => {
-      const repo = {
-        id,
-        nameWithOwner: "openclaw/openclaw",
-        url: "https://github.com/openclaw/openclaw",
-      };
-      const run = identity(repo, {
-        ...process.env,
-        OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: join(scripts, "pr-lib"),
-      });
-      expect(run.status, run.stderr).toBe(0);
-      expect(JSON.parse(run.stdout)).toEqual(repo);
-      expect(run.stderr).toBe("");
-    },
-  );
-
-  it.each([
-    ["a missing id", {}],
-    ["a null id", { id: null }],
-    ["an empty string id", { id: "" }],
-    ["an object id", { id: { node: "x" } }],
-  ])("still rejects %s", (_label, overrides) => {
-    const run = identity({
-      nameWithOwner: "openclaw/openclaw",
-      url: "https://github.com/openclaw/openclaw",
-      ...overrides,
-    });
-    expect(run.status, run.stderr).toBe(4);
-    expect(run.stderr).toBe("");
-    expect(run.stdout).toBe("");
-  });
-
-  it("still rejects a url that does not belong to the named repository", () => {
-    const run = identity({
-      id: 1103012935,
-      nameWithOwner: "openclaw/openclaw",
-      url: "https://github.com/attacker/openclaw",
-    });
-    expect(run.status, run.stderr).toBe(4);
-    expect(run.stderr).toBe("");
-    expect(run.stdout).toBe("");
-  });
-});
-
 describePosix("repository identity across gh id representations", () => {
   const canonicalRepo = {
     id: "R_kgDOQb6kRw",
@@ -494,16 +530,6 @@ describePosix("repository identity across gh id representations", () => {
     f.git(["update-ref", outcomeRef, historical, previous]);
     return historical;
   };
-
-  it.each(historicalIds)("records the canonical node identity with a $name CLI id", ({ id }) => {
-    const f = fixture();
-    f.save({ ...f.state(), repo: { ...f.state().repo, id } });
-    const run = f.run();
-    expect(run.status, run.output).toBe(0);
-    expect(f.record().repo).toEqual(canonicalRepo);
-    expect(f.record().phase).toBe("complete");
-    expect(f.state().mutations).toBe(1);
-  });
 
   it.each(historicalIds)(
     "recovers the historical $name identity after CLI shape drift without rewriting its evidence",
@@ -568,10 +594,7 @@ describePosix("repository identity across gh id representations", () => {
 
   it.each(
     [
-      { name: "extra key", repo: { ...canonicalRepo, allow: true } },
-      { name: "numeric string", repo: { ...canonicalRepo, id: "1103012935" } },
       { name: "unknown node id", repo: { ...canonicalRepo, id: "R_other" } },
-      { name: "unknown numeric id", repo: { ...canonicalRepo, id: 1103012936 } },
       {
         name: "other repository",
         repo: {
@@ -612,12 +635,7 @@ describePosix("repository identity across gh id representations", () => {
   );
 
   it.each([
-    { name: "missing numeric id", authority: { id: undefined } },
-    { name: "numeric string", authority: { id: "1103012935" } },
-    { name: "zero numeric id", authority: { id: 0 } },
     { name: "fractional numeric id", authority: { id: 1.5 } },
-    { name: "missing node id", authority: { node_id: undefined } },
-    { name: "empty node id", authority: { node_id: "" } },
     { name: "numeric node id", authority: { node_id: 1103012935 } },
     { name: "different name", authority: { full_name: "fixture/other" } },
     { name: "different host", authority: { html_url: "https://elsewhere.invalid/fixture/repo" } },

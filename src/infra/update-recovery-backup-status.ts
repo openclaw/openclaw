@@ -24,8 +24,8 @@ function resolveUpdateRecoveryTerminalOutcome(
 }
 
 /** Backup-local pending markers cannot override the update's durable terminal result. */
-export async function inspectUpdateRecoveryBackups(params: { installRoot?: string } = {}) {
-  const evidence = await readUpdateRecoveryBackups(params.installRoot);
+export async function inspectUpdateRecoveryBackups() {
+  const evidence = await readUpdateRecoveryBackups();
   const snapshots = evidence.filter((entry) => entry.kind === "sealed");
   const forwardResolved = new Set<string>();
   for (const { ref } of snapshots) {

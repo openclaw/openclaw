@@ -20,7 +20,6 @@ function setup(engine: "chromium" | "lightpanda" = "lightpanda") {
   const ctx = {
     forProfile: vi.fn(() => profileCtx),
     state: () => makeBrowserServerState({ profile }),
-    mapTabError: () => null,
   } as unknown as BrowserRouteContext;
   const routes = createBrowserRouteApp();
   const request = async (method: "get" | "post", path: string, input: Partial<BrowserRequest>) => {

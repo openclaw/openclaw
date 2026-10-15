@@ -1,6 +1,7 @@
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import SHARED_TOOL_DISPLAY_JSON from "../../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" with { type: "json" };
+import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import {
   defaultTitle,
   normalizeToolDisplayName,
@@ -39,14 +40,15 @@ export function resolveToolDisplay(params: {
   args?: unknown;
   detailMode?: ToolDetailMode;
 }): ToolDisplay {
-  const name = normalizeToolDisplayName(params.name);
+  const call = unwrapToolCallForDisplay({ name: params.name, args: params.args });
+  const name = normalizeToolDisplayName(call.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
   const icon = resolveToolDisplayIcon(name);
   const label = spec?.label ?? spec?.title ?? defaultTitle(name);
   let { detail } = resolveToolVerbAndDetailForArgs({
     toolKey: key,
-    args: params.args,
+    args: call.args,
     spec,
     fallbackDetailKeys: FALLBACK.detailKeys,
     detailMode: "first",
@@ -83,21 +85,16 @@ function sanitizeCanvasEntryUrl(
   rawEntryUrl: string,
   allowExternalEmbedUrls = false,
 ): string | undefined {
-  try {
-    const entry = new URL(rawEntryUrl, "http://localhost");
-    if (entry.origin !== "http://localhost") {
-      if (!allowExternalEmbedUrls || !isHttpUrl(entry)) {
-        return undefined;
-      }
-      return entry.toString();
-    }
-    if (!isCanvasHttpPath(entry.pathname)) {
-      return undefined;
-    }
-    return `${entry.pathname}${entry.search}${entry.hash}`;
-  } catch {
+  const entry = URL.parse(rawEntryUrl, "http://localhost");
+  if (!entry) {
     return undefined;
   }
+  if (entry.origin !== "http://localhost") {
+    return allowExternalEmbedUrls && isHttpUrl(entry) ? entry.toString() : undefined;
+  }
+  return isCanvasHttpPath(entry.pathname)
+    ? `${entry.pathname}${entry.search}${entry.hash}`
+    : undefined;
 }
 
 /**
@@ -151,18 +148,10 @@ export function resolveEmbedSandbox(
   mode: EmbedSandboxMode | null | undefined,
   ceiling?: "strict" | "scripts",
 ): string {
-  if (ceiling === "strict" || (ceiling === "scripts" && mode === "strict")) {
+  if (ceiling === "strict" || mode === "strict") {
     return "";
   }
-  if (ceiling === "scripts") {
-    return "allow-scripts";
-  }
-  switch (mode) {
-    case "strict":
-      return "";
-    case "trusted":
-      return "allow-scripts allow-same-origin";
-    default:
-      return "allow-scripts";
-  }
+  return mode === "trusted" && ceiling !== "scripts"
+    ? "allow-scripts allow-same-origin"
+    : "allow-scripts";
 }

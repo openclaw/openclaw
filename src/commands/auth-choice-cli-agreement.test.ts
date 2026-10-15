@@ -3,6 +3,7 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { applyNonInteractiveAuthChoice } from "./onboard-non-interactive/local/auth-choice.js";
 
 const PROVIDER_SETUP_CONTRIBUTIONS = [
   { providerId: "demo", option: { value: "demo-api-key", label: "Demo API key" } },
@@ -66,8 +67,6 @@ async function readHelpAuthChoices(): Promise<string[]> {
 }
 
 async function readAcceptedAuthChoices(rejectedChoice: string): Promise<string[]> {
-  const { applyNonInteractiveAuthChoice } =
-    await import("./onboard-non-interactive/local/auth-choice.js");
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
   const result = await applyNonInteractiveAuthChoice({
     nextConfig: {} as OpenClawConfig,

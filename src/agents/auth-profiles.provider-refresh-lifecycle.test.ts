@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetFileLockStateForTest } from "../infra/file-lock.js";
+import { resetFileLockStateForTest } from "../plugin-sdk/file-lock.js";
 import { isPluginRegistryLoadInFlight } from "../plugins/loader-cache.js";
 import {
   cleanupPluginLoaderFixturesForTest,

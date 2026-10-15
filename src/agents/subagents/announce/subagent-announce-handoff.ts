@@ -1,11 +1,13 @@
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../internal-event-contract.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
+import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
 
 type SubagentSettleToolPolicyBatch = {
   sourceSessionKeys: readonly string[];
   /** The settle owner retains batch, requester-incarnation, and revocation authority. */
   isCurrent: () => boolean;
+  receiptAdmission?: GatewayToolCallerReceiptAdmission;
 };
 
 export type TrustedSubagentCompletionHandoff = {

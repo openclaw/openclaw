@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ResponseFormatTextConfig } from "openai/resources/responses/responses.js";
 
 const JSON_SCHEMA_RESPONSE_FORMAT_NAME = "openclaw_response";
 const OLLAMA_CLOUD_ORIGIN = "https://ollama.com";
@@ -29,11 +30,7 @@ export function shouldOmitOllamaCompatResponseFormat(params: {
   if (params.hasTools()) {
     return true;
   }
-  try {
-    return new URL(params.baseUrl).origin === OLLAMA_CLOUD_ORIGIN;
-  } catch {
-    return false;
-  }
+  return URL.parse(params.baseUrl)?.origin === OLLAMA_CLOUD_ORIGIN;
 }
 
 /**
@@ -63,5 +60,26 @@ export function resolveOpenAICompletionsResponseFormat(
       name: JSON_SCHEMA_RESPONSE_FORMAT_NAME,
       schema: responseFormat,
     },
+  };
+}
+
+/** Maps shared or provider-shaped structured-output options to the Responses API text format. */
+export function resolveOpenAIResponsesTextFormat(
+  responseFormat: Record<string, unknown>,
+): ResponseFormatTextConfig {
+  if (responseFormat.type === "json_schema") {
+    const descriptor = isRecord(responseFormat.json_schema)
+      ? responseFormat.json_schema
+      : responseFormat;
+    // SAFETY: Caller-authored native name/schema fields pass through for provider validation.
+    return { ...descriptor, type: "json_schema" } as ResponseFormatTextConfig;
+  }
+  if (responseFormat.type === "json_object" || responseFormat.type === "text") {
+    return { ...responseFormat, type: responseFormat.type };
+  }
+  return {
+    type: "json_schema",
+    name: JSON_SCHEMA_RESPONSE_FORMAT_NAME,
+    schema: responseFormat,
   };
 }

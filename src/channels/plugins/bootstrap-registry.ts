@@ -6,7 +6,7 @@ import {
   getBundledChannelSetupSecrets,
 } from "./bundled.js";
 import { mergeChannelPluginSection } from "./merge-plugin-section.js";
-import type { ChannelPlugin } from "./types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
 function mergeBootstrapPlugin(

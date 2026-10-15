@@ -3,7 +3,7 @@ import { StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { ensureAgentProvenanceSchema } from "./agent-provenance.js";
+import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -11,12 +11,12 @@ import {
 } from "./openclaw-state-db.js";
 import * as stateWorker from "./openclaw-state-worker-store.js";
 import {
-  getUserPreferences,
+  getCanonicalUserPreferences,
   getUserPreferenceValues,
   setCanonicalUserPreferences,
-  setUserPreferences,
 } from "./user-preferences.js";
 import { ensureUserPreferencesSchema, mergeUserPreferences } from "./user-preferences.store.js";
+import { getUserPreferences, setUserPreferences } from "./user-preferences.test-support.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -37,6 +37,17 @@ afterEach(() => {
 });
 
 describe("user preferences", () => {
+  it("reads absent canonical preferences without creating their optional table", async () => {
+    expect(await getCanonicalUserPreferences("missing", undefined, stateOptions())).toBeUndefined();
+    const { db, options } = openWithoutFeatureSchemas();
+    const profileId = ensureProfileForEmail("empty@example.test", options).id;
+    expect(await getCanonicalUserPreferences(profileId, undefined, options)).toEqual({
+      profileId,
+      entries: {},
+    });
+    expect(tableExists(db, "user_preferences")).toBe(false);
+  });
+
   it("reads selected profile preferences in the worker and observes subsequent writes", async () => {
     const options = stateOptions();
     const first = ensureProfileForEmail("first@example.test", options).id;
@@ -176,7 +187,9 @@ describe("user preferences", () => {
       run.mockRestore();
     }
     expect(getUserPreferences("profile-a", undefined, options)).toEqual(entries);
-    expect(getUserPreferences("profile-b", undefined, options)).toEqual({ "key-0": "unrelated" });
+    expect(getUserPreferences("profile-b", undefined, options)).toEqual({
+      "key-0": "unrelated",
+    });
     expect(writes).toBeGreaterThan(0);
     expect(writes).toBeLessThanOrEqual(1);
   });

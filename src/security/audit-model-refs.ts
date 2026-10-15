@@ -1,5 +1,4 @@
 import { listAgentEntries } from "../agents/agent-scope-config.js";
-// Audits configured model references for risky provider or model choices.
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { modelKey } from "../agents/model-ref-shared.js";
 import {
@@ -13,7 +12,6 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /**
- * Model reference used by security audit findings.
  * `id` is the normalized provider/model key; `source` is the config path shown in diagnostics.
  */
 type AuditModelRef = { id: string; source: string };
@@ -52,13 +50,6 @@ export function collectAuditModelRefs(cfg: OpenClawConfig): AuditModelRef[] {
   add(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model), "agents.defaults.model.primary");
   for (const fallback of resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)) {
     add(fallback, "agents.defaults.model.fallbacks");
-  }
-  add(
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel),
-    "agents.defaults.imageModel.primary",
-  );
-  for (const fallback of resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel)) {
-    add(fallback, "agents.defaults.imageModel.fallbacks");
   }
 
   for (const agent of listAgentEntries(cfg)) {

@@ -3,17 +3,55 @@ import path from "node:path";
 import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { UpdatePreMutationError } from "../cli/update-cli/shared.js";
+import { resolveUpdatedInstallCommandEnv } from "../cli/update-cli/update-command-service-env.js";
 import { resolveGatewayWindowsTaskName } from "../daemon/constants.js";
 import { resolveLaunchAgentLabel } from "../daemon/launchd-label.js";
 import { resolveLaunchAgentPlistPath } from "../daemon/launchd-service-files.js";
 import type { SystemdGatewayInstallation } from "../daemon/service-types.js";
 import { findSystemdGatewayInstallation } from "../daemon/systemd-scope.js";
 import { resolveSystemdServiceName } from "../daemon/systemd-service-files.js";
-import { resolveInstallationTarget } from "./installation-target-context.js";
-import type { RespawnSupervisor } from "./supervisor-markers.js";
+import { installationTargetEnv, resolveInstallationTarget } from "./installation-target-context.js";
+import { SUPERVISOR_HINT_ENV_VARS, type RespawnSupervisor } from "./supervisor-markers.js";
+import {
+  CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
+  UPDATE_RUN_ID_ENV,
+} from "./update-control-plane-sentinel.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
-import type { HandoffChild } from "./update-managed-service-handoff-control.js";
+import {
+  createHandoffLineReader,
+  type HandoffChild,
+} from "./update-managed-service-handoff-control.js";
 import type { ActiveManagedServiceUpdateHandoff } from "./update-managed-service-handoff-types.js";
+
+const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
+  "OPENCLAW_LAUNCHD_LABEL",
+  "OPENCLAW_SYSTEMD_UNIT",
+  "OPENCLAW_WINDOWS_TASK_NAME",
+] as const);
+
+export function resolveManagedHandoffCommandEnv(
+  serviceEnv: NodeJS.ProcessEnv,
+  metaPath: string,
+  runId?: string,
+): NodeJS.ProcessEnv {
+  const childEnv: NodeJS.ProcessEnv = {
+    ...serviceEnv,
+    // Resolve relative/default target selectors before entering the helper scratch directory.
+    ...installationTargetEnv(resolveInstallationTarget(serviceEnv)),
+    [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
+    OPENCLAW_UPDATE_RUN_HANDOFF: "1",
+    ...(runId ? { [UPDATE_RUN_ID_ENV]: runId } : {}),
+  };
+  for (const key of SUPERVISOR_HINT_ENV_VARS) {
+    if (!SERVICE_IDENTITY_ENV_VARS.has(key)) {
+      delete childEnv[key];
+    }
+  }
+  return resolveUpdatedInstallCommandEnv({
+    processEnv: childEnv,
+    invocationCwd: process.cwd(),
+  });
+}
 
 /** Package ownership permits installation, not control of an operator's system unit. */
 export async function admitSystemdUpdate(
@@ -56,19 +94,12 @@ export function observeManagedServiceUpdateHandoffClose(
   owner: ActiveManagedServiceUpdateHandoff,
   child: HandoffChild,
 ): Promise<void> {
-  let buffered = "";
   let cleanupSettled = false;
-  const onData = (chunk: Buffer | string) => {
-    buffered = (buffered + chunk.toString()).slice(-1024);
-    let newline;
-    while ((newline = buffered.indexOf("\n")) >= 0) {
-      const line = buffered.slice(0, newline + 1);
-      buffered = buffered.slice(newline + 1);
-      if (line === SYSTEM_SERVICE_UPDATE_SETTLED_MARKER) {
-        cleanupSettled = true;
-      }
+  const onData = createHandoffLineReader((line) => {
+    if (line === SYSTEM_SERVICE_UPDATE_SETTLED_MARKER) {
+      cleanupSettled = true;
     }
-  };
+  });
   child.stdout.on("data", onData);
   return new Promise((resolve) => {
     child.once("close", () => {
@@ -77,32 +108,6 @@ export function observeManagedServiceUpdateHandoffClose(
       resolve();
     });
   });
-}
-
-/** A detached helper still shares the system unit's cgroup until it settles. */
-export function joinSystemServiceUpdateHandoffs(
-  owners: ReadonlyMap<string, ActiveManagedServiceUpdateHandoff>,
-): Promise<void> | undefined {
-  const pending = () =>
-    [...owners.values()].filter((owner) => owner.operatorRestartWarning && !owner.settled);
-  let updates = pending();
-  if (!updates.length) {
-    return undefined;
-  }
-  return (async () => {
-    while (updates.length) {
-      await Promise.all(
-        updates.map(async (owner) => {
-          await owner.flight;
-          await owner.closed;
-          if (!owner.settled) {
-            throw new Error("System-service updater settlement could not be confirmed.");
-          }
-        }),
-      );
-      updates = pending();
-    }
-  })();
 }
 
 type GatewayServiceRecovery =

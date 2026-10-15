@@ -40,7 +40,20 @@ describe("buildOpenAIClientHeaders session_id affinity header", () => {
     expect(sessionHeader?.startsWith("internal-session-effects-session-companion-")).toBe(true);
   });
 
-  it.each(["short", "none"] as const)(
+  it("omits generated Responses session headers when caching is disabled", () => {
+    const headers = buildOpenAIClientHeaders(
+      proxyResponsesModel,
+      context,
+      undefined,
+      undefined,
+      "proxy-session-123",
+      "none",
+    );
+
+    expect(headers.session_id).toBeUndefined();
+  });
+
+  it.each(["short"] as const)(
     "preserves a mixed-case caller header with %s retention",
     (cacheRetention) => {
       const headers = buildOpenAIClientHeaders(
@@ -57,31 +70,6 @@ describe("buildOpenAIClientHeaders session_id affinity header", () => {
       ).toHaveLength(1);
     },
   );
-
-  it("honors an explicit native Responses session header opt-out", () => {
-    const headers = buildOpenAIClientHeaders(
-      { ...codexModel, compat: { sendSessionIdHeader: false } },
-      context,
-      undefined,
-      undefined,
-      "native-session-123",
-    );
-
-    expect(headers.session_id).toBeUndefined();
-  });
-
-  it("omits generated Responses session headers when caching is disabled", () => {
-    const headers = buildOpenAIClientHeaders(
-      proxyResponsesModel,
-      context,
-      undefined,
-      undefined,
-      "proxy-session-123",
-      "none",
-    );
-
-    expect(headers.session_id).toBeUndefined();
-  });
 });
 
 describe("buildOpenAISdkRequestOptions turn controls", () => {

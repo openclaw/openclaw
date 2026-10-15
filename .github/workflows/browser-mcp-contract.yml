@@ -23,6 +23,8 @@ on:
       - "test/vitest/vitest.tooling.config.ts"
       - ".github/actions/setup-node-env/**"
       - ".github/actions/setup-test-bun/**"
+      - "scripts/lib/openclaw-bun.json"
+      - "scripts/stage-openclaw-bun.sh"
       - ".github/workflows/browser-mcp-contract.yml"
   workflow_dispatch:
 

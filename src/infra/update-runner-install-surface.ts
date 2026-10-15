@@ -47,6 +47,9 @@ export async function resolveUpdateInstallSurface(opts: {
   if (opts.installKind === "git") {
     return { kind: "git", mode: "git", root, packageRoot: root };
   }
+  if (opts.installKind === "immutable") {
+    return { kind: "immutable", mode: "unknown", root, packageRoot: root };
+  }
   const { runCommand } = await buildUpdateCommandRunner(opts.runCommand);
   const globalManager = await detectGlobalInstallManagerForRoot(
     runCommand,

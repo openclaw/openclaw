@@ -19,11 +19,8 @@ import {
   type CurrentConversationMatch,
 } from "./message-action-current-conversation.js";
 import { resolveChannelPluginRegistration } from "./registry.js";
-import type {
-  ChannelMessageActionContext,
-  ChannelMessageActionName,
-  ChannelPlugin,
-} from "./types.js";
+import type { ChannelMessageActionContext, ChannelMessageActionName } from "./types.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./types.plugin.js";
 
 declare const serverOwnedConversationReadOrigin: unique symbol;
 
@@ -712,6 +709,12 @@ export async function dispatchChannelMessageAction(
         !actions.supportsAction({ action: authorizedActionContext.action })
       ) {
         return null;
+      }
+      try {
+        await authorizedActionContext.onPlatformSendDispatch?.();
+      } catch (error) {
+        assertOutboundHandoffCurrent(authorizedActionContext.assertDirectAdapterHandoff);
+        throw error;
       }
       assertOutboundHandoffCurrent(authorizedActionContext.assertDirectAdapterHandoff);
       prepared.assertReadAuthorityCurrent?.();

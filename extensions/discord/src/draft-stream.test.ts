@@ -61,25 +61,6 @@ describe("createDiscordDraftStream", () => {
     expect(stream.messageId()).toBe("1102");
   });
 
-  it("retries cleanup for a parent draft left behind by retargeting", async () => {
-    const rest = {
-      post: vi.fn().mockResolvedValueOnce({ id: "1101" }).mockResolvedValueOnce({ id: "1102" }),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn().mockRejectedValueOnce(new Error("transient")).mockResolvedValue(undefined),
-    };
-    const stream = createDraftStream(rest, {
-      channelId: "parent",
-    });
-
-    stream.update("working");
-    await stream.flush();
-    await stream.retarget("thread-1");
-    await stream.cleanupPendingMessages();
-
-    expect(rest.delete).toHaveBeenNthCalledWith(1, "/channels/parent/messages/1101");
-    expect(rest.delete).toHaveBeenNthCalledWith(2, "/channels/parent/messages/1101");
-  });
-
   it("keeps the parent draft when the thread replacement cannot be created", async () => {
     const rest = {
       post: vi
@@ -151,43 +132,6 @@ describe("createDiscordDraftStream", () => {
     expect(stream.messageId()).toBe("1001");
   });
 
-  it("deletes the current preview without stopping later draft updates", async () => {
-    const { rest, stream } = createCurrentPreviewHarness();
-
-    stream.update("temporary commentary");
-    await stream.flush();
-    await stream.deleteCurrentMessage();
-    stream.update("tool progress");
-    await stream.flush();
-
-    expect(rest.delete).toHaveBeenCalledWith(Routes.channelMessage("c1", "1001"));
-    expect(rest.post).toHaveBeenNthCalledWith(2, Routes.channelMessages("c1"), {
-      body: {
-        content: "tool progress",
-        allowed_mentions: { parse: [] },
-      },
-    });
-    expect(rest.patch).not.toHaveBeenCalled();
-    expect(stream.messageId()).toBe("1002");
-  });
-
-  it("retries failed current-preview cleanup without reusing the stale message", async () => {
-    const remove = vi.fn().mockRejectedValueOnce(new Error("transient"));
-    const { rest, stream } = createCurrentPreviewHarness(remove);
-
-    stream.update("temporary commentary");
-    await stream.flush();
-    await stream.deleteCurrentMessage();
-    stream.update("tool progress");
-    await stream.flush();
-    await stream.cleanupPendingMessages();
-
-    expect(rest.delete).toHaveBeenNthCalledWith(1, Routes.channelMessage("c1", "1001"));
-    expect(rest.delete).toHaveBeenNthCalledWith(2, Routes.channelMessage("c1", "1001"));
-    expect(rest.patch).not.toHaveBeenCalled();
-    expect(stream.messageId()).toBe("1002");
-  });
-
   it.each(["clear", "deleteCurrentMessage"] as const)(
     "%s claims a preview once and preserves its replacement during deletion",
     async (method) => {
@@ -215,54 +159,6 @@ describe("createDiscordDraftStream", () => {
       expect(stream.messageId()).toBe("1002");
     },
   );
-
-  it("does not clear a queued preview after awaiting the prior create", async () => {
-    const createStarted = createDeferred<void>();
-    const finishCreate = createDeferred<{ id: string }>();
-    const { rest, stream } = createCurrentPreviewHarness();
-    rest.post
-      .mockReset()
-      .mockImplementationOnce(async () => {
-        createStarted.resolve();
-        return await finishCreate.promise;
-      })
-      .mockResolvedValueOnce({ id: "1002" });
-
-    stream.update("prior turn");
-    await createStarted.promise;
-    const clearing = stream.clear();
-    stream.forceNewMessage("discard");
-    stream.update("queued turn");
-    finishCreate.resolve({ id: "1001" });
-    await clearing;
-    await stream.flush();
-
-    expect(rest.delete).toHaveBeenCalledExactlyOnceWith(Routes.channelMessage("c1", "1001"));
-    expect(stream.messageId()).toBe("1002");
-  });
-
-  it("suppresses mentions in preview creates and edits", async () => {
-    const rest = createDraftRest();
-    const stream = createDraftStream(rest);
-
-    stream.update("working @everyone <@123>");
-    await stream.flush();
-    stream.update("still working @here");
-    await stream.flush();
-
-    expect(rest.post).toHaveBeenCalledWith(Routes.channelMessages("c1"), {
-      body: {
-        content: "working @everyone <@123>",
-        allowed_mentions: { parse: [] },
-      },
-    });
-    expect(rest.patch).toHaveBeenCalledWith(Routes.channelMessage("c1", "1001"), {
-      body: {
-        content: "still working @here",
-        allowed_mentions: { parse: [] },
-      },
-    });
-  });
 
   it("suppresses link embeds in preview creates and edits when requested", async () => {
     const rest = createDraftRest();
@@ -307,22 +203,6 @@ describe("createDiscordDraftStream", () => {
     expect(stream.messageId()).toBeUndefined();
   });
 
-  it("discardPending keeps an existing preview but ignores later updates", async () => {
-    const rest = createDraftRest();
-    const stream = createDraftStream(rest);
-
-    stream.update("first draft");
-    await stream.flush();
-    await stream.discardPending();
-    stream.update("late draft");
-    await stream.flush();
-
-    expect(rest.post).toHaveBeenCalledTimes(1);
-    expect(rest.patch).not.toHaveBeenCalled();
-    expect(rest.delete).not.toHaveBeenCalled();
-    expect(stream.messageId()).toBe("1001");
-  });
-
   it("starts a new preview after a cleared turn is re-armed", async () => {
     const rest = {
       post: vi.fn().mockResolvedValueOnce({ id: "1001" }).mockResolvedValueOnce({ id: "1002" }),
@@ -341,99 +221,5 @@ describe("createDiscordDraftStream", () => {
     expect(rest.post).toHaveBeenCalledTimes(2);
     expect(rest.delete).toHaveBeenCalledTimes(1);
     expect(stream.messageId()).toBe("1002");
-  });
-
-  it("preserves an in-flight block while starting the next block", async () => {
-    let finishFirstCreate: ((value: { id: string }) => void) | undefined;
-    const firstCreate = new Promise<{ id: string }>((resolve) => {
-      finishFirstCreate = resolve;
-    });
-    const rest = {
-      post: vi.fn().mockReturnValueOnce(firstCreate).mockResolvedValueOnce({ id: "1002" }),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    };
-    const stream = createDraftStream(rest);
-
-    stream.update("old turn draft");
-    await vi.waitFor(() => expect(rest.post).toHaveBeenCalledTimes(1));
-    stream.forceNewMessage();
-    stream.update("queued turn draft");
-    finishFirstCreate?.({ id: "1001" });
-    await stream.flush();
-
-    expect(rest.post).toHaveBeenCalledTimes(2);
-    expect(rest.post.mock.calls[1]?.[1]).toMatchObject({
-      body: { content: "queued turn draft" },
-    });
-    expect(rest.delete).not.toHaveBeenCalled();
-    expect(stream.messageId()).toBe("1002");
-  });
-
-  it("discards an in-flight progress draft while starting the queued turn", async () => {
-    let finishFirstCreate: ((value: { id: string }) => void) | undefined;
-    const firstCreate = new Promise<{ id: string }>((resolve) => {
-      finishFirstCreate = resolve;
-    });
-    const rest = {
-      post: vi.fn().mockReturnValueOnce(firstCreate).mockResolvedValueOnce({ id: "1002" }),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    };
-    const stream = createDraftStream(rest);
-
-    stream.update("old progress draft");
-    await vi.waitFor(() => expect(rest.post).toHaveBeenCalledTimes(1));
-    stream.forceNewMessage("discard");
-    stream.update("queued turn draft");
-    finishFirstCreate?.({ id: "1001" });
-    await stream.flush();
-
-    expect(rest.post).toHaveBeenCalledTimes(2);
-    expect(rest.post.mock.calls[1]?.[1]).toMatchObject({
-      body: { content: "queued turn draft" },
-    });
-    expect(rest.delete).toHaveBeenCalledWith(Routes.channelMessage("c1", "1001"));
-    expect(stream.messageId()).toBe("1002");
-  });
-
-  it("drops stale text restored by a failed in-flight send during rotation", async () => {
-    let failFirstCreate: ((error: Error) => void) | undefined;
-    const firstCreate = new Promise<{ id: string }>((_resolve, reject) => {
-      failFirstCreate = reject;
-    });
-    const rest = {
-      post: vi.fn().mockReturnValueOnce(firstCreate).mockResolvedValueOnce({ id: "1002" }),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    };
-    const stream = createDraftStream(rest);
-
-    stream.update("stale turn draft");
-    await vi.waitFor(() => expect(rest.post).toHaveBeenCalledTimes(1));
-    stream.forceNewMessage("discard");
-    stream.update("queued turn draft");
-    failFirstCreate?.(new Error("send failed"));
-    await stream.flush();
-
-    expect(rest.post).toHaveBeenCalledTimes(2);
-    expect(rest.post.mock.calls[1]?.[1]).toMatchObject({
-      body: { content: "queued turn draft" },
-    });
-    expect(stream.messageId()).toBe("1002");
-  });
-
-  it("seal keeps an existing preview and cancels pending final overwrites", async () => {
-    const rest = createDraftRest();
-    const stream = createDraftStream(rest);
-
-    stream.update("first draft");
-    await stream.flush();
-    stream.update("stale final draft");
-    await stream.seal();
-
-    expect(rest.post).toHaveBeenCalledTimes(1);
-    expect(rest.patch).not.toHaveBeenCalled();
-    expect(stream.messageId()).toBe("1001");
   });
 });

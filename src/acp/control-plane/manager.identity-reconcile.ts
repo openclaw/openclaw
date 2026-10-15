@@ -112,18 +112,19 @@ export async function reconcileManagerRuntimeSessionIdentifiers(
       runtimeStatus,
     };
   }
-  const nextMeta: SessionAcpMeta = {
-    backend: params.meta.backend,
-    agent: params.meta.agent,
-    runtimeSessionName: params.meta.runtimeSessionName,
+  const projectMeta = (base: SessionAcpMeta): SessionAcpMeta => ({
+    backend: base.backend,
+    agent: base.agent,
+    runtimeSessionName: base.runtimeSessionName,
     ...(nextIdentity ? { identity: nextIdentity } : {}),
-    mode: params.meta.mode,
-    ...(params.meta.runtimeOptions ? { runtimeOptions: params.meta.runtimeOptions } : {}),
-    ...(params.meta.cwd ? { cwd: params.meta.cwd } : {}),
+    mode: base.mode,
+    ...(base.runtimeOptions ? { runtimeOptions: base.runtimeOptions } : {}),
+    ...(base.cwd ? { cwd: base.cwd } : {}),
+    state: base.state,
     lastActivityAt: now,
-    state: params.meta.state,
-    ...(params.meta.lastError ? { lastError: params.meta.lastError } : {}),
-  };
+    ...(base.lastError ? { lastError: base.lastError } : {}),
+  });
+  const nextMeta = projectMeta(params.meta);
   assertCurrent();
   if (!identityEquals(currentIdentity, nextIdentity)) {
     const currentAgentSessionId = currentIdentity?.agentSessionId ?? "<none>";
@@ -151,25 +152,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(
         return undefined;
       }
       params.assertCurrent?.();
-      if (!entry) {
-        return null;
-      }
-      const base = current;
-      if (!base) {
-        return null;
-      }
-      return {
-        backend: base.backend,
-        agent: base.agent,
-        runtimeSessionName: base.runtimeSessionName,
-        ...(nextIdentity ? { identity: nextIdentity } : {}),
-        mode: base.mode,
-        ...(base.runtimeOptions ? { runtimeOptions: base.runtimeOptions } : {}),
-        ...(base.cwd ? { cwd: base.cwd } : {}),
-        state: base.state,
-        lastActivityAt: now,
-        ...(base.lastError ? { lastError: base.lastError } : {}),
-      };
+      return entry && current ? projectMeta(current) : null;
     },
   });
   assertCurrent();

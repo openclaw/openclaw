@@ -17,6 +17,8 @@ export function createPendingApproval(
     id: generateApprovalId(params.type),
     type: params.type,
     requestingShip: params.requestingShip,
+    ...(params.clubId !== undefined ? { clubId: params.clubId } : {}),
+    ...(params.verifiedDirect === true ? { verifiedDirect: true } : {}),
     channelNest: params.channelNest,
     groupFlag: params.groupFlag,
     messagePreview:
@@ -38,6 +40,18 @@ export function formatApprovalRequest(approval: PendingApproval): string {
 
   switch (approval.type) {
     case "dm":
+      if (approval.clubId !== undefined) {
+        // A club message claiming the owner is queued without originalMessage, so approval only
+        // updates the allowlist and never processes that message; the notice must not promise a reply.
+        const replayLine = approval.originalMessage
+          ? `The message is answered as an unverified group DM sender, never as ${approval.requestingShip}.`
+          : `The message is not kept, so it will not be answered; have ${approval.requestingShip} send it again in a normal direct message to get a reply.`;
+        return (
+          `New group DM message claiming to be from ${approval.requestingShip} (unverified; group DM ${approval.clubId}):${preview}\n\n` +
+          `Approving adds ${approval.requestingShip} to the DM allowlist. ${replayLine}\n` +
+          `Reply "approve", "deny", or "block" (ID: ${approval.id})`
+        );
+      }
       return (
         `New DM request from ${approval.requestingShip}:${preview}\n\n` +
         `Reply "approve", "deny", or "block" (ID: ${approval.id})`
@@ -65,13 +79,6 @@ type ApprovalResponse = {
   id?: string;
 };
 
-/**
- * Parse an owner's response to an approval request.
- * Supports formats:
- *   - "approve" / "deny" / "block" (applies to most recent pending)
- *   - "approve dm-1234567890-abc" / "deny dm-1234567890-abc" (specific ID)
- *   - "block" permanently blocks the ship via Tlon's native blocking
- */
 export function parseApprovalResponse(text: string): ApprovalResponse | null {
   const trimmed = normalizeLowercaseStringOrEmpty(text);
 
@@ -103,6 +110,19 @@ export function removePendingApproval(
   return pendingApprovals.filter((a) => a.id !== id);
 }
 
+/**
+ * DM requests saved before sender provenance was recorded cannot be told apart from unverified
+ * group DM claims, so their stored message is never replayed; the sender must send it again.
+ */
+export function requiresResendAfterApproval(approval: PendingApproval): boolean {
+  return (
+    approval.type === "dm" &&
+    approval.originalMessage !== undefined &&
+    approval.clubId === undefined &&
+    approval.verifiedDirect !== true
+  );
+}
+
 export function formatApprovalConfirmation(
   approval: PendingApproval,
   action: "approve" | "deny" | "block",
@@ -116,6 +136,13 @@ export function formatApprovalConfirmation(
   switch (approval.type) {
     case "dm":
       if (action === "approve") {
+        if (requiresResendAfterApproval(approval)) {
+          return (
+            `${actionText} DM access for ${approval.requestingShip}. They can now message the bot.\n` +
+            `Their earlier message was saved before this version and its sender cannot be verified, ` +
+            `so it was not processed. Ask ${approval.requestingShip} to send it again.`
+          );
+        }
         return `${actionText} DM access for ${approval.requestingShip}. They can now message the bot.`;
       }
       return `${actionText} DM request from ${approval.requestingShip}.`;
@@ -137,13 +164,6 @@ export function formatApprovalConfirmation(
 
 type AdminCommand = { type: "unblock"; ship: string } | { type: "blocked" } | { type: "pending" };
 
-/**
- * Parse an admin command from owner message.
- * Supports:
- *   - "unblock ~ship" - unblock a specific ship
- *   - "blocked" - list all blocked ships
- *   - "pending" - list all pending approvals
- */
 export function parseAdminCommand(text: string): AdminCommand | null {
   const trimmed = normalizeLowercaseStringOrEmpty(text);
 

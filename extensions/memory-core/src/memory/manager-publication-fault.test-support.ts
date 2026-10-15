@@ -8,7 +8,6 @@ export type PublicationFaultInput = MemoryPublicationConnection & {
   failRollback: boolean;
   failClose: boolean;
   throwResultFailure: boolean;
-  failDiscard?: boolean;
   failBindingClose?: boolean;
 };
 
@@ -31,7 +30,14 @@ export function bindSqliteWorkerBackend(
       ...backend,
       execute(command: Parameters<typeof backend.execute>[0]) {
         const result = backend.execute(command);
-        if (command.type === operation && result && result.ok && result.value === true) {
+        if (
+          command.type === operation &&
+          result &&
+          typeof result === "object" &&
+          "ok" in result &&
+          result.ok &&
+          result.value === true
+        ) {
           throw new Error(
             input.kind === "cache-clear-result"
               ? "injected committed cache clear reply failure"
@@ -80,16 +86,12 @@ export function bindSqliteWorkerBackend(
   const originalExec = db.exec.bind(db);
   const originalClose = db.close.bind(db);
   db.exec = (sql) => {
-    if (input.failDiscard && sql === "DELETE FROM temp.memory_publication_input") {
-      throw new Error("injected staging discard failure");
-    }
     if (input.failRollback && sql === "ROLLBACK") {
       throw new Error("injected rollback failure");
     }
     originalExec(sql);
     if (sql === "BEGIN IMMEDIATE") {
       writeFileSync(input.marker, "native transaction entered");
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
     }
   };
   db.close = () => {
@@ -102,7 +104,13 @@ export function bindSqliteWorkerBackend(
     ...backend,
     execute(command: Parameters<typeof backend.execute>[0]) {
       const result = backend.execute(command);
-      if (input.throwResultFailure && result && !result.ok) {
+      if (
+        input.throwResultFailure &&
+        result &&
+        typeof result === "object" &&
+        "ok" in result &&
+        !result.ok
+      ) {
         throw new Error("injected result delivery failure");
       }
       return result;
@@ -111,11 +119,10 @@ export function bindSqliteWorkerBackend(
       db.exec = originalExec;
       db.close = originalClose;
       if (db.isOpen) {
-        const closed = backend.close();
+        backend.close();
         if (input.failBindingClose) {
           throw new Error("injected binding cleanup failure");
         }
-        return closed;
       }
     },
   };

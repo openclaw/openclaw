@@ -124,7 +124,6 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "src/channels/plugins/config-schema.ts", // Public SDK Zod generics preserve caller schema identity.
   "src/commands/channel-test-registry.ts", // Test support.
   "src/commands/doctor/cron/legacy-repair.ts", // Partially validated legacy rows cross the canonical cron store type.
-  "src/commands/doctor/cron/legacy-store-migration.ts", // Legacy loader carries partial rows in the canonical store envelope.
   "src/commands/doctor/cron/warnings.ts", // Doctor inspects partially parsed cron rows.
   "src/config/schema.hints.ts", // Zod pipe internals cross its public type namespace.
   "src/config/sessions/store-entry-shape.ts", // Legacy projection accepts partially validated session records.

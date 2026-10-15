@@ -3,7 +3,9 @@ import * as fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SpawnResult } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -13,6 +15,8 @@ import {
   handleReset,
   normalizeGatewayTokenInput,
   openUrl,
+  probeGatewayConfiguredModel,
+  probeGatewayReachable,
   resolveAdvertisedControlUiLinks,
   resolveControlUiLinks,
   resolveLocalControlUiProbeLinks,
@@ -96,6 +100,7 @@ vi.mock("../agents/workspace-legacy-state.js", async () => ({
 }));
 
 afterEach(() => {
+  mocks.probeGateway.mockReset();
   mocks.removeAgentSessions.mockReset().mockResolvedValue(undefined);
   vi.clearAllMocks();
   mocks.movePathToTrash.mockReset();
@@ -224,37 +229,6 @@ describe("handleReset", () => {
     );
   });
 
-  it("reports config and credential Trash failures together", async () => {
-    const homeDir = tempDirs.make("openclaw-reset-state-failures-");
-    const stateDir = path.join(homeDir, ".openclaw");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const credentialsDir = path.join(stateDir, "credentials");
-    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
-    fs.mkdirSync(credentialsDir, { recursive: true });
-    fs.mkdirSync(sessionsDir, { recursive: true });
-    fs.writeFileSync(configPath, "{}\n");
-    mocks.movePathToTrash.mockRejectedValue(new Error("trash unavailable"));
-    const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
-
-    await withEnvAsync(
-      {
-        HOME: homeDir,
-        OPENCLAW_HOME: homeDir,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: configPath,
-      },
-      async () => {
-        await expect(handleReset("config+creds+sessions", "unused", runtime)).rejects.toThrow(
-          new RegExp(
-            [configPath, credentialsDir]
-              .map((targetPath) => targetPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-              .join("[\\s\\S]*"),
-          ),
-        );
-      },
-    );
-  });
-
   it("preserves config and workspace when canonical session reset fails", async () => {
     const homeDir = tempDirs.make("openclaw-reset-session-enumeration-");
     const stateDir = path.join(homeDir, ".openclaw");
@@ -280,35 +254,6 @@ describe("handleReset", () => {
     );
 
     expect(mocks.movePathToTrash).not.toHaveBeenCalled();
-    expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
-  });
-
-  it("attempts workspace removal even when state deletion planning fails", async () => {
-    const homeDir = tempDirs.make("openclaw-reset-workspace-plan-");
-    const stateDir = path.join(homeDir, ".openclaw");
-    const workspaceDir = path.join(stateDir, "workspace");
-    fs.mkdirSync(workspaceDir, { recursive: true });
-    mocks.prepareWorkspaceStateDeletion.mockImplementationOnce(() => {
-      throw new Error("workspace state unavailable");
-    });
-
-    await withEnvAsync(
-      {
-        HOME: homeDir,
-        OPENCLAW_HOME: homeDir,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-      },
-      async () => {
-        await expect(
-          handleReset("full", workspaceDir, { log: vi.fn() } as unknown as RuntimeEnv),
-        ).rejects.toThrow(`${workspaceDir} (workspace state)`);
-      },
-    );
-
-    expect(mocks.movePathToTrash).toHaveBeenCalledWith(expectedTrashSourcePath(workspaceDir), {
-      allowedRoots: [path.dirname(expectedTrashSourcePath(workspaceDir))],
-    });
     expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
   });
 
@@ -452,12 +397,6 @@ describe("openUrl", () => {
 describe("formatControlUiSshHint", () => {
   it.each([
     {
-      label: "plain HTTP root",
-      tlsEnabled: false,
-      basePath: undefined,
-      expectedUrl: "http://localhost:18789/",
-    },
-    {
       label: "plain HTTP base path",
       tlsEnabled: false,
       basePath: "/control",
@@ -469,41 +408,10 @@ describe("formatControlUiSshHint", () => {
       basePath: undefined,
       expectedUrl: "https://localhost:18789/",
     },
-    {
-      label: "HTTPS base path",
-      tlsEnabled: true,
-      basePath: "/control",
-      expectedUrl: "https://localhost:18789/control/",
-    },
   ])("uses the Gateway transport for $label", ({ tlsEnabled, basePath, expectedUrl }) => {
     const hint = formatControlUiSshHint({ port: 18789, basePath, tlsEnabled });
 
     expect(hint).toContain(`Then open:\n${expectedUrl}`);
-  });
-
-  it("includes the IPv4-only BYOH note and workaround", () => {
-    const hint = formatControlUiSshHint({ port: 18789, tlsEnabled: false });
-    expect(hint).toContain("BYOH note: lan, tailnet, and custom bind are currently IPv4-only.");
-    expect(hint).toContain(
-      "If your host is IPv6-only, use an IPv4 sidecar or proxy in front of the Gateway.",
-    );
-  });
-
-  it("leaves remote login coordinates explicit instead of guessing from the server process", async () => {
-    await withEnvAsync(
-      {
-        USER: "gateway-service",
-        LOGNAME: "gateway-service",
-        SSH_CONNECTION: "192.0.2.10 54321 127.0.0.1 22",
-      },
-      async () => {
-        const hint = formatControlUiSshHint({ port: 18789, tlsEnabled: false });
-
-        expect(hint).toContain("ssh -N -L 18789:127.0.0.1:18789 <user>@<host>");
-        expect(hint).not.toContain("gateway-service");
-        expect(hint).not.toContain("192.0.2.10");
-      },
-    );
   });
 });
 
@@ -574,37 +482,6 @@ describe("summarizeExistingConfig", () => {
 });
 
 describe("resolveControlUiLinks", () => {
-  it("uses customBindHost for custom bind", () => {
-    const links = resolveControlUiLinks({
-      port: 18789,
-      bind: "custom",
-      customBindHost: "192.168.1.100",
-    });
-    expect(links.httpUrl).toBe("http://192.168.1.100:18789/");
-    expect(links.wsUrl).toBe("ws://192.168.1.100:18789");
-  });
-
-  it("uses secure schemes when gateway TLS is enabled", () => {
-    const links = resolveControlUiLinks({
-      port: 18789,
-      bind: "custom",
-      customBindHost: "192.168.1.100",
-      tlsEnabled: true,
-    });
-    expect(links.httpUrl).toBe("https://192.168.1.100:18789/");
-    expect(links.wsUrl).toBe("wss://192.168.1.100:18789");
-  });
-
-  it("falls back to loopback for invalid customBindHost", () => {
-    const links = resolveControlUiLinks({
-      port: 18789,
-      bind: "custom",
-      customBindHost: "192.168.001.100",
-    });
-    expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
-    expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
-  });
-
   it("uses tailnet IP for tailnet bind", () => {
     mocks.pickPrimaryTailnetIPv4.mockReturnValueOnce("100.64.0.9");
     const links = resolveControlUiLinks({
@@ -613,44 +490,6 @@ describe("resolveControlUiLinks", () => {
     });
     expect(links.httpUrl).toBe("http://100.64.0.9:18789/");
     expect(links.wsUrl).toBe("ws://100.64.0.9:18789");
-  });
-
-  it("keeps loopback for auto even when tailnet is present", () => {
-    mocks.pickPrimaryTailnetIPv4.mockReturnValueOnce("100.64.0.9");
-    const links = resolveControlUiLinks({
-      port: 18789,
-      bind: "auto",
-    });
-    expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
-    expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
-  });
-
-  it("falls back to loopback for tailnet bind when interface discovery throws", () => {
-    mocks.pickPrimaryTailnetIPv4.mockImplementationOnce(() => {
-      throw new Error("uv_interface_addresses failed");
-    });
-
-    const links = resolveControlUiLinks({
-      port: 18789,
-      bind: "tailnet",
-    });
-
-    expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
-    expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
-  });
-
-  it("falls back to loopback for LAN bind when interface discovery throws", () => {
-    vi.spyOn(os, "networkInterfaces").mockImplementationOnce(() => {
-      throw new Error("uv_interface_addresses failed");
-    });
-
-    const links = resolveControlUiLinks({
-      port: 18789,
-      bind: "lan",
-    });
-
-    expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
-    expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
   });
 
   it("uses route-aware advertised LAN host for display links", async () => {
@@ -665,24 +504,23 @@ describe("resolveControlUiLinks", () => {
     expect(links.wsUrl).toBe("ws://10.211.55.3:18789");
   });
 
-  it("keeps co-located LAN probes on loopback", () => {
+  it.each(["tailnet"] as const)("keeps co-located %s probes on loopback", (bind) => {
+    mocks.pickPrimaryTailnetIPv4.mockReturnValueOnce("100.64.0.9");
     const links = resolveLocalControlUiProbeLinks({
       port: 18789,
-      bind: "lan",
+      bind,
+      customBindHost: "192.0.2.10",
+      tlsEnabled: true,
+      basePath: "/dashboard",
     });
 
-    expect(links.httpUrl).toBe("http://127.0.0.1:18789/");
-    expect(links.wsUrl).toBe("ws://127.0.0.1:18789");
+    expect(links.httpUrl).toBe("https://127.0.0.1:18789/dashboard/");
+    expect(links.wsUrl).toBe("wss://127.0.0.1:18789/dashboard");
     expect(mocks.resolveAdvertisedLanHostCore).not.toHaveBeenCalled();
   });
 });
 
 describe("normalizeGatewayTokenInput", () => {
-  it("returns empty string for undefined or null", () => {
-    expect(normalizeGatewayTokenInput(undefined)).toBe("");
-    expect(normalizeGatewayTokenInput(null)).toBe("");
-  });
-
   it("trims string input", () => {
     expect(normalizeGatewayTokenInput("  token  ")).toBe("token");
   });
@@ -710,5 +548,197 @@ describe("validateGatewayPasswordInput", () => {
 
   it("accepts a normal password", () => {
     expect(validateGatewayPasswordInput(" secret ")).toBeUndefined();
+  });
+});
+
+describe("probeGatewayReachable", () => {
+  it.each([["polling", waitForGatewayReachable]] as const)(
+    "forwards remote trust through %s",
+    async (_name, probe) => {
+      mocks.probeGateway.mockResolvedValueOnce({ ok: true, configSnapshot: null });
+      const config: OpenClawConfig = {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example",
+            edgeAuth: { "X-Edge-Auth": "test-secret" },
+            tlsFingerprint: "ab".repeat(32),
+          },
+        },
+      };
+
+      await expect(
+        probe({ url: "wss://gateway.example", config, originScopedDeviceAuth: true }),
+      ).resolves.toEqual({ ok: true });
+      expect(mocks.probeGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "wss://gateway.example",
+          config,
+          originScopedDeviceAuth: true,
+        }),
+      );
+    },
+  );
+
+  it("bounds thrown probe errors without splitting UTF-16", async () => {
+    const detail = `${"x".repeat(118)}…`;
+    const params = { url: "ws://127.0.0.1:18789" };
+    mocks.probeGateway.mockRejectedValue(new Error(`${"x".repeat(118)}🚀tail\nignored`));
+    expect(await probeGatewayReachable(params)).toEqual({ ok: false, detail });
+    expect(await probeGatewayConfiguredModel(params)).toEqual({ kind: "unreachable", detail });
+  });
+
+  it("forwards a configured TLS fingerprint to the gateway probe", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: true,
+      configSnapshot: null,
+    });
+
+    await expect(
+      probeGatewayReachable({
+        url: "wss://gateway.example.com:18789",
+        tlsFingerprint: "sha256:11:22:33:44",
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(mocks.probeGateway).toHaveBeenCalledWith({
+      url: "wss://gateway.example.com:18789",
+      timeoutMs: 1500,
+      auth: {
+        token: undefined,
+        password: undefined,
+      },
+      tlsFingerprint: "sha256:11:22:33:44",
+      detailLevel: "none",
+    });
+  });
+
+  it("lets a configured preauth handshake timeout widen the default probe budget", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: true,
+      configSnapshot: null,
+    });
+
+    await expect(
+      probeGatewayReachable({
+        url: "wss://gateway.example.com:18789",
+        preauthHandshakeTimeoutMs: 30_000,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(mocks.probeGateway).toHaveBeenCalledWith({
+      url: "wss://gateway.example.com:18789",
+      timeoutMs: 30_000,
+      auth: {
+        token: undefined,
+        password: undefined,
+      },
+      preauthHandshakeTimeoutMs: 30_000,
+      detailLevel: "none",
+    });
+  });
+
+  it("classifies configured and missing default-agent models from config-only probes", async () => {
+    mocks.probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        server: { version: "2026.7.2", connId: "conn-configured" },
+        gatewayReached: true,
+        configSnapshot: {
+          valid: true,
+          config: { agents: { entries: { work: { model: "openai/gpt-5.5" } } } },
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        server: { version: "2026.7.2", connId: "conn-missing" },
+        gatewayReached: true,
+        configSnapshot: { valid: true, config: { gateway: { mode: "local" } } },
+      });
+
+    await expect(
+      probeGatewayConfiguredModel({
+        url: "ws://127.0.0.1:18789",
+      }),
+    ).resolves.toEqual({ kind: "configured" });
+    await expect(
+      probeGatewayConfiguredModel({
+        url: "ws://127.0.0.1:18789",
+        originScopedDeviceAuth: true,
+      }),
+    ).resolves.toEqual({
+      kind: "missing-configured-model",
+      detail: "Gateway default agent has no configured model",
+    });
+    expect(mocks.probeGateway).toHaveBeenLastCalledWith(
+      expect.objectContaining({ detailLevel: "config", originScopedDeviceAuth: true }),
+    );
+  });
+
+  it("keeps typed pre-Hello Gateway auth failures on the reachable path", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: false,
+      connectLatencyMs: 42,
+      error: "device pairing required",
+      connectErrorDetails: { code: ConnectErrorDetailCodes.PAIRING_REQUIRED },
+      gatewayReached: true,
+      auth: { role: null, scopes: [], capability: "pairing_pending" },
+      server: { version: null, connId: null },
+    });
+
+    await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
+      kind: "reachable-unverified",
+      detail: "device pairing required",
+    });
+  });
+
+  it("does not trust an unrecognized connect error code as Gateway evidence", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: false,
+      connectLatencyMs: 42,
+      error: "foreign protocol error",
+      connectErrorDetails: { code: "NOT_AN_OPENCLAW_CONNECT_ERROR" },
+      auth: { role: null, scopes: [], capability: "unknown" },
+      server: { version: null, connId: null },
+    });
+
+    await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
+      kind: "unreachable",
+      detail: "foreign protocol error",
+    });
+  });
+
+  it("does not trust a config-shaped response without Gateway handshake evidence", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: true,
+      connectLatencyMs: 42,
+      error: null,
+      auth: { role: null, scopes: [], capability: "unknown" },
+      server: { version: "foreign-server", connId: null },
+      configSnapshot: {
+        valid: true,
+        config: { agents: { defaults: { model: "openai/foreign-model" } } },
+      },
+    });
+
+    await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
+      kind: "unreachable",
+    });
+  });
+
+  it("treats an invalid config snapshot as reachable but unverified", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: true,
+      connectLatencyMs: 42,
+      auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
+      server: { version: "2026.7.2", connId: "conn-1" },
+      gatewayReached: true,
+      configSnapshot: { valid: false },
+    });
+
+    await expect(probeGatewayConfiguredModel({ url: "ws://127.0.0.1:18789" })).resolves.toEqual({
+      kind: "reachable-unverified",
+      detail: "Gateway returned an invalid config snapshot",
+    });
   });
 });

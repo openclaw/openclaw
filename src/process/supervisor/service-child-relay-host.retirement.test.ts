@@ -4,7 +4,11 @@ import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Duplex } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
@@ -41,7 +45,7 @@ afterEach(() => {
 
 it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
   "confirms process-group retirement completed before the deadline while the Node host was blocked",
-  async () => {
+  async ({ signal }) => {
     // The two-process group relay reaps its anchor independently of the blocked host.
     // Native custody has no such relay.
     mockProcessPlatform("darwin");
@@ -96,10 +100,13 @@ it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildRelay),
     );
     try {
-      await withTestTimeout(
-        once(observer, "message"),
-        GRACEFUL_CANCEL_TIMEOUT_MS,
-        "observer startup",
+      await withinTest(
+        awaitGateBeforeSettlement(
+          once(observer, "message"),
+          observerExit,
+          "observer exited before startup",
+        ),
+        signal,
       );
       hooks.spawned = (child, args) => {
         if (
@@ -200,7 +207,7 @@ it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       if (relay) {
         adapter?.kill("SIGKILL");
         relay.kill("SIGTERM");
-        await withTestTimeout(relayExit.promise, GRACEFUL_CANCEL_TIMEOUT_MS * 3, "relay cleanup");
+        await relayExit.promise;
       }
       adapter?.dispose();
     }

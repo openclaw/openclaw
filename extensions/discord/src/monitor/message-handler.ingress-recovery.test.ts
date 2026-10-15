@@ -139,6 +139,7 @@ function createHandler(params: {
   preflight: (input: { data: { message?: { id?: string } } }) => Promise<null>;
   debounceMs?: number;
   beforeDispatch?: () => Promise<void>;
+  afterDispatch?: () => void;
 }) {
   const handlerParams = createDiscordHandlerParams();
   handlerParams.cfg.messages = { inbound: { debounceMs: params.debounceMs ?? 0 } };
@@ -151,12 +152,15 @@ function createHandler(params: {
         createDiscordIngressMonitor({
           ...monitorParams,
           queue: params.queue,
-          dispatch: params.beforeDispatch
-            ? async (event, lifecycle) => {
-                await params.beforeDispatch?.();
-                return await monitorParams.dispatch(event, lifecycle);
-              }
-            : monitorParams.dispatch,
+          dispatch:
+            params.beforeDispatch || params.afterDispatch
+              ? async (event, lifecycle) => {
+                  await params.beforeDispatch?.();
+                  const result = await monitorParams.dispatch(event, lifecycle);
+                  params.afterDispatch?.();
+                  return result;
+                }
+              : monitorParams.dispatch,
         }),
     },
   });
@@ -197,13 +201,15 @@ describe("Discord durable ingress replacement recovery", () => {
       expect(beforeDispatchPreflight).not.toHaveBeenCalled();
       expect(await retryFacts(queue, "poison")).toEqual(expectedFacts);
 
+      const bufferedDispatched = createDeferred<void>();
       const bufferedPreflight = vi.fn(async () => null);
       const bufferedHandler = createHandler({
         queue,
         preflight: bufferedPreflight,
         debounceMs: 60_000,
+        afterDispatch: () => bufferedDispatched.resolve(),
       });
-      await vi.waitFor(async () => expect(await queue.listClaims()).toHaveLength(1));
+      await bufferedDispatched.promise;
       await bufferedHandler.deactivate();
       expect(bufferedPreflight).not.toHaveBeenCalled();
       expect(await retryFacts(queue, "poison")).toEqual(expectedFacts);

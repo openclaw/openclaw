@@ -5,72 +5,109 @@ import { HEARTBEAT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { assembleHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import { limitHistoryTurns } from "../history.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { resolveAttemptBootstrapContext } from "./attempt-context-engine-helpers.js";
+import { appendAttemptCacheTtlIfNeeded } from "./attempt-thread-helpers.js";
 
 describe("embedded attempt context injection", () => {
+  it("skips context injection for completed limited bootstrap turns", async () => {
+    const hasCompletedBootstrapTurn = vi.fn(async () => true);
+    const resolveBootstrapContextForRun = vi.fn(async () => ({
+      bootstrapFiles: [],
+      contextFiles: [],
+    }));
+    expect(
+      await resolveAttemptBootstrapContext({
+        contextInjectionMode: "continuation-skip",
+        bootstrapMode: "limited",
+        bootstrapContextRunKind: "default",
+        bootstrapContextMode: "full",
+        deliversCompleteWorkspaceContext: false,
+        hasCompletedBootstrapTurn,
+        resolveBootstrapContextForRun,
+      }),
+    ).toEqual({
+      bootstrapFiles: [],
+      contextFiles: [],
+      isContinuationTurn: true,
+      shouldRecordCompletedBootstrapTurn: false,
+    });
+    expect(hasCompletedBootstrapTurn).toHaveBeenCalledOnce();
+    expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
-      name: "explicit never",
-      mode: "never",
-      bootstrap: "full",
+      mode: "always",
+      bootstrapMode: "none",
       runKind: "default",
-      continuation: false,
-      resolve: false,
-      completedCalls: 0,
+      contextMode: "full",
+      complete: true,
+      expected: false,
     },
     {
-      name: "pending bootstrap overrides stale completion",
-      mode: "continuation-skip",
-      bootstrap: "full",
+      mode: "always",
+      bootstrapMode: "full",
       runKind: "default",
-      continuation: false,
-      resolve: true,
-      completedCalls: 0,
+      contextMode: "full",
+      complete: true,
+      expected: true,
     },
     {
-      name: "heartbeat always filters bootstrap",
       mode: "continuation-skip",
-      bootstrap: "none",
+      bootstrapMode: "none",
+      runKind: "cron",
+      contextMode: "full",
+      complete: true,
+      expected: false,
+    },
+    {
+      mode: "continuation-skip",
+      bootstrapMode: "none",
       runKind: "heartbeat",
-      continuation: false,
-      resolve: true,
-      completedCalls: 0,
+      contextMode: "full",
+      complete: true,
+      expected: false,
     },
     {
-      name: "limited bootstrap permits continuation skip",
       mode: "continuation-skip",
-      bootstrap: "limited",
+      bootstrapMode: "none",
       runKind: "default",
-      continuation: true,
-      resolve: false,
-      completedCalls: 1,
+      contextMode: "lightweight",
+      complete: true,
+      expected: false,
     },
-  ] as const)("$name", async (testCase) => {
-    const files =
-      testCase.bootstrap === "full"
-        ? {
-            bootstrapFiles: [{ name: "BOOTSTRAP.md" }],
-            contextFiles: [{ path: "BOOTSTRAP.md" }],
-          }
-        : { bootstrapFiles: [], contextFiles: [] };
-    const hasCompletedBootstrapTurn = vi.fn(async () => true);
-    const resolveBootstrapContextForRun = vi.fn(async () => files);
-    const result = await resolveAttemptBootstrapContext({
-      contextInjectionMode: testCase.mode,
-      bootstrapMode: testCase.bootstrap,
-      bootstrapContextRunKind: testCase.runKind,
-      bootstrapContextMode: testCase.runKind === "heartbeat" ? "lightweight" : "full",
-      hasCompletedBootstrapTurn,
-      resolveBootstrapContextForRun,
-    });
-    expect(result).toEqual({
-      ...(testCase.resolve ? files : { bootstrapFiles: [], contextFiles: [] }),
-      isContinuationTurn: testCase.continuation,
-      shouldRecordCompletedBootstrapTurn: testCase.bootstrap === "full" && testCase.resolve,
-    });
-    expect(hasCompletedBootstrapTurn).toHaveBeenCalledTimes(testCase.completedCalls);
-    expect(resolveBootstrapContextForRun).toHaveBeenCalledTimes(Number(testCase.resolve));
-  });
+    {
+      mode: "continuation-skip",
+      bootstrapMode: "limited",
+      runKind: "default",
+      contextMode: "full",
+      complete: false,
+      expected: false,
+    },
+    {
+      mode: "never",
+      bootstrapMode: "full",
+      runKind: "default",
+      contextMode: "full",
+      complete: true,
+      expected: false,
+    },
+  ] as const)(
+    "completion eligibility: $mode / $bootstrapMode / $runKind / $contextMode",
+    async (testCase) => {
+      const result = await resolveAttemptBootstrapContext({
+        contextInjectionMode: testCase.mode,
+        bootstrapMode: testCase.bootstrapMode,
+        bootstrapContextRunKind: testCase.runKind,
+        bootstrapContextMode: testCase.contextMode,
+        deliversCompleteWorkspaceContext: testCase.complete,
+        hasCompletedBootstrapTurn: async () => false,
+        resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
+      });
+      expect(result.shouldRecordCompletedBootstrapTurn).toBe(testCase.expected);
+    },
+  );
 
   it("filters no-op heartbeat pairs before history limiting and context-engine assembly", async () => {
     const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
@@ -121,5 +158,30 @@ describe("embedded attempt context injection", () => {
       { role: "user", content: "real question" },
       { role: "assistant", content: "real answer" },
     ]);
+  });
+
+  it("records cache continuity without compaction", async () => {
+    const sessionManager = { appendCustomEntryAsync: vi.fn(async () => undefined) };
+    const appended = await appendAttemptCacheTtlIfNeeded({
+      sessionManager,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
+      timedOutDuringCompaction: false,
+      compactionOccurredThisAttempt: false,
+      config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } },
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-20250514",
+      modelApi: "anthropic-messages",
+      isCacheTtlEligibleProvider: () => true,
+      now: 123,
+    });
+    expect(appended).toBe(true);
+    expect(sessionManager.appendCustomEntryAsync).toHaveBeenCalledWith("openclaw.cache-ttl", {
+      timestamp: 123,
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-20250514",
+      prunedToolResults: [],
+      ambiguousToolResultBaseKeys: [],
+      frozenToolResults: [],
+    });
   });
 });

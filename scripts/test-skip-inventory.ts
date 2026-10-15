@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Test Skip Inventory reports skipped, conditional, todo, and focused tests.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -131,7 +130,7 @@ function methodReason(params: {
   }
 
   const sourceText = params.textNode.getText(params.sourceFile).toLowerCase();
-  const text = `${params.file}\n${sourceText}`.toLowerCase();
+  const text = `${params.file.toLowerCase()}\n${sourceText}`;
   if (
     sourceText.includes("process.platform") ||
     sourceText.includes("win32") ||
@@ -284,19 +283,16 @@ export function collectTestSkipInventoryReport(
   };
 }
 
-function renderReasonCounts(reasonCounts: Record<SkipInventoryReason, number>): string {
-  return Object.entries(reasonCounts)
-    .filter(([, count]) => count > 0)
-    .map(([reason, count]) => `${reason}: ${count}`)
-    .join(", ");
-}
-
 export function renderTestSkipInventoryReport(
   report: TestSkipInventoryReport,
   options: { limit?: number } = {},
 ): string {
   const limit = options.limit === 0 ? Number.POSITIVE_INFINITY : (options.limit ?? 120);
-  const reasonCounts = renderReasonCounts(report.summary.reasonCounts) || "none";
+  const reasonCounts =
+    Object.entries(report.summary.reasonCounts)
+      .filter(([, count]) => count > 0)
+      .map(([reason, count]) => `${reason}: ${count}`)
+      .join(", ") || "none";
   const lines = [
     "OpenClaw test skip inventory",
     `Scanned files: ${report.summary.scannedFileCount}`,

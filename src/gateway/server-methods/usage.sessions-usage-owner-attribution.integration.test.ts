@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
 import { encodeSessionArchiveContent } from "../../config/sessions/archive-compression.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.js";
 import {
@@ -15,11 +15,18 @@ import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import {
+  historyLane,
+  projectionLane,
+  targetDiscoveryLane,
+} from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { createPersistCronSessionEntry } from "../../cron/isolated-agent/run-session-state.js";
 import { prepareCronSession } from "../../cron/isolated-agent/session.js";
+import { refreshCostUsageCacheForAgent } from "../../infra/session-cost-usage-aggregation.js";
 import { discoverAllSessions, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import type { AssistantMessage } from "../../llm/types.js";
+import { buildUsageOverview } from "../../shared/usage-overview.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -29,8 +36,20 @@ import {
   withOpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createResidentSessionRowReader } from "../session-row-projection.test-support.js";
 import type { RespondFn } from "./types.js";
+import { loadUsageSessionSummaries } from "./usage-session-loading.js";
+import * as usageSessionSelection from "./usage-session-selection.js";
 import { usageHandlers } from "./usage.js";
+
+let sessionRows: ReturnType<typeof createResidentSessionRowReader>;
+
+beforeEach(() => {
+  const reader = createResidentSessionRowReader();
+  sessionRows = reader;
+  onTestFinished(() => reader.dispose());
+});
 
 function usageMessage(tokens: number, timestamp: number): AssistantMessage {
   return {
@@ -55,21 +74,25 @@ function usageMessage(tokens: number, timestamp: number): AssistantMessage {
 async function requestUsage(params: Record<string, unknown>, method = "sessions.usage") {
   const respond = vi.fn<RespondFn>();
   const handler = expectDefined(usageHandlers[method], "usage handler");
+  const projection = await sessionRows.ready();
   await handler({
     req: { type: "req", id: "usage", method },
     params,
     respond,
     client: null,
     isWebchatConnect: () => false,
-    context: createDirectChatContext({ getRuntimeConfig }),
+    context: bindSessionRowProjection(
+      createDirectChatContext({ getRuntimeConfig }),
+      () => projection,
+    ),
   });
   expect(respond).toHaveBeenCalledOnce();
   return expectDefined(respond.mock.calls[0], "usage response");
 }
 
 async function readUsage(params: Record<string, unknown>) {
-  const [ok, payload] = await requestUsage(params);
-  expect(ok).toBe(true);
+  const [ok, payload, error] = await requestUsage(params);
+  expect(ok, JSON.stringify({ params, error })).toBe(true);
   return payload as SessionsUsageResult;
 }
 
@@ -79,7 +102,12 @@ async function withUsageState(run: (state: OpenClawTestState) => Promise<void>) 
       agents: { ownership: "explicit", entries: { main: {}, opus: {} } },
       plugins: { enabled: false },
     });
-    await run(state);
+    await captureRuntimeConfigAsyncReader()();
+    try {
+      await run(state);
+    } finally {
+      await sessionRows.dispose();
+    }
   });
 }
 
@@ -97,6 +125,154 @@ function contextReport(generatedAt: number, ordinal = 0): SessionSystemPromptRep
     tools: { listChars: ordinal, schemaChars: 0, entries: [] },
   };
 }
+
+it("preserves global session addition order across agents before overview pagination", async () => {
+  await withUsageState(async (state) => {
+    const config = getRuntimeConfig();
+    const startMs = Date.UTC(2026, 8, 18);
+    const sessions = [];
+    for (const [index, cost] of [0.2, 0.1, 0.3].entries()) {
+      const agentId = index === 1 ? "opus" : "main";
+      const sessionId = `ordered-${index}`;
+      const sessionFile = state.path(`${sessionId}.jsonl`);
+      await fs.writeFile(
+        sessionFile,
+        `${JSON.stringify({
+          type: "message",
+          id: sessionId,
+          parentId: null,
+          message: {
+            role: "assistant",
+            timestamp: startMs,
+            provider: "fixture",
+            model: "same-model",
+            usage: {
+              input: 1,
+              totalTokens: 1,
+              cost: { total: cost, input: cost, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
+          },
+        })}\n`,
+      );
+      sessions.push({
+        key: sessionId,
+        agentId,
+        sessionId,
+        sessionFile,
+        channel: "same-channel",
+        creatorKey: "same-creator",
+        updatedAt: 30 - index * 10,
+        instances: [{ sessionId, sessionFile }],
+      });
+    }
+    for (const agentId of ["main", "opus"]) {
+      await refreshCostUsageCacheForAgent({
+        config,
+        agentId,
+        sessionFiles: sessions
+          .filter((session) => session.agentId === agentId)
+          .flatMap((session) => session.instances.map((instance) => instance.sessionFile)),
+      });
+    }
+    const loaded = await loadUsageSessionSummaries({
+      read: (load) => load(),
+      entries: sessions,
+      config,
+      startMs,
+      endMs: startMs + 86_400_000 - 1,
+      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+    });
+    const result = {
+      ...buildUsageOverview({
+        rows: sessions.map((session, index) =>
+          Object.assign({}, session, { usage: loaded.summaries[index] ?? null }),
+        ),
+        options: { offset: 1 },
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+      }),
+      cacheStatus: loaded.cacheStatus,
+    };
+    expect(result.cacheStatus?.status).toBe("fresh");
+    const expectedCost = 0.6000000000000001;
+    expect(result.totals.totalCost).toBe(expectedCost);
+    expect(result.aggregates.byModel[0]?.totals.totalCost).toBe(expectedCost);
+    expect(result.aggregates.byChannel[0]?.totals.totalCost).toBe(expectedCost);
+    expect(result.aggregates.byCreator?.[0]?.totals.totalCost).toBe(expectedCost);
+    expect(result.aggregates.costDaily?.[0]?.totalCost).toBe(expectedCost);
+    expect(result.aggregates.daily[0]?.cost).toBe(expectedCost);
+    expect(result.overview.tableTotals.cost).toBe(expectedCost);
+    expect(result.sessions.map((session) => session.key)).toEqual(["ordered-1", "ordered-2"]);
+    expect(result.overview).toMatchObject({ total: 3, offset: 1, limit: 50 });
+  });
+});
+
+it("keeps same-key overview context reports with their selected agent", async () => {
+  await withUsageState(async (state) => {
+    const config = getRuntimeConfig();
+    const timestamp = Date.now() - 60_000;
+    const candidates: usageSessionSelection.UsageSessionSelection[] = [];
+    const reports = [contextReport(timestamp, 1), contextReport(timestamp, 2)];
+    for (const [index, agentId] of ["main", "opus"].entries()) {
+      const sessionId = `${agentId}-global-context`;
+      const scope = {
+        agentId,
+        sessionId,
+        sessionKey: "global",
+        storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
+      };
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: timestamp,
+        systemPromptReport: reports[index],
+      });
+      await persistSessionTranscriptTurn(scope, {
+        cwd: state.workspaceDir,
+        updateMode: "none",
+        messages: [{ message: usageMessage(index + 1, timestamp), now: timestamp }],
+      });
+      await loadSessionCostSummary({ agentId, sessionId, sessionTarget: scope, config });
+      candidates.push(
+        ...(await usageSessionSelection.selectUsageSessions({
+          config,
+          projection: await sessionRows.ready(),
+          agentId,
+          specificKey: null,
+          groupingMode: "instance",
+          startMs: 0,
+          endMs: Date.now(),
+        })),
+      );
+    }
+    expect(candidates.map(({ agentId, key }) => [agentId, key])).toEqual([
+      ["main", "global"],
+      ["opus", "global"],
+    ]);
+    // Federation picks one public sentinel today; assembly must retain each physical owner supplied by selection.
+    const selection = vi
+      .spyOn(usageSessionSelection, "selectUsageSessions")
+      .mockResolvedValueOnce(candidates);
+    try {
+      const result = await readUsage({
+        agentScope: "all",
+        range: "all",
+        projection: "overview",
+        includeContextWeight: true,
+      });
+      expect(result.sessions).toHaveLength(2);
+      for (const [index, agentId] of ["main", "opus"].entries()) {
+        expect(result.sessions.find((row) => row.agentId === agentId)).toMatchObject({
+          key: "global",
+          agentId,
+          sessionId: `${agentId}-global-context`,
+          hasContextWeight: true,
+          contextWeight: reports[index],
+        });
+      }
+    } finally {
+      selection.mockRestore();
+    }
+  });
+});
 
 it("keeps prior cron runs attributed through guarded replacement and the real usage handler", async () => {
   await withUsageState(async (state) => {
@@ -144,7 +320,14 @@ it("keeps prior cron runs attributed through guarded replacement and the real us
       await loadSessionCostSummary({ agentId: "main", sessionId, sessionFile, config });
     }
     for (const groupBy of ["instance", "family"]) {
-      const result = await readUsage({ range: "all", agentId: "main", groupBy });
+      const sql = observeHostDataSql();
+      let result: SessionsUsageResult;
+      try {
+        result = await readUsage({ range: "all", agentId: "main", groupBy });
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
       expect(result.totals.totalTokens).toBe(60);
       expect(result.totals.totalCost).toBeCloseTo(0.03);
       expect(result.sessions).toHaveLength(groupBy === "instance" ? 3 : 1);
@@ -152,6 +335,90 @@ it("keeps prior cron runs attributed through guarded replacement and the real us
       expect(result.aggregates.byCreator).toMatchObject([
         { actor: { type: "system" }, totals: { totalTokens: 60, totalCost: 0.03 } },
       ]);
+    }
+    for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
+      const sql = observeHostDataSql();
+      try {
+        const [ok, payload] = await requestUsage({ key: sessionKey }, method);
+        expect(ok).toBe(true);
+        expect(payload).toMatchObject(
+          method === "sessions.usage.timeseries"
+            ? { points: [expect.objectContaining({ totalTokens: 30 })] }
+            : { logs: [expect.objectContaining({ role: "assistant", tokens: 30 })] },
+        );
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+    }
+  });
+});
+
+it("uses committed metadata for selected usage and families with an empty current window", async () => {
+  await withUsageState(async (state) => {
+    const config = getRuntimeConfig();
+    const key = "agent:main:usage-receipts";
+    const scope = {
+      agentId: "main",
+      sessionKey: key,
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+    };
+    const timestamp = Date.now() - 60_000;
+    const firstId = "usage-receipts-first";
+    await upsertSessionEntryCore(scope, {
+      sessionId: firstId,
+      updatedAt: timestamp,
+      label: "Before rename",
+    });
+    await persistSessionTranscriptTurn(
+      { ...scope, sessionId: firstId },
+      {
+        cwd: state.workspaceDir,
+        updateMode: "none",
+        messages: [{ message: usageMessage(17, timestamp), now: timestamp }],
+      },
+    );
+    await loadSessionCostSummary({
+      config,
+      agentId: scope.agentId,
+      sessionId: firstId,
+      sessionTarget: { ...scope, sessionId: firstId },
+    });
+    const params = { range: "all", key };
+    expect((await readUsage(params)).sessions).toMatchObject([
+      { key, sessionId: firstId, label: "Before rename", usage: { totalTokens: 17 } },
+    ]);
+
+    await patchSessionEntryCore(scope, () => ({ label: "After rename" }));
+    expect((await readUsage(params)).sessions).toMatchObject([
+      { key, sessionId: firstId, label: "After rename", usage: { totalTokens: 17 } },
+    ]);
+
+    const currentId = "usage-receipts-current";
+    await upsertSessionEntryCore(scope, {
+      sessionId: currentId,
+      updatedAt: timestamp + 1,
+      label: "Replacement",
+    });
+    await loadSessionCostSummary({
+      config,
+      agentId: scope.agentId,
+      sessionId: currentId,
+      sessionTarget: { ...scope, sessionId: currentId },
+    });
+    for (const selector of [{ key }, { agentId: "main" }]) {
+      const result = await readUsage({ range: "all", groupBy: "family", ...selector });
+      expect(result.sessions).toMatchObject([
+        {
+          key,
+          sessionId: currentId,
+          currentSessionId: currentId,
+          label: "Replacement",
+          includedSessionIds: [currentId, firstId],
+          usage: { totalTokens: 17 },
+        },
+      ]);
+      expect(result.totals.totalTokens).toBe(17);
     }
   });
 });
@@ -163,7 +430,7 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
     const bob = ensureProfileForEmail("bob@example.test");
     const timestamp = Date.now() - 60_000;
     const fixtures = ["main", "opus"].flatMap((agentId, agentIndex) =>
-      Array.from({ length: 8 }, (_, index) => {
+      Array.from({ length: agentId === "main" ? 8 : 51 }, (_, index) => {
         const ordinal = agentIndex * 8 + index;
         return {
           agentId,
@@ -229,17 +496,28 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
       { selected: [newest, secondNewest], includeContextWeight: false },
       { selected: [adaNewest], includeContextWeight: false, creatorKey: adaCreatorKey },
       { selected: [adaNewest], includeContextWeight: true, creatorKey: adaCreatorKey },
+      {
+        selected: adaFixtures.toReversed(),
+        includeContextWeight: true,
+        creatorKey: adaCreatorKey,
+        projection: "overview" as const,
+      },
     ]) {
       let payload: unknown;
-      const reads = ["main", "opus"].map((agentId) =>
-        trackSqliteStatementExecutions(
-          openOpenClawAgentDatabase({ agentId }).db,
-          ["entries"],
-          (sql) => (/from\s+"session_nodes"/i.test(sql) ? "entries" : null),
-        ),
-      );
-      const parse = vi.spyOn(JSON, "parse");
-      let parsedPrompts: string[];
+      const transferredPrompts = new Set<string>();
+      const transfers = [historyLane, projectionLane, targetDiscoveryLane].map(({ pool }) => {
+        const run = pool.run.bind(pool);
+        return vi.spyOn(pool, "run").mockImplementation(async (...args) => {
+          const reply = await run(...args);
+          const bytes = JSON.stringify(reply);
+          for (const fixture of fixtures) {
+            if (bytes.includes(fixture.promptMarker)) {
+              transferredPrompts.add(fixture.promptMarker);
+            }
+          }
+          return reply;
+        });
+      });
       try {
         payload = await readUsage({
           ...(scenario.key ? { key: scenario.key } : { agentScope: "all" }),
@@ -247,19 +525,11 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
           limit: scenario.selected.length,
           includeContextWeight: scenario.includeContextWeight,
           creatorKey: scenario.creatorKey,
+          projection: scenario.projection,
         });
-        parsedPrompts = fixtures
-          .filter((fixture) =>
-            parse.mock.calls.some(([json]) => json.includes(fixture.promptMarker)),
-          )
-          .map((fixture) => fixture.promptMarker);
-        expect(reads.reduce((bytes, read) => bytes + read.textBytes.entries, 0)).toBeLessThan(
-          65_536 * scenario.selected.length * 4,
-        );
       } finally {
-        parse.mockRestore();
-        for (const read of reads) {
-          read.restore();
+        for (const transfer of transfers) {
+          transfer.mockRestore();
         }
       }
       const matches = scenario.key
@@ -287,8 +557,8 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
       const emittedPrompts = new Set(scenario.selected.map((fixture) => fixture.promptMarker));
       expect
         .soft(
-          parsedPrompts.filter((marker) => !emittedPrompts.has(marker)),
-          "large saved prompts outside the emitted usage page must remain unparsed",
+          [...transferredPrompts].filter((marker) => !emittedPrompts.has(marker)),
+          "large saved prompts outside the emitted usage page must not cross the worker boundary",
         )
         .toEqual([]);
     }
@@ -307,7 +577,7 @@ it("reads selected reports from the physical owner of shared-store sentinels and
       session: { store: storePath },
       plugins: { enabled: false },
     });
-    const config = getRuntimeConfig();
+    const config = await captureRuntimeConfigAsyncReader()();
     openOpenClawAgentDatabase({ agentId: "main", path: storePath });
     for (const [agentId, key] of [
       ["ops", "global"],
@@ -331,6 +601,7 @@ it("reads selected reports from the physical owner of shared-store sentinels and
         });
       }
     }
+    await sessionRows.dispose();
   });
 });
 

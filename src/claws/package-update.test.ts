@@ -511,7 +511,12 @@ describe("applyClawPackageUpdate", () => {
                 installedVersion: "1.0.0",
                 record: currentRecords.audit,
               }),
-              acquirePackageLease: () => ({ heartbeat: () => {}, release: () => {} }),
+              withPackageLease: async (_artifact, operation) =>
+                operation({
+                  signal: new AbortController().signal,
+                  assertOwned() {},
+                  assertOwnedInTransaction() {},
+                }),
               preflightPlugin: (params) =>
                 preflightPluginInstall({
                   ...params,

@@ -23,8 +23,19 @@ const censusArgs = args => delayed && args?.[2]?.endsWith("ci-windows-process-ce
   ? ["-I", "-S", "-c", "import runpy,sys,time; time.sleep(1.1); sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name='__main__')", ...args.slice(2)]
   : args;
 const spawn = cp.spawn, spawnSync = cp.spawnSync;
+// POSIX has no census interpreter to delay; its first native query instead
+// spends as long as a loaded host can, on the supervisor's clock.
+let slowNativeQuery = delayed && process.argv[2] === "supervise";
 // Delay the actual interpreter entry point, including the pre-fix synchronous path.
-cp.spawnSync = (command, args, options) => spawnSync(command, censusArgs(args), options);
+cp.spawnSync = (command, args, options) => {
+  const result = spawnSync(command, censusArgs(args), options);
+  if (slowNativeQuery && command === "/bin/ps") {
+    slowNativeQuery = false;
+    const now = Date.now;
+    Date.now = () => now() + 1_100;
+  }
+  return result;
+};
 cp.spawn = (command, args, options) => {
   const child = spawn(command, censusArgs(args), options);
   if (command === "python" && process.argv[2] === "supervise") {
@@ -274,11 +285,13 @@ fs.rmSync(root, { recursive: true });
     censusTestTimeoutMs,
   );
 
-  it.each(["sentinel", ...(process.platform === "win32" ? ["startup", "query", "lease"] : [])])(
+  it.for(["sentinel", ...(process.platform === "win32" ? ["startup", "query", "lease"] : [])])(
     "retains startup errors and joins census before registration (%s)",
-    async (fault) => {
+    { timeout: 55_000 },
+    async (fault, { signal }) => {
       await withCiCheckoutFixture(
         "early-leader-exit",
+        signal,
         (root) => {
           writeFileSync(path.join(root, "checkout.sh"), "exit 99\n");
           const sampler = String.raw`
@@ -351,12 +364,12 @@ for line in sys.stdin:
         },
       );
     },
-    55_000,
   );
 
-  it("joins an unregistered sentinel before supervisor close on disconnect", async () => {
+  it("joins an unregistered sentinel before supervisor close on disconnect", async ({ signal }) => {
     await withCiCheckoutFixture(
       "early-leader-exit",
+      signal,
       (root) => {
         writeFileSync(path.join(root, "checkout.sh"), "exit 99\n");
         // Fault only the asynchronous startup boundary; keep the real safe preflight.
@@ -414,9 +427,10 @@ if (mode === "supervise") {
     );
   }, 55_000);
 
-  it.each(["direct-child-close", "truthful-final-census"])(
+  it.for(["direct-child-close", "truthful-final-census"])(
     "rejects expired supervisor cleanup and joins census (%s)",
-    async (fault) => {
+    { timeout: 55_000 },
+    async (fault, { signal }) => {
       type BoundaryEvent = {
         event: string;
         role?: string;
@@ -436,6 +450,7 @@ if (mode === "supervise") {
       let failure: unknown;
       await withCiCheckoutFixture(
         "early-leader-exit",
+        signal,
         (directory) => {
           root = directory;
           writeFileSync(path.join(root, "checkout.sh"), "exit 0\n");
@@ -593,6 +608,5 @@ if (mode === "supervise") {
       // Every spawned writer above also has a creator-held close; failures retain evidence.
       rmSync(directory, { recursive: true });
     },
-    55_000,
   );
 }

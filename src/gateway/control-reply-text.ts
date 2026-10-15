@@ -4,6 +4,7 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN, stripSilentToken } from "../auto
 
 export const SUPPRESSED_CONTROL_REPLY_TOKENS = [
   SILENT_REPLY_TOKEN,
+  // Suppress control replies persisted in transcripts or stored cron prompts by older versions.
   "ANNOUNCE_SKIP",
   "REPLY_SKIP",
 ] as const;

@@ -12,21 +12,6 @@ function isPluginsPath(path: string): boolean {
   return path === "plugins" || path.startsWith("plugins.");
 }
 
-function isPluginEntryIssue(issue: ConfigValidationIssue): boolean {
-  const path = issue.path.trim();
-  if (!path.startsWith(PLUGIN_ENTRY_PATH_PREFIX)) {
-    return false;
-  }
-  return path.slice(PLUGIN_ENTRY_PATH_PREFIX.length).trim().length > 0;
-}
-
-function isPluginPolicyIssue(issue: ConfigValidationIssue): boolean {
-  return (
-    PLUGIN_POLICY_PATHS.has(issue.path.trim()) &&
-    issue.message.trim().startsWith("plugin not found:")
-  );
-}
-
 /** Return true for plugin validation issues caused by missing compiled runtime output. */
 function isPluginPackagingRuntimeOutputIssue(issue: ConfigValidationIssue): boolean {
   const path = issue.path.trim();
@@ -88,7 +73,14 @@ export function isPluginLocalInvalidConfigSnapshot(
   if (snapshot.valid || snapshot.legacyIssues.length > 0 || snapshot.issues.length === 0) {
     return false;
   }
-  return snapshot.issues.every((issue) => isPluginEntryIssue(issue) || isPluginPolicyIssue(issue));
+  return snapshot.issues.every((issue) => {
+    const path = issue.path.trim();
+    return (
+      (path.startsWith(PLUGIN_ENTRY_PATH_PREFIX) &&
+        path.slice(PLUGIN_ENTRY_PATH_PREFIX.length).trim().length > 0) ||
+      (PLUGIN_POLICY_PATHS.has(path) && issue.message.trim().startsWith("plugin not found:"))
+    );
+  });
 }
 
 /**
@@ -98,10 +90,7 @@ export function isPluginLocalInvalidConfigSnapshot(
 export function shouldAttemptLastKnownGoodRecovery(
   snapshot: Pick<ConfigFileSnapshot, "valid" | "issues" | "legacyIssues">,
 ): boolean {
-  if (snapshot.valid) {
-    return false;
-  }
-  return !isPluginLocalInvalidConfigSnapshot(snapshot);
+  return !snapshot.valid && !isPluginLocalInvalidConfigSnapshot(snapshot);
 }
 
 function isSensitiveConfigPath(pathLabel: string): boolean {

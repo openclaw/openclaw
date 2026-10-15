@@ -108,7 +108,7 @@ function assertSignalRecipientDelivery(
   );
 }
 
-async function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
+function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
   const cfg = requireRuntimeConfig(opts.cfg, "Signal RPC account resolution");
   return resolveSignalAccount({
     cfg,
@@ -121,14 +121,13 @@ function parseTarget(raw: string): SignalTarget {
   if (!value) {
     throw new Error("Signal recipient is required");
   }
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  if (normalized.startsWith("group:")) {
-    return { type: "group", groupId: value.slice("group:".length).trim() };
+  if (value.startsWith("group:")) {
+    return { type: "group", groupId: value.slice("group:".length) };
   }
-  if (normalized.startsWith("username:")) {
+  if (value.startsWith("username:")) {
     return {
       type: "username",
-      username: value.slice("username:".length).trim(),
+      username: value.slice("username:".length),
     };
   }
   return { type: "recipient", recipient: value };
@@ -315,23 +314,19 @@ export async function sendMessageSignal(
   };
   let nativeReplyStatus: "sent" | "fallback" | undefined;
   let result: SignalSendRpcResult | undefined;
-  if (quote) {
-    try {
-      result = await signalRpcRequest<SignalSendRpcResult>(
-        "send",
-        { ...params, ...quote.params },
-        sendOpts,
-      );
-      nativeReplyStatus = "sent";
-    } catch (error) {
-      if (!isSignalQuoteMetadataRejection(error)) {
-        throw error;
-      }
-      result = await signalRpcRequest<SignalSendRpcResult>("send", params, sendOpts);
-      nativeReplyStatus = "fallback";
+  try {
+    result = await signalRpcRequest<SignalSendRpcResult>(
+      "send",
+      quote ? { ...params, ...quote.params } : params,
+      sendOpts,
+    );
+    nativeReplyStatus = quote ? "sent" : undefined;
+  } catch (error) {
+    if (!quote || !isSignalQuoteMetadataRejection(error)) {
+      throw error;
     }
-  } else {
     result = await signalRpcRequest<SignalSendRpcResult>("send", params, sendOpts);
+    nativeReplyStatus = "fallback";
   }
   assertSignalRecipientDelivery(result, target);
   const timestamp = result?.timestamp;
@@ -365,7 +360,7 @@ export async function sendTypingSignal(
   to: string,
   opts: SignalRpcOpts & { stop?: boolean },
 ): Promise<boolean> {
-  const accountInfo = await resolveSignalRpcAccountInfo(opts);
+  const accountInfo = resolveSignalRpcAccountInfo(opts);
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const target = parseTarget(to);
   if (target.type === "username") {
@@ -394,7 +389,7 @@ export async function sendReadReceiptSignal(
   if (!Number.isFinite(targetTimestamp) || targetTimestamp <= 0) {
     return false;
   }
-  const accountInfo = await resolveSignalRpcAccountInfo(opts);
+  const accountInfo = resolveSignalRpcAccountInfo(opts);
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const target = parseTarget(to);
   if (target.type !== "recipient") {

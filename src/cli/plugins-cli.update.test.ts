@@ -8,11 +8,10 @@ import {
   resolvePluginInstallTransactionRequest,
   type PluginInstallTransaction,
 } from "../plugins/install-transaction.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   createTestInstalledPluginIndex,
   pluginCliConfigMock,
-  resolvePluginLifecycleGatewayMock,
   pluginLifecycleGatewayMock,
   readConfigFileSnapshotForWriteMock,
   readPersistedInstalledPluginIndexMock,
@@ -37,7 +36,7 @@ import {
 } from "./plugins-cli.update.test-support.js";
 import { createCliTtyMock } from "./test-runtime-capture.js";
 
-const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
+const originalEnv = captureEnv(["OPENCLAW_NIX_MODE"]);
 const { set: setTty, restore: restoreTty } = createCliTtyMock();
 
 function createTrackedPluginConfig(params: { pluginId: string; spec: string }): OpenClawConfig {
@@ -221,11 +220,7 @@ describe("plugins cli update", () => {
 
   afterEach(() => {
     restoreTty();
-    if (ORIGINAL_OPENCLAW_NIX_MODE === undefined) {
-      delete process.env.OPENCLAW_NIX_MODE;
-    } else {
-      process.env.OPENCLAW_NIX_MODE = ORIGINAL_OPENCLAW_NIX_MODE;
-    }
+    originalEnv.restore();
   });
 
   it("refuses plugin updates in Nix mode before package-manager work", async () => {
@@ -311,7 +306,6 @@ describe("plugins cli update", () => {
 
   it.each([
     { ids: ["alpha", "--all"], error: "not both" },
-    { ids: ["@acme/alpha@beta", "@acme/alpha@1.2.3"], error: 'Conflicting npm specs for "alpha"' },
     {
       ids: ["alpha", "@acme/hooks@beta", "@acme/hooks@1.2.3", "--dry-run"],
       error: 'Conflicting npm specs for "hooks"',
@@ -363,8 +357,6 @@ describe("plugins cli update", () => {
       changed: true,
       outcomes: [{ hookId: "hooks", status: "updated", message: "Updated hooks." }],
     });
-    resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
-    pluginLifecycleGatewayMock.mockResolvedValue({ runtime: { generation: 7 } });
 
     await runPluginsCommand([
       "plugins",
@@ -391,12 +383,11 @@ describe("plugins cli update", () => {
     expect(updateNpmInstalledPluginsMock.mock.calls[0]?.[0].config).toEqual({
       plugins: { ...config.plugins, installs: records },
     });
-    expect(pluginLifecycleGatewayMock.mock.calls.map(([method]) => method)).toEqual([
-      "plugins.list",
-      "plugins.refresh",
-    ]);
+    expect(pluginLifecycleGatewayMock).not.toHaveBeenCalled();
     expectInstallRecordsWrittenWithLease(nextRecords, config);
-    expect(pluginsCliRuntimeLogs).toContain("Applied plugin updates in Gateway generation 7.");
+    expect(pluginsCliRuntimeLogs).toContain(
+      "Updates saved; they will load on the next Gateway start.",
+    );
   });
 
   it.each([{ label: "update all", args: ["--all"] }])(
@@ -478,23 +469,6 @@ describe("plugins cli update", () => {
     expectOfflineNoticeLogged();
   });
 
-  it("retains the install error when package rollback also fails", async () => {
-    primeTrackedPluginUpdate({ pluginId: "alpha", spec: "@acme/alpha@1.0.0" });
-    const rollback = vi.fn(async () => {
-      throw new Error("backup restore failed");
-    });
-    const commit = vi.fn(async () => {});
-    updateNpmInstalledPluginsMock.mockImplementation(async (params) => {
-      resolvePluginInstallTransactionRequest(params)?.transactionSink?.push({ commit, rollback });
-      throw new Error("plugin install failed");
-    });
-    await expect(runPluginsCommand(["plugins", "update", "alpha"])).rejects.toThrow(
-      "plugin install failed",
-    );
-    expect(rollback).toHaveBeenCalledOnce();
-    expect(commit).not.toHaveBeenCalled();
-  });
-
   it("rejects invalid config snapshots before updater side effects", async () => {
     const cfg = createTrackedPluginConfig({
       pluginId: "alpha",
@@ -559,68 +533,6 @@ describe("plugins cli update", () => {
     expect(configWriteMock).not.toHaveBeenCalled();
   });
 
-  it("refreshes the online owner only after releasing the update lease", async () => {
-    const config = {};
-    primeUpdateConfigSnapshot({ config });
-    primeBravePluginRecordUpdate(config);
-    const lifecycle = await import("../plugins/plugin-lifecycle-lease.js");
-    const original = lifecycle.withPluginLifecycleLease;
-    let held = false;
-    const spy = vi
-      .spyOn(lifecycle, "withPluginLifecycleLease")
-      .mockImplementation(
-        async <T>(
-          options: Parameters<typeof original>[0],
-          run: (
-            lease: import("../plugins/plugin-lifecycle-lease.js").PluginLifecycleLeaseContext,
-          ) => Promise<T>,
-        ) =>
-          original(options, async (lease) => {
-            const wasHeld = held;
-            held = true;
-            try {
-              return await run(lease);
-            } finally {
-              held = wasHeld;
-            }
-          }),
-      );
-    resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
-    pluginLifecycleGatewayMock.mockImplementation(async (...args: unknown[]) => {
-      const [method] = args;
-      expect(held).toBe(false);
-      return method === "plugins.refresh"
-        ? {
-            runtime: { generation: 7 },
-            warnings: ["Previous plugin service could not stop."],
-          }
-        : {};
-    });
-    try {
-      await runPluginsCommand(["plugins", "update", "brave"]);
-      expect(pluginLifecycleGatewayMock.mock.calls.map(([method]) => method)).toEqual([
-        "plugins.list",
-        "plugins.refresh",
-      ]);
-      expect(pluginsCliRuntimeLogs).toContainEqual(
-        expect.stringContaining("Previous plugin service could not stop."),
-      );
-      expect(pluginsCliRuntimeLogs).toContain("Applied plugin updates in Gateway generation 7.");
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  it("does not mutate packages when the known Gateway is unreachable", async () => {
-    resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
-    pluginLifecycleGatewayMock.mockRejectedValue(new Error("owner unreachable"));
-    await expect(runPluginsCommand(["plugins", "update", "brave"])).rejects.toThrow(
-      "owner unreachable",
-    );
-    expect(updateNpmInstalledPluginsMock).not.toHaveBeenCalled();
-    expect(configWriteMock).not.toHaveBeenCalled();
-  });
-
   it("commits a moved managed npm load path with its replacement record", async () => {
     const previousInstallPath = "/tmp/openclaw/npm/projects/brave-v1/node_modules/brave";
     const nextInstallPath = "/tmp/openclaw/npm/projects/brave-v2/node_modules/brave";
@@ -666,10 +578,7 @@ describe("plugins cli update", () => {
       nextConfig: expectedConfig,
       baseHash: "update-config",
       writeOptions: expect.objectContaining({
-        afterWrite: {
-          mode: "none",
-          reason: "plugin update applies runtime after releasing its lease",
-        },
+        afterWrite: expect.objectContaining({ mode: "none" }),
       }),
     });
     expect(refreshPluginRegistryMock).toHaveBeenCalledWith({
@@ -769,12 +678,6 @@ describe("plugins cli update", () => {
 
   it.each([
     {
-      name: "managed npm load path",
-      id: "demo",
-      record: { source: "npm", spec: "@acme/demo@1.0.0" },
-      loadPath: "/tmp/openclaw/npm/projects/demo-v1/node_modules/demo",
-    },
-    {
       name: "git child load path",
       id: "@acme/demo",
       record: { source: "git", spec: "https://github.com/acme/demo.git#v1.0.0" },
@@ -785,21 +688,14 @@ describe("plugins cli update", () => {
       id: "voice-call",
       record: { source: "marketplace", marketplaceSource: "acme", marketplacePlugin: "voice-call" },
     },
-    {
-      name: "unresolved plugin references",
-      id: "voice-call",
-      record: { source: "npm", spec: "@openclaw/voice-call" },
-      unresolved: true,
-    },
   ] satisfies {
     name: string;
     id: string;
     record: import("../config/types.plugins.js").PluginInstallRecord;
     loadPath?: string;
-    unresolved?: boolean;
   }[])(
     "blocks $name beside include-owned plugin config before updating",
-    async ({ id, record, loadPath, unresolved }) => {
+    async ({ id, record, loadPath }) => {
       const externalPath = path.join(
         path.parse(process.cwd()).root,
         "external-openclaw",
@@ -808,16 +704,11 @@ describe("plugins cli update", () => {
       const config: OpenClawConfig = {
         plugins: loadPath
           ? { load: { paths: [loadPath] } }
-          : unresolved
-            ? {}
-            : { entries: { [id]: { enabled: true } } },
+          : { entries: { [id]: { enabled: true } } },
       };
       primeUpdateConfigSnapshot({
         config,
         parsed: { plugins: { $include: externalPath } },
-        ...(unresolved
-          ? { sourceConfig: { plugins: { $include: externalPath } } as unknown as OpenClawConfig }
-          : {}),
         includeFileTargetsForWrite: { [externalPath]: externalPath },
       });
       setInstalledPluginIndexInstallRecords({

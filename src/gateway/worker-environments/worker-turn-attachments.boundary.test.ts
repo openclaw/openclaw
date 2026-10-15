@@ -1,6 +1,7 @@
 import { mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
@@ -166,7 +167,6 @@ describe("current attachments in an active remote placement", () => {
               environmentId: ENVIRONMENT_ID,
               ownerEpoch: OWNER_EPOCH,
               sessionId: SESSION_ID,
-              generation: 1,
               localPath: local,
               isAuthorized: request.isAuthorized,
             });
@@ -201,12 +201,14 @@ describe("current attachments in an active remote placement", () => {
                 : prompt.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n"),
             );
             request.onDispatchReady?.();
-            const transcriptLeafId = openSessionManager().appendMessage({
+            const transcriptLeafId = await (
+              await openSessionManager()
+            ).appendMessageAsync({
               role: "assistant",
               content: [{ type: "text", text: "Read both" }],
               api: "openai-responses",
               provider: "openai",
-              model: "gpt-test",
+              model: "gpt-5.6-luna",
               usage: {
                 input: 1,
                 output: 1,
@@ -218,7 +220,7 @@ describe("current attachments in an active remote placement", () => {
               stopReason: "stop",
               timestamp: Date.now(),
             });
-            createWorkerSessionPlacementGate(placements).updateAckCursors({
+            await createWorkerSessionPlacementGate(placements).updateAckCursors({
               claim: request.turnClaim,
               transcriptSeq: 2,
               liveSeq: 1,
@@ -300,6 +302,7 @@ describe("current attachments in an active remote placement", () => {
           return { meta: { durationMs: 1 } };
         },
       );
+      await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
       if (executionMode === "remote-exec") {
         const commands = vi.mocked(tunnel.runWorkspaceCommand).mock.calls;
         expect(commands.at(-1)?.[0].input).toBe(JSON.stringify({ op: "discover" }));

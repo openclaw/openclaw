@@ -2,14 +2,12 @@ import { isAgentRunWaitingForCapacity } from "../../../infra/agent-run-capacity-
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  compareSubagentRunGeneration,
-  recordLatestSubagentRun,
-} from "./subagent-run-generation.js";
+import { isSameSubagentRun, recordLatestSubagentRun } from "./subagent-run-generation.js";
 import {
   hasSubagentRunEnded,
   isSubagentRunLive,
   isSubagentRunQueued,
+  isYieldedSubagentRun,
 } from "./subagent-run-liveness.js";
 
 export type SubagentExecutionObservation = {
@@ -21,16 +19,6 @@ export type SubagentExecutionObservation = {
     pendingCount?: number;
   };
 };
-
-function isYieldedSubagentRun(entry: SubagentRunRecord): boolean {
-  return (
-    entry.pauseReason === "sessions_yield" &&
-    !entry.killIntent &&
-    !entry.killReconciliation &&
-    entry.suppressAnnounceReason !== "killed" &&
-    entry.endedReason !== "subagent-killed"
-  );
-}
 
 /** Project recorded execution separately from completion and requester delivery. */
 export function observeSubagentExecution(
@@ -81,15 +69,9 @@ export function observeSubagentExecution(
   if (entry.execution.status === "interrupted") {
     return { state: "unknown" };
   }
-  // Snapshots must match the current registration before using live or queued ownership.
+  // Data-only snapshots may observe matching current execution, but carry no callback custody.
   const current = subagentRuns.get(entry.runId);
-  if (
-    !current ||
-    current.childSessionKey !== entry.childSessionKey ||
-    current.requesterSessionKey !== entry.requesterSessionKey ||
-    (current.taskRunId ?? current.runId) !== (entry.taskRunId ?? entry.runId) ||
-    compareSubagentRunGeneration(current, entry) !== 0
-  ) {
+  if (!current || !isSameSubagentRun(current, entry)) {
     return { state: "unknown" };
   }
   if (isSubagentRunLive(current)) {
@@ -114,8 +96,5 @@ export function observeSubagentExecution(
     const tool = activity?.tools.at(-1);
     return { state: "running", ...(tool ? { currentTool: { name: tool.name } } : {}) };
   }
-  if (isSubagentRunQueued(current)) {
-    return { state: "queued" };
-  }
-  return { state: "unknown" };
+  return { state: isSubagentRunQueued(current) ? "queued" : "unknown" };
 }

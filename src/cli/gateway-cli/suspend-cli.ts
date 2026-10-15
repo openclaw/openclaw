@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import type {
   GatewaySuspendPrepareResult,
   GatewaySuspendResumeResult,
@@ -67,12 +68,7 @@ export async function runGatewaySuspend(
   deps: SuspendCliDeps,
 ): Promise<void> {
   const nowMs = deps.nowMs ?? Date.now;
-  const sleep =
-    deps.sleep ??
-    (async (delayMs: number) =>
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, delayMs);
-      }));
+  const wait = deps.sleep ?? sleep;
   const requestId = resolveRequestId(options.requestId);
   const waitMs = parseWaitMs(options.waitSeconds);
   const deadlineMs = waitMs === undefined ? undefined : nowMs() + waitMs;
@@ -119,7 +115,7 @@ export async function runGatewaySuspend(
       break;
     }
     const delayMs = Math.min(remainingMs, Math.max(MIN_SUSPEND_POLL_DELAY_MS, latest.retryAfterMs));
-    await sleep(delayMs);
+    await wait(delayMs);
   }
 
   if (!latest || latest.status !== "busy") {

@@ -52,7 +52,13 @@ describe("Zoom meetings plugin surface", () => {
     const api = fixture.createApi({
       pluginConfig: {},
       runtime: {
-        gateway: { isAvailable: vi.fn(async () => true), request: gatewayRequest },
+        gateway: {
+          isAvailable: vi.fn(async () => true),
+          request: gatewayRequest,
+          async readSessionFacts() {
+            throw new Error("Unexpected session facts request");
+          },
+        },
       } as unknown as OpenClawPluginApi["runtime"],
       registerTool: (registered: unknown) => {
         tool = (

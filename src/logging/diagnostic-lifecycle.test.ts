@@ -1,12 +1,13 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { recordCommandPoll } from "../agents/command-poll-backoff.js";
 import { detectToolCallLoop, recordToolCall } from "../agents/tool-loop-detection.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   onDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
-  type DiagnosticMessageProcessedEvent,
 } from "../infra/diagnostic-events.js";
 import {
   createGatewaySchedulerClock,
@@ -29,6 +30,7 @@ import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 import { createDiagnosticMessageLifecycle } from "./message-lifecycle.js";
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   resetDiagnosticStateForTest();
   setDiagnosticsEnabledForProcess(true);
   vi.restoreAllMocks();
@@ -67,6 +69,43 @@ it("reports the shared next wake and coalesces diagnostic heartbeats after sleep
   }
 });
 
+// Mirrors the private per-field budget in src/infra/diagnostic-content.ts; the
+// production constant stays unexported because only tests would consume it.
+const MAX_DIAGNOSTIC_CONTENT_CHARS = 128 * 1024;
+
+it("bounds captured message content before diagnostic dispatch", () => {
+  setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
+  const oversizedContent = `${"x".repeat(MAX_DIAGNOSTIC_CONTENT_CHARS - 1)}🚀tail`;
+  const captured: Array<{ userPrompt?: string; finalResponse?: string }> = [];
+  const unsubscribe = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+    if (event.type === "message.processed" && privateData.messageContent) {
+      captured.push(privateData.messageContent);
+    }
+  });
+  try {
+    const lifecycle = createDiagnosticMessageLifecycle({
+      enabled: true,
+      channel: "test",
+      source: "test",
+      trackSessionState: false,
+      userPrompt: oversizedContent,
+    });
+    lifecycle.markProcessed("completed", { finalResponse: oversizedContent });
+  } finally {
+    unsubscribe();
+  }
+
+  expect(captured).toHaveLength(1);
+  expect(captured[0]?.userPrompt?.length).toBeLessThanOrEqual(MAX_DIAGNOSTIC_CONTENT_CHARS);
+  expect(captured[0]?.finalResponse?.length).toBeLessThanOrEqual(MAX_DIAGNOSTIC_CONTENT_CHARS);
+  expect(captured[0]?.userPrompt?.charCodeAt((captured[0]?.userPrompt?.length ?? 0) - 1)).not.toBe(
+    0xd83d,
+  );
+  expect(
+    captured[0]?.finalResponse?.charCodeAt((captured[0]?.finalResponse?.length ?? 0) - 1),
+  ).not.toBe(0xd83d);
+});
+
 it("preserves independent tool-loop and poll-backoff policy when diagnostic observation stops", () => {
   const session = { sessionKey: "diagnostic-tool-history" };
   const state = getDiagnosticSessionState(session);
@@ -74,14 +113,14 @@ it("preserves independent tool-loop and poll-backoff policy when diagnostic obse
   for (let index = 0; index < 10; index += 1) {
     recordToolCall(state, "read", args);
   }
-  const before = detectToolCallLoop(state, "read", args, { enabled: true });
+  const before = detectToolCallLoop(state, "read", args);
   expect(before).toMatchObject({ stuck: true, detector: "generic_repeat", count: 10 });
   expect(recordCommandPoll(state, "fixture-command", false)).toBe(5_000);
   expect(recordCommandPoll(state, "fixture-command", false)).toBe(10_000);
   setDiagnosticsEnabledForProcess(false);
   stopGatewayDiagnosticHeartbeat();
   const current = getDiagnosticSessionState(session);
-  expect(detectToolCallLoop(current, "read", args, { enabled: true })).toEqual(before);
+  expect(detectToolCallLoop(current, "read", args)).toEqual(before);
   expect(recordCommandPoll(current, "fixture-command", false)).toBe(30_000);
 });
 
@@ -122,7 +161,7 @@ it("retires interrupted diagnostic observations before re-enable without revivin
 });
 
 it("attributes message.processed to the ingesting agent recorded at the lifecycle owner", () => {
-  const processed: DiagnosticMessageProcessedEvent[] = [];
+  const processed: Extract<DiagnosticEventPayload, { type: "message.processed" }>[] = [];
   const unsubscribe = onDiagnosticEvent((event) => {
     if (event.type === "message.processed") {
       processed.push(event);

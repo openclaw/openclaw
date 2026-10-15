@@ -24,8 +24,6 @@ export type ReplyLine = {
   agentAvatar?: ReplyPreview["agentAvatar"];
   /** The original the name navigates to, loaded or not. */
   openId?: string;
-  /** An original that still needs a lookup: unresolved, or named only by a snapshot. */
-  request?: string;
 };
 
 export const NO_REPLY_LINE: ReplyLine = { state: "hidden" };
@@ -114,8 +112,6 @@ function resolveTarget(
       sender: { ...sender, name },
       agentAvatar: preview?.agentAvatar,
       openId: id,
-      // A sender-only snapshot paints now; its lookup can still confirm a missing original.
-      ...(preview || snapshot?.text || oversized ? {} : { request: id }),
     };
   }
   if (preview || name) {
@@ -123,7 +119,6 @@ function resolveTarget(
   }
   return {
     state: result && "pending" in result && reserves ? "reserved" : "hidden",
-    request: id,
   };
 }
 
@@ -201,7 +196,6 @@ export function resolveGroupReplyLine(
 
 type ReplyLineActions = {
   onOpenReply?: (id: string) => void;
-  onResolveReply?: (id: string) => void;
   replyNavigationId?: string | null;
 };
 
@@ -212,12 +206,9 @@ type ReplyLineActions = {
  */
 export function renderReplyLine(
   line: ReplyLine,
-  { onOpenReply, onResolveReply, replyNavigationId }: ReplyLineActions,
+  { onOpenReply, replyNavigationId }: ReplyLineActions,
   inline = false,
 ) {
-  if (line.request) {
-    onResolveReply?.(line.request);
-  }
   if (line.state === "hidden") {
     return nothing;
   }

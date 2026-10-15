@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "@openclaw/retry";
 import type { WizardStartResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { WizardNextResult, WizardStep } from "../../api/types.ts";
@@ -14,7 +15,6 @@ async function requestWithTimeout<T>(
   params: unknown,
   onLateResult?: (result: T) => void,
 ): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
   const request = client.request<T>(method, params).then((result) => {
     if (timedOut) {
@@ -22,19 +22,10 @@ async function requestWithTimeout<T>(
     }
     return result;
   });
-  try {
-    return await Promise.race([
-      request,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          timedOut = true;
-          reject(new Error(`wizard request timed out: ${method}`));
-        }, WIZARD_STEP_TIMEOUT_MS);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
+  return await raceWithTimeout(request, WIZARD_STEP_TIMEOUT_MS, () => {
+    timedOut = true;
+    throw new Error(`wizard request timed out: ${method}`);
+  });
 }
 
 function cancelRunningWizardResult(client: WizardGatewayClient, result: WizardStartResult): void {

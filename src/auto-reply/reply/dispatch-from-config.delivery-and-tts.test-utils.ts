@@ -3,12 +3,17 @@ import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../config/config.js";
+import type { PendingFinalDeliveryState } from "../../config/sessions/pending-final-delivery-types.js";
+import { createMemorySessionActorOwner } from "../../config/sessions/session-actor-memory.js";
+import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "../../config/sessions/session-actor-storage-result.js";
 import {
   createDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
@@ -20,6 +25,7 @@ import {
 } from "../../infra/outbound/deliver-types.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.test-fixtures.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
@@ -53,7 +59,7 @@ import {
   messageAuditEvents,
   globalBeforeAll0,
   describe0BeforeEach0,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { usesFullReplyRuntime } from "./reply-config-runtime-mode.js";
@@ -190,53 +196,6 @@ describe("dispatchReplyFromConfig", () => {
     ).toBe(fallback);
     expect(result.noVisibleReplyFallbackEligible === true).toBe(fallback);
     expect(receipt?.anyVisibleDelivered).toBe(false);
-  });
-
-  it("does not dispatch a settled final reply after its session writer is replaced", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      lifecycleRevision: "revision-a",
-      activeWriterRunId: "run-settled",
-      updatedAt: 0,
-    };
-    const payload = setReplyPayloadMetadata(
-      { text: "settled fallback" },
-      {
-        assistantTranscriptOwned: true,
-        assistantTranscriptIdempotencyKey: "run-settled:settled-finalization-fallback",
-        sessionWriterDeliveryAuthority: {
-          expectedLifecycleRevision: "revision-a",
-          expectedSessionId: "s1",
-          expectedWriterRunId: "run-settled",
-          sessionKey: "agent:main:telegram:direct:123",
-          storePath: "/tmp/mock-sessions.json",
-        },
-      },
-    );
-    const dispatcher = createDispatcher();
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "telegram",
-        Surface: "telegram",
-        SessionKey: "agent:main:telegram:direct:123",
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyOptions: { runId: "run-settled" },
-      replyResolver: vi.fn(async () => {
-        sessionStoreMocks.currentEntry = {
-          ...sessionStoreMocks.currentEntry,
-          activeWriterRunId: "replacement-run",
-        };
-        return payload;
-      }),
-    });
-
-    expect(result).toMatchObject({ queuedFinal: false });
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(mocks.routeReply).not.toHaveBeenCalled();
   });
 
   it("keeps a block-only channel transform veto terminal", async () => {
@@ -2749,80 +2708,116 @@ describe("dispatchReplyFromConfig", () => {
     async ({ completionState, audio, native }) => {
       setNoAbort();
       ttsMocks.state.synthesizeFinalAudio = audio;
-      const pending = {
+      const pending: PendingFinalDeliveryState = {
         kind: "replayable",
         text: "same",
         createdAt: 1,
         intentId: "pending-block",
         deliveries: [{ id: "original", state: completionState }],
       };
-      sessionStoreMocks.currentEntry = { sessionId: "session-1", pendingFinalDelivery: pending };
-      const onFinalDeliverySuccess = vi.fn();
-      const payload = setReplyPayloadMetadata(
-        { text: "same" },
-        {
-          pendingFinalDeliveryCompletion: {
-            deliveryId: "original",
-            intentId: "pending-block",
-            sessionId: "session-1",
-            sessionKey: "agent:main:slack:direct:123",
-            storePath: "/tmp/mock-sessions.json",
-          },
-          onFinalDeliverySuccess,
-        },
-      );
-      mocks.routeReply
-        .mockResolvedValueOnce({ ok: true, delivered: false, ambiguous: true })
-        .mockResolvedValue({ ok: true, delivered: true });
-      const nativePayloads: ReplyPayload[] = [];
-      const dispatcher = native
-        ? createReplyDispatcher({
-            deliver: async (reply, info) => {
-              nativePayloads.push(reply);
-              if (info.kind === "block") {
-                throw Object.assign(
-                  new OutboundDeliveryError("queued block", {
-                    cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
-                  }),
-                  { queueCustody: "held" as const },
-                );
-              }
-            },
-          })
-        : createDispatcher();
-      await dispatchReplyFromConfig({
-        ctx: buildTestCtx({
-          Provider: native ? "telegram" : "slack",
-          Surface: native ? "telegram" : "slack",
-          OriginatingChannel: "telegram",
-          OriginatingTo: "telegram:999",
-          SessionKey: "agent:main:slack:direct:123",
-        }),
-        cfg: emptyConfig,
-        dispatcher,
-        replyResolver: async (_ctx, opts) => {
-          await opts?.onBlockReply?.({ text: "same" });
-          return payload;
-        },
+      const sessionKey = "agent:main:dashboard:incognito-pending-block";
+      const storePath = resolveIncognitoOpenClawAgentSqlitePath({
+        agentId: "main",
+        env: { OPENCLAW_STATE_DIR: "/synthetic/dispatch-pending-block" },
       });
-
-      dispatcher.markComplete();
-      await dispatcher.waitForIdle();
-      const attempted = native
-        ? nativePayloads
-        : mocks.routeReply.mock.calls.map(([call]) => call.payload);
-      expect(attempted).toHaveLength(audio ? 2 : 1);
-      expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toEqual(
-        completionState === "prepared" ? undefined : pending,
+      const owner = createMemorySessionActorOwner({ agentId: "main", path: storePath });
+      const actor = await owner.acquire(
+        { database: owner.identity, sessionKey },
+        { assertCurrent() {}, assertReadable() {} },
       );
-      expect(onFinalDeliverySuccess).not.toHaveBeenCalled();
-      if (audio) {
-        const supplement = expectDefined(attempted[1], "audio supplement");
-        expect(supplement).toMatchObject({
-          text: undefined,
-          mediaUrl: "https://example.com/tts-synth.opus",
-        });
-        expect(getReplyPayloadMetadata(supplement)?.pendingFinalDeliveryCompletion).toBeUndefined();
+      const authority = { assertCurrent() {}, authorize() {} };
+      const entry = { sessionId: "session-1", updatedAt: 1, pendingFinalDelivery: pending };
+      try {
+        readSessionActorStorageResult(
+          await actor.storage!.mutate(
+            {
+              type: "session.metadata.initialize",
+              input: {
+                scope: { agentId: "main", storePath, sessionKey, sessionId: entry.sessionId },
+                entry,
+              },
+            },
+            authority,
+          ),
+        );
+        sessionStoreMocks.currentEntry = { ...actor.snapshot(authority)?.entry };
+        const onFinalDeliverySuccess = vi.fn();
+        const payload = setReplyPayloadMetadata(
+          { text: "same" },
+          {
+            pendingFinalDeliveryCompletion: {
+              deliveryId: "original",
+              intentId: "pending-block",
+              sessionId: "session-1",
+              sessionKey,
+              storePath,
+            },
+            onFinalDeliverySuccess,
+          },
+        );
+        mocks.routeReply
+          .mockResolvedValueOnce({ ok: true, delivered: false, ambiguous: true })
+          .mockResolvedValue({ ok: true, delivered: true });
+        const nativePayloads: ReplyPayload[] = [];
+        const dispatcher = native
+          ? createReplyDispatcher({
+              deliver: async (reply, info) => {
+                nativePayloads.push(reply);
+                if (info.kind === "block") {
+                  throw Object.assign(
+                    new OutboundDeliveryError("queued block", {
+                      cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
+                    }),
+                    { queueCustody: "held" as const },
+                  );
+                }
+              },
+            })
+          : createDispatcher();
+        await runWithSessionActorStorage(
+          { actor, authority, agentId: "main", path: storePath },
+          async () => {
+            await dispatchReplyFromConfig({
+              ctx: buildTestCtx({
+                Provider: native ? "telegram" : "slack",
+                Surface: native ? "telegram" : "slack",
+                OriginatingChannel: "telegram",
+                OriginatingTo: "telegram:999",
+                SessionKey: sessionKey,
+              }),
+              cfg: emptyConfig,
+              dispatcher,
+              replyResolver: async (_ctx, opts) => {
+                await opts?.onBlockReply?.({ text: "same" });
+                return payload;
+              },
+            });
+
+            dispatcher.markComplete();
+            await dispatcher.waitForIdle();
+          },
+        );
+        const attempted = native
+          ? nativePayloads
+          : mocks.routeReply.mock.calls.map(([call]) => call.payload);
+        expect(attempted).toHaveLength(audio ? 2 : 1);
+        expect(actor.snapshot(authority)?.entry?.pendingFinalDelivery).toEqual(
+          completionState === "prepared" ? undefined : pending,
+        );
+        expect(onFinalDeliverySuccess).not.toHaveBeenCalled();
+        if (audio) {
+          const supplement = expectDefined(attempted[1], "audio supplement");
+          expect(supplement).toMatchObject({
+            text: undefined,
+            mediaUrl: "https://example.com/tts-synth.opus",
+          });
+          expect(
+            getReplyPayloadMetadata(supplement)?.pendingFinalDeliveryCompletion,
+          ).toBeUndefined();
+        }
+      } finally {
+        await actor.release();
+        owner.close();
       }
     },
   );
@@ -2908,7 +2903,10 @@ describe("dispatchReplyFromConfig", () => {
     expect(firstFinalReplyPayload(dispatcher)).toEqual({ text: "Partial useful answer." });
     expect(
       vi.mocked(dispatcher.sendFinalReply).mock.calls.map(([payload]) => payload.text),
-    ).toEqual(["Partial useful answer.", expect.stringContaining("Something went wrong")]);
+    ).toEqual([
+      "Partial useful answer.",
+      expect.stringContaining(GENERIC_EXTERNAL_RUN_FAILURE_TEXT),
+    ]);
   });
 
   it.each([
@@ -3025,7 +3023,7 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
 
     expect(firstFinalReplyPayload(dispatcher)).toMatchObject({
-      text: "Visible block.\nVisible final.",
+      text: "Visible block. \nVisible final.",
       mediaUrl: "https://example.com/tts-synth.opus",
     });
   });

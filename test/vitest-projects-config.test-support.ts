@@ -2,6 +2,7 @@
 import { globSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { globSync as nativeGlobSync } from "tinyglobby";
 import { fullSuiteVitestShards } from "./vitest/vitest.test-shards.mjs";
 
 type VitestTestConfig = {
@@ -81,9 +82,12 @@ async function listConfigTestFiles(config: VitestConfig, includeFile?: string): 
   const exclude = (testConfig.exclude ?? []).map((pattern) =>
     path.isAbsolute(pattern) ? toRepoPath(path.relative(dir, pattern)) : toRepoPath(pattern),
   );
-  return globSync(testConfig.include ?? [], { cwd: dir, exclude }).map((file) =>
-    toRepoPath(path.relative(process.cwd(), path.resolve(dir, file))),
-  );
+  return nativeGlobSync(testConfig.include ?? [], {
+    cwd: dir,
+    ignore: exclude,
+    dot: true,
+    expandDirectories: false,
+  }).map((file) => toRepoPath(path.relative(process.cwd(), path.resolve(dir, file))));
 }
 
 export async function listVitestConfigTestFiles(
@@ -105,10 +109,7 @@ async function listFullSuiteTestFileMatches(): Promise<Map<string, string[]>> {
 }
 
 function listNormalFullSuiteTestFiles(): string[] {
-  const e2eNamedIntegrationTests = new Set([
-    "src/gateway/gateway.test.ts",
-    "src/gateway/server.startup-matrix-migration.integration.test.ts",
-  ]);
+  const e2eNamedIntegrationTests = new Set(["src/gateway/gateway.test.ts"]);
   return globSync(["**/*.{test,spec}.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"], {
     cwd: process.cwd(),
     exclude: ["**/.*/**", "**/dist/**", "**/node_modules/**", "**/vendor/**"],
