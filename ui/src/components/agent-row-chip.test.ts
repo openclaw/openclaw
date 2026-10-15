@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createComponent } from "solid-js";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createContext, createGateway, createSessions } from "../test-helpers/app-sidebar.ts";
@@ -87,4 +87,38 @@ it("updates a mounted chip when the identity owner publishes", async () => {
     );
   });
   expect(provider.querySelector("openclaw-agent-row-chip")).toBe(chip);
+});
+
+it("leaves retained chip DOM untouched when only the parent's loading state changes", () => {
+  const context = createContext(
+    createGateway(createTestGatewayClient(async () => ({}))),
+    createSessions("research", []),
+    {
+      defaultId: "research",
+      agents: [{ id: "research", name: "Research", identity: { emoji: "🔬" } }],
+    },
+  );
+  const [parent, setParent] = createSignal({ agentId: "research", loading: false });
+  const { container } = mountSolid(
+    () =>
+      createComponent(AgentRowChip, {
+        get agentId() {
+          return parent().agentId;
+        },
+      }),
+    { wrapper: createSolidApplicationContextProvider(context).wrapper },
+  );
+  flush();
+  const observer = new MutationObserver(() => undefined);
+  observer.observe(container, {
+    attributes: true,
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
+  setParent({ agentId: "research", loading: true });
+  flush();
+  const mutations = observer.takeRecords();
+  observer.disconnect();
+  expect(mutations).toEqual([]);
 });
