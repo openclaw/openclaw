@@ -10,6 +10,7 @@ import {
   setWorktreePreparationTemplate,
   startWorktreePreparationPhase,
 } from "../worktrees/preparation-timing.js";
+import { bindSandboxInputStager, getSandboxInputStager } from "./input-staging.js";
 import type { SandboxConfig, SandboxContext } from "./types.js";
 
 /** A writable project is an exact managed projection, never a role-policy override. */
@@ -180,5 +181,11 @@ export function bindLocalSandboxWorkspace(
   }
   if (createFileExclusive) {
     bridge.createFileExclusive = (params) => mutate(() => createFileExclusive(params));
+  }
+  const stageInput = getSandboxInputStager(bridge);
+  if (stageInput) {
+    bindSandboxInputStager(bridge, (params) =>
+      mutate(() => projection.provision(() => stageInput(params), params.signal)),
+    );
   }
 }

@@ -57,6 +57,7 @@ async function fixture(
     fastMode: fastMode ?? {
       active: false,
       currentOverride: "",
+      persistedOverride: "",
       disabled: true,
       label: "Off",
       nextValue: "on",
@@ -158,15 +159,46 @@ describe("effort bar colour and flow", () => {
     await expect.poll(() => document.activeElement).toBe(trigger);
   });
 
+  it("keeps inherited speed selectable", async () => {
+    document.documentElement.dataset.themeMode = "dark";
+    const fastMode = resolveChatFastModeSelectState({
+      connected: true,
+      gatewayAvailable: true,
+      loading: false,
+      sessionsResult: null,
+      currentModelOverride: "openai/speed-fixture",
+      fastModeTarget: {
+        model: "speed-fixture",
+        modelProvider: "openai",
+        effectiveFastMode: "ultrafast",
+      },
+      catalog: [
+        {
+          id: "speed-fixture",
+          name: "Speed fixture",
+          provider: "openai",
+          available: true,
+          supportsFastMode: true,
+          serviceTiers: ["default", "priority", "ultrafast"],
+        },
+      ],
+    });
+    const { onFastModeSelect } = await fixture(["low", "medium", "high"], "high", false, fastMode);
+    for (const value of ["off", "on", "ultrafast"]) {
+      const option = host!.querySelector<HTMLButtonElement>(
+        '[data-chat-speed-option="' + value + '"]',
+      )!;
+      expect(option.disabled).toBe(false);
+      option.click();
+      expect(onFastModeSelect).toHaveBeenLastCalledWith(value, "effort-preview");
+    }
+  });
   it("keeps speed names accessible without chip labels and only exposes entitled choices", async () => {
     const state = (mode: boolean | "ultrafast", tiers?: string[], supportsFastMode = true) =>
       resolveChatFastModeSelectState({
-        activeRunId: null,
         connected: true,
         gatewayAvailable: true,
         loading: false,
-        sending: false,
-        stream: null,
         sessionsResult: null,
         currentModelOverride: "openai/model",
         fastModeTarget: { model: "model", modelProvider: "openai", fastMode: mode },
