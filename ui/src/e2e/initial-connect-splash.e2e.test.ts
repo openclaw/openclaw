@@ -22,6 +22,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { defineControlUiFrameIdentityTests } from "./control-ui-screenshot-identity.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -974,6 +975,8 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     await page.clock.runFor(2_000);
     expect(await target.textContent()).toBe("");
   });
+
+  defineControlUiFrameIdentityTests(createPageWithoutRecording);
 
   it("falls back to the login gate when stored credentials are rejected", async () => {
     const page = await createPage();

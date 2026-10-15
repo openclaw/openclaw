@@ -15,6 +15,7 @@ import {
 } from "../media/playback-transcode.js";
 import { extractOriginalFilename } from "../media/store.js";
 import { resolveAvatarMime } from "../shared/avatar-policy.js";
+import { normalizeChatImageRenditionWidth } from "../shared/chat-image-renditions.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
 import {
@@ -333,21 +334,26 @@ export async function handleControlUiAssistantMediaRequest(
           )
         : path.basename(media.reference.path);
     const mediaKind = kindFromMime(contentType);
+    // Local assistant-media previews retain their original animation bytes.
     if (
       media.reference.kind === "inbound" &&
       mediaKind === "image" &&
       url.searchParams.get("variant") === "thumbnail"
     ) {
       const { readImageThumbnailFromFile } = await import("./managed-image-thumbnail-cache.js");
-      const thumbnail = await readImageThumbnailFromFile(opened);
+      const thumbnail = await readImageThumbnailFromFile(
+        opened,
+        undefined,
+        normalizeChatImageRenditionWidth(url.searchParams.get("width")),
+      );
       await byteStream.close();
       await publishResponse(() => {
-        res.setHeader("Content-Type", "image/png");
+        res.setHeader("Content-Type", "image/webp");
         res.setHeader("Content-Length", String(thumbnail.byteLength));
         res.setHeader("Cache-Control", "private, no-cache");
         res.setHeader(
           "Content-Disposition",
-          buildAssistantMediaContentDisposition(`${filename}-preview.png`, "image/png"),
+          buildAssistantMediaContentDisposition(`${filename}-preview.webp`, "image/webp"),
         );
         res.end(req.method === "HEAD" ? undefined : thumbnail);
       });

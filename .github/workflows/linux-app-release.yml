@@ -97,7 +97,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.21.0"
           package-manager-cache: false
@@ -254,7 +254,7 @@ jobs:
 
       - name: Retain Linux builder admission
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-release-admission-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/linux-release-admission.json
@@ -262,7 +262,7 @@ jobs:
 
       - name: Retain Linux completion evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-release-completion-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/linux-release-completion
@@ -322,7 +322,7 @@ jobs:
         run: rustup toolchain install stable --profile minimal
 
       - name: Setup trusted Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
@@ -488,7 +488,7 @@ jobs:
 
       - name: Upload unqualified Linux bundle diagnostics
         if: ${{ failure() && steps.bundle-build.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-app-release-unqualified-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 14
@@ -498,7 +498,7 @@ jobs:
 
       - name: Upload packaged runtime failure evidence
         if: failure() && steps.packaged-runtime.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-app-release-runtime-failure
           retention-days: 14
@@ -507,7 +507,7 @@ jobs:
 
       - name: Upload Debian bundle
         id: upload_deb
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-app-release-deb
           path: dist/linux-app/release/*.deb
@@ -515,7 +515,7 @@ jobs:
 
       - name: Upload finalized unsigned AppImage
         id: upload_appimage
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-app-release-unsigned-appimage
           path: dist/linux-app/unsigned/*.AppImage
@@ -560,7 +560,7 @@ jobs:
           "${RUNNER_TEMP}/bin/minisign" -v
 
       - name: Download finalized unsigned AppImage
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.build_linux.outputs.unsigned_appimage_artifact_id }}
           path: dist/signing-input
@@ -608,7 +608,7 @@ jobs:
 
       - name: Upload signed AppImage
         id: upload_signed_appimage
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-app-release-signed-appimage
           path: dist/linux-app
@@ -635,7 +635,7 @@ jobs:
         run: rustup toolchain install stable --profile minimal
 
       - name: Setup trusted Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
@@ -694,7 +694,7 @@ jobs:
 
       - name: Upload macOS DMG
         id: upload_dmg
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-app-release-dmg
           path: dist/macos-app/release/*.dmg
@@ -702,7 +702,7 @@ jobs:
 
       - name: Upload unsigned macOS updater archive
         id: upload_updater
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-app-release-unsigned-updater
           path: dist/macos-app/unsigned/*.app.tar.gz
@@ -723,7 +723,7 @@ jobs:
         run: rustup toolchain install stable --profile minimal
 
       - name: Setup trusted Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
@@ -777,7 +777,7 @@ jobs:
 
       - name: Upload unsigned Windows updater installer
         id: upload_updater
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-app-release-unsigned-updater
           path: dist/windows-app/unsigned/*.exe
@@ -799,7 +799,7 @@ jobs:
       signed_installer_artifact_id: ${{ steps.upload_signed.outputs.artifact-id }}
     steps:
       - name: Download unsigned Windows installer
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.build_windows.outputs.unsigned_updater_artifact_id }}
           path: dist/windows
@@ -850,7 +850,7 @@ jobs:
 
       - name: Upload Authenticode-signed installer
         id: upload_signed
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows-app-release-authenticode
           path: dist/windows/*.exe
@@ -902,21 +902,21 @@ jobs:
 
       - name: Download finalized macOS updater archive
         if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.build_macos.outputs.unsigned_updater_artifact_id }}
           path: dist/signing-input/macos
 
       - name: Download finalized Windows updater installer
         if: ${{ vars.OPENCLAW_RELEASE_WINDOWS_SIGNED != 'true' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.build_windows.outputs.unsigned_updater_artifact_id }}
           path: dist/signing-input/windows
 
       - name: Download Authenticode-signed Windows updater installer
         if: ${{ vars.OPENCLAW_RELEASE_WINDOWS_SIGNED == 'true' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.sign_windows.outputs.signed_installer_artifact_id }}
           path: dist/signing-input/windows
@@ -971,7 +971,7 @@ jobs:
 
       - name: Upload signed desktop updater bundles
         id: upload_signed_desktop
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-test-release-signed-updaters
           path: dist/desktop-test
@@ -1038,28 +1038,28 @@ jobs:
 
       - name: Download Debian bundle
         if: ${{ needs.validate_release.outputs.already_published != 'true' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.build_linux.outputs.deb_artifact_id }}
           path: dist/input/linux/release
 
       - name: Download signed AppImage
         if: ${{ needs.validate_release.outputs.already_published != 'true' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.sign_linux.outputs.signed_appimage_artifact_id }}
           path: dist/input/linux
 
       - name: Download macOS test DMG
         if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.build_macos.outputs.dmg_artifact_id }}
           path: dist/input/macos/release
 
       - name: Download signed desktop updater bundles
         if: ${{ needs.validate_release.outputs.already_published != 'true' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.sign_desktop.outputs.signed_desktop_artifact_id }}
           path: dist/input
@@ -1120,7 +1120,7 @@ jobs:
           permission-workflows: write
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.21.0"
           package-manager-cache: false
@@ -1185,7 +1185,7 @@ jobs:
 
       - name: Retain Linux updater publication evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-updater-publication-${{ github.run_id }}-${{ github.run_attempt }}
           path: |

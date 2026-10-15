@@ -181,6 +181,7 @@ export function memoizedSidebarSections(
             ? (context.gateway.snapshot.client ?? null)
             : null,
         listSource: context?.sessions ?? null,
+        listLoaded: (roster ? roster.result : host.sessionData.sessionsResult) !== null,
         subtitle: {
           sidebarLiveActivity: host.sidebarLiveActivity,
           showPreview: host.sessionsShowPreview,
