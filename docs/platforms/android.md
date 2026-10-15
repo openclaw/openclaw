@@ -565,6 +565,7 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 - By default, Android Talk uses native speech recognition, Gateway chat, and `talk.speak` through the configured Gateway Talk provider. It inherits the session's thinking setting. Local system TTS is used only when `talk.speak` is unavailable.
 - Gateway config changes refresh Android's cached Talk settings on the next use, without reconnecting or interrupting an active capture.
 - Android Talk uses realtime Gateway relay only when `talk.realtime.mode` is `realtime` and `talk.realtime.transport` is `gateway-relay`.
+- Phone relay Talk preserves accepted agent work when Talk fails, the app leaves the foreground, or the voice mode changes. The answer still appears in chat; explicit Stop cancels it. This requires a Gateway advertising `talk-session-close-disposition`; older Gateways and Wear Talk retain the aborting close behavior.
 - Enable **Settings → Voice → Listen for wake words** for foreground on-device
   Voice Wake. Android advertises `voiceWake` only when enabled, on-device
   recognition and microphone permission are available, and wake words are

@@ -109,7 +109,11 @@ each utterance, the current chat session's agent answers it, and the browser pla
 the Gateway's generated speech. This uses the configured agent model, including
 local models. Output uses `talk.provider` when set, otherwise `tts`.
 The browser pauses capture while generating and playing the answer. Stop ends
-capture and playback and cancels that call's active chat run. Split Talk requires
+capture and playback and cancels that call's active chat run. A Talk failure,
+including the two-minute answer timeout, ends capture and playback but leaves the
+accepted chat run to finish in the conversation. The timeout message tells you to
+look for the answer in chat. Leaving the chat or switching away from Talk also
+leaves accepted work running. Split Talk requires
 both transcription and speech output to be configured. Dictation in an existing
 conversation uses that conversation's agent credentials; the catalog remains an
 advisory view of the configured Talk agent.

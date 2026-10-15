@@ -1,12 +1,13 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
-import { afterEach, expect, it, vi } from "vitest";
+import { createComponent } from "solid-js";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { createAsyncQuestionPresentation } from "./components/chat-async-question.ts";
 import { resolveComposerQuestionPanel } from "./components/chat-composer-question.tsx";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import "./components/chat-question-panel.tsx";
+import { ChatQuestionPanel } from "./components/chat-question-panel.tsx";
 
 afterEach(() => resetComposerFixture());
 
@@ -53,12 +54,12 @@ it.each(["draft", "focus"])(
     expect(panel.model.autoFocus).toBe(false);
     const container = document.createElement("div");
     document.body.append(container);
-    render(
-      html`<openclaw-chat-question-panel .props=${panel}></openclaw-chat-question-panel>`,
+    const view = mountSolid(() => createComponent(ChatQuestionPanel, { props: panel }), {
       container,
-    );
-    await (container.firstElementChild as HTMLElement & { updateComplete: Promise<unknown> })
-      .updateComplete;
+    });
+    onTestFinished(view.unmount);
+    await container.querySelector<ChatQuestionPanel>("openclaw-chat-question-panel")
+      ?.updateComplete;
     expect(container.textContent).not.toContain("Optional · work can continue");
     expect(container.textContent).toContain("1 unanswered question");
     if (editing === "focus") {

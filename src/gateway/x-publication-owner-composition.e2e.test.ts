@@ -382,7 +382,7 @@ describe("X publication production-owner composition", () => {
       }
     };
     let creating = false;
-    let creationSettled = observedDeferred<void>();
+    let creationSettled = Promise.withResolvers<void>();
     let revokedInCatalogWait = false;
     let delegationRevokedInCatalogWait = false;
     let authorRevokedInCatalogWait = false;
@@ -449,6 +449,7 @@ describe("X publication production-owner composition", () => {
       );
 
     const outcomes = new Map<Case, unknown>();
+    const spawnErrors = new Map<Case, unknown>();
     const publications = new Map<Case, boolean>();
     const childWritten = observedDeferred<string>();
     const childRuns = new Set<Promise<unknown>>();
@@ -546,17 +547,12 @@ describe("X publication production-owner composition", () => {
             outcomes.set(activeCase, result.details);
             if (isRecord(result.details) && typeof result.details.error === "string") {
               text = deniedWorkSessionReply;
-              if (!creationRequests.some(({ kind }) => kind === activeCase)) {
-                creationSettled.reject(new Error(result.details.error));
-              }
             }
             console.info("[x-proof] spawn result", activeCase, result.details);
           } catch (error) {
+            spawnErrors.set(activeCase, error);
             outcomes.set(activeCase, { error: String(error) });
             text = deniedWorkSessionReply;
-            if (!creationRequests.some(({ kind }) => kind === activeCase)) {
-              creationSettled.reject(error);
-            }
             console.info("[x-proof] spawn error", activeCase, String(error));
           }
         } else {
@@ -641,8 +637,6 @@ describe("X publication production-owner composition", () => {
       if (params.sessionKey?.includes(":dashboard:")) {
         childRuns.add(work);
         void work.catch(childWritten.reject);
-      } else {
-        void work.catch(creationSettled.reject);
       }
       return work;
     });
@@ -710,7 +704,7 @@ describe("X publication production-owner composition", () => {
           setRuntimeConfigSnapshot(restored);
         }
         activeCase = kind;
-        creationSettled = observedDeferred<void>();
+        creationSettled = Promise.withResolvers<void>();
         dispatched = observedDeferred<void>();
         rejectMonitor = dispatched.reject;
         rejectIngress = dispatched.reject;
@@ -760,6 +754,9 @@ describe("X publication production-owner composition", () => {
           await waitFor(
             "reply dispatch",
             dispatch.catch((error: unknown) => {
+              if (!creationRequests.some((request) => request.kind === kind)) {
+                throw error;
+              }
               // Author removal forbids final delivery. Registry retirement may
               // instead reject the monitor's last plugin-runtime callback.
               if (kind === "author-revoked") {
@@ -772,6 +769,14 @@ describe("X publication production-owner composition", () => {
             }),
           );
           if (kind !== "guest") {
+            if (!creationRequests.some((request) => request.kind === kind)) {
+              if (spawnErrors.has(kind)) {
+                throw spawnErrors.get(kind);
+              }
+              throw new Error(
+                `X ${kind} dispatch completed without sessions.create; outcome: ${JSON.stringify(outcomes.get(kind))}`,
+              );
+            }
             await waitFor("sessions.create settlement", creationSettled.promise);
           }
         } finally {

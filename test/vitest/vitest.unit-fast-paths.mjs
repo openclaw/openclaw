@@ -143,6 +143,8 @@ const broadUnitFastCandidatePatterns = prepareGlobPatterns(
   directoryPrefixForGlob,
 );
 const ownerRoutedUnitTestPatterns = [
+  // This family proof belongs to the PostgreSQL conformance owner.
+  "src/infra/database-engine/port-provider.postgres.test.ts",
   ...gatewayPluginTestFiles,
   ...cliProcessTestFiles,
   // Planner inventory proofs retain their tooling timing and worker policy

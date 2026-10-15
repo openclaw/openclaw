@@ -584,7 +584,7 @@ const owner = ${JSON.stringify(owner)};
 const config = owner === "AI" ? ai : configs.find(config => config.outDir ===
   (owner === "node" ? "packages/agent-core/dist" : "packages/gateway-protocol/dist"));
 assert.ok(config);
-assert.equal(config.dts, ${!dts});
+assert.deepEqual(config.dts, ${dts ? "false" : '{ tsconfig: "tsconfig.packages.json" }'});
 // The build API's cwd, rather than the importing process's cwd, owns inputs.
 process.chdir(path.dirname(root));
 let finishedRuntime;
