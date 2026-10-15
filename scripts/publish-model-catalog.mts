@@ -1144,7 +1144,7 @@ function projectReleasedModelInputs(bundle: PublishedModelCatalogBundle): void {
       const input = model.input?.filter(
         (value) => value === "text" || value === "image" || value === "document",
       );
-      if (model.input?.length && input?.length === 0) {
+      if (input?.length === 0) {
         omitted.add(model.id);
         return false;
       }

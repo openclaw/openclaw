@@ -110,6 +110,13 @@ function fixtureFetch() {
             free: { id: "free", cost: { input: 0, output: 0 } },
             paid: { id: "paid", cost: { input: 2, output: 3 } },
             extra: { id: "extra", cost: { input: 5, output: 6 } },
+            "hydrated-video-only": {
+              id: "hydrated-video-only",
+              tool_call: true,
+              modalities: { input: ["video"], output: ["text"] },
+              limit: { context: 128000, output: 32000 },
+              cost: { input: 1, output: 2 },
+            },
           },
         },
         openai: {
@@ -477,6 +484,10 @@ describe("publish model catalog v2", () => {
     expect(v1.providers.anthropic?.models[0]?.input).toEqual(["text", "image", "document"]);
     expect(v1.providers.anthropic?.models.some((model) => model.id === "video-only")).toBe(false);
     expect(v2.models.some((model) => model.id === "video-only")).toBe(false);
+    expect(
+      v1.providers["fixture-native"]?.models.some((model) => model.id === "hydrated-video-only"),
+    ).toBe(false);
+    expect(v2.models.some((model) => model.id === "hydrated-video-only")).toBe(false);
     for (const provider of [v1.providers.anthropic, v2.providers.anthropic]) {
       expect(provider).not.toHaveProperty("defaultModel");
       expect(provider).not.toHaveProperty("defaultUtilityModel");
