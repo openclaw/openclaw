@@ -615,7 +615,7 @@ describe("runDaemonInstall integration", () => {
       try {
         await expect(runDaemonInstall({ json: true, force })).rejects.toThrow("__exit__:1");
 
-        expect(await fs.readdir(stateDir)).toEqual(["control", "tmp"]);
+        expect((await fs.readdir(stateDir)).toSorted()).toEqual(["control", "tmp"]);
         expect(await fs.readdir(path.join(stateDir, "control"))).toEqual(["services.sqlite"]);
         await expect(fs.access(missingConfigPath)).rejects.toMatchObject({ code: "ENOENT" });
         expect(serviceMock.readCommand).toHaveBeenCalledOnce();
