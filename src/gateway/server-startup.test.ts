@@ -44,6 +44,7 @@ describe("gateway startup model runtime publication", () => {
         gatewayLifecycle: true,
         startup: true,
         catalogMode: "static",
+        joinSupersedingPublication: true,
         ...(workspaceDir ? { defaultWorkspaceDir: workspaceDir } : {}),
       });
     },

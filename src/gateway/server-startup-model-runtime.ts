@@ -84,6 +84,9 @@ export async function publishConfiguredModelRuntimeSnapshots(params: {
     startup: true,
     catalogMode: "static",
     allowGatewaySubagentBinding: true,
+    // A newer publication that supersedes this startup build owns the next generation;
+    // join it instead of failing Gateway startup, mirroring hot-reload supersession.
+    joinSupersedingPublication: true,
     ...(params.isCurrent ? { isPublicationCurrent: params.isCurrent } : {}),
     ...(params.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }

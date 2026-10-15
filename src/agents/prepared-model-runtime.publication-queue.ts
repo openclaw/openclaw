@@ -44,7 +44,7 @@ export class PreparedModelRuntimePublicationQueue {
       return startup ? startup.wait(publication) : publication;
     }
     // Join outside the queue: the successor cannot run until this publication releases it.
-    return (async () => {
+    const joined = (async () => {
       let current = refresh;
       for (;;) {
         assertLifetime();
@@ -72,6 +72,8 @@ export class PreparedModelRuntimePublicationQueue {
         return;
       }
     })();
+    // Keep the bounded degraded wait for a joined startup; successors settle in the background.
+    return startup ? startup.wait(joined) : joined;
   }
 
   async settle(): Promise<void> {
