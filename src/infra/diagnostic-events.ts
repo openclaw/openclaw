@@ -1257,6 +1257,19 @@ function emitDiagnosticEventWithTrust(
       default:
         enriched.kind = undefined;
     }
+    switch (enriched.reason) {
+      case "none":
+      case "forced":
+      case "synchronous_phantom_processing":
+      case "all_available_garbage":
+      case "all_external_memory":
+      case "schedule_idle":
+      case "construct_retained":
+      case "other":
+        break;
+      default:
+        enriched.reason = "other";
+    }
     enriched.thread =
       enriched.thread === undefined || enriched.thread === "main"
         ? "main"

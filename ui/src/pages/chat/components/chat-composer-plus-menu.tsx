@@ -29,7 +29,6 @@ import type { ComposerLibraryProps } from "../composer-library-session.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { handleChatAttachmentMenuSelection } from "./chat-attachment-inputs.ts";
 import { useSingleAttachmentPicker } from "./chat-attachment-picker-policy.ts";
-import { solidTemplate } from "./chat-composer-controls.ts";
 import { LitContent } from "./chat-composer-interop.tsx";
 import {
   handleComposerLibrarySelection,
@@ -71,7 +70,7 @@ type ChatComposerRootToggle = {
   onChange: (checked: boolean) => void;
 };
 
-type ChatComposerPlusMenuProps = {
+export type ChatComposerPlusMenuProps = {
   attachments: ChatAttachmentControlsProps;
   capabilityMenu?: ChatComposerCapabilityMenuProps;
   disabled: boolean;
@@ -661,8 +660,4 @@ export function ChatComposerPlusMenu(props: { menu: ChatComposerPlusMenuProps })
       {(menu) => <PlusMenuSurface menu={menu()} />}
     </Show>
   );
-}
-
-export function renderChatComposerPlusMenu(menu: ChatComposerPlusMenuProps) {
-  return solidTemplate(ChatComposerPlusMenu, { menu });
 }

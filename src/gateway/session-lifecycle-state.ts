@@ -377,6 +377,18 @@ async function persistPreparedGatewaySessionLifecycleEvent(
   if (!sessionEntry.entry) {
     return;
   }
+  const startedRunId = phase === "start" ? normalizeLifecycleRunId(params.event.runId) : undefined;
+  if (
+    startedRunId &&
+    sessionEntry.entry.lifecycleRunId === startedRunId &&
+    sessionEntry.entry.status === undefined &&
+    sessionEntry.entry.endedAt === undefined &&
+    sessionEntry.entry.abortedLastRun !== true
+  ) {
+    // Admission already committed the running marker. Live events carry backend
+    // timing until settlement persists it; yielded runs still need a resume write.
+    return;
+  }
   // Incognito keeps its existing native lifecycle writer. The runtime's private fact
   // joins that same entry update; public event data cannot introduce a review pause.
   const terminalReview =

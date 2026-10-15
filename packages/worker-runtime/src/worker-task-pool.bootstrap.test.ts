@@ -129,13 +129,16 @@ it.each(["error", "exit", "constructor"] as const)(
   "rejects one bootstrap cohort after %s and retries only after rotation",
   async (failure) => {
     const { pool, workers, attempts, failConstruction, onCreated } = createPool();
+    const nativeFailure = Object.assign(new Error("synthetic heap exhausted"), {
+      code: "ERR_WORKER_OUT_OF_MEMORY",
+    });
     if (failure === "constructor") {
       failConstruction(new Error("module unavailable"));
     } else {
       onCreated((worker) => {
         queueMicrotask(() => {
           if (failure === "error") {
-            worker.emit("error", new Error("module unavailable"));
+            worker.emit("error", nativeFailure);
           } else {
             worker.emit("exit", 0);
           }
@@ -154,6 +157,9 @@ it.each(["error", "exit", "constructor"] as const)(
         reason: expect.objectContaining({ code: "unavailable" }),
       })),
     );
+    if (failure === "error") {
+      expect(outcomes[0]).toMatchObject({ reason: { cause: nativeFailure } });
+    }
     expect(attempts()).toBe(1);
     expect(prepare).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledTimes(12);
@@ -172,18 +178,6 @@ it.each(["error", "exit", "constructor"] as const)(
     expect(attempts()).toBe(2);
   },
 );
-
-it("preserves the native worker cause for runtime diagnostics", async () => {
-  const { pool, onCreated } = createPool();
-  const failure = Object.assign(new Error("synthetic heap exhausted"), {
-    code: "ERR_WORKER_OUT_OF_MEMORY",
-  });
-  onCreated((worker) => queueMicrotask(() => worker.emit("error", failure)));
-  await expect(pool.run("input", {})).rejects.toMatchObject({
-    code: "unavailable",
-    cause: failure,
-  });
-});
 
 it("keeps a healthy sibling serving the backlog without repeatedly replacing the failed boot", async () => {
   const { pool, workers, attempts } = createPool({ maxWorkers: 2 });

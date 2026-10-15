@@ -84,22 +84,29 @@ describe("filesystem tool output contracts", () => {
     await fs.writeFile(path.join(tmpDir, "pixel.png"), Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"));
     await fs.writeFile(path.join(tmpDir, "long.txt"), "x".repeat(DEFAULT_MAX_BYTES + 1), "utf8");
 
-    const tool = createOpenClawReadTool(
-      createReadTool(tmpDir, { autoResizeImages: false }) as unknown as AnyAgentTool,
-    );
+    const tool = createOpenClawReadTool(createReadTool(tmpDir, { autoResizeImages: false }));
     const text = await tool.execute("read-text", { path: "notes.txt", limit: 10 });
     const image = await tool.execute("read-image", { path: "pixel.png", limit: 10 });
+    const omittedImage = await createOpenClawReadTool(
+      createReadTool(tmpDir, { autoResizeImages: false }),
+      { imageSanitization: { maxBytes: 1 } },
+    ).execute("read-omitted-image", { path: "pixel.png", limit: 10 });
     const truncated = await tool.execute("read-truncated", { path: "long.txt", limit: 10 });
     const notFound = await tool.execute("read-not-found", {
       path: "memory/2026-07-17.md",
       optional: true,
     });
 
-    for (const result of [text, image, truncated, notFound]) {
+    for (const result of [text, image, omittedImage, truncated, notFound]) {
       expectContract(tool, result.details);
     }
     expect(text.details).toEqual({ kind: "text", content: "ordinary text\n" });
     expect(image.details).toMatchObject({ kind: "image", mimeType: "image/png" });
+    expect(omittedImage.content.some((block) => block.type === "image")).toBe(false);
+    expect(omittedImage.details).toMatchObject({
+      kind: "text",
+      content: expect.stringContaining("omitted image payload"),
+    });
     expect(truncated.details).toMatchObject({
       kind: "truncated",
       truncation: { totalBytes: DEFAULT_MAX_BYTES + 1 },
@@ -135,7 +142,7 @@ describe("filesystem tool output contracts", () => {
       const original =
         "\n".repeat(leadingBlankLines) + JSON.stringify(records, null, indent) + "\n";
       await fs.writeFile(path.join(tmpDir, "records.json"), original);
-      const base = createReadTool(tmpDir, { maxBytes: 16 * 1024 }) as unknown as AnyAgentTool;
+      const base = createReadTool(tmpDir, { maxBytes: 16 * 1024 });
       const tool = wrapped ? createOpenClawReadTool(base) : base;
       const first = await tool.execute("first-page", { path: "records.json" });
       expectContract(tool, first.details);
@@ -175,7 +182,7 @@ describe("filesystem tool output contracts", () => {
 
   it("bounds structured blank pages independently of their short display summary", async () => {
     await fs.writeFile(path.join(tmpDir, "blank.txt"), "\n".repeat(10_000));
-    const tool = createOpenClawReadTool(createReadTool(tmpDir) as unknown as AnyAgentTool, {
+    const tool = createOpenClawReadTool(createReadTool(tmpDir), {
       modelContextWindowTokens: 1_024,
     });
     const result = await tool.execute("blank-budget", { path: "blank.txt" });
@@ -194,7 +201,7 @@ describe("filesystem tool output contracts", () => {
 
   it("retains source continuation when only its notice exceeds the rebound budget", async () => {
     await fs.writeFile(path.join(tmpDir, "continued.txt"), "x".repeat(2_000));
-    const base = createReadTool(tmpDir, { maxBytes: 200 }) as unknown as AnyAgentTool;
+    const base = createReadTool(tmpDir, { maxBytes: 200 });
     const tool = createOpenClawReadTool(base, { modelContextWindowTokens: 100 });
     const result = await tool.execute("continued-rebound", { path: "continued.txt" });
     expectContract(tool, result.details);
@@ -206,7 +213,7 @@ describe("filesystem tool output contracts", () => {
 
   it("honors normalized explicit limit 0 without automatic paging", async () => {
     await fs.writeFile(path.join(tmpDir, "limited.txt"), "alpha\nbeta\ngamma");
-    const tool = createOpenClawReadTool(createReadTool(tmpDir) as unknown as AnyAgentTool);
+    const tool = createOpenClawReadTool(createReadTool(tmpDir));
     const result = await tool.execute("normalized-limit", { path: "limited.txt", limit: 0 });
     expectContract(tool, result.details);
     expect(result.details).toMatchObject({

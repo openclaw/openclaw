@@ -35,7 +35,7 @@ import {
   resolveModelRuntimeEntry,
 } from "../../../lib/model-runtime-choice.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { solidTemplate } from "./chat-composer-controls.ts";
+import { solidContent } from "../../../lit/solid-content.tsx";
 import { ChatEffortPicker, type ChatEffortPickerParams } from "./chat-effort-picker.tsx";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import {
@@ -636,5 +636,5 @@ export function ChatModelControls(props: ChatModelControlsProps) {
 }
 
 export function renderChatModelControls(props: ChatModelControlsProps) {
-  return solidTemplate(ChatModelControls, props);
+  return solidContent(ChatModelControls, props);
 }

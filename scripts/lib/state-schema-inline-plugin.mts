@@ -15,6 +15,11 @@ const STATE_SCHEMA_MODULES = [
     exportName: "WORKBOARD_POSTGRES_SCHEMA_SQL",
   },
   {
+    modulePath: "extensions/team-reports/src/store-postgres-schema.ts",
+    schemaPath: "extensions/team-reports/src/team-reports-schema.postgres.sql",
+    exportName: "TEAM_REPORTS_POSTGRES_SCHEMA_SQL",
+  },
+  {
     modulePath: "src/state/openclaw-state-schema.ts",
     schemaPath: "src/state/openclaw-state-schema.sql",
     exportName: "OPENCLAW_STATE_SCHEMA_SQL",

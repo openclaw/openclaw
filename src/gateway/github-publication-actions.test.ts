@@ -76,6 +76,7 @@ async function fixture(backend: "local" | "repository" = "local") {
   const writes: { action: string; input: Record<string, unknown> }[] = [];
   let beforeRead: (() => Promise<void>) | undefined;
   let rejectMerge = false;
+  let rejectClose = false;
   let loseResponse = false;
   const previous = mocks.runCommand.getMockImplementation()!;
   mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
@@ -97,6 +98,12 @@ async function fixture(backend: "local" | "repository" = "local") {
       state.merged = true;
       state.state = "closed";
       state.merge_commit_sha = "e".repeat(40);
+    } else if (argv.includes("PATCH") && argv.some((arg) => /\/pulls\/\d+$/u.test(arg))) {
+      writes.push({ action: "close", input: JSON.parse(options!.input!) });
+      if (rejectClose) {
+        return commandResult('{"message":"Resource not accessible"}', 1);
+      }
+      state.state = "closed";
     } else {
       return await previous(argv, options);
     }
@@ -155,6 +162,9 @@ async function fixture(backend: "local" | "repository" = "local") {
     rejectMerge() {
       rejectMerge = true;
     },
+    rejectClose() {
+      rejectClose = true;
+    },
     loseResponse() {
       loseResponse = true;
     },
@@ -205,33 +215,100 @@ describe("session PR actions through the agent tool and registered Gateway metho
     },
   );
 
-  it.each(["changed head", "different receipt", "missing head", "closed PR", "blocked checks"])(
-    "rejects %s before GitHub writes",
-    async (change) => {
-      const f = await fixture();
-      const args: Record<string, unknown> = { action: "ready", ...f.expected };
-      if (change === "changed head") {
-        f.state.head.sha = "f".repeat(40);
-      }
-      if (change === "different receipt") {
-        args.requestId = randomUUID();
-      }
-      if (change === "missing head") {
-        delete args.expectedHeadCommit;
-      }
-      if (change === "closed PR") {
-        f.state.state = "closed";
-      }
-      if (change === "blocked checks") {
+  it.each(["local", "repository"] as const)(
+    "closes a %s PR without merging or changing saved work, including repeated requests",
+    async (backend) => {
+      const f = await fixture(backend);
+      const scope = { agentId: "main", sessionKey: SESSION_KEY };
+      const original = loadSessionEntryReadOnly(scope);
+      const originalHead = await f.local?.git("rev-parse", "HEAD");
+      const originalWorktree = await f.local?.git("status", "--porcelain=v1", "--branch");
+      if (backend === "repository") {
         f.state.draft = false;
-        f.state.mergeable_state = "blocked";
-        args.action = "merge";
-        args.mergeMethod = "merge";
+        f.loseResponse();
       }
-      await expect(f.invoke("admin", args)).rejects.toThrow(/changed|inspect|closed/iu);
+      f.state.mergeable = false;
+      f.state.mergeable_state = "blocked";
+      const args = { action: "close", ...f.expected };
+      await expect(f.invoke("guest", args)).rejects.toThrow(/scope|permission/iu);
       expect(f.writes).toEqual([]);
+      expect(
+        (await f.invoke(backend === "local" ? "admin" : "writer", args)).details,
+      ).toMatchObject({
+        state: "closed",
+        mergeCommit: null,
+      });
+      expect((await f.invoke("admin", args)).details).toMatchObject({ state: "closed" });
+      await expect(f.invoke("guest", args)).rejects.toThrow(/scope|permission/iu);
+      expect(f.writes).toEqual([{ action: "close", input: { state: "closed" } }]);
+      expect(f.state.merged).toBe(false);
+      expect(loadSessionEntryReadOnly(scope)).toEqual(original);
+      if (f.local) {
+        expect(await f.local.git("rev-parse", "HEAD")).toBe(originalHead);
+        expect(await f.local.git("status", "--porcelain=v1", "--branch")).toBe(originalWorktree);
+      }
     },
   );
+
+  it("reports a rejected close without claiming success or retrying the write", async () => {
+    const f = await fixture();
+    f.rejectClose();
+    await expect(f.invoke("admin", { action: "close", ...f.expected })).rejects.toThrow(
+      "GitHub has not confirmed close",
+    );
+    expect((await f.invoke("admin", { action: "inspect" })).details).toMatchObject({
+      state: "draft",
+      mergeCommit: null,
+    });
+    expect(f.writes).toEqual([{ action: "close", input: { state: "closed" } }]);
+  });
+
+  it("reports an already-merged PR honestly instead of closing or rewriting it", async () => {
+    const f = await fixture();
+    f.state.merged = true;
+    f.state.state = "closed";
+    f.state.merge_commit_sha = "e".repeat(40);
+    expect((await f.invoke("admin", { action: "close", ...f.expected })).details).toMatchObject({
+      state: "merged",
+      mergeCommit: "e".repeat(40),
+    });
+    expect(f.writes).toEqual([]);
+  });
+
+  it.each([
+    "changed head",
+    "close changed head",
+    "different receipt",
+    "missing head",
+    "closed PR",
+    "blocked checks",
+  ])("rejects %s before GitHub writes", async (change) => {
+    const f = await fixture();
+    const args: Record<string, unknown> = { action: "ready", ...f.expected };
+    if (change.includes("changed head")) {
+      f.state.head.sha = "f".repeat(40);
+    }
+    if (change === "close changed head" || change === "different receipt") {
+      args.action = "close";
+    }
+    if (change === "different receipt") {
+      args.requestId = randomUUID();
+    }
+    if (change === "missing head") {
+      delete args.expectedHeadCommit;
+    }
+    if (change === "closed PR") {
+      f.state.state = "closed";
+    }
+    if (change === "blocked checks") {
+      f.state.draft = false;
+      f.state.mergeable_state = "blocked";
+      args.action = "merge";
+      args.mergeMethod = "merge";
+    }
+    await expect(f.invoke("admin", args)).rejects.toThrow(/changed|inspect|closed/iu);
+    expect(f.writes).toEqual([]);
+  });
 
   it("revalidates the admitted person's role after GitHub state is read", async () => {
     const f = await fixture();
@@ -239,7 +316,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
       await setCanonicalUserProfileRole(f.maintainerProfile, "revoked");
       invalidateOperatorRolePolicy(f.maintainerProfile);
     });
-    await expect(f.invoke("admin", { action: "ready", ...f.expected })).rejects.toThrow(
+    await expect(f.invoke("admin", { action: "close", ...f.expected })).rejects.toThrow(
       /role changed/iu,
     );
     expect(f.writes).toEqual([]);
@@ -286,7 +363,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
     const f = await fixture();
     const parent = "agent:main:dashboard:parent";
     await persistPublicationTestSession(parent);
-    const args = { action: "ready", ...f.expected, publishingSessionKey: SESSION_KEY };
+    const args = { action: "close", ...f.expected, publishingSessionKey: SESSION_KEY };
     await expect(f.invoke("admin", args, parent)).rejects.toThrow("not a child");
     expect(f.writes).toEqual([]);
     await upsertSessionEntryCore(
@@ -294,7 +371,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
       { parentSessionKey: parent },
     );
     expect((await f.invoke("admin", args, parent)).details).toMatchObject({
-      state: "open",
+      state: "closed",
       publishingSessionKey: SESSION_KEY,
     });
     expect(f.writes).toHaveLength(1);

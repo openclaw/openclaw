@@ -91,10 +91,10 @@ function useRoster(props: RosterProps) {
     host();
     return store().snapshot;
   }, presented);
+  const cached = createMemo(() => cachedRosterCards(host()));
   const cards = createParkedProjection(() => {
-    const cached = cachedRosterCards(host());
-    if (cached) {
-      return cached;
+    if (cached()) {
+      return cached()!;
     }
     const currentContext = context();
     return snapshot().cards.map((card) =>

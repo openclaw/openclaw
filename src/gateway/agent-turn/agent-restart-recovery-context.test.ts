@@ -9,6 +9,7 @@ const matchingParams = {
   canUseInternalRuntimeHandoff: true,
   expectedExistingSessionId: "session-1",
   resolvedSessionId: "session-1",
+  resolvedSessionKey: "agent:main:discord:dm:123",
   runId: "recovery-run-1",
   sessionEntry: {
     sessionId: "session-1",
@@ -41,27 +42,53 @@ const matchingTargetlessParams = {
   },
 } as const;
 
+const matchingInternalParams = {
+  ...matchingParams,
+  resolvedSessionKey: "agent:main:dashboard:recovered-cli",
+  sessionEntry: {
+    ...matchingParams.sessionEntry,
+    restartRecoverySourceIngress: "internal",
+    restartRecoveryDeliveryContext: undefined,
+  },
+} as const;
+
 describe("resolveAgentRestartRecoveryContext", () => {
-  it.each([matchingParams])("rejects mismatched recovery ownership", (params) => {
-    for (const override of [
-      { canUseInternalRuntimeHandoff: false },
-      { expectedExistingSessionId: undefined },
-      { expectedExistingSessionId: "replacement-session" },
-      { resolvedSessionId: "replacement-session" },
-      { runId: "replacement-run" },
-      { sessionEntry: undefined },
-      { sessionEntry: { ...params.sessionEntry, sessionId: "replacement-session" } },
-      { sessionEntry: { ...params.sessionEntry, restartRecoveryDeliverySourceRunId: " " } },
-      { sessionEntry: { ...params.sessionEntry, restartRecoverySourceIngress: undefined } },
-      {
+  it.each([matchingParams, matchingUiParams, matchingInternalParams])(
+    "rejects mismatched recovery ownership",
+    (params) => {
+      for (const override of [
+        { canUseInternalRuntimeHandoff: false },
+        { expectedExistingSessionId: undefined },
+        { expectedExistingSessionId: "replacement-session" },
+        { resolvedSessionId: "replacement-session" },
+        { runId: "replacement-run" },
+        { sessionEntry: undefined },
+        { sessionEntry: { ...params.sessionEntry, sessionId: "replacement-session" } },
+        { sessionEntry: { ...params.sessionEntry, restartRecoveryDeliverySourceRunId: " " } },
+        { sessionEntry: { ...params.sessionEntry, restartRecoverySourceIngress: undefined } },
+      ]) {
+        expect(resolveAgentRestartRecoveryContext({ ...params, ...override })).toBeUndefined();
+      }
+    },
+  );
+
+  it("does not restore an internal source for ordinary runs or external delivery claims", () => {
+    expect(
+      resolveAgentRestartRecoveryContext({
+        ...matchingInternalParams,
+        isRestartRecoveryResumeRun: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveAgentRestartRecoveryContext({
+        ...matchingInternalParams,
         sessionEntry: {
-          ...params.sessionEntry,
-          restartRecoverySourceIngress: "internal" as const,
+          ...matchingInternalParams.sessionEntry,
+          restartRecoveryDeliveryContext:
+            matchingParams.sessionEntry.restartRecoveryDeliveryContext,
         },
-      },
-    ]) {
-      expect(resolveAgentRestartRecoveryContext({ ...params, ...override })).toBeUndefined();
-    }
+      }),
+    ).toBeUndefined();
   });
 
   it("preserves WebChat policy context and pinned authoring for an admitted Control UI recovery", () => {

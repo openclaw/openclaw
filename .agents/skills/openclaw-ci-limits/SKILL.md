@@ -604,6 +604,11 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Apply capacity after packing; preserve inventories, runtime selection, timing
   identities, and process boundaries. Full families retain their planned capacity.
   RunsOn inherits the hybrid choice for these retained Blacksmith jobs.
+  The isolated LLM-boundary cache-stability file also qualifies when it is the
+  group's only file, under the same serial, worker, and preparation guards.
+  Its complete current-source replay passed all 19 tests with four CPUs,
+  12 GiB RAM, no swap, 4.23 GiB peak, and zero OOMs. Other isolated files,
+  including siblings in the same job, retain their planned capacity.
 - Source-only serial Blacksmith tooling bins use the 16-class after packing,
   retaining logical classes, names, file inventories, and two-worker pins.
   Keep the 32-class for compiler/artifact capacity files, explicit runner or

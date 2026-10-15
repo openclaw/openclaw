@@ -44,7 +44,7 @@ function primeConfiguredContextWindowsFromConfig(cfg: OpenClawConfig): OpenClawC
 
 function primeConfiguredContextWindows(): OpenClawConfig | undefined {
   if (CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig) {
-    return primeConfiguredContextWindowsFromConfig(CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig);
+    return CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig;
   }
   if (Date.now() < CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs) {
     return undefined;
@@ -114,42 +114,43 @@ export async function prewarmContextWindowCacheAfterReady(params: {
     return;
   }
   let published = false;
-  const loadPromise = Promise.resolve().then(async () => {
-    const { getPublishedPreparedModelCatalogOwnerSnapshot } =
-      await loadPreparedModelCatalogRuntime();
-    const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
-      config: params.config,
-      allowGatewaySubagentBinding: true,
+  const loadPromise = Promise.resolve()
+    .then(async () => {
+      const { getPublishedPreparedModelCatalogOwnerSnapshot } =
+        await loadPreparedModelCatalogRuntime();
+      const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
+        config: params.config,
+        allowGatewaySubagentBinding: true,
+      });
+      if (!owner) {
+        throw new Error("published Gateway model catalog owner is unavailable");
+      }
+      // Gateway publication intentionally exposes configured/static turn facts. Full catalog
+      // inventory is a separate control-plane load and must not run in post-ready warmup.
+      const caches = await prepareContextWindowCaches({
+        config: owner.config,
+        modelCatalog: owner.modelCatalog,
+      });
+      if (params.isCancelled?.()) {
+        return;
+      }
+      replaceContextWindowCaches(caches);
+      CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = owner.config;
+      CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
+      CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = 0;
+      published = true;
+    })
+    .catch(() => {
+      // Optional Gateway warmup is best-effort; failed publication can retry on demand.
+    })
+    .finally(() => {
+      // Overlapping optional warmups may publish older metadata until the next refresh.
+      if (!published) {
+        CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = null;
+      }
     });
-    if (!owner) {
-      throw new Error("published Gateway model catalog owner is unavailable");
-    }
-    // Gateway publication intentionally exposes configured/static turn facts. Full catalog
-    // inventory is a separate control-plane load and must not run in post-ready warmup.
-    const caches = await prepareContextWindowCaches({
-      config: owner.config,
-      modelCatalog: owner.modelCatalog,
-    });
-    if (params.isCancelled?.() || CONTEXT_WINDOW_RUNTIME_STATE.loadPromise !== trackedLoadPromise) {
-      return;
-    }
-    replaceContextWindowCaches(caches);
-    CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = owner.config;
-    CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
-    CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = 0;
-    published = true;
-  });
-  const trackedLoadPromise = loadPromise.catch(() => {});
-  CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = trackedLoadPromise;
-  try {
-    await loadPromise;
-  } catch {
-    // Optional Gateway warmup is best-effort; failed publication can retry on demand.
-  } finally {
-    if (!published && CONTEXT_WINDOW_RUNTIME_STATE.loadPromise === trackedLoadPromise) {
-      CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = null;
-    }
-  }
+  CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = loadPromise;
+  await loadPromise;
 }
 
 /** Restore configured context limits without acquiring a model catalog. */

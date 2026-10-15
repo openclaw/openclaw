@@ -157,6 +157,8 @@ it("preserves global session addition order across agents before overview pagina
       sessions.push({
         key: sessionId,
         agentId,
+        sessionId,
+        sessionFile,
         channel: "same-channel",
         creatorKey: "same-creator",
         updatedAt: 30 - index * 10,

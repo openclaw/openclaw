@@ -2,7 +2,7 @@ import { createComponent, createMemo, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { ControllerHost } from "./page-controller.ts";
+import type { SolidControllerHost as ControllerHost } from "../../lit/solid-controller-host.ts";
 
 registerModelSetupEnglish();
 

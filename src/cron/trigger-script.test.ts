@@ -588,41 +588,6 @@ describe("cron script runtime elapsed-time budgets", () => {
 });
 
 describe("cron script payload evaluator", () => {
-  it("exposes a stream batch beside the script payload state", async () => {
-    const config = {} as OpenClawConfig;
-    const runHeadless = vi.fn(async (_params: HeadlessParams) => completed({ value: {} }));
-    const runtime = createCronScriptRuntime({
-      config,
-      runHeadless,
-      prepareRuntime: vi.fn(async () => createPreparedRuntime(config)),
-    });
-
-    await runtime.executePayload({
-      jobId: "payload-stream",
-      script: "return {}",
-      state: { cursor: 3 },
-      streamBatch: "line one\nline two",
-    });
-
-    expect(runHeadless).toHaveBeenCalledWith(
-      expect.objectContaining({
-        maxToolCalls: 50,
-        extraNamespaces: [
-          expect.objectContaining({
-            globalName: "trigger",
-            scope: {
-              kind: "object",
-              entries: [
-                ["state", { kind: "value", value: { cursor: 3 } }],
-                ["streamBatch", { kind: "value", value: "line one\nline two" }],
-              ],
-            },
-          }),
-        ],
-      }),
-    );
-  });
-
   it("uses payload-grade capped budgets and exposes frozen trigger state", async () => {
     const config = {} as OpenClawConfig;
     const runHeadless = vi.fn(async (_params: HeadlessParams) =>
@@ -646,6 +611,7 @@ describe("cron script payload evaluator", () => {
         jobId: "payload-job",
         script: "return result",
         state: { revision: 1 },
+        streamBatch: "line one\nline two",
         timeoutSeconds: 10_000,
         toolBudget: 10_000,
       }),
@@ -666,7 +632,10 @@ describe("cron script payload evaluator", () => {
             globalName: "trigger",
             scope: {
               kind: "object",
-              entries: [["state", { kind: "value", value: { revision: 1 } }]],
+              entries: [
+                ["state", { kind: "value", value: { revision: 1 } }],
+                ["streamBatch", { kind: "value", value: "line one\nline two" }],
+              ],
             },
           },
         ],

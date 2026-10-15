@@ -11,6 +11,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { LitContent } from "../../../lit/solid-content.tsx";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import type { FileCopyAction, FileCopyFeedback } from "./chat-file-copy-controller.ts";
+import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileHtmlPreviewControls } from "./chat-html-preview.ts";
 import type { FileSidebarContent, AttachmentSidebarRuntime } from "./chat-sidebar-content-types.ts";
 import { ChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.tsx";
@@ -171,6 +172,19 @@ export function SidebarFile(props: {
         <Show when={props.controls}>
           {(controls) => (
             <div class="sidebar-file-view__actions">
+              <Show when={props.content.download}>
+                {(download) => (
+                  <FileDownloadButton
+                    scopeKey={[
+                      props.content.sessionFileSource?.sessionKey ?? props.runtime?.sessionKey,
+                      props.content.path,
+                      props.runtime?.connectionEpoch,
+                    ].join("\0")}
+                    download={(signal) => download()(signal)}
+                    class="btn btn--sm sidebar-file-view__action"
+                  />
+                )}
+              </Show>
               <Show when={!controls().htmlPreview || controls().htmlPreview?.source}>
                 <FileAction
                   label={t(

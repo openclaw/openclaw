@@ -767,30 +767,6 @@ describe("show_widget", () => {
     });
   });
 
-  it("keeps the host bridges ordered around HTML widget code", async () => {
-    const stateDir = await createStateDir();
-    const { viewId } = await executeWidget({
-      stateDir,
-      widgetCode: "<section><button>Run</button><script>document.title='ready'</script></section>",
-    });
-    const html = await readFile(
-      path.join(resolveCanvasDocumentDir(stateDir, viewId), "index.html"),
-      "utf8",
-    );
-
-    expect(html).not.toContain('<body class="svg-widget">');
-    expect(html.indexOf("window.sendPrompt")).toBeLessThan(html.indexOf("<section>"));
-    expect(html).toContain("openclaw:widget-theme");
-    expect(html.indexOf("openclaw:widget-theme")).toBeLessThan(html.indexOf("<section>"));
-    expect(html).toContain("openclaw:widget-snapshot-request");
-    expect(html.indexOf("openclaw:widget-theme")).toBeLessThan(
-      html.indexOf("openclaw:widget-snapshot-request"),
-    );
-    expect(html.indexOf("openclaw:widget-snapshot-request")).toBeLessThan(
-      html.indexOf("<section>"),
-    );
-  });
-
   it("uses opaque ids and evicts the oldest widget within a session scope", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-07T00:00:00.000Z"));

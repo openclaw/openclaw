@@ -4,20 +4,14 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
+import type { SolidControllerHost as ControllerHost } from "../../lit/solid-controller-host.ts";
 import { loadModelProvidersData, type ModelProvidersData } from "./load.ts";
-import type { ControllerHost } from "./page-controller.ts";
 
 export type ModelProviderRefreshReason = "publication" | "replacement" | "forced";
 
-type CoreRequest = {
-  client: GatewayBrowserClient;
-  agentId: string;
-  reason: ModelProviderRefreshReason;
-};
-
 type CoreLoadOptions = {
   onStart: (reason: ModelProviderRefreshReason) => void;
-  onComplete: (result: CoreRequest & { data: ModelProvidersData }) => void;
+  onComplete: (result: { client: GatewayBrowserClient; data: ModelProvidersData }) => void;
   onCatalogComplete: (result: ModelCatalogResult) => void;
 };
 
@@ -151,7 +145,7 @@ export class ModelProviderCoreLoader {
       if (this.request === request) {
         this.active = false;
         this.retryProvider = target && data.error ? target.providerId : undefined;
-        this.options.onComplete({ client, agentId, reason, data });
+        this.options.onComplete({ client, data });
       }
     } catch {
       // Each source reports its own error; a retired request has no result to publish.

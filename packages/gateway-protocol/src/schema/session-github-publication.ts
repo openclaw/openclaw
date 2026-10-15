@@ -49,7 +49,12 @@ export const SessionGitHubPublishParamsSchema = closedObject({
 });
 
 export const GitHubPublicationActionSchema = closedObject({
-  action: Type.Union([Type.Literal("inspect"), Type.Literal("ready"), Type.Literal("merge")]),
+  action: Type.Union([
+    Type.Literal("inspect"),
+    Type.Literal("ready"),
+    Type.Literal("merge"),
+    Type.Literal("close"),
+  ]),
   publishingSessionKey: Type.Optional(NonEmptyString),
   requestId: Type.Optional(PersonalGitHubGenerationSchema),
   expectedHeadCommit: Type.Optional(Type.String({ pattern: "^[a-f0-9]{40}$" })),
