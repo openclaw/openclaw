@@ -71,18 +71,19 @@ export function bindSqliteWorkerBackend(
       return transact<
         StandingIntentWorkerOperations[keyof StandingIntentWorkerOperations]["output"]
       >(() => {
-        switch (command.type) {
-          case "create":
-            return result(createStandingIntentInDatabase(db, command.input));
-          case "list":
-            return result(listStandingIntentsInDatabase(db, command.input));
-          case "sweep":
-            return result(maintainStandingIntentLifecycle(db, command.input.nowMs ?? Date.now()));
-          case "cancel":
-            return result(cancelStandingIntentInDatabase(db, command.input));
-          case "match":
-            return result(matchStandingIntentsInDatabase(db, command.input));
+        if (command.type === "create") {
+          return result(createStandingIntentInDatabase(db, command.input));
         }
+        if (command.type === "list") {
+          return result(listStandingIntentsInDatabase(db, command.input));
+        }
+        if (command.type === "sweep") {
+          return result(maintainStandingIntentLifecycle(db, command.input.nowMs ?? Date.now()));
+        }
+        if (command.type === "cancel") {
+          return result(cancelStandingIntentInDatabase(db, command.input));
+        }
+        return result(matchStandingIntentsInDatabase(db, command.input));
       });
     },
   });

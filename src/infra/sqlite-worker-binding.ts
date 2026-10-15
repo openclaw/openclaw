@@ -4,20 +4,37 @@ import type { SqliteWorkerBackend, SqliteWorkerOperations } from "./sqlite-worke
 
 export type SqliteWorkerDatabaseBinding<Operations extends SqliteWorkerOperations> = Omit<
   SqliteWorkerBackend<Operations>,
-  "close"
-> & { close(): undefined; assertOpen(this: void): void };
+  "close" | "assertSettled"
+> & { close(): undefined; assertOpen(this: void): void; assertSettled(): void };
+
+type BindingImplementation<Operations extends SqliteWorkerOperations> = Pick<
+  SqliteWorkerBackend<Operations>,
+  "execute" | "prepare"
+> & { close?(): undefined };
+type Preparation<Operations extends SqliteWorkerOperations> = Required<
+  Pick<SqliteWorkerBackend<Operations>, "prepare">
+>;
 
 /** A bound backend borrows native state; only its executor closes the connection. */
 export function bindSqliteWorkerDatabase<Operations extends SqliteWorkerOperations>(
   database: EngineConnection,
-  backend: Pick<SqliteWorkerBackend<Operations>, "execute" | "prepare"> & { close?(): undefined },
+  backend: BindingImplementation<Operations> & Preparation<Operations>,
+): SqliteWorkerDatabaseBinding<Operations> & Preparation<Operations>;
+export function bindSqliteWorkerDatabase<Operations extends SqliteWorkerOperations>(
+  database: EngineConnection,
+  backend: BindingImplementation<Operations>,
+): SqliteWorkerDatabaseBinding<Operations>;
+export function bindSqliteWorkerDatabase<Operations extends SqliteWorkerOperations>(
+  database: EngineConnection,
+  backend: BindingImplementation<Operations>,
 ): SqliteWorkerDatabaseBinding<Operations> {
   let closed = false;
   const assertOpen = () => {
+    // Preserve the native rollback failure even after retirement closes the handle.
+    assertTransactionUsable(database);
     if (closed || !database.isOpen) {
       throw new Error("SQLite worker binding is closed");
     }
-    assertTransactionUsable(database);
   };
   return {
     ...backend,

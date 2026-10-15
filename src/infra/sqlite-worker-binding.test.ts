@@ -13,9 +13,9 @@ it("closes a publication scope without closing its borrowed database", () => {
   });
   try {
     expect(backend.execute({ type: "read", input: undefined })).toBe(42);
-    backend.assertSettled?.();
+    backend.assertSettled();
     db.exec("BEGIN");
-    expect(() => backend.assertSettled?.()).toThrow("unsettled transaction");
+    expect(() => backend.assertSettled()).toThrow("unsettled transaction");
     db.exec("ROLLBACK");
     backend.close();
     expect(cleaned).toBe(true);

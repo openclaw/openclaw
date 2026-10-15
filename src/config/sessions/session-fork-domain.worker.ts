@@ -21,13 +21,14 @@ export function bindSqliteWorkerBackend(
     bound,
     "Session fork",
     (context) => (command) => {
-      switch (command.type) {
-        case "session.parentFork.prepare":
-          return prepareParentForkEntry(command.input, context);
-        case "session.parentFork.source":
-          return readParentForkSource(command.input, context);
-        case "session.parentFork.commit":
-          return commitParentFork(command.input, context);
+      if (command.type === "session.parentFork.prepare") {
+        return prepareParentForkEntry(command.input, context);
+      }
+      if (command.type === "session.parentFork.source") {
+        return readParentForkSource(command.input, context);
+      }
+      if (command.type === "session.parentFork.commit") {
+        return commitParentFork(command.input, context);
       }
       return commitSessionForkMessageCut(command.input, context);
     },
