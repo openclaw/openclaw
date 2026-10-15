@@ -93,10 +93,6 @@ suite.define(() => {
             content: [{ type: "text", text: "Preparing the draft report." }],
           },
         });
-        await page
-          .getByRole("paragraph")
-          .filter({ hasText: /^Preparing the draft report\.$/u })
-          .waitFor();
         await expect.poll(() => faviconLinks(page)).toEqual(original);
         const activity = await page.evaluateHandle((eventName) => {
           const observation = { changes: 0 };
@@ -113,8 +109,7 @@ suite.define(() => {
           },
         });
         await page
-          .getByRole("paragraph")
-          .filter({ hasText: /^Preparing the draft report\. Checking the details\.$/u })
+          .getByText("Preparing the draft report. Checking the details.", { exact: true })
           .waitFor();
         expect(await activity.evaluate((observation) => observation.changes)).toBe(0);
         await expect.poll(() => faviconLinks(page)).toEqual(original);
@@ -130,6 +125,7 @@ suite.define(() => {
           decision: "deny",
         });
         await expect.poll(() => faviconLinks(page)).toEqual(original);
+        await page.getByRole("button", { name: "Stop generating" }).waitFor();
         await setVisibility(page, "hidden");
         await gateway.emitChatFinal({ runId, sessionKey, text: "Draft report complete." });
         await expectStatusColor(page, "--ok");

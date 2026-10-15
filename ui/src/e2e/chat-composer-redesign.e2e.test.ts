@@ -792,9 +792,9 @@ suite.define(() => {
         sessionKey: "agent:main:main",
         state: "delta",
       });
-      // Answer text ends visual activity; queue and Stop still belong to the active run.
+      // Answer publication ends visual activity while queue and Stop stay owned.
       await expect.poll(() => page.getByText("Working on it.").first().isVisible()).toBe(true);
-      await expect.poll(() => spark.isVisible()).toBe(false);
+      await expect.poll(() => spark.count()).toBe(0);
       await expect.poll(() => announcement.textContent()).toBe("");
       await expect.poll(() => layout.isVisible()).toBe(true);
       await expect.poll(() => model.isVisible()).toBe(true);

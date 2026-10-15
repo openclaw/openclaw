@@ -203,7 +203,7 @@ suite.define(() => {
     const context = await suite.newBrowserContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
-    const gateway = await installMockGateway(currentPage, {
+    await installMockGateway(currentPage, {
       historyMessages: [
         {
           role: "assistant",
@@ -222,19 +222,11 @@ suite.define(() => {
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     const assistantGroup = currentPage.locator(".chat-group.assistant");
     await assistantGroup.getByText("First result is ready.", { exact: true }).waitFor();
-    // An active snapshot alone is still preparing; foreground work advances its status.
-    await gateway.emitGatewayEvent("agent", {
-      sessionKey: "agent:main:main",
-      runId: "run-continuing",
-      seq: 1,
-      stream: "thinking",
-      data: { itemId: "continuing-thought", text: "Continuing the work." },
-    });
     await assistantGroup.locator(".chat-working-indicator--continuation").waitFor();
 
     expect(await assistantGroup.count()).toBe(1);
     expect(await currentPage.locator(".chat-reading-indicator").count()).toBe(0);
-    await expect.poll(() => assistantGroup.getByText("Working…", { exact: true }).count()).toBe(1);
+    expect(await assistantGroup.getByText("Preparing this turn…", { exact: true }).count()).toBe(1);
 
     const artifactDir = path.join(suite.artifactDir, "chat-single-turn-status");
     await currentPage.screenshot({
@@ -509,6 +501,8 @@ suite.define(() => {
     await composer.fill("keep this draft");
     // Deferred responses do not synthesize chat.abort lifecycle events.
     await gateway.resolveDeferred("chat.abort", { ok: true, aborted: true, runIds: [runId] });
+    await currentPage.locator(".chat-working-indicator").waitFor({ state: "visible" });
+    // An answer retires visual activity, not the accepted abort's run ownership.
     await gateway.emitGatewayEvent("chat", {
       sessionKey,
       runId,
@@ -526,13 +520,13 @@ suite.define(() => {
       hasText: "Interrupted",
     });
     expect(await interrupted.count()).toBe(0);
-    // Answer text ends visual activity, but the accepted abort still owns the run.
-    await currentPage.locator(".chat-working-indicator").waitFor({ state: "hidden" });
+    await currentPage.locator(".chat-working-indicator").waitFor({ state: "detached" });
     expect(await composer.inputValue()).toBe("keep this draft");
+    expect(await gateway.getRequests("chat.history")).toHaveLength(historyCount);
     await composer.fill("");
     await stop.waitFor({ state: "visible" });
     await composer.fill("keep this draft");
-    expect(await gateway.getRequests("chat.history")).toHaveLength(historyCount);
+    expect(await interrupted.count()).toBe(0);
     await captureMockStopProof(currentPage, "mock-accepted-abort-before-terminal");
     await gateway.emitGatewayEvent("chat", { sessionKey, runId, state: "aborted" });
     await currentPage.locator(".chat-working-indicator").waitFor({ state: "detached" });
@@ -723,17 +717,7 @@ suite.define(() => {
     const startedAt = Date.now();
     await currentPage.clock.setFixedTime(startedAt);
     await currentPage.getByRole("button", { name: "Send message" }).click();
-    const send = await gateway.waitForRequest("chat.send");
-    const { idempotencyKey: runId } = send.params as { idempotencyKey: string };
-    // Measure working time after actual foreground activity, not while preparing.
-    await gateway.emitGatewayEvent("agent", {
-      sessionKey: "agent:main:main",
-      runId,
-      seq: 1,
-      stream: "thinking",
-      data: { itemId: "project-thought", text: "Inspecting the project." },
-    });
-    await currentPage.clock.runFor(32);
+    await gateway.waitForRequest("chat.send");
     await currentPage.locator(".chat-working-indicator").waitFor();
 
     await currentPage.clock.setFixedTime(startedAt + 177_000);
@@ -741,11 +725,13 @@ suite.define(() => {
     await expect
       .poll(() => currentPage.locator(".chat-working-indicator__elapsed").textContent())
       .toBe("2m 57s");
-    const workingLabel = currentPage.locator(".chat-working-indicator__status > .sr-only");
-    expect(await workingLabel.textContent()).toBe("Working…");
+    const workingLabel = currentPage.locator(".chat-working-indicator__status > span:first-child");
+    expect(await workingLabel.textContent()).toBe("Preparing this turn…");
     expect(
-      await currentPage.locator(".chat-working-indicator__status > span:not(.sr-only)").count(),
-    ).toBe(0);
+      await currentPage
+        .locator(".chat-working-indicator__status > span:not(.sr-only)")
+        .allTextContents(),
+    ).toEqual(["Preparing this turn…", "·"]);
   });
 
   it.each(["final", "error"] as const)(

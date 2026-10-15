@@ -250,11 +250,11 @@ suite.define(() => {
         await closePanel();
         await page.setViewportSize({ width: 1280, height: 900 });
         await page.locator(".shell:not(.shell--mobile-nav)").waitFor();
-        const reportUsage = (usageRunId: string, outputTokens: number) =>
+        const reportUsage = (usageRunId: string, outputTokens: number, seq = 1) =>
           gateway.emitGatewayEvent("agent", {
             stream: "usage",
             runId: usageRunId,
-            seq: 1,
+            seq,
             sessionKey: parent.key,
             data: { outputTokens },
             ts: now,
@@ -537,15 +537,6 @@ suite.define(() => {
         await expect.poll(requestClock).toBe(history[0]!.timestamp);
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
         expect(await workingTokens()).toBe("4.1k output tokens");
-        if (artifactDir) {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            activePane,
-            [indicator, activePane.locator(".agent-chat__composer-combobox")],
-            { animations: "disabled" },
-          );
-          await writeFile(path.join(artifactDir, "resumed-dark-1280.png"), frame.png);
-        }
         const answerText = "The backend is complete. I am reviewing the result.";
         await gateway.emitGatewayEvent("chat", {
           sessionKey: parent.key,
@@ -555,14 +546,43 @@ suite.define(() => {
           message: { role: "assistant", content: answerText, timestamp: now + 65_000 },
         });
         await waitLine.waitFor({ state: "hidden" });
-        // The answer phase ends visual activity while the run remains unsettled.
-        await indicator.waitFor({ state: "hidden" });
+        await page
+          .locator(
+            ".chat-pane-cache__pane--active .chat-working-indicator:not(.chat-working-indicator--subagents)",
+          )
+          .waitFor({ state: "detached" });
+        expect(await indicator.count()).toBe(0);
+        const visibleAnswer = activePane
+          .locator(".chat-text")
+          .getByText(answerText, { exact: true });
+        expect(await visibleAnswer.count()).toBe(1);
         expect(await activePane.locator(".chat-notice").count()).toBe(0);
-        // The answer keeps one assistant row; its final recap retains the request
-        // clock and both runs' token totals.
+        await gateway.emitGatewayEvent("agent", {
+          sessionKey: parent.key,
+          runId: "parent-resumed-run",
+          seq: 2,
+          stream: "assistant",
+          ts: now + 65_500,
+          data: { phase: "commentary", text: "Reviewing the delegated backend result." },
+        });
+        await indicator.waitFor();
+        expect(await indicator.textContent()).not.toContain("Waiting on");
+        if (artifactDir) {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            activePane,
+            [indicator, activePane.locator(".agent-chat__composer-combobox")],
+            { animations: "disabled" },
+          );
+          await writeFile(path.join(artifactDir, "resumed-dark-1280.png"), frame.png);
+        }
+        // Still one assistant row once it answers, on the same clock, and both
+        // runs' tokens count on its line.
         await block.getByText(answerText, { exact: true }).waitFor();
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
-        await reportUsage("parent-resumed-run", 256);
+        expect(await requestClock()).toBe(history[0]!.timestamp);
+        await reportUsage("parent-resumed-run", 256, 3);
+        await expect.poll(workingTokens).toBe("4.4k output tokens");
 
         const answer = {
           role: "assistant",
@@ -616,8 +636,12 @@ suite.define(() => {
         const recap = activePane.locator(".chat-turn-recap");
         await recap.waitFor();
         expect(
-          (await recap.locator(":scope > span").allTextContents()).map((text) => text.trim()),
-        ).toEqual(["4.4k output tokens", "·", "Done in 1 minute, 17 seconds"]);
+          await recap.locator(":scope > span:not(.chat-turn-recap__claw)").allTextContents(),
+        ).toEqual([
+          "4.4k output tokens",
+          "·",
+          expect.stringMatching(/^Done in 1 minute,? 17 seconds$/),
+        ]);
         expect(await block.locator(".chat-turn-recap").count()).toBe(1);
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
         // The finished subagent's row shows how long it took, and its name shows it in the panel.

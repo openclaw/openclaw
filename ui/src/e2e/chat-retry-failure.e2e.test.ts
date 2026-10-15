@@ -239,7 +239,8 @@ suite.define(() => {
         data: { text: "Continuing the review." },
       });
       await page.clock.runFor(32);
-      await expect.poll(() => status.textContent()).not.toContain("Trying fallback");
+      await expect.poll(() => status.count()).toBe(0);
+      await page.getByRole("button", { name: "Stop generating" }).waitFor();
       await gateway.emitChatFinal({ runId, text: "The review is complete." });
       await page.clock.runFor(32);
       await page
