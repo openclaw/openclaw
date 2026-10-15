@@ -9,7 +9,6 @@ import {
   maxAsk,
   minSecurity,
   normalizeExecAsk,
-  requireValidExecTarget,
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
@@ -49,7 +48,6 @@ import {
   type ExecProcessHandle,
   normalizePathPrepend,
   resolveApprovalRunningNoticeMs,
-  resolveExecTarget,
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
 import {
@@ -249,10 +247,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       let execCommandOverride: string | undefined;
       let gatewayApproval: GatewayApprovalResult | undefined;
       let approvalReview: ExecToolApprovalReview | undefined;
-      const foregroundFallbackWarning =
-        !backgroundAvailable && (params.background === true || typeof params.yieldMs === "number")
-          ? "Warning: continuation options are unavailable; running synchronously."
-          : undefined;
       const yieldWindow = allowBackground
         ? params.background === true
           ? 0
@@ -295,14 +289,14 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             .join("\n"),
         );
       }
-      const target = resolveExecTarget({
-        configuredTarget: defaults?.host,
-        requestedTarget: requireValidExecTarget(params.host),
-        elevatedRequested,
-        sandboxAvailable: Boolean(defaults?.sandbox),
-        sandboxRequired: defaults?.sandboxRequired,
-      });
-      const host = target.effectiveHost;
+      const host = resolveHostForParams(params);
+      const foregroundFallbackWarning =
+        (host === "node" || !backgroundAvailable) &&
+        (params.background === true || typeof params.yieldMs === "number")
+          ? host === "node"
+            ? "Warning: continuation options are unavailable for host=node; running synchronously via remote system.run without a process session."
+            : "Warning: continuation options are unavailable; running synchronously."
+          : undefined;
 
       const explicitSecurity = defaults?.security;
       const configuredSecurity = explicitSecurity ?? (host === "sandbox" ? "deny" : "full");
@@ -352,7 +346,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       const autoReview = modePolicy.autoReview && ask === modePolicy.ask && !bypassApprovals;
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
-      if (target.selectedTarget === "sandbox" && !sandbox) {
+      if (host === "sandbox" && !sandbox) {
         throw new Error(
           [
             "exec host=sandbox requires a sandbox runtime for this session.",

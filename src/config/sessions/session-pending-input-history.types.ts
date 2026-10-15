@@ -6,6 +6,7 @@ export type PendingInputHistoryQuery = {
   limit?: number;
   before?: number;
   id?: string;
+  includeTotal?: false;
 };
 export type PendingInputHistorySnapshot = {
   rows: SessionPendingInputRow[];

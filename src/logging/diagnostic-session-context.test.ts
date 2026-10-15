@@ -8,16 +8,18 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import {
-  appendTranscriptMessageSync,
-  readLatestTranscriptAssistantText,
+  appendTranscriptMessage,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import * as sessionReads from "../config/sessions/session-entry-diagnostic-read.js";
+import { readLatestTranscriptAssistantTextAsync } from "../config/sessions/session-transcript-assistant-read.js";
 import { saveCronStore } from "../cron/store.js";
 import {
   areDiagnosticsEnabledForProcess,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -52,7 +54,7 @@ async function seedSessionTranscript(params: {
     { sessionId, updatedAt: 1, ...(incognito ? { incognito: true } : {}) },
   );
   for (const message of messages) {
-    appendTranscriptMessageSync({ agentId, sessionId, sessionKey }, { message });
+    await appendTranscriptMessage({ agentId, sessionId, sessionKey }, { message });
   }
 }
 
@@ -75,6 +77,15 @@ describe("diagnostic session context", () => {
   afterEach(() => vi.restoreAllMocks());
 
   afterAll(async () => {
+    if (testState) {
+      memorySessionActorOwners.closeDatabase({
+        agentId: "incognito-agent",
+        path: resolveIncognitoOpenClawAgentSqlitePath({
+          agentId: "incognito-agent",
+          env: testState.env,
+        }),
+      });
+    }
     await testState?.cleanup();
     clearRuntimeConfigSnapshot();
     setDiagnosticsEnabledForProcess(diagnosticsEnabled);
@@ -225,8 +236,13 @@ describe("diagnostic session context", () => {
       });
 
       expect(
-        readLatestTranscriptAssistantText({ agentId: "incognito-agent", sessionId, sessionKey })
-          ?.text,
+        (
+          await readLatestTranscriptAssistantTextAsync({
+            agentId: "incognito-agent",
+            sessionId,
+            sessionKey,
+          })
+        )?.text,
       ).toBe(privateReply);
       expect(await captureSessionLog({ sessionKey, activeSessionId: sessionId })).toBe("");
       expect(

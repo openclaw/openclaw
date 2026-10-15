@@ -30,8 +30,8 @@ import {
   isSessionPersonalBootstrapTurn,
   prepareChannelParticipantObservation,
 } from "../../sessions/session-participant-input.js";
+import { waitForSessionParticipantRecording } from "../../sessions/session-participant-recording.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
-import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -205,13 +205,7 @@ describe("prepareChatSendUserTurn", () => {
         prepareChannelParticipantObservation(prepared.ctx);
         recordAcceptedSessionParticipantInput({ ...prepared.ctx }, target);
         recordAcceptedSessionParticipantInput(prepared.ctx, target);
-        await new Promise<void>((resolve) => {
-          queueMicrotask(resolve);
-        });
-        await runOpenClawAgentWriteAdmission(
-          { agentId: target.agentId, path: target.storePath, env: state.env },
-          () => undefined,
-        );
+        await waitForSessionParticipantRecording(target);
         expect(listSessionParticipantsReadOnly(scope).get(scope.sessionKey)).toEqual(
           kind === "profile"
             ? [

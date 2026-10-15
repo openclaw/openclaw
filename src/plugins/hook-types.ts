@@ -405,9 +405,11 @@ export type PluginHookReplyDispatchContext = {
   dispatcher: ReplyDispatcher;
   abortSignal?: AbortSignal;
   onReplyStart?: () => Promise<void> | void;
-  /** @deprecated Use onPreparedAgentRunStart. */
+  /** @deprecated Use onPreparedAgentRunStart. Final compatibility day: 2026-12-31. */
   onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
   onPreparedAgentRunStart?: GetReplyOptions["onPreparedAgentRunStart"];
+  /** Host-owned input custody; adopt before backend submission and propagate refusal. */
+  turnAdoption?: { adopt: () => Promise<void>; assertCurrent: () => void };
   userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
   /** Host-owned display facts applied before the assistant transcript is published. */
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;

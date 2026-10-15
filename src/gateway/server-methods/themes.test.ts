@@ -27,6 +27,7 @@ import {
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { forbidMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -46,19 +47,19 @@ vi.mock("../../plugins/theme-catalog.js", () => ({ listPluginThemes: () => plugi
 let state: OpenClawTestState;
 let requesterProfileId: string;
 let otherProfileId: string;
-let releaseProfiles: () => void;
+let profileCatalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>>;
 
 beforeEach(async () => {
   pluginThemes.length = 0;
   state = await createOpenClawTestState({ layout: "state-only", prefix: "themes-rpc-" });
   requesterProfileId = ensureProfileForEmail("requester@example.test").id;
   otherProfileId = ensureProfileForEmail("other@example.test").id;
-  releaseProfiles = (await prepareUserProfileCatalog()).release;
+  profileCatalog = await prepareUserProfileCatalog();
 });
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  releaseProfiles();
+  profileCatalog.release();
   await state.cleanup();
 });
 
@@ -567,8 +568,10 @@ describe("theme RPC", () => {
     ];
     const broadcastToConnIds = vi.fn();
     const definition = createThemeDefinitionFixture();
-    expect(
-      await invoke(
+    const sql = forbidMainThreadSql("theme identity and notification queried host SQLite");
+    let result: Awaited<ReturnType<typeof invoke>>;
+    try {
+      result = await invoke(
         "themes.import",
         { id: "merged", definition, apply: true, mode: "dark" },
         {
@@ -580,8 +583,11 @@ describe("theme RPC", () => {
               ),
           },
         },
-      ),
-    ).toMatchObject({
+      );
+    } finally {
+      sql.restore();
+    }
+    expect(result).toMatchObject({
       ok: true,
       payload: { current: { id: "user/merged" }, application: "saved" },
     });

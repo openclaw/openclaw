@@ -16,29 +16,3 @@ export type PanelTabStripTab<Content = unknown> = {
   /** Explicit click/Enter/Space action; arrow-key selection still uses onSelect. */
   onActivate?: () => void;
 };
-
-export type PanelTabStripParams<
-  T extends PanelTabStripTab = PanelTabStripTab,
-  Content = unknown,
-> = {
-  tabs: T[];
-  activeId: string | null;
-  ariaControls: string | ((tab: T) => string);
-  onSelect: (id: string) => void;
-  onClose: (id: string) => void | Promise<void>;
-  onNew: () => void;
-  newLabel: string;
-  newDisabled?: boolean;
-  newTabAction?: boolean;
-  newControl?: Content;
-  separateTabs?: boolean;
-  onReorder?: (sourceId: string, targetId: string, placement: "before" | "after") => void;
-};
-
-/** Transitional Lit leaf boundary; undefined clears the owned content. */
-export type PanelTabStripContentRenderer = (value: unknown, container: HTMLElement) => void;
-
-export type LegacyPanelTabStripParams = Omit<PanelTabStripParams, "tabs" | "ariaControls"> & {
-  tabs: (PanelTabStripTab & { controls: string })[];
-  renderContent: PanelTabStripContentRenderer;
-};

@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { nothing, render, type ReactiveControllerHost } from "lit";
+import { createComponent, createSignal } from "solid-js";
 import { expect, onTestFinished, vi } from "vitest";
 import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import {
@@ -7,10 +8,11 @@ import {
   isUiGlobalScopeConfigured,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { renderChat } from "./chat-view.ts";
+import { ChatView, type ChatProps } from "./chat-view.tsx";
 import {
   prepareChatMessageRender,
   resolveMessageActionDetails,
@@ -129,8 +131,6 @@ export function stubAnimationFrames() {
   };
 }
 
-type ChatProps = Parameters<typeof renderChat>[0];
-
 export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
   const transcript = overrides.transcript ?? createTestTranscript();
   const sessionKey = overrides.sessionKey ?? "main";
@@ -218,6 +218,7 @@ export function renderChatView(overrides: Partial<ChatProps> = {}) {
 }
 
 const renderedTranscripts = new WeakMap<HTMLElement, ChatTranscriptController>();
+const mountedViews = new WeakMap<HTMLElement, (props: ChatProps) => void>();
 
 export function renderChatPropsInto(container: HTMLElement, props: ChatProps) {
   const previous = renderedTranscripts.get(container);
@@ -226,8 +227,20 @@ export function renderChatPropsInto(container: HTMLElement, props: ChatProps) {
     if (attached) {
       document.body.append(container);
     }
+    const [current, setCurrent] = createSignal(props, { equals: false });
+    const view = mountSolid(
+      () =>
+        createComponent(ChatView, {
+          get props() {
+            return current();
+          },
+        }),
+      { container },
+    );
+    mountedViews.set(container, (next) => setCurrent(() => next));
     onTestFinished(() => {
-      render(nothing, container);
+      view.unmount();
+      mountedViews.delete(container);
       renderedTranscripts.get(container)?.hostDisconnected();
       renderedTranscripts.delete(container);
       if (attached) {
@@ -238,7 +251,9 @@ export function renderChatPropsInto(container: HTMLElement, props: ChatProps) {
     previous.hostDisconnected();
   }
   renderedTranscripts.set(container, props.transcript);
-  render(renderChat(props), container);
+  if (previous) {
+    mountedViews.get(container)?.(props);
+  }
   flush();
   props.transcript.hostConnected();
   props.transcript.hostUpdated();

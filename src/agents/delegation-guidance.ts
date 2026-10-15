@@ -41,16 +41,37 @@ export function buildDelegationGuidanceSection(params: {
   hasSessionsYield: boolean;
   hasSubagentsList: boolean;
   hasSessionsSend: boolean;
+  sessionsCreateToolName?: string;
+  suggestTaskToolName?: string;
 }): string[] {
-  const hiddenDelegationTool = params.hiddenDelegationTool.trim();
-  if (
-    params.isMinimal ||
-    params.mode !== "prefer" ||
-    (!hiddenDelegationTool && !params.hasVisibleSessionSpawn)
-  ) {
+  if (params.isMinimal) {
     return [];
   }
+  const hiddenDelegationTool = params.hiddenDelegationTool.trim();
+  const createToolName = params.sessionsCreateToolName;
+  const sessionRouting =
+    createToolName || params.suggestTaskToolName
+      ? [
+          "## Session routing",
+          createToolName
+            ? `- Explicit requests to start/create a session or task, including "spin up a new task", use \`${createToolName}\`. Supply \`message\` to start work; omit it to create an idle session. This is a normal, independent, persistent visible session, not a supervised child: no completion event or yield expectation.`
+            : "",
+          hiddenDelegationTool
+            ? `- Actual delegated helpers use ${hiddenDelegationTool}; use hidden children by default.`
+            : "",
+          params.hasVisibleSessionSpawn
+            ? "- `sessions_spawn` with `visible=true` is for deliberately supervised child work the user needs to revisit or steer, not ordinary independent session creation."
+            : "",
+          params.suggestTaskToolName
+            ? `- Proactive, unrequested follow-up proposals use \`${params.suggestTaskToolName}\`: record a suggestion card; nothing starts until the user accepts. An explicit request to start work is not a proposal.`
+            : "",
+        ].filter(Boolean)
+      : [];
+  if (params.mode !== "prefer" || (!hiddenDelegationTool && !params.hasVisibleSessionSpawn)) {
+    return sessionRouting;
+  }
   return [
+    ...sessionRouting,
     "## Delegation",
     "Stay responsive: incoming messages wait on your current turn.",
     "- Answer directly: chat, known answers, quick lookups.",
@@ -61,7 +82,7 @@ export function buildDelegationGuidanceSection(params: {
       ? "- Use subagents for internal QA, research, coding, review, and test lanes; keep their results in the parent task. A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session."
       : "",
     params.hasVisibleSessionSpawn
-      ? "- Only when the user asks for a separate session, or needs to return to and steer the work independently, spawn `sessions_spawn` with `visible=true` (persistent, in the user's sidebar); reply with the link. A request to use subagents does not request separate sessions."
+      ? "- For deliberately supervised child work the user needs to revisit or steer, spawn `sessions_spawn` with `visible=true` (persistent, in the user's sidebar); reply with the link. A request to use subagents does not request separate sessions."
       : "",
     `- Announcing spawns notify when the run ends; later turns in a kept OpenClaw session do not report back${params.hasSessionsSend ? "; follow up via `sessions_send`." : "."}`,
     "- A child run ending does not end the user's delegated goal. Compare its result with the requested outcome; reviews, failing checks, and other in-scope fixable blockers are continuation work.",

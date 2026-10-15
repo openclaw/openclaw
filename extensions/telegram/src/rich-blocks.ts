@@ -87,7 +87,7 @@ type TelegramLinkAction =
 function resolveTelegramLinkAction(
   link: MarkdownLinkSpan,
   source: string,
-  context: { origin: "authored" | "linkify" },
+  context: { origin: "authored" | "linkify"; skipEntityDetection: boolean },
 ): TelegramLinkAction | null {
   const href = link.href.trim();
   if (!href || link.start === link.end) {
@@ -95,9 +95,23 @@ function resolveTelegramLinkAction(
   }
   const label = source.slice(link.start, link.end);
   if (context.origin === "linkify") {
-    // File refs need code to suppress false links. Other bare links stay plain
-    // because Telegram typed URLs escape query separators (observed 2026-08).
-    return isAutoLinkedFileRef(href, label) ? { kind: "code" } : null;
+    // File refs need code to suppress false links while Telegram-side
+    // detection is on; with detection skipped there is nothing to suppress,
+    // so they stay exactly as they were before (#171111).
+    if (isAutoLinkedFileRef(href, label)) {
+      return context.skipEntityDetection ? null : { kind: "code" };
+    }
+    // With Telegram-side detection off, OpenClaw marks the safe bare URLs
+    // itself so they stay tappable. URLs carrying `&` remain plain because
+    // typed URLs mangle query separators (#102162, #171111).
+    if (
+      context.skipEntityDetection &&
+      !href.includes("&") &&
+      TELEGRAM_RICH_LINK_HREF_RE.test(href)
+    ) {
+      return { kind: "url", href };
+    }
+    return null;
   }
   if (href.startsWith("#")) {
     // In-message fragments are RichTextAnchorLink, not RichTextUrl.
@@ -113,7 +127,12 @@ function resolveTelegramLinkAction(
  * Build nested RichText from IR spans over [rangeStart, rangeEnd).
  * Spans that partially overlap are split at shared boundaries (IR contract).
  */
-function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number): RichText {
+function irRangeToRichText(
+  ir: MarkdownIR,
+  rangeStart: number,
+  rangeEnd: number,
+  skipEntityDetection = false,
+): RichText {
   const slice = sliceMarkdownIR(ir, rangeStart, rangeEnd);
   const text = slice.text;
   if (!text) {
@@ -142,7 +161,10 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
         styleMarkers: {},
         escapeText: (value) => value,
         buildLink: (link, source, context) => {
-          const action = resolveTelegramLinkAction(link, source, context);
+          const action = resolveTelegramLinkAction(link, source, {
+            ...context,
+            skipEntityDetection,
+          });
           if (action) {
             spans.push(
               action.kind === "code"
@@ -251,7 +273,12 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
   return normalizeRichText(root);
 }
 
-function splitParagraphs(ir: MarkdownIR, start: number, end: number): InputRichBlockParagraph[] {
+function splitParagraphs(
+  ir: MarkdownIR,
+  start: number,
+  end: number,
+  skipEntityDetection = false,
+): InputRichBlockParagraph[] {
   if (end <= start) {
     return [];
   }
@@ -265,7 +292,7 @@ function splitParagraphs(ir: MarkdownIR, start: number, end: number): InputRichB
     if (absEnd <= absStart) {
       return;
     }
-    const text = irRangeToRichText(ir, absStart, absEnd);
+    const text = irRangeToRichText(ir, absStart, absEnd, skipEntityDetection);
     // Inline island conversion can normalize a leaf to nothing (e.g. an anchor
     // with empty label); an empty paragraph is invalid wire content.
     if (text !== "") {
@@ -286,6 +313,7 @@ function splitParagraphs(ir: MarkdownIR, start: number, end: number): InputRichB
 function renderTableBlock(
   table: MarkdownTableMeta,
   degradationReasons: Set<TelegramRichBlocksDegradationReason>,
+  skipEntityDetection = false,
 ): InputRichBlock {
   const columnCount = Math.max(table.headers.length, ...table.rows.map((row) => row.length), 0);
   if (columnCount > TELEGRAM_RICH_TEXT_TABLE_COLUMN_LIMIT) {
@@ -300,7 +328,9 @@ function renderTableBlock(
     index: number,
     header = false,
   ): RichBlockTableCell => {
-    const text = cell?.text ? irRangeToRichText(cell, 0, cell.text.length) : "";
+    const text = cell?.text
+      ? irRangeToRichText(cell, 0, cell.text.length, skipEntityDetection)
+      : "";
     return {
       ...(header ? { is_header: true as const } : {}),
       align: table.aligns?.[index] ?? "left",
@@ -415,6 +445,7 @@ function emitSegments(
   degradationReasons: Set<TelegramRichBlocksDegradationReason>,
   htmlNodes: readonly HtmlNode[] = [],
   depth = 0,
+  skipEntityDetection = false,
 ): InputRichBlock[] {
   // Leave room for the existing list-limit fallback before applying the wire
   // depth budget, but never recurse through an unbounded authored document.
@@ -433,7 +464,17 @@ function emitSegments(
     start: number,
     end: number,
     nodes: readonly HtmlNode[] = [],
-  ) => emitSegments(ir, children, start, end, degradationReasons, nodes, depth + 1);
+  ) =>
+    emitSegments(
+      ir,
+      children,
+      start,
+      end,
+      degradationReasons,
+      nodes,
+      depth + 1,
+      skipEntityDetection,
+    );
   const containerRank = (segment: StructuralSegment) =>
     segment.kind === "blockquote" ? 0 : segment.kind === "list" ? 1 : 2;
   const orderedSegments = [
@@ -459,7 +500,7 @@ function emitSegments(
       break;
     }
     if (segment.start > cursor) {
-      blocks.push(...splitParagraphs(ir, cursor, segment.start));
+      blocks.push(...splitParagraphs(ir, cursor, segment.start, skipEntityDetection));
     }
     // Segments nested inside this one (fences/headings/tables in a blockquote)
     // belong to it; consuming them here prevents a second top-level emission.
@@ -501,7 +542,7 @@ function emitSegments(
         break;
       }
       case "heading": {
-        const text = irRangeToRichText(ir, segment.start, segment.end);
+        const text = irRangeToRichText(ir, segment.start, segment.end, skipEntityDetection);
         if (text !== "") {
           blocks.push({ type: "heading", text, size: segment.size });
         }
@@ -528,7 +569,7 @@ function emitSegments(
         break;
       }
       case "table": {
-        blocks.push(renderTableBlock(segment.table, degradationReasons));
+        blocks.push(renderTableBlock(segment.table, degradationReasons, skipEntityDetection));
         break;
       }
     }
@@ -536,7 +577,7 @@ function emitSegments(
     index = next;
   }
   if (cursor < rangeEnd) {
-    blocks.push(...splitParagraphs(ir, cursor, rangeEnd));
+    blocks.push(...splitParagraphs(ir, cursor, rangeEnd, skipEntityDetection));
   }
   return blocks;
 }
@@ -550,11 +591,15 @@ export function markdownToTelegramRichBlocks(
   degradationReasons: readonly TelegramRichBlocksDegradationReason[];
 } {
   const tableMode = options.tableMode ?? "block";
+  const skipEntityDetection = options.skipEntityDetection === true;
   // The shared parse carries list markers into native blocks; `---` keeps the
   // IR's ─── text, while media/details/math stay HTML-island contracts.
+  // Bare URLs are always tokenized; `resolveTelegramLinkAction` decides
+  // whether they stay plain (Telegram detects them) or become typed `url`
+  // nodes when detection is skipped (#171111).
   const { ir, tables } = markdownToIRWithMeta(markdown ?? "", {
     assistantTranscriptRoleHeaders: true,
-    linkify: options.skipEntityDetection !== true,
+    linkify: true,
     enableSpoilers: true,
     enableTaskLists: true,
     headingStyle: "rich",
@@ -572,11 +617,29 @@ export function markdownToTelegramRichBlocks(
   const segments = collectStructuralSegments(ir, tables, htmlNodes);
   const hasMarkdownLists = segments.some((segment) => segment.kind === "list");
   const flattenedSegments = segments.filter((segment) => segment.kind !== "list");
-  let blocks = emitSegments(ir, segments, 0, ir.text.length, degradationReasons, htmlNodes);
+  let blocks = emitSegments(
+    ir,
+    segments,
+    0,
+    ir.text.length,
+    degradationReasons,
+    htmlNodes,
+    0,
+    skipEntityDetection,
+  );
   if (hasMarkdownLists && measureInputRichBlocks(blocks).nesting > 16) {
     degradationReasons = new Set<TelegramRichBlocksDegradationReason>();
     degradationReasons.add("list-limit");
-    blocks = emitSegments(ir, flattenedSegments, 0, ir.text.length, degradationReasons, htmlNodes);
+    blocks = emitSegments(
+      ir,
+      flattenedSegments,
+      0,
+      ir.text.length,
+      degradationReasons,
+      htmlNodes,
+      0,
+      skipEntityDetection,
+    );
   }
   if (measureInputRichBlocks(blocks).nesting > MAX_RICH_BLOCK_NESTING) {
     degradationReasons.add("nesting-limit");
@@ -589,7 +652,16 @@ export function markdownToTelegramRichBlocks(
 
   // Plain recovery remains byte-compatible with the pre-native-list path.
   const plainBlocks = hasMarkdownLists
-    ? emitSegments(ir, flattenedSegments, 0, ir.text.length, new Set(), htmlNodes)
+    ? emitSegments(
+        ir,
+        flattenedSegments,
+        0,
+        ir.text.length,
+        new Set(),
+        htmlNodes,
+        0,
+        skipEntityDetection,
+      )
     : blocks;
 
   return {

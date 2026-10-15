@@ -105,6 +105,7 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
+import kotlin.time.Duration.Companion.seconds
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -3024,7 +3025,8 @@ class TalkModeManagerTest {
         scheduler.runCurrent()
         while (true) (captureTasks.poll() ?: break).run()
         scheduler.runCurrent()
-        withTimeout(5_000) { managerJob.join() }
+        // Cancellation can dispatch back here after real IO finishes.
+        runTest(context = StandardTestDispatcher(scheduler), timeout = 5.seconds) { managerJob.join() }
         shadowOf(Looper.getMainLooper()).idle()
         scheduler.runCurrent()
         ShadowAudioTrack.removeAudioDataListener(listener)

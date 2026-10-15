@@ -14,7 +14,9 @@ import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
+import { loadOpenClawAgentCanonicalValidationReceipt } from "./openclaw-agent-canonical-validation-receipt.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
+import { hasPendingAgentStartupColumns } from "./openclaw-agent-db-additive-columns.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import {
@@ -73,31 +75,14 @@ export function readOpenClawAgentDatabase<T>(
 
 function hasAdmittedAgentReadOnlySchema(database: OpenClawAgentReadOnlyDatabase): boolean {
   const userVersion = assertSupportedAgentSchemaVersion(database.db, database.path);
-  assertCanonicalAgentPersistenceVersion(database.db, database.path, userVersion);
   const schemaMeta = readExistingAgentSchemaMeta(database.db);
+  assertCanonicalAgentPersistenceVersion(database.db, database.path, userVersion);
   if (!schemaMeta) {
     return false;
   }
   assertExistingAgentSchemaOwner(schemaMeta, database.agentId, database.path);
   assertCanonicalSessionValidationSchema(database.db);
   return true;
-}
-
-/** Retained grants reuse their fresh read scope without re-admitting changed schema under a lock. */
-export function captureOpenClawAgentReadOnlyAdmission(database: OpenClawAgentReadOnlyDatabase) {
-  const changed = () =>
-    new SqliteSchemaMismatchError(
-      `OpenClaw agent database ${database.path} schema admission changed; retry the request.`,
-    );
-  const schema = getAdmittedSqliteSchemaFacts(database.db);
-  if (!schema) {
-    throw changed();
-  }
-  return () => {
-    if (getAdmittedSqliteSchemaFacts(database.db) !== schema) {
-      throw changed();
-    }
-  };
 }
 
 /** Recheck admission and consume retained rows in the same fresh synchronous scope. */
@@ -206,7 +191,16 @@ export function openOpenClawAgentDatabaseReadOnly(
       adoptOpenClawAgentDatabaseSchema(database) ||
       runSqliteReadOperationSync(db, () => {
         admitSqliteSchema(db);
-        return hasAdmittedAgentReadOnlySchema(database);
+        if (!hasAdmittedAgentReadOnlySchema(database)) {
+          return false;
+        }
+        const schema = getAdmittedSqliteSchemaFacts(database.db);
+        if (schema && hasPendingAgentStartupColumns(schema.tableSql)) {
+          throw new SqliteSchemaMismatchError(
+            `OpenClaw agent database ${database.path} requires writable startup admission before session reads; restart the Gateway or run openclaw doctor --fix.`,
+          );
+        }
+        return true;
       });
     if (!hasSchema) {
       close();
@@ -214,6 +208,7 @@ export function openOpenClawAgentDatabaseReadOnly(
     }
     // Worker admission loads file-bound proof before a read transaction prevents it.
     if (!isMainThread) {
+      loadOpenClawAgentCanonicalValidationReceipt(database);
       hasOpenClawAgentCanonicalValidation(database);
     }
     if (behavior.lifecycle === "agent") {

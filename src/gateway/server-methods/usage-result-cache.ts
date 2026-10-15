@@ -23,10 +23,14 @@ import { listGatewayAgentsBasic } from "../agent-list.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { loadUsageResultCached, type UsageCacheEntry } from "./usage-cache.js";
 import { mergeUsageCacheStatus, runUsageAgentTasks } from "./usage-session-loading.js";
-import type { UsageGroupingMode } from "./usage-session-selection.js";
+import type { UsageSessionSelection, UsageGroupingMode } from "./usage-session-selection.js";
 
 const costUsageCache = new Map<string, UsageCacheEntry<CostUsageSummary>>();
-const sessionsUsageCache = new Map<string, UsageCacheEntry<SessionsUsageResult>>();
+export type SessionsUsageSnapshot = Pick<
+  SessionsUsageResult,
+  "updatedAt" | "sessions" | "cacheStatus"
+> & { sources: UsageSessionSelection[]; accessRevision: number; sessionRevision: number };
+const sessionsUsageCache = new Map<string, UsageCacheEntry<SessionsUsageSnapshot>>();
 
 function usageDayBucketCacheKey(dayBucket: UsageDailyBucket | undefined): string {
   return dayBucket
@@ -71,16 +75,18 @@ function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
   ]);
 }
 
-export async function loadSessionsUsageResultCached(
+export async function loadSessionsUsageSnapshotCached(
   params: SessionsUsageCacheKeyParams & {
-    load: () => Promise<SessionsUsageResult>;
+    load: () => Promise<SessionsUsageSnapshot>;
   },
-): Promise<SessionsUsageResult> {
+): Promise<SessionsUsageSnapshot> {
   return await loadUsageResultCached({
     cache: sessionsUsageCache,
+    maxEntries: 8,
+    shareInFlight: false,
     cacheKey: sessionsUsageCacheKey(params),
     configRef: params.configRef,
-    revision: `${readUserProfileVersion()}:${getSessionCostUsageUpdatedAt()}:${readSessionRowChangeRevision()}:${readSessionTranscriptUpdateVersion()}:${readGatewayAccessRevision()}:${getActiveRemoteModelCatalog(params.configRef, false)?.revision ?? ""}`,
+    revision: `${readUserProfileVersion()}:${getSessionCostUsageUpdatedAt()}:${readSessionRowChangeRevision()}:${readSessionTranscriptUpdateVersion()}:${readGatewayAccessRevision()}:${getActiveRemoteModelCatalog(params.configRef)?.revision ?? ""}`,
     revisionOnly: params.overviewKey !== undefined,
     load: params.load,
     // Incomplete lower-cache snapshots must not acquire the outer freshness TTL.
@@ -106,15 +112,12 @@ export async function loadCostUsageSummaryCached(params: {
     cache: costUsageCache,
     cacheKey,
     configRef: params.config,
-    revision: getSessionCostUsageUpdatedAt(),
+    revision: `${getSessionCostUsageUpdatedAt()}:${readSessionTranscriptUpdateVersion()}`,
     load: () =>
       allAgents
         ? loadAllAgentCostUsageSummary(params)
         : loadCostUsageSummaryFromCache({
-            startMs: params.startMs,
-            endMs: params.endMs,
-            dayBucket: params.dayBucket,
-            config: params.config,
+            ...params,
             agentId: expectDefined(agentId, "non-aggregate usage agent id"),
             requestRefresh: true,
           }),
@@ -136,10 +139,7 @@ async function loadAllAgentCostUsageSummary(params: {
     agentIds.map(
       (agentId) => () =>
         loadCostUsageSummaryFromCache({
-          startMs: params.startMs,
-          endMs: params.endMs,
-          dayBucket: params.dayBucket,
-          config: params.config,
+          ...params,
           agentId,
           requestRefresh: true,
         }),

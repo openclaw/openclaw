@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
@@ -15,6 +15,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
+import { useUserProfileCatalogForTest } from "../../test-utils/user-profile-catalog.js";
 import { projectChatDisplayMessages } from "../chat-display-projection.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
@@ -28,6 +29,10 @@ import { createProgressCardHandlers } from "./progress-card.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 installGatewayTestHooks();
+const prepareProfiles = useUserProfileCatalogForTest();
+beforeEach(async () => {
+  await prepareProfiles();
+});
 const createFixture = useBrowserFollowupFixture();
 
 function refreshCard(

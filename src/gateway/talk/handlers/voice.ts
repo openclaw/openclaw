@@ -144,9 +144,9 @@ async function resolveVoiceCaller(
   );
   return {
     kind: "browser" as const,
+    [Symbol.dispose]: () => authorization?.release?.(),
     session,
     connId,
-    [Symbol.dispose]: () => authorization?.release?.(),
     assertCurrent: composeSessionSourceAssertion(
       [assertBrowserBindingCurrent, authorization?.assertCurrent],
       (assertSources) => {

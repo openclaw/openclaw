@@ -339,24 +339,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           return {
             isAvailable: () => runWithPluginScope(() => gateway.isAvailable(), false),
             request: async (method, params, options) => {
-              const { withPreparedSessionOwnership, assertGatewaySessionRequestOwned } =
-                await loadSessionOwnership();
-              return await runWithPluginScope(() =>
-                withPreparedSessionOwnership(
-                  {
-                    sessionKey:
-                      typeof params?.sessionKey === "string"
-                        ? params.sessionKey
-                        : typeof params?.key === "string"
-                          ? params.key
-                          : undefined,
-                  },
-                  async () => {
-                    await assertGatewaySessionRequestOwned(method, params);
-                    return await gateway.request(method, params, options);
-                  },
-                ),
-              );
+              const { assertGatewaySessionRequestOwned } = await loadSessionOwnership();
+              return await runWithPluginScope(async () => {
+                await assertGatewaySessionRequestOwned(method, params);
+                return await gateway.request(method, params, options);
+              });
             },
             openPluginPanel: (params) =>
               runWithCurrentPluginScope(() => gateway.openPluginPanel(params)),
@@ -461,12 +448,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               );
             },
             patchSessionEntry: async (params) => {
-              const { withPreparedSessionOwnership, patchSessionEntry } =
-                await loadSessionOwnership();
+              const { patchSessionEntry } = await loadSessionOwnership();
               return await runWithPluginScope(() =>
-                withPreparedSessionOwnership(params, () =>
-                  patchSessionEntry(session, params, assertRuntimeCurrent),
-                ),
+                patchSessionEntry(session, params, assertRuntimeCurrent),
               );
             },
             upsertSessionEntry: async (params) => {
@@ -476,70 +460,58 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               );
             },
             runWithWorkAdmission: async (params, run) => {
-              const { withPreparedSessionOwnership, resolveStoredSessionExecutionOwner } =
-                await loadSessionOwnership();
-              return await runWithPluginScope(() =>
-                withPreparedSessionOwnership(params, async () => {
-                  const resolveCurrentExecutionOwner = () =>
-                    resolveStoredSessionExecutionOwner({
-                      action: "admit work on",
-                      sessionKey: params.sessionKey,
-                      storePath: params.storePath,
-                    });
-                  const ownerPluginId = await resolveCurrentExecutionOwner();
-                  const admissionSession = ownerPluginId
-                    ? resolveDelegatedRuntime(ownerPluginId).agent.session
-                    : session;
-                  return await admissionSession.runWithWorkAdmission(params, async (signal) => {
-                    // Admission can wait behind another run that changes ownership.
-                    // Recheck delegation inside the admitted callback before plugin work starts.
-                    if ((await resolveCurrentExecutionOwner()) !== ownerPluginId) {
-                      throw new Error(
-                        `Session "${params.sessionKey}" changed execution ownership while starting work.`,
-                      );
-                    }
-                    // The owner supplies the admission primitive, but the caller's
-                    // callback must not inherit the owner's plugin identity.
-                    return await runWithPluginScope(() => run(signal));
+              const { resolveStoredSessionExecutionOwner } = await loadSessionOwnership();
+              return await runWithPluginScope(async () => {
+                const resolveCurrentExecutionOwner = () =>
+                  resolveStoredSessionExecutionOwner({
+                    action: "admit work on",
+                    sessionKey: params.sessionKey,
+                    storePath: params.storePath,
                   });
-                }),
-              );
+                const ownerPluginId = await resolveCurrentExecutionOwner();
+                const admissionSession = ownerPluginId
+                  ? resolveDelegatedRuntime(ownerPluginId).agent.session
+                  : session;
+                return await admissionSession.runWithWorkAdmission(params, async (signal) => {
+                  // Admission can wait behind another run that changes ownership.
+                  // Recheck delegation inside the admitted callback before plugin work starts.
+                  if ((await resolveCurrentExecutionOwner()) !== ownerPluginId) {
+                    throw new Error(
+                      `Session "${params.sessionKey}" changed execution ownership while starting work.`,
+                    );
+                  }
+                  // The owner supplies the admission primitive, but the caller's
+                  // callback must not inherit the owner's plugin identity.
+                  return await runWithPluginScope(() => run(signal));
+                });
+              });
             },
             updateSessionStoreEntry: async (params) => {
-              const { withPreparedSessionOwnership, prepareSessionStoreUpdate } =
-                await loadSessionOwnership();
-              return await runWithPluginScope(() =>
-                withPreparedSessionOwnership(params, async () => {
-                  const update = await prepareSessionStoreUpdate(params, assertRuntimeCurrent);
-                  return await session.updateSessionStoreEntry({ ...params, update });
-                }),
-              );
+              const { prepareSessionStoreUpdate } = await loadSessionOwnership();
+              return await runWithPluginScope(async () => {
+                const update = await prepareSessionStoreUpdate(params, assertRuntimeCurrent);
+                return await session.updateSessionStoreEntry({ ...params, update });
+              });
             },
           } satisfies PluginRuntime["agent"]["session"];
           const runEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] = async (params) => {
             const runParams = { ...params };
-            const { withPreparedSessionOwnership, prepareRunSessionExecution } =
-              await loadSessionOwnership();
-            return await runWithPluginScope(() =>
-              withPreparedSessionOwnership(
-                { ...runParams, ...runParams.sessionTarget },
-                async () => {
-                  const { ownerPluginId, agentHarnessRuntimeOverride } =
-                    await prepareRunSessionExecution(runParams);
-                  if (agentHarnessRuntimeOverride !== undefined) {
-                    runParams.agentHarnessRuntimeOverride = agentHarnessRuntimeOverride;
-                  }
-                  if (ownerPluginId) {
-                    return await resolveDelegatedRuntime(ownerPluginId).agent.runEmbeddedAgent(
-                      runParams,
-                    );
-                  }
-                  // The public runtime adapter owns admission preparation. Passing
-                  // host authority through this plugin wrapper is rejected by design.
-                  return await agent.runEmbeddedAgent(runParams);
-                },
-              ),
-            );
+            const { prepareRunSessionExecution } = await loadSessionOwnership();
+            return await runWithPluginScope(async () => {
+              const { ownerPluginId, agentHarnessRuntimeOverride } =
+                await prepareRunSessionExecution(runParams);
+              if (agentHarnessRuntimeOverride !== undefined) {
+                runParams.agentHarnessRuntimeOverride = agentHarnessRuntimeOverride;
+              }
+              if (ownerPluginId) {
+                return await resolveDelegatedRuntime(ownerPluginId).agent.runEmbeddedAgent(
+                  runParams,
+                );
+              }
+              // The public runtime adapter owns admission preparation. Passing
+              // host authority through this plugin wrapper is rejected by design.
+              return await agent.runEmbeddedAgent(runParams);
+            });
           };
           const runCommandFromIngress: PluginRuntime["agent"]["runCommandFromIngress"] = async (
             params,
@@ -610,34 +582,29 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         const subagent: PluginRuntime["subagent"] = getRuntimeProperty();
         return {
           complete: (params) => runWithPluginScope(() => subagent.complete(params)),
+          forkSession: (params) => runWithPluginScope(() => subagent.forkSession(params)),
           run: async (params) => {
-            const { withPreparedSessionOwnership, assertSessionIdentitiesOwned } =
-              await loadSessionOwnership();
-            return await runWithPluginScope(() =>
-              withPreparedSessionOwnership(params, async () => {
-                await assertSessionIdentitiesOwned({
-                  action: "run",
-                  sessionKeys: [params.sessionKey],
-                });
-                return await subagent.run(params);
-              }),
-            );
+            const { assertSessionIdentitiesOwned } = await loadSessionOwnership();
+            return await runWithPluginScope(async () => {
+              await assertSessionIdentitiesOwned({
+                action: "run",
+                sessionKeys: [params.sessionKey],
+              });
+              return await subagent.run(params);
+            });
           },
           waitForRun: (params) => runWithPluginScope(() => subagent.waitForRun(params)),
           getSessionMessages: (params) =>
             runWithPluginScope(() => subagent.getSessionMessages(params)),
           deleteSession: async (params) => {
-            const { withPreparedSessionOwnership, assertStoredSessionEntryOwned } =
-              await loadSessionOwnership();
-            return await runWithPluginScope(() =>
-              withPreparedSessionOwnership(params, async () => {
-                await assertStoredSessionEntryOwned({
-                  action: "delete",
-                  sessionKey: params.sessionKey,
-                });
-                await subagent.deleteSession(params);
-              }),
-            );
+            const { assertStoredSessionEntryOwned } = await loadSessionOwnership();
+            return await runWithPluginScope(async () => {
+              await assertStoredSessionEntryOwned({
+                action: "delete",
+                sessionKey: params.sessionKey,
+              });
+              await subagent.deleteSession(params);
+            });
           },
         } satisfies PluginRuntime["subagent"];
       },

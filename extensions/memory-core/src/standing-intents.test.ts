@@ -158,6 +158,17 @@ describe("standing intents", () => {
       kind: "result",
       value: [{ id: "cancelled", status: "cancelled" }],
     });
+    const preciseExpiry = 1_790_000_000_001;
+    worker.execute({
+      type: "create",
+      input: { ...row, id: "precise-expiry", expires_at: preciseExpiry },
+    });
+    expect(worker.execute({ type: "sweep", input: { nowMs: preciseExpiry - 1 } })).toMatchObject({
+      nextDueAt: preciseExpiry,
+    });
+    expect(worker.execute({ type: "sweep", input: { nowMs: preciseExpiry } })).toMatchObject({
+      nextDueAt: Infinity,
+    });
     worker.execute({ type: "create", input: { ...row, id: "large-expiry", expires_at: 2 ** 60 } });
     expect(() => worker.execute({ type: "sweep", input: { nowMs: 15_000 } })).not.toThrow();
     worker.execute({
@@ -167,7 +178,7 @@ describe("standing intents", () => {
     expect(() => worker.execute({ type: "sweep", input: { nowMs: 15_000 } })).toThrow();
     await worker.close();
   });
-  it("skips empty matches without hiding creates, cancellation, or rolled-back expiry", async () => {
+  it("skips empty match transactions without hiding creates, cancellation, or rolled-back expiry", async () => {
     await listStandingIntents({ agentId: "main", nowMs: 1_000 });
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
@@ -184,7 +195,7 @@ describe("standing intents", () => {
     let worker = bindSqliteWorkerBackend(undefined, context);
     const match = (prompt = "release", nowMs = 1_000) =>
       worker.execute({ type: "match", input: prepareStandingIntentMatch({ prompt, nowMs })! });
-    const empty = { kind: "result", value: [] };
+    const empty = { kind: "result", value: [], nextDueAt: Infinity };
     const row = {
       id: "release",
       description: "Review the release.",
@@ -206,13 +217,11 @@ describe("standing intents", () => {
     await worker.close();
     worker = bindSqliteWorkerBackend(undefined, context);
     const observation = observeHostDataSql();
-    const intentQueries = () =>
-      observation.queries.filter((query) => query.includes('"standing_intents"'));
     try {
       expect(match()).toEqual(empty);
-      expect(intentQueries()).toEqual([]);
+      expect(observation.queries).toEqual([]);
       worker.execute({ type: "create", input: row });
-      expect(match("unrelated")).toEqual(empty);
+      expect(match("unrelated")).toEqual({ ...empty, nextDueAt: row.expires_at });
       expect(match()).toMatchObject({
         kind: "result",
         value: [{ id: row.id, status: "done", fireCount: 1 }],
@@ -220,9 +229,9 @@ describe("standing intents", () => {
       worker.execute({ type: "create", input: { ...row, id: "cancelled" } });
       worker.execute({ type: "cancel", input: { id: "cancelled" } });
       expect(match()).toEqual(empty);
-      const reads = intentQueries().length;
+      const reads = observation.queries.length;
       expect(match()).toEqual(empty);
-      expect(intentQueries()).toHaveLength(reads);
+      expect(observation.queries).toHaveLength(reads);
 
       worker.execute({ type: "create", input: { ...row, id: "rollback" } });
       refuseCommit = true;
@@ -297,6 +306,56 @@ describe("standing intents", () => {
     const stored = await listStandingIntents({ agentId: "main", nowMs: 2_000 });
     expect(stored.map((intent) => intent.id)).toEqual([created.id]);
     expect(stored[0]).toMatchObject({ status: "done", fireCount: 1 });
+  });
+
+  it.each([
+    ["3", 3],
+    [3, 3],
+    ["5", 5],
+    [undefined, 3],
+  ])("creates an intent with maxFires=%j", async (maxFires, expected) => {
+    const execute = createStandingIntentExecutor({
+      agentId: "main",
+      provider: "qa-channel",
+      senderId: "owner-1",
+    });
+    const result = parseToolJson(
+      await execute("create-integer-options", {
+        action: "create",
+        description: "Review the release.",
+        triggerKeywords: ["release"],
+        maxFires,
+        cooldownSeconds: "0",
+      }),
+    );
+    expect(result.intent).toMatchObject({ maxFires: expected, cooldownSeconds: 0 });
+    expect(await listStandingIntents({ agentId: "main" })).toMatchObject([
+      { maxFires: expected, cooldownSeconds: 0 },
+    ]);
+  });
+
+  it.each([
+    ["maxFires", "abc", "positive"],
+    ["maxFires", "3.5", "positive"],
+    ["maxFires", "3fires", "positive"],
+    ["maxFires", "-1", "positive"],
+    ["maxFires", "0", "positive"],
+    ["maxFires", "9007199254740992", "positive"],
+    ["cooldownSeconds", "-1", "non-negative"],
+  ])("rejects invalid %s=%s with an integer error", async (field, value, range) => {
+    const execute = createStandingIntentExecutor({
+      agentId: "main",
+      provider: "qa-channel",
+      senderId: "owner-1",
+    });
+    await expect(
+      execute("create-invalid-integer", {
+        action: "create",
+        description: "Review the release.",
+        triggerKeywords: ["release"],
+        [field]: value,
+      }),
+    ).rejects.toThrow(`${field} must be a ${range} integer`);
   });
 
   it("injects owner-created intents and skips rows without a known creator", async () => {

@@ -5,6 +5,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { requestSessionUsage, type SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import { showToast } from "../../lib/toast.ts";
+import { isUsageCacheIncomplete } from "./cache-status.ts";
 import { formatIsoDate } from "./helpers.ts";
 import { buildDailyCsv, buildSessionsCsv } from "./query.ts";
 import { createUsageRequest } from "./request.ts";
@@ -35,6 +36,12 @@ export function createUsageExportRequest(
           signal,
         },
       );
+      if (
+        isUsageCacheIncomplete(result.cacheStatus, undefined) &&
+        result.overview?.selectedUsageComplete !== true
+      ) {
+        throw new Error(t("usage.export.incomplete"));
+      }
       const selectedKeys = new Set(selectedQuery.selectedSessions);
       const data: UsageJsonExport = {
         sessions: selectedKeys.size

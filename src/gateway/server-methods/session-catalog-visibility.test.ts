@@ -27,11 +27,14 @@ type TestClient = {
 
 const hoisted = vi.hoisted(() => ({
   activeRegistry: {} as TestPluginRegistry,
+  profileRole: vi.fn((): string | null => null),
   hasMultipleSessionSharingIdentities: vi.fn(() => false),
   resolveSessionSharingRole: vi.fn<
     typeof import("../session-sharing-policy.js").resolveSessionSharingRole
   >(() => "viewer"),
-  resolveSessionSharingTargetAsync: vi.fn(async () => null as Record<string, unknown> | null),
+  resolveSessionSharingTargetAsync: vi.fn<
+    typeof import("../session-sharing-policy.js").resolveSessionSharingTargetAsync
+  >(async () => null),
 }));
 
 vi.mock("../../plugins/runtime.js", async (importOriginal) => ({
@@ -43,6 +46,16 @@ vi.mock("../../plugins/runtime.js", async (importOriginal) => ({
 vi.mock("../../state/user-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profiles.js")>()),
   hasMultipleSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
+}));
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  hasMultipleResidentSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
+  readResidentUserProfileAliases: (id: string) => new Set([id]),
+  readResidentUserProfileId: (id: string) => id,
+  readResidentUserProfileIdentity: (id: string) => ({
+    profileId: id,
+    role: hoisted.profileRole(),
+  }),
 }));
 vi.mock("../session-sharing.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session-sharing.js")>()),
@@ -169,6 +182,7 @@ describe("session catalog caller visibility", () => {
     hoisted.activeRegistry = createEmptyPluginRegistry() as TestPluginRegistry;
     markPluginRegistryActive(hoisted.activeRegistry as PluginRegistry);
     hoisted.hasMultipleSessionSharingIdentities.mockReset().mockReturnValue(false);
+    hoisted.profileRole.mockReset().mockReturnValue(null);
     sessionEntries = [];
     hoisted.resolveSessionSharingRole.mockReset().mockReturnValue("viewer");
     hoisted.resolveSessionSharingTargetAsync.mockReset().mockResolvedValue(null);

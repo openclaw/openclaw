@@ -154,6 +154,8 @@ describe("MCP App request shutdown", () => {
           try {
             return await callTool(...args);
           } finally {
+            // The watchdog covers MCP cancellation, not unrelated Gateway teardown.
+            clearTimeout(emergencyTimer);
             callSettled = true;
             callFinished.resolve();
           }

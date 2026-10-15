@@ -68,7 +68,11 @@ function setup(handle?: (envelope: BrowserRequestEnvelope) => Promise<unknown>) 
       }
       switch (envelope.path) {
         case "/tabs":
-          return { running: true, tabs: [createBrowserPanelTestTab("tab-a", PAGE_URL, "Page")] };
+          return {
+            running: true,
+            canAutoResizeViewport: true,
+            tabs: [createBrowserPanelTestTab("tab-a", PAGE_URL, "Page")],
+          };
         case "/screencast":
           return {
             token: "token",
@@ -111,38 +115,35 @@ async function start(controller: BrowserPanelController) {
 }
 
 describe("Browser panel stream ownership", () => {
-  it.each(["inspect"] as const)(
-    "pins the captured image and URL during %s and presents the latest frame on exit",
-    async (mode) => {
-      const { controller } = setup();
-      const socket = await start(controller);
-      controller.setMode(mode);
-      controller.setState("strokes", [{ points: [{ x: 0.1, y: 0.2 }] }]);
-      controller.setState("inspected", createInspectedNode("Original button"));
-      const pinnedView = controller.view;
-      socket.receive(screencastFrame(NEXT_URL, 200, 100));
-      socket.receive(screencastFrame(NEXT_URL, 300, 100));
-      socket.receive(JSON.stringify({ type: "meta", url: NEXT_URL, title: "Next" }));
-      await flush();
-      expect(controller.view).toBe(pinnedView);
-      expect(controller.view).toMatchObject({ dataUrl: "blob:frame-0", url: PAGE_URL });
-      expect(controller.tabs[0]).toMatchObject({ url: NEXT_URL, title: "Next" });
-      expect(controller.urlDraft).toBe(NEXT_URL);
-      expect(controller.strokes).toHaveLength(1);
-      expect(controller.inspected?.name).toBe("Original button");
+  it("pins the captured image and URL during inspect and presents the latest frame on exit", async () => {
+    const { controller } = setup();
+    const socket = await start(controller);
+    controller.setMode("inspect");
+    controller.setState("strokes", [{ points: [{ x: 0.1, y: 0.2 }] }]);
+    controller.setState("inspected", createInspectedNode("Original button"));
+    const pinnedView = controller.view;
+    socket.receive(screencastFrame(NEXT_URL, 200, 100));
+    socket.receive(screencastFrame(NEXT_URL, 300, 100));
+    socket.receive(JSON.stringify({ type: "meta", url: NEXT_URL, title: "Next" }));
+    await flush();
+    expect(controller.view).toBe(pinnedView);
+    expect(controller.view).toMatchObject({ dataUrl: "blob:frame-0", url: PAGE_URL });
+    expect(controller.tabs[0]).toMatchObject({ url: NEXT_URL, title: "Next" });
+    expect(controller.urlDraft).toBe(NEXT_URL);
+    expect(controller.strokes).toHaveLength(1);
+    expect(controller.inspected?.name).toBe("Original button");
 
-      controller.exitCaptureModes();
-      await flush();
-      expect(controller.view).toMatchObject({
-        dataUrl: "blob:frame-1",
-        url: NEXT_URL,
-        metrics: { cssWidth: 300, title: "Next", url: NEXT_URL },
-      });
-      expect(controller.strokes).toEqual([]);
-      expect(controller.inspected).toBeNull();
-      expect(revokedUrls).toEqual(["blob:frame-0"]);
-    },
-  );
+    controller.exitCaptureModes();
+    await flush();
+    expect(controller.view).toMatchObject({
+      dataUrl: "blob:frame-1",
+      url: NEXT_URL,
+      metrics: { cssWidth: 300, title: "Next", url: NEXT_URL },
+    });
+    expect(controller.strokes).toEqual([]);
+    expect(controller.inspected).toBeNull();
+    expect(revokedUrls).toEqual(["blob:frame-0"]);
+  });
 
   it("reconnects while a fallback screenshot is still pending", async () => {
     const screenshot = createDeferred<unknown>();
@@ -189,14 +190,14 @@ describe("Browser panel stream ownership", () => {
     expect(calls("/screenshot")).toHaveLength(2);
   });
 
-  it.each(["inspect"] as const)("defers a resize restart until %s ends", async (mode) => {
+  it("defers a resize restart until inspect ends", async () => {
     const { controller, host, calls } = setup();
     let width = 500;
     const stage = host.renderRoot.querySelector<HTMLElement>(".bp-stage")!;
     Object.defineProperty(stage, "clientWidth", { get: () => width });
     controller.handleViewportResize(width, 300);
     const socket = await start(controller);
-    controller.setMode(mode);
+    controller.setMode("inspect");
     const pinned = controller.view;
     width = 800;
     controller.handleViewportResize(width, 300);
@@ -412,10 +413,10 @@ describe("Browser panel stream ownership", () => {
     expect(calls("/screencast")).toHaveLength(3);
   });
 
-  it.each(["inspect"] as const)("defers socket recovery until %s ends", async (mode) => {
+  it("defers socket recovery until inspect ends", async () => {
     const { controller, calls } = setup();
     const socket = await start(controller);
-    controller.setMode(mode);
+    controller.setMode("inspect");
     controller.setState("strokes", [{ points: [{ x: 0.1, y: 0.2 }] }]);
     controller.setState("inspected", createInspectedNode("Pinned button"));
     const pinned = controller.view;

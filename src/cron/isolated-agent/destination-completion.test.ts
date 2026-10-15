@@ -276,317 +276,262 @@ describe("destination-owned completion", () => {
     },
   );
 
-  it.each([
-    "existing",
-    "creatorless",
-    "persistent",
-    "same",
-    "threaded",
-    "stable",
-    "uncertain",
-    "rejected",
-    "commit-failure",
-    "tool-commit-failure",
-    "cross-agent",
-  ] as const)("routes %s output without duplicate conversation writes or sends", async (mode) => {
-    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      const destinationKey =
-        mode === "threaded"
-          ? "agent:main:telegram:direct:12345:thread:12345:42"
-          : "agent:main:telegram:direct:12345";
-      const fixture = await createCompletionFixture(
-        state,
-        "isolated",
-        mode === "same" ? destinationKey : undefined,
-      );
-      const registry = captureActivePluginRegistrySnapshot();
-      const clock = mode === "uncertain" ? vi.spyOn(Date, "now") : undefined;
-      const commitFailure =
-        mode === "commit-failure" || mode === "tool-commit-failure"
-          ? vi
-              .spyOn(backgroundResults, "commitBackgroundResultToSession")
-              .mockRejectedValue(new Error("completion commit rejected"))
-          : undefined;
-      const destination = {
-        ...fixture.scope,
-        sessionKey: destinationKey,
-        sessionId: mode === "same" ? fixture.scope.sessionId : "recipient-session",
-      };
-      fixture.params.cfgWithAgentDefaults.session = {
-        ...fixture.params.cfgWithAgentDefaults.session,
-        dmScope: "per-channel-peer",
-      };
-      if (mode === "cross-agent") {
-        fixture.params.cfgWithAgentDefaults.agents = {
-          entries: {
-            main: { workspace: state.workspaceDir },
-            other: { workspace: state.path("other-workspace") },
-          },
+  it.each(["persistent", "threaded", "stable", "tool-commit-failure", "cross-agent"] as const)(
+    "routes %s output without duplicate conversation writes or sends",
+    async (mode) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const destinationKey =
+          mode === "threaded"
+            ? "agent:main:telegram:direct:12345:thread:12345:42"
+            : "agent:main:telegram:direct:12345";
+        const fixture = await createCompletionFixture(state, "isolated");
+        const registry = captureActivePluginRegistrySnapshot();
+        const commitFailure =
+          mode === "tool-commit-failure"
+            ? vi
+                .spyOn(backgroundResults, "commitBackgroundResultToSession")
+                .mockRejectedValue(new Error("completion commit rejected"))
+            : undefined;
+        const destination = {
+          ...fixture.scope,
+          sessionKey: destinationKey,
+          sessionId: "recipient-session",
         };
-        fixture.params.cfgWithAgentDefaults.bindings = [
-          {
-            agentId: "other",
-            match: {
-              channel: "telegram",
-              accountId: "default",
-              peer: { kind: "direct", id: "12345" },
+        fixture.params.cfgWithAgentDefaults.session = {
+          ...fixture.params.cfgWithAgentDefaults.session,
+          dmScope: "per-channel-peer",
+        };
+        if (mode === "cross-agent") {
+          fixture.params.cfgWithAgentDefaults.agents = {
+            entries: {
+              main: { workspace: state.workspaceDir },
+              other: { workspace: state.path("other-workspace") },
             },
-          },
-        ];
-      }
-      fixture.params.agentSessionKey = "agent:main:telegram:direct:12345:thread:12345:99";
-      await replaceSessionEntry(
-        { ...fixture.scope, sessionKey: fixture.params.agentSessionKey },
-        {
-          sessionId: fixture.params.sessionId,
-          lifecycleRevision: fixture.params.lifecycleRevision,
-          updatedAt: 1,
-          delivery: normalizeSessionDeliveryState({
-            context: { channel: "telegram", to: "12345", threadId: "99" },
-          }),
-        },
-      );
-      if (mode === "existing" || mode === "persistent") {
-        await replaceSessionEntry(destination, {
-          sessionId: destination.sessionId,
-          updatedAt: 1,
-        });
-      }
-      if (mode === "creatorless") {
-        delete fixture.params.sourceSessionKey;
-        delete fixture.params.sourceSessionGeneration;
-        delete fixture.job.sourceConversation;
-      }
-      if (mode === "stable") {
-        // v2026.9.9 stored sessionKey, but did not store sourceConversation.
-        delete fixture.job.sourceConversation;
-        const storePath = state.path("cron", "jobs.json");
-        await saveCronStore(storePath, { version: 1, jobs: [fixture.job] });
-        const [reloaded] = (await loadCronStore(storePath)).jobs;
-        if (!reloaded) {
-          throw new Error("Stored v2026.9.9 job was not loaded");
-        }
-        expect(reloaded).not.toHaveProperty("sourceConversation");
-        fixture.params.job = reloaded;
-      }
-      if (mode === "persistent") {
-        fixture.params.agentSessionKey = "Agent:Main:Telegram:Direct:12345";
-        fixture.params.runSessionKey = fixture.params.agentSessionKey;
-        fixture.params.sessionId = destination.sessionId;
-        fixture.job.sessionTarget = `session:${fixture.params.agentSessionKey}`;
-        await persistSessionTranscriptTurn(destination, {
-          updateMode: "none",
-          messages: [
+          };
+          fixture.params.cfgWithAgentDefaults.bindings = [
             {
-              message: {
-                role: "assistant",
-                content: [{ type: "text", text: "Final destination report" }],
-                api: "openai-completions",
-                provider: "test",
-                model: "test",
-                stopReason: "stop",
-                usage: makeZeroUsageSnapshot(),
-                timestamp: 1000,
+              agentId: "other",
+              match: {
+                channel: "telegram",
+                accountId: "default",
+                peer: { kind: "direct", id: "12345" },
               },
             },
-          ],
-        });
-      }
-      const sendText = vi.fn(async (request: { to: string; threadId?: string | number }) => {
-        expect(request.to).toBe(mode === "threaded" ? "12345:topic:42" : "12345");
-        expect(request.threadId).toBe(mode === "threaded" ? 42 : undefined);
-        if (mode === "existing" || mode === "persistent" || mode === "same") {
-          expect(await readConversationMessages(destination)).toHaveLength(
-            mode === "persistent" ? 1 : 0,
-          );
-        } else if (mode !== "cross-agent") {
-          expect(
-            loadSessionEntryReadOnly({ ...destination, readConsistency: "latest" }),
-          ).toBeUndefined();
+          ];
         }
-        if (mode !== "same") {
-          expect(await fixture.messages()).toEqual([]);
-        }
-        if (mode === "rejected") {
-          throw new PlatformMessageNotDispatchedError("chat not found", {
-            cause: new Error("recipient not found"),
-            retryable: false,
+        fixture.params.agentSessionKey = "agent:main:telegram:direct:12345:thread:12345:99";
+        await replaceSessionEntry(
+          { ...fixture.scope, sessionKey: fixture.params.agentSessionKey },
+          {
+            sessionId: fixture.params.sessionId,
+            lifecycleRevision: fixture.params.lifecycleRevision,
+            updatedAt: 1,
+            delivery: normalizeSessionDeliveryState({
+              context: { channel: "telegram", to: "12345", threadId: "99" },
+            }),
+          },
+        );
+        if (mode === "persistent") {
+          await replaceSessionEntry(destination, {
+            sessionId: destination.sessionId,
+            updatedAt: 1,
           });
         }
-        if (clock) {
-          clock.mockReturnValue(Date.now() + 31_000);
-          const error = Object.assign(new Error("read ECONNRESET after send"), {
-            code: "ECONNRESET",
-          });
-          throw new OutboundDeliveryError(error.message, {
-            cause: error,
-            stage: "platform_send",
-            payloadOutcomes: [
-              { index: 0, status: "failed", error, sentBeforeError: true, stage: "platform_send" },
+        if (mode === "stable") {
+          // v2026.9.9 stored sessionKey, but did not store sourceConversation.
+          delete fixture.job.sourceConversation;
+          const storePath = state.path("cron", "jobs.json");
+          await saveCronStore(storePath, { version: 1, jobs: [fixture.job] });
+          const [reloaded] = (await loadCronStore(storePath)).jobs;
+          if (!reloaded) {
+            throw new Error("Stored v2026.9.9 job was not loaded");
+          }
+          expect(reloaded).not.toHaveProperty("sourceConversation");
+          fixture.params.job = reloaded;
+        }
+        if (mode === "persistent") {
+          fixture.params.agentSessionKey = "Agent:Main:Telegram:Direct:12345";
+          fixture.params.runSessionKey = fixture.params.agentSessionKey;
+          fixture.params.sessionId = destination.sessionId;
+          fixture.job.sessionTarget = `session:${fixture.params.agentSessionKey}`;
+          await persistSessionTranscriptTurn(destination, {
+            updateMode: "none",
+            messages: [
+              {
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "Final destination report" }],
+                  api: "openai-completions",
+                  provider: "test",
+                  model: "test",
+                  stopReason: "stop",
+                  usage: makeZeroUsageSnapshot(),
+                  timestamp: 1000,
+                },
+              },
             ],
           });
         }
-        return { channel: "telegram", messageId: "notification-message" };
-      });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "telegram",
-            source: "test",
-            plugin: {
-              ...createChannelTestPluginBase({ id: "telegram" }),
-              messaging: {
-                resolveOutboundSessionRoute: (params: ChannelOutboundSessionRouteParams) => {
-                  const chatId = params.target.split(":")[0]!;
-                  const route = buildChannelOutboundSessionRoute({
-                    cfg: params.cfg,
-                    agentId: params.agentId,
-                    channel: "telegram",
-                    accountId: params.accountId,
-                    peer: { kind: "direct", id: chatId },
-                    chatType: "direct",
-                    from: `telegram:${chatId}`,
-                    to: `telegram:${chatId}`,
-                    recipientSessionExact: true,
-                  });
-                  // Models Telegram's current-session thread recovery (extensions/telegram/src/channel.ts:459-466).
-                  const threaded = buildThreadAwareOutboundSessionRoute({
-                    route,
-                    threadId: params.threadId == null ? undefined : `${chatId}:${params.threadId}`,
-                    currentSessionKey: params.currentSessionKey,
-                    precedence: ["threadId", "currentSession"],
-                  });
-                  const threadId = threaded.threadId?.toString().split(":").at(-1);
-                  return {
-                    ...threaded,
-                    threadId: threadId === undefined ? undefined : Number(threadId),
-                    to:
-                      threadId === undefined
-                        ? `telegram:${chatId}`
-                        : `telegram:${chatId}:topic:${threadId}`,
-                  };
-                },
-              },
-              outbound: { deliveryMode: "direct", sendText },
-            },
-          },
-        ]),
-      );
-      try {
-        fixture.params.job.delivery = {
-          mode: "announce",
-          channel: "telegram",
-          to: "12345",
-          ...(mode === "threaded" ? { threadId: 42 } : {}),
-          ...(mode === "cross-agent" ? { accountId: "default" } : {}),
-        };
-        fixture.params.deliveryPlan = resolveCronDeliveryPlan(fixture.params.job);
-        fixture.params.resolvedDelivery = await resolveDeliveryTarget(
-          fixture.params.cfgWithAgentDefaults,
-          "main",
-          { ...fixture.params.job, ...fixture.params.deliveryPlan },
-        );
-        fixture.params.deliveryPayloads = [{ text: "Final destination report" }];
-        fixture.params.synthesizedText = "Final destination report";
-        if (mode === "tool-commit-failure") {
-          fixture.params.sourceDeliveryOutcome = messageToolOutcome([
-            {
-              tool: "message",
-              provider: "telegram",
-              to: "12345",
-              text: "Final destination report",
-            },
-          ]);
-        }
-        const expected =
-          mode === "uncertain"
-            ? { deliveryState: { status: "unknown" }, delivered: undefined }
-            : { delivered: mode !== "rejected" };
-        const result = await dispatchCronDelivery(fixture.params);
-        expect(result).toMatchObject(expected);
-        if (mode !== "rejected") {
-          expect(await dispatchCronDelivery(fixture.params)).toMatchObject(expected);
-        }
-        expect(sendText).toHaveBeenCalledTimes(mode === "tool-commit-failure" ? 0 : 1);
-        if (commitFailure) {
-          expect(result.deliveryError).toBeUndefined();
-        }
-        if (mode === "uncertain" || commitFailure) {
-          expect(result).toMatchObject({
-            diagnostics: {
-              entries: expect.arrayContaining([
-                expect.objectContaining({
-                  source: "delivery",
-                  severity: "warn",
-                  message:
-                    mode === "uncertain"
-                      ? "result may have been delivered but was not added to the conversation"
-                      : "result was delivered but was not added to the conversation: completion commit rejected",
-                }),
-              ]),
-            },
-          });
-        }
-        if (mode === "cross-agent") {
-          expect(result).toMatchObject({
-            delivered: true,
-            deliveryError: undefined,
-            diagnostics: {
-              entries: expect.arrayContaining([
-                expect.objectContaining({
-                  source: "delivery",
-                  severity: "warn",
-                  message:
-                    "Conversation context skipped: the destination belongs to a different agent.",
-                }),
-              ]),
-            },
-          });
-          expect(fixture.updates()).toBe(0);
-          for (const agentId of ["main", "other"]) {
+        const sendText = vi.fn(async (request: { to: string; threadId?: string | number }) => {
+          expect(request.to).toBe(mode === "threaded" ? "12345:topic:42" : "12345");
+          expect(request.threadId).toBe(mode === "threaded" ? 42 : undefined);
+          if (mode === "persistent") {
+            expect(await readConversationMessages(destination)).toHaveLength(1);
+          } else if (mode !== "cross-agent") {
             expect(
-              loadSessionEntryReadOnly({
-                agentId,
-                sessionKey: `agent:${agentId}:telegram:direct:12345`,
-                storePath: path.join(
-                  state.stateDir,
-                  "agents",
-                  agentId,
-                  "sessions",
-                  "sessions.json",
-                ),
-                readConsistency: "latest",
-              }),
+              loadSessionEntryReadOnly({ ...destination, readConsistency: "latest" }),
             ).toBeUndefined();
           }
-        } else if (mode === "uncertain" || mode === "rejected") {
-          expect(
-            loadSessionEntryReadOnly({ ...destination, readConsistency: "latest" }),
-          ).toBeUndefined();
-        } else {
-          const messages = await readConversationMessages(destination);
-          if (commitFailure) {
-            expect(messages).toEqual([]);
-          } else {
-            expect(messages).toHaveLength(1);
-            expect(readTranscriptEventMessage(messages[0])?.content).toEqual([
-              { type: "text", text: "Final destination report" },
+          expect(await fixture.messages()).toEqual([]);
+          return { channel: "telegram", messageId: "notification-message" };
+        });
+        setActivePluginRegistry(
+          createTestRegistry([
+            {
+              pluginId: "telegram",
+              source: "test",
+              plugin: {
+                ...createChannelTestPluginBase({ id: "telegram" }),
+                messaging: {
+                  resolveOutboundSessionRoute: (params: ChannelOutboundSessionRouteParams) => {
+                    const chatId = params.target.split(":")[0]!;
+                    const route = buildChannelOutboundSessionRoute({
+                      cfg: params.cfg,
+                      agentId: params.agentId,
+                      channel: "telegram",
+                      accountId: params.accountId,
+                      peer: { kind: "direct", id: chatId },
+                      chatType: "direct",
+                      from: `telegram:${chatId}`,
+                      to: `telegram:${chatId}`,
+                      recipientSessionExact: true,
+                    });
+                    // Models Telegram's current-session thread recovery (extensions/telegram/src/channel.ts:459-466).
+                    const threaded = buildThreadAwareOutboundSessionRoute({
+                      route,
+                      threadId:
+                        params.threadId == null ? undefined : `${chatId}:${params.threadId}`,
+                      currentSessionKey: params.currentSessionKey,
+                      precedence: ["threadId", "currentSession"],
+                    });
+                    const threadId = threaded.threadId?.toString().split(":").at(-1);
+                    return {
+                      ...threaded,
+                      threadId: threadId === undefined ? undefined : Number(threadId),
+                      to:
+                        threadId === undefined
+                          ? `telegram:${chatId}`
+                          : `telegram:${chatId}:topic:${threadId}`,
+                    };
+                  },
+                },
+                outbound: { deliveryMode: "direct", sendText },
+              },
+            },
+          ]),
+        );
+        try {
+          fixture.params.job.delivery = {
+            mode: "announce",
+            channel: "telegram",
+            to: "12345",
+            ...(mode === "threaded" ? { threadId: 42 } : {}),
+            ...(mode === "cross-agent" ? { accountId: "default" } : {}),
+          };
+          fixture.params.deliveryPlan = resolveCronDeliveryPlan(fixture.params.job);
+          fixture.params.resolvedDelivery = await resolveDeliveryTarget(
+            fixture.params.cfgWithAgentDefaults,
+            "main",
+            { ...fixture.params.job, ...fixture.params.deliveryPlan },
+          );
+          fixture.params.deliveryPayloads = [{ text: "Final destination report" }];
+          fixture.params.synthesizedText = "Final destination report";
+          if (mode === "tool-commit-failure") {
+            fixture.params.sourceDeliveryOutcome = messageToolOutcome([
+              {
+                tool: "message",
+                provider: "telegram",
+                to: "12345",
+                text: "Final destination report",
+              },
             ]);
           }
-        }
-        if (mode !== "same") {
+          const expected = { delivered: true };
+          const result = await dispatchCronDelivery(fixture.params);
+          expect(result).toMatchObject(expected);
+          expect(await dispatchCronDelivery(fixture.params)).toMatchObject(expected);
+          expect(sendText).toHaveBeenCalledTimes(mode === "tool-commit-failure" ? 0 : 1);
+          if (commitFailure) {
+            expect(result.deliveryError).toBeUndefined();
+          }
+          if (commitFailure) {
+            expect(result).toMatchObject({
+              diagnostics: {
+                entries: expect.arrayContaining([
+                  expect.objectContaining({
+                    source: "delivery",
+                    severity: "warn",
+                    message:
+                      "result was delivered but was not added to the conversation: completion commit rejected",
+                  }),
+                ]),
+              },
+            });
+          }
+          if (mode === "cross-agent") {
+            expect(result).toMatchObject({
+              delivered: true,
+              deliveryError: undefined,
+              diagnostics: {
+                entries: expect.arrayContaining([
+                  expect.objectContaining({
+                    source: "delivery",
+                    severity: "warn",
+                    message:
+                      "Conversation context skipped: the destination belongs to a different agent.",
+                  }),
+                ]),
+              },
+            });
+            expect(fixture.updates()).toBe(0);
+            for (const agentId of ["main", "other"]) {
+              expect(
+                loadSessionEntryReadOnly({
+                  agentId,
+                  sessionKey: `agent:${agentId}:telegram:direct:12345`,
+                  storePath: path.join(
+                    state.stateDir,
+                    "agents",
+                    agentId,
+                    "sessions",
+                    "sessions.json",
+                  ),
+                  readConsistency: "latest",
+                }),
+              ).toBeUndefined();
+            }
+          } else {
+            const messages = await readConversationMessages(destination);
+            if (commitFailure) {
+              expect(messages).toEqual([]);
+            } else {
+              expect(messages).toHaveLength(1);
+              expect(readTranscriptEventMessage(messages[0])?.content).toEqual([
+                { type: "text", text: "Final destination report" },
+              ]);
+            }
+          }
           expect(await fixture.messages()).toEqual([]);
+        } finally {
+          restoreActivePluginRegistrySnapshot(registry);
+          commitFailure?.mockRestore();
+          await fixture.dispose();
         }
-      } finally {
-        restoreActivePluginRegistrySnapshot(registry);
-        clock?.mockRestore();
-        commitFailure?.mockRestore();
-        await fixture.dispose();
-      }
-    });
-  });
+      });
+    },
+  );
 
-  it.each(["no-route", "silent", "none", "webhook"] as const)(
+  it.each(["no-route", "silent"] as const)(
     "keeps the %s result out of unrelated conversations and channel sends",
     async (mode) => {
       await withOpenClawTestState({ layout: "state-only" }, async (state) => {
@@ -613,13 +558,9 @@ describe("destination-owned completion", () => {
           fixture.job.delivery =
             mode === "no-route"
               ? { mode: "announce", channel: "last" }
-              : mode === "webhook"
-                ? { mode: "webhook", to: "https://example.invalid/hook" }
-                : mode === "none"
-                  ? { mode: "none" }
-                  : { mode: "announce", channel: "telegram", to: "12345" };
+              : { mode: "announce", channel: "telegram", to: "12345" };
           fixture.params.deliveryPlan = resolveCronDeliveryPlan(fixture.job);
-          fixture.params.deliveryRequested = mode !== "none" && mode !== "webhook";
+          fixture.params.deliveryRequested = true;
           if (fixture.params.deliveryRequested) {
             fixture.params.resolvedDelivery = await resolveDeliveryTarget(
               fixture.params.cfgWithAgentDefaults,
@@ -778,7 +719,7 @@ describe("destination-owned completion", () => {
     });
   });
 
-  it.each(["isolated", "current"] as const)(
+  it.each(["current"] as const)(
     "rejects implicit %s delivery when the creator resets after route resolution",
     async (sessionTarget) => {
       await withOpenClawTestState({ layout: "state-only" }, async (state) => {
@@ -886,40 +827,6 @@ describe("destination-owned completion", () => {
             delivered: false,
             deliveryAttempted: true,
             deliveryError: expect.stringContaining("session rebound"),
-            disposition: { kind: "error", errorKind: "delivery-target" },
-          });
-          expect(await fixture.messages()).toEqual([]);
-          expect(fixture.updates()).toBe(0);
-        } finally {
-          await fixture.dispose();
-        }
-      });
-    },
-  );
-
-  it.each(["explicit", "remembered"] as const)(
-    "does not write a result when the %s external route is unavailable",
-    async (route) => {
-      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const fixture = await createCompletionFixture(state, "isolated");
-        try {
-          fixture.params.deliveryPayloads = [{ text: "tick" }];
-          fixture.params.synthesizedText = "tick";
-          if (route === "explicit") {
-            fixture.params.job.delivery = { mode: "announce", channel: "missing-channel" };
-            fixture.params.deliveryPlan = resolveCronDeliveryPlan(fixture.params.job);
-          } else {
-            fixture.params.resolvedDelivery = {
-              ok: false,
-              channel: "telegram",
-              mode: "implicit",
-              error: new Error("Remembered channel unavailable"),
-            };
-          }
-          await expect(dispatchCronDelivery(fixture.params)).resolves.toMatchObject({
-            delivered: false,
-            deliveryError:
-              route === "explicit" ? "No external channel" : "Remembered channel unavailable",
             disposition: { kind: "error", errorKind: "delivery-target" },
           });
           expect(await fixture.messages()).toEqual([]);

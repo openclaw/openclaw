@@ -84,7 +84,7 @@ export function loadTranscriptSuffixEventsBoundedFromDatabase(
           .select([
             "seq",
             /* kysely-allow-raw: reject oversized suffixes before acquiring their JSON payloads. */
-            sql<number>`${transcriptRetainedDataBytesSql(limits.retainedCustomDataIds ?? [])} + 1`.as(
+            sql<number>`${transcriptRetainedDataBytesSql(database.db, limits.retainedCustomDataIds ?? [])} + 1`.as(
               "serialized_bytes",
             ),
           ])
@@ -116,6 +116,7 @@ export function loadTranscriptSuffixEventsBoundedFromDatabase(
           .selectFrom("transcript_events")
           .select([
             projectTranscriptRetainedDataSql(
+              database.db,
               transcriptEventJsonSql(database.db),
               limits.retainedCustomDataIds ?? [],
             ).as("event_json"),

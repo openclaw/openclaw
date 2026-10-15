@@ -82,9 +82,9 @@ function parseCrabboxMachineShapes(stdout: string): CrabboxMachineShapes {
   );
 }
 
-export function createCrabboxMachineOptionsResolver(
+export function createCrabboxMachineCatalogResolver(
   dependencies: CrabboxMachineOptionsResolverDependencies,
-): Required<Pick<WorkerProvider, "listMachineOptions" | "listOperatingSystems">> {
+) {
   const machineShapesByBinary = new Map<string, Promise<CrabboxMachineShapes>>();
   const loadMachineShapes = async (binary: string): Promise<CrabboxMachineShapes> => {
     // The full provider matrix exceeds the lifecycle command's 64 KiB log cap.
@@ -102,9 +102,8 @@ export function createCrabboxMachineOptionsResolver(
     return parseCrabboxMachineShapes(result.stdout);
   };
 
-  const resolveCatalog = async (profile: WorkerProfile) => {
-    const parsed = parseCrabboxProfile(profile);
-    const binary = await dependencies.resolveBinary(parsed.binary);
+  return async (provider: string, explicitBinary?: string): Promise<CrabboxCatalog | undefined> => {
+    const binary = await dependencies.resolveBinary(explicitBinary);
     // Cache successful metadata per binary; different builds may advertise different sizes.
     // One rejection handler per load runs after insertion, including synchronous runner throws.
     let shapes = machineShapesByBinary.get(binary);
@@ -116,7 +115,17 @@ export function createCrabboxMachineOptionsResolver(
       });
       machineShapesByBinary.set(binary, shapes);
     }
-    const catalog = (await shapes).get(parsed.provider);
+    return (await shapes).get(provider);
+  };
+}
+
+export function createCrabboxMachineOptionsResolver(
+  dependencies: CrabboxMachineOptionsResolverDependencies,
+): Required<Pick<WorkerProvider, "listMachineOptions" | "listOperatingSystems">> {
+  const resolveMachineCatalog = createCrabboxMachineCatalogResolver(dependencies);
+  const resolveCatalog = async (profile: WorkerProfile) => {
+    const parsed = parseCrabboxProfile(profile);
+    const catalog = await resolveMachineCatalog(parsed.provider, parsed.binary);
     return { parsed, catalog };
   };
   return {

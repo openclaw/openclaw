@@ -4,22 +4,15 @@ import { iterateProjectedAgentRunSessionKeys } from "../../infra/agent-run-proje
 import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { collectActiveSessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
-import {
-  retainOpenClawAgentDatabaseReadOnly,
-  withOpenClawAgentDatabaseReadOnly,
-} from "../../state/openclaw-agent-db-readonly.js";
+import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import {
-  createOpenClawAgentDatabasePathMatcher,
-  isIncognitoOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
+import { createOpenClawAgentDatabasePathMatcher } from "../../state/openclaw-agent-db.paths.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
@@ -40,14 +33,13 @@ import { withSqliteReclamationAuthorization } from "./session-accessor.sqlite-re
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   prepareSqliteTranscriptReadScope,
-  resolveSqliteTranscriptReadScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type { SessionColdRestorationGuard } from "./session-cold-storage-guard.types.js";
 import type { SessionColdReadPreparation } from "./session-cold-storage-read.js";
-import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { prepareSessionColdStorageTargets } from "./session-cold-storage-targets.js";
 import type {
   SessionColdMutationPlan,
@@ -62,7 +54,6 @@ import type {
   SessionColdMutationResult,
 } from "./session-cold-storage.types.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
-import { captureIncognitoSessionSource } from "./session-incognito-binding.js";
 import type { SessionSourceValidation } from "./session-source-authority.js";
 import { publishUnchangedSessionTranscriptReceipts } from "./session-transcript-authority.js";
 import { projectionLane } from "./session-transcript-worker-resources.js";
@@ -429,32 +420,21 @@ export async function restoreSessionColdTranscript(
   signal?: AbortSignal,
 ): Promise<void> {
   signal?.throwIfAborted();
-  assertCurrent?.();
-  const binding = captureIncognitoSessionSource(scope);
-  if (binding) {
-    binding.admissionSignal?.throwIfAborted();
-    if ("kind" in binding) {
-      binding.assertCurrent();
-    } else {
-      binding.actor.assertReadable();
-    }
-    // An actor has no cold archive to restore; loss must still reject this continuation.
+  const memory = captureSessionActorStorageOwner(
+    {
+      ...scope,
+      storePath: scope.storePath ?? preparation?.target.path,
+    },
+    { assertCurrent: () => assertCurrent?.(), authorize: () => assertCurrent?.() },
+  );
+  if (memory) {
+    memory.authority.assertCurrent();
+    memory.binding?.actor.assertReadable();
+    // Memory sessions have no archive, including sessions that were never created or already closed.
     return;
   }
-  let resolved = preparation?.target;
-  if (
-    !resolved &&
-    (isIncognitoSessionKey(scope.sessionKey) ||
-      (scope.agentId &&
-        scope.storePath &&
-        isIncognitoOpenClawAgentSqlitePath(scope.storePath, {
-          agentId: scope.agentId,
-          env: scope.env,
-        })))
-  ) {
-    resolved = resolveSqliteTranscriptReadScope(scope);
-  }
-  if (!resolved) {
+  assertCurrent?.();
+  if (!preparation) {
     const captured = {
       ...scope,
       ...(scope.storePath ? { storePath: path.resolve(scope.storePath) } : {}),
@@ -470,73 +450,61 @@ export async function restoreSessionColdTranscript(
     const target = await prepareSqliteTranscriptReadScope(captured, signal);
     assertPreparedCurrent();
     target.path = resolveOpenClawAgentSqlitePath(toDatabaseOptions(target));
-    resolved = target;
     const options = toDatabaseOptions(target);
-    if (!isIncognitoOpenClawAgentSqlitePath(target.path, options)) {
-      // Synchronous inspection stays within the admission check above.
-      try {
-        statSync(target.path);
-      } catch (error) {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
-        // First writers may create this store; there is no cold transcript to restore yet.
-        return;
+    // Synchronous inspection stays within the admission check above.
+    try {
+      statSync(target.path);
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        throw error;
       }
-      const source = createOpenClawAgentDatabasePathMatcher();
-      source(target.path, target.path);
-      return await withSessionHistoryWorkerDatabase(
-        options,
-        async (owner) => {
-          const assertAllowed = () => {
-            assertPreparedCurrent();
-            owner.assertCurrent();
-            if (!source.isCurrent()) {
-              throw new Error(
-                "Session store changed while preparing its metadata. Retry the request.",
-              );
-            }
-          };
-          return await restoreSessionColdTranscript(
-            captured,
-            assertAllowed,
-            {
-              target,
-              readMetadata: async () => {
-                const metadata = await owner.readColdMetadata(
-                  {
-                    sessionId: target.sessionId,
-                    env: captured.env,
-                  },
-                  signal,
-                );
-                return metadata.archive;
-              },
-            },
-            guard,
-            signal,
-          );
-        },
-        projectionLane,
-      );
+      // First writers may create this store; there is no cold transcript to restore yet.
+      return;
     }
+    const source = createOpenClawAgentDatabasePathMatcher();
+    source(target.path, target.path);
+    return await withSessionHistoryWorkerDatabase(
+      options,
+      async (owner) => {
+        const assertAllowed = () => {
+          assertPreparedCurrent();
+          owner.assertCurrent();
+          if (!source.isCurrent()) {
+            throw new Error(
+              "Session store changed while preparing its metadata. Retry the request.",
+            );
+          }
+        };
+        return await restoreSessionColdTranscript(
+          captured,
+          assertAllowed,
+          {
+            target,
+            readMetadata: async () => {
+              const metadata = await owner.readColdMetadata(
+                {
+                  sessionId: target.sessionId,
+                  env: captured.env,
+                },
+                signal,
+              );
+              return metadata.archive;
+            },
+          },
+          guard,
+          signal,
+        );
+      },
+      projectionLane,
+    );
   }
+  const resolved = preparation.target;
   const options = toDatabaseOptions(resolved);
   const storePath = resolveOpenClawAgentSqlitePath(options);
   const key = `${storePath}\0${resolved.sessionId}`;
-  const readNativeMetadata = () => {
-    const result = withOpenClawAgentDatabaseReadOnly(
-      (database) => readSessionColdTranscript(database.db, resolved.sessionId),
-      options,
-    );
-    return result.found ? result.value : undefined;
-  };
-  // Incognito retains its process-held database; durable readers always supply preparation.
-  const initial = preparation ? await preparation.readMetadata("initial") : readNativeMetadata();
-  if (preparation) {
-    signal?.throwIfAborted();
-    assertCurrent?.();
-  }
+  const initial = await preparation.readMetadata("initial");
+  signal?.throwIfAborted();
+  assertCurrent?.();
   if (!initial) {
     return;
   }
@@ -547,11 +515,9 @@ export async function restoreSessionColdTranscript(
     signal,
     fn: async () => {
       assertCurrent?.();
-      const archive = preparation ? await preparation.readMetadata("queued") : readNativeMetadata();
-      if (preparation) {
-        signal?.throwIfAborted();
-        assertCurrent?.();
-      }
+      const archive = await preparation.readMetadata("queued");
+      signal?.throwIfAborted();
+      assertCurrent?.();
       if (!archive) {
         return;
       }
@@ -565,7 +531,7 @@ export async function restoreSessionColdTranscript(
         },
         assertCurrent,
         signal,
-        preparation?.acceptSourceValidation,
+        preparation.acceptSourceValidation,
       );
       if (result.turnRebound) {
         throw new SessionColdTurnReboundError(result.turnRebound);

@@ -4,12 +4,14 @@ import { killProcessTree } from "../../src/process/kill-tree.js";
 import { getFileLockProcessStartTime } from "../../src/shared/pid-alive.js";
 import { reserveTestPortListener } from "../../src/test-utils/port-claims.js";
 import { writeOpenAiResponsesSse, writeOpenAiResponsesText } from "./openai-responses-sse.js";
-import { createDeferred } from "./promise.js";
+import { createDeferred, withinTest } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 export async function startGatewayRestartProvider(signal: AbortSignal) {
   const ready = createDeferred();
   void ready.promise.catch(() => {});
+  const recoveryReleased = createDeferred();
+  let recovering = false;
   const held = new Set<number>();
   const issuedExecs = new Set<number>();
   const processes = new Map<number, number>();
@@ -51,7 +53,9 @@ export async function startGatewayRestartProvider(signal: AbortSignal) {
     const executionTool =
       Array.isArray(body.tools) &&
       body.tools.some((tool) => isRecord(tool) && tool.name === "exec");
-    if (!executionTool) {
+    const recoveryRequest =
+      recovering && text.includes("Your previous turn was interrupted by a gateway restart");
+    if (!executionTool && !recoveryRequest) {
       const reply = "Synthetic restart handoff session";
       if (body.stream === false) {
         response.writeHead(200, { "content-type": "application/json" });
@@ -86,6 +90,18 @@ export async function startGatewayRestartProvider(signal: AbortSignal) {
       throw new Error("Execution request lost its session marker");
     }
     const index = Number(marker);
+    if (recovering) {
+      if (!recoveryRequest) {
+        throw new Error("Successor execution request lost its restart recovery context");
+      }
+      await withinTest(recoveryReleased.promise, signal);
+      writeOpenAiResponsesText(response, {
+        text: `RESTART_HANDOFF_RESUMED_${index}`,
+        messageId: `msg_recovered_${index}`,
+        responseId: `resp_recovered_${index}`,
+      });
+      return;
+    }
     const outputs = input.filter((item) => isRecord(item) && item.type === "function_call_output");
     for (const output of outputs) {
       const pid = /Command still running \(session [^,]+, pid (\d+)\)/.exec(
@@ -154,7 +170,12 @@ export async function startGatewayRestartProvider(signal: AbortSignal) {
   return {
     baseUrl: `http://127.0.0.1:${reservation.claim.port}/v1`,
     ready: ready.promise,
+    beginRecovery() {
+      recovering = true;
+    },
+    releaseRecovery: recoveryReleased.resolve,
     async close() {
+      recoveryReleased.resolve();
       await runQaGatewayFixture(
         async () => {
           for (const [pid, startedAt] of processes) {

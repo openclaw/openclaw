@@ -2,7 +2,7 @@ import type { TemplateResult } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive } from "lit/directive.js";
 
-export type ImageLoadingState = { loading: boolean; onLoad: () => void };
+type ImageLoadingState = { loading: boolean; onLoad: () => void };
 type ImageRenderer = (
   url: string | null,
   onError: () => void,

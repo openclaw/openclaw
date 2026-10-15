@@ -2,10 +2,9 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For, Match, Show, Switch } from "solid-js";
 import type { WizardStep } from "../../api/types.ts";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
-import type { PickerOption, PickerParams } from "../../components/select-picker.ts";
+import { Picker, type PickerOption, type PickerParams } from "../../components/select-picker.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import "../../components/select-picker.ts";
 import "../../styles/wizard-step-controls.css";
 
 type WizardStepOption = NonNullable<WizardStep["options"]>[number];
@@ -25,7 +24,11 @@ type StepProps = {
 function Message(props: StepProps) {
   return (
     <Show when={props.step.message}>
-      <div class="wizard-step__message">{formatUiExternalText(props.step.message!)}</div>
+      <div class="wizard-step__message">
+        <For each={formatUiExternalText(props.step.message!).split("\n\n")} keyed={false}>
+          {(paragraph, index) => <p class={index === 0 ? undefined : "muted"}>{paragraph()}</p>}
+        </For>
+      </div>
     </Show>
   );
 }
@@ -56,6 +59,7 @@ function SignIn(props: { step: WizardStep }) {
           <Show when={props.step.externalUrl}>
             <a
               class="btn primary wizard-step__external-link"
+              autofocus
               data-link-reader-external
               href={props.step.externalUrl}
               target="_blank"
@@ -76,8 +80,9 @@ function SignIn(props: { step: WizardStep }) {
             )}
           </Show>
         </div>
-        <div class="muted" role="status" aria-live="polite">
-          {t("modelSetup.wizard.waiting")}
+        <div class="wizard-step__waiting muted" role="status" aria-live="polite" aria-busy="true">
+          <span class="wizard-step__spinner" aria-hidden="true" />
+          {props.step.progressMessage ?? t("modelSetup.waitingForApproval")}
         </div>
         <Show when={code()?.expiresInMinutes}>
           <div class="muted">
@@ -97,18 +102,20 @@ function Answer(props: StepProps & { label: string; onClick?: () => void }) {
     <button
       type={props.onClick ? "button" : "submit"}
       class="btn primary"
+      autofocus
       disabled={props.busy}
       onClick={() => props.onClick?.()}
     >
       {props.label}
     </button>
   );
+  // Manual external-auth submission stays local to its disclosure form.
   return (
-    <Show when={props.leadingAction} fallback={button}>
-      <div class="wizard-step__actions wizard-step__actions--split">
+    <Show when={!props.externalAuthInput} fallback={button}>
+      <openclaw-modal-actions class="wizard-step__actions wizard-step__actions--split">
         {props.leadingAction}
         {button}
-      </div>
+      </openclaw-modal-actions>
     </Show>
   );
 }
@@ -165,7 +172,9 @@ function TextStep(props: StepProps) {
         <summary class="muted">{t("modelSetup.wizard.manualEntry")}</summary>
         <TextForm {...props} />
       </details>
-      <div class="wizard-step__actions wizard-step__actions--split">{props.leadingAction}</div>
+      <openclaw-modal-actions class="wizard-step__actions wizard-step__actions--split">
+        {props.leadingAction}
+      </openclaw-modal-actions>
     </Show>
   );
 }
@@ -189,27 +198,23 @@ function SingleChoice(props: StepProps & { options: WizardStepOption[] }) {
     };
   });
   return (
-    <Show
-      when={props.options.length <= 2}
-      fallback={
-        <openclaw-select-picker
-          class="settings-select picker-select"
-          style={{ width: "100%", "min-width": "min(138px,100%)" }}
-          prop:params={params()}
-        />
-      }
-    >
+    <Show when={props.options.length <= 2} fallback={<Picker params={params()} />}>
       <div
-        class="wizard-step__actions"
+        class={[
+          "wizard-step__actions",
+          { "wizard-step__actions--split": Boolean(props.leadingAction) },
+        ]}
         role="group"
         aria-label={label()}
         aria-describedby={props.validationErrorId}
       >
+        {props.leadingAction}
         <For each={props.options} keyed={false}>
           {(option, index) => (
             <button
               type="button"
               class={index === 0 ? "btn primary" : "btn"}
+              autofocus={index === 0}
               disabled={props.busy}
               onClick={() => props.onAnswer(option().value)}
             >
@@ -273,7 +278,11 @@ function OptionsStep(props: StepProps) {
         fallback={
           <>
             <SingleChoice {...props} options={options()} />
-            {props.leadingAction}
+            <Show when={options().length > 2 && props.leadingAction}>
+              <openclaw-modal-actions class="wizard-step__actions wizard-step__actions--split">
+                {props.leadingAction}
+              </openclaw-modal-actions>
+            </Show>
           </>
         }
       >
@@ -287,7 +296,7 @@ function ConfirmStep(props: StepProps) {
   return (
     <>
       <Message {...props} />
-      <div
+      <openclaw-modal-actions
         class={[
           "wizard-step__actions",
           { "wizard-step__actions--split": Boolean(props.leadingAction) },
@@ -306,7 +315,7 @@ function ConfirmStep(props: StepProps) {
             </button>
           )}
         </For>
-      </div>
+      </openclaw-modal-actions>
     </>
   );
 }
@@ -336,7 +345,9 @@ function ProgressStep(props: StepProps) {
       </Show>
       <SignIn step={props.step} />
       <Show when={props.leadingAction}>
-        <div class="wizard-step__actions wizard-step__actions--split">{props.leadingAction}</div>
+        <openclaw-modal-actions class="wizard-step__actions wizard-step__actions--split">
+          {props.leadingAction}
+        </openclaw-modal-actions>
       </Show>
     </>
   );

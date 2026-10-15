@@ -63,7 +63,10 @@ performed by the database migration itself.
 Candidate acceptance and predecessor rollback use the same verification owner.
 `OPENCLAW_TEAM_VERIFICATION_BUDGET` defaults to 600 seconds and bounds each
 started process's convergence, marker admission, dispatch reconciliation, and
-terminal observation together. Readiness waits and RPC retries never renew that
+terminal observation together. An empty loopback listener snapshot waits within
+that deadline and emits one `VERIFICATION_WAITING` diagnostic per acceptance
+attempt; an invalid or foreign listener still fails verification. Deadline expiry
+still emits `VERIFICATION_FAILED`. Readiness waits and RPC retries never renew that
 deadline. The 60-second marker RPC timeout bounds a transport exchange; it is
 not the whole startup acceptance window.
 
@@ -91,6 +94,17 @@ still names that same run. Acceptance requires the subsequent `agent.wait`
 terminal receipt to bind the exact session, visible marker, and configured
 provider/model. Neither a healthy probe nor a timeout becomes successful
 acceptance. A deadline expiry retains recovery evidence.
+
+During graceful suspension drain, status reads use a five-second transport and
+subprocess bound (shortened by the original drain deadline). A typed timeout,
+connection loss, or service-restart close retries after one, two, then at most
+four seconds, with each wait capped by the remaining drain budget. These reads
+do not renew the deadline or the suspension lease. Missing or malformed failure
+evidence, authentication or protocol failures, and definitive Gateway refusals
+remain fatal. Deadline expiry still requires the existing fresh lease,
+process-generation, and write-custody proof before authorized interruption;
+failed observations never authorize stopping the Gateway. Adopt the changed
+script and library together through the complete-pair procedure below.
 
 Migration and restoration receive at least two hours, or the existing build
 budget when larger. A measured synthetic 25 → 26 crossing took 4m04s for
@@ -203,6 +217,15 @@ official mirror. Each candidate keeps its own shallow Git object database, with
 no alternates or dependency on the mirror after publication. Ancestry checks
 continue to use the full mirror before preparation.
 
+Capacity admission measures each release tree in one Python subprocess, keeping
+large metadata walks outside V8 after an optimized `lstatSync` loop crashed.
+It still budgets each entry's larger logical/allocated size, counts hardlinks
+separately for independent copies, does not follow symlinks, and rejects special
+files or filesystem crossings. Byte/inode reserves and shared-filesystem demand
+aggregation remain unchanged. Python 3 must be available to the controller;
+failed inventories refuse admission. This change requires ordinary complete-pair
+adoption and does not change the selected controller or Gateway runtime.
+
 The build account retains pnpm's content-addressed store under
 `OPENCLAW_TEAM_BUILD_HOME/cache/store` across candidates. The frozen lockfile and
 pnpm's integrity checks select package contents; `clone-or-copy` imports keep
@@ -221,7 +244,9 @@ This cache is disposable while the deployment owner is idle.
 The fresh build overlaps the Control UI's staged build and precompression with
 runtime finalization after the compiler and plugin builders finish. Both
 writers finish before final build metadata is emitted, including when either
-fails. All build checks still run; cached compiler output never substitutes for a
+fails. Runtime compiler configs overlap in pairs only with the build owner's
+full 12 GiB heap budget; smaller budgets retain serial native allocations.
+All build checks still run; cached compiler output never substitutes for a
 validation result. The Control UI refreshes release identity and its offline
 shell even when its bundles and precompressed assets are reused.
 
@@ -288,7 +313,7 @@ publication is not a deployment or a request to restart the Gateway.
 
 ## Standalone tests
 
-Use disposable Linux with Node 24.16+ or 26.1+, Bun 1.4+, Bash, Python 3, GNU
+Use disposable Linux with Node 24.16+ or 26.1+, Bun 1.4.3+, Bash, Python 3, GNU
 coreutils, `flock`, and `/usr/bin/bwrap`. Full coverage requires root and working user/mount
 namespaces. Tests use synthetic temporary state, services, processes, and
 Gateways; they do not contact Team. Some boundary tests extract Bash functions;

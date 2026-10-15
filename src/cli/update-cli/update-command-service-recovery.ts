@@ -38,7 +38,10 @@ import {
   assertOriginalServiceStateCompatible,
   revalidateOriginalManagedServiceRuntime,
 } from "./update-command-original-service.js";
-import { verifyPreviousGatewayForUpdate } from "./update-command-readiness.js";
+import {
+  observeUpdateGatewayReadiness,
+  verifyPreviousGatewayForUpdate,
+} from "./update-command-readiness.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   isPackageManagerUpdateMode,
@@ -67,6 +70,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   service: GatewayService;
   port: number;
   timeoutMs?: number;
+  onProgress?: (stage: string, reason: string) => void;
   expectedVersion?: string;
   expectedBuildId?: string;
   env?: NodeJS.ProcessEnv;
@@ -76,6 +80,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
 }> {
   const executor = params.updateRun?.executorFence;
   const assertCurrent = () => {
+    params.updateRun?.deadline?.signal.throwIfAborted();
     executor?.assertCurrent();
     params.assertCurrent?.();
   };
@@ -96,6 +101,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
       const recovery = await recoverInstalledLaunchAgentAfterUpdate({
         onGatewayStartAttempted: params.onGatewayStartAttempted,
         service: params.service,
+        deadline: params.updateRun?.deadline,
         env: params.env,
         assertCurrent: assertRecovery,
       });
@@ -131,11 +137,17 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   const health = await waitForGatewayHealthyRestart({
     service: params.service,
     port: params.port,
-    timeoutMs: params.timeoutMs,
+    timeoutMs: params.updateRun?.deadline?.remainingMs() ?? params.timeoutMs,
+    deadline: params.updateRun?.deadline,
+    signal: params.updateRun?.deadline?.signal,
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
     requirePluginHealth: false,
+    requireChannelHealth: false,
     env: params.env,
+    onObservation: params.onProgress
+      ? (snapshot) => params.onProgress?.("recovery", renderRestartDiagnostics(snapshot).join("; "))
+      : undefined,
     supervisorKeepsAlive: true,
     settle: { probes: 12 },
   });
@@ -366,6 +378,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
         "Service recovery lost its original update executor.",
       );
     }
+    params.updateRun?.deadline?.signal.throwIfAborted();
     executor?.assertCurrent();
   };
   const before = params.preManagedServiceStop;
@@ -491,14 +504,18 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       );
     }
     assertCurrent();
-    const health = await waitForGatewayHealthyRestart({
-      service,
-      port,
-      env: current.env,
+    const { health } = await observeUpdateGatewayReadiness({
+      serviceEnv: current.env,
+      gatewayPort: port,
       timeoutMs: params.timeoutMs,
+      deadline: run?.deadline,
       expectedVersion: original?.version ?? packageRecovery?.version,
       expectedBuildId: original?.buildId ?? packageRecovery?.buildId,
       requireRunningService: true,
+      healthOnly: true,
+      assertCurrent,
+      onProgress: (stage, reason) =>
+        defaultRuntime[params.jsonMode ? "error" : "log"](`Gateway recovery (${stage}): ${reason}`),
       settle: { probes: 12 },
     });
     assertCurrent();

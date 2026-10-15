@@ -23,6 +23,77 @@ afterEach(() => {
 });
 
 describe("process-owned directory observation", () => {
+  it("bounds scheduling work while 810 directories subscribe and close", () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(0);
+    const root = tempDirs.make("owned-directory-fleet-");
+    const timeout = vi.spyOn(globalThis, "setTimeout");
+    const clock = vi.spyOn(Date, "now");
+    const listener = vi.fn();
+    for (let index = 0; index < 810; index++) {
+      const directory = path.join(root, `agent-${index}`);
+      fs.mkdirSync(directory);
+      clock.mockClear();
+      subscriptions.push(observeOwnedDirectory(directory, listener));
+      expect(clock.mock.calls.length).toBeLessThanOrEqual(4);
+    }
+    expect(timeout).toHaveBeenCalledOnce();
+    clock.mockClear();
+    for (let index = 0; index < 809; index++) {
+      subscriptions.pop()!.close();
+    }
+    expect(clock).not.toHaveBeenCalled();
+    expect(timeout).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(300_000);
+    expect(listener).toHaveBeenCalledOnce();
+    subscriptions.pop()!.close();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("recovers healthy watches every five minutes while authority subscribers keep 30 seconds", () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(0);
+    const directory = tempDirs.make("owned-directory-cadence-");
+    const listener = vi.fn();
+    subscriptions.push(observeOwnedDirectory(directory, listener));
+    vi.advanceTimersByTime(299_999);
+    expect(listener).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(listener).toHaveBeenCalledOnce();
+    const authority = vi.fn();
+    subscriptions.push(observeOwnedDirectory(directory, authority, { recoveryIntervalMs: 30_000 }));
+    vi.advanceTimersByTime(30_000);
+    expect(authority).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the authority recovery bound across a backward wall-clock correction", () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(300_000);
+    const directory = tempDirs.make("owned-directory-clock-");
+    const listener = vi.fn();
+    subscriptions.push(observeOwnedDirectory(directory, listener, { recoveryIntervalMs: 30_000 }));
+    vi.setSystemTime(0);
+    vi.advanceTimersByTime(30_000);
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
+  it("repairs failed watches within 30 seconds and resumes healthy recovery", () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(0);
+    const directory = tempDirs.make("owned-directory-repair-");
+    const watch = vi.spyOn(fs, "watch");
+    const listener = vi.fn();
+    subscriptions.push(observeOwnedDirectory(directory, listener));
+    watch.mock.results[0]!.value.emit("error", new Error("lost watch"));
+    listener.mockClear();
+    vi.advanceTimersByTime(30_000);
+    expect(listener).toHaveBeenCalledOnce();
+    expect(watch).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(30_000);
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
   it("creates long-lived observations outside importer and caller authority", () => {
     const directory = tempDirs.make("owned-directory-authority-");
     const watch = fs.watch;
@@ -38,7 +109,9 @@ describe("process-owned directory observation", () => {
   });
 
   it("shares one watcher and reconciles a separate process's atomic replacement", async () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    vi.useFakeTimers({
+      toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
     const directory = tempDirs.make("owned-directory-external-");
     const filename = path.join(directory, "profiles");
     fs.writeFileSync(filename, "before");
@@ -53,7 +126,7 @@ describe("process-owned directory observation", () => {
       "const fs = require('node:fs'); const p = process.argv[1]; fs.writeFileSync(p + '.tmp', 'after'); fs.renameSync(p + '.tmp', p);",
       filename,
     ]);
-    vi.advanceTimersByTime(30_000);
+    vi.advanceTimersByTime(300_000);
     expect(listener).toHaveLastReturnedWith("after");
     expect(otherListener).toHaveBeenCalledWith(undefined);
     expect(watch).toHaveBeenCalledTimes(1);
@@ -74,7 +147,10 @@ describe("process-owned directory observation", () => {
   });
 
   it("re-admits an absent directory and invalidates after missed notifications", () => {
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    vi.useFakeTimers({
+      toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    vi.setSystemTime(0);
     const root = tempDirs.make("owned-directory-missing-");
     const directory = path.join(root, "new");
     const listener = vi.fn();
@@ -84,6 +160,8 @@ describe("process-owned directory observation", () => {
     expect(listener).toHaveBeenCalledWith(undefined);
     listener.mockClear();
     vi.advanceTimersByTime(30_000);
+    expect(listener).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(270_000);
     expect(listener).toHaveBeenCalledWith(undefined);
   });
 });

@@ -1,5 +1,6 @@
 // Tests SSH config parsing and canonical command execution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSshTarget } from "../commands/gateway-status/discovery.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveSshClient } from "./ssh-client.js";
 import { resolveSshConfig } from "./ssh-config.js";
@@ -43,6 +44,36 @@ describe("ssh-config", () => {
     runCommandMock.mockResolvedValue(commandResult());
     resolveSshClientMock.mockReset();
     resolveSshClientMock.mockReturnValue("/usr/bin/ssh");
+  });
+
+  it("preserves an explicit default port through probe target resolution", async () => {
+    runCommandMock.mockResolvedValueOnce(
+      commandResult({ stdout: "user me\nhostname resolved.example\nport 22\n" }),
+    );
+    const resolved = await resolveSshTarget({
+      rawTarget: "alias:22",
+      identity: null,
+      overallTimeoutMs: 1000,
+    });
+    expect(runCommandMock.mock.calls[0]?.[0]).toEqual([
+      "/usr/bin/ssh",
+      "-G",
+      "-p",
+      "22",
+      "--",
+      "alias",
+    ]);
+    expect(resolved?.target).toBe("me@resolved.example:22");
+  });
+
+  it("inherits the alias port when the probe target omits a port", async () => {
+    const resolved = await resolveSshTarget({
+      rawTarget: "alias",
+      identity: null,
+      overallTimeoutMs: 1000,
+    });
+    expect(runCommandMock.mock.calls[0]?.[0]).toEqual(["/usr/bin/ssh", "-G", "--", "alias"]);
+    expect(resolved?.target).toBe("steipete@peters-mac-studio-1.sheep-coho.ts.net:2222");
   });
 
   it.each(["not-a-number"])("ignores invalid port %s and blank lines", async (port) => {

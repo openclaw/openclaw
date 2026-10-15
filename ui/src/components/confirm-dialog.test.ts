@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { showConfirmDialog } from "./confirm-dialog.ts";
@@ -73,9 +74,11 @@ describe("showConfirmDialog", () => {
     }
     checkbox.checked = true;
     checkbox.dispatchEvent(new Event("change"));
+    flush();
     expect(findButton("Confirm").disabled).toBe(false);
     checkbox.checked = false;
     checkbox.dispatchEvent(new Event("change"));
+    flush();
     expect(findButton("Confirm").disabled).toBe(true);
     findButton("Cancel").click();
     await expect(result).resolves.toBe(false);

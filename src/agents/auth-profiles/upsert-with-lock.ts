@@ -1,9 +1,14 @@
 /** Locked auth profile writes and attempt-scoped compensation. */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { replaceAuthProfileAuthorization } from "./authorization-lifetime.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { withOAuthProfileLock, withOAuthProfileLocks } from "./oauth-profile-lock.js";
 import { isOAuthRefreshFence, isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
+import {
+  getPreparedSharedAuthStoreOwnership,
+  prepareSharedAuthStoreOwnership,
+} from "./path-resolve.js";
 import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
 import { updateAuthProfileStoreWithLock } from "./store-runtime.js";
 import { publishAuthProfileStoreUpdate } from "./store-update-publication.js";
@@ -169,8 +174,12 @@ export async function persistAuthProfileBatch(
   const authorityProfileIds = [...profiles.entries()]
     .filter(([, entry]) => needsOAuthRefreshAuthority(entry.credential))
     .map(([profileId]) => profileId);
+  const env = resolveAuthProfileWriteEnv(params);
+  if (authorityProfileIds.length > 0 && !getPreparedSharedAuthStoreOwnership(env)) {
+    await prepareSharedAuthStoreOwnership(env);
+  }
   const readAuthorities = () => loadAuthProfileWriteAuthorities(params, authorityProfileIds);
-  // Capture before yielding so a queued batch cannot restore an OAuth generation consumed while waiting.
+  // Capture before the lock wait so a queued batch cannot restore a consumed OAuth generation.
   const observedProfiles = readAuthorities();
 
   return await withOAuthProfileLocks(
@@ -215,7 +224,7 @@ export async function persistAuthProfileBatch(
               );
             }
             previousProfiles.set(profileId, next.profiles[profileId]);
-            next.profiles[profileId] = entry.credential;
+            next.profiles[profileId] = replaceAuthProfileAuthorization(entry.credential);
             const existingStats = next.usageStats?.[profileId];
             if (params.resetFailureState && existingStats) {
               next.usageStats![profileId] = resetAuthProfileFailureState(existingStats);
@@ -372,6 +381,9 @@ export async function upsertAuthProfileWithLock(
   params: AuthProfileUpsertParams,
 ): Promise<AuthProfileStore | null> {
   const credential = normalizeAuthProfileCredential(params.credential);
+  if (needsOAuthRefreshAuthority(credential)) {
+    await prepareSharedAuthStoreOwnership(resolveAuthProfileWriteEnv(params));
+  }
   const observed = needsOAuthRefreshAuthority(credential)
     ? loadAuthProfileWriteAuthorities(params, [params.profileId]).get(params.profileId)
     : undefined;
@@ -415,9 +427,12 @@ export async function upsertAuthProfileWithLock(
           normalizeProviderId(existing.provider) === normalizeProviderId(credential.provider)
         ) {
           const { key: _key, keyRef: _keyRef, ...metadata } = existing;
-          store.profiles[params.profileId] = { ...metadata, ...credential };
+          store.profiles[params.profileId] = replaceAuthProfileAuthorization({
+            ...metadata,
+            ...credential,
+          });
         } else {
-          store.profiles[params.profileId] = credential;
+          store.profiles[params.profileId] = replaceAuthProfileAuthorization(credential);
         }
         const existingStats = store.usageStats?.[params.profileId];
         if (params.resetFailureState && store.usageStats && existingStats) {

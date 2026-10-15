@@ -65,8 +65,7 @@ export interface SubagentLifecycleCompletionContext extends SubagentLifecycleCom
   acquireTerminalCompletionLock(runId: string): Promise<() => void>;
   bindTerminalSessionEffects(entry: SubagentRunRecord, effects?: SubagentSessionEffects): void;
   bumpCleanupGeneration(entry: SubagentRunRecord): number;
-  bumpTerminalGeneration(entry: SubagentRunRecord, bindingChanged?: boolean): number;
-  isTerminalCallbackCurrent(entry: SubagentRunRecord, generation: number): boolean;
+  isTerminalExecutionCurrent(entry: SubagentRunRecord): boolean;
   startSubagentAnnounceCleanupFlow(entry: SubagentRunRecord): boolean;
 }
 
@@ -147,7 +146,7 @@ export type CleanupBookkeepingParams = {
   provisionalKill?: boolean;
   skipRequesterSettleWake?: boolean;
   isCurrent?: () => boolean;
-  discardDelivery?: (draft: SubagentRunRecord) => void;
+  finalizeDelivery?: (draft: SubagentRunRecord) => void;
 };
 
 export type ScheduledRequesterSettleWake = {

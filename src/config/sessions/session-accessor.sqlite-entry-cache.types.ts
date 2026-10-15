@@ -7,6 +7,7 @@ import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite
 import type { SessionActorHotState } from "./session-actor-state.types.js";
 import type { SessionMembershipFact } from "./session-membership-facts.types.js";
 import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
+import type { SessionMaintenancePreservationPlan } from "./store-maintenance-preserve-snapshot.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
@@ -41,6 +42,10 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
       ? structuredClone(entry.mainRestartRecovery)
       : undefined,
     modelSelectionLocked: entry.modelSelectionLocked,
+    pluginOwnerId: entry.pluginOwnerId,
+    skillLibrarySelections: entry.skillLibrarySelections
+      ? structuredClone(entry.skillLibrarySelections)
+      : undefined,
     pendingProjectGitUrl: entry.pendingProjectGitUrl,
     pendingWorktree: entry.pendingWorktree ? structuredClone(entry.pendingWorktree) : undefined,
     lifecycleRevision: entry.lifecycleRevision,
@@ -75,7 +80,12 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
     spawnDepth: entry.spawnDepth,
     parentSessionKey: entry.parentSessionKey,
     sessionStartedAt: entry.sessionStartedAt,
+    deviceFolder: entry.deviceFolder ? { ...entry.deviceFolder } : undefined,
     permissionMode: entry.permissionMode,
+    execNode: entry.execNode,
+    sessionRoot: entry.sessionRoot,
+    spawnedCwd: entry.spawnedCwd,
+    spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
     toolOverrides: entry.toolOverrides ? structuredClone(entry.toolOverrides) : undefined,
   };
 }
@@ -137,6 +147,7 @@ export type SessionEntryProjectionFacts = {
 };
 
 export type SessionEntryReplacementPublication = {
+  maintenancePlans?: readonly SessionMaintenancePreservationPlan[];
   kind: "session-entry-replacements";
   transcriptPublication?: readonly import("./session-transcript-authority.types.js").SessionTranscriptAuthorityReceipt[];
   pendingArchiveRecovery: boolean;
@@ -243,7 +254,7 @@ export function readSessionEntryCreationIdentity(creation: CreationRecord): Data
     : creation.source.databaseIdentity;
 }
 
-export function assertSessionEntryCreationCurrent(
+function assertSessionEntryCreationCurrent(
   creation: CreationRecord | undefined,
 ): asserts creation is CreationRecord {
   if (!creation?.active) {

@@ -250,7 +250,7 @@ export class LobsterComposerGeometry {
     const editor = composer.querySelector("textarea");
     const controls = Array.from(
       footer?.querySelectorAll(
-        ".agent-chat__composer-lead, .chat-composer-model-control, .agent-chat__composer-actions, button, wa-button, [role=button]",
+        ".agent-chat__composer-lead, .chat-composer-model-control, .agent-chat__composer-actions, button, [role=button]",
       ) ?? [],
     );
     const root = composer.closest(".new-session-page__draft");

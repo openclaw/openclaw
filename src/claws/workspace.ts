@@ -1,7 +1,6 @@
 // Creates Claw-owned bootstrap and supporting files inside the new agent workspace.
 import { realpath } from "node:fs/promises";
 import { resolve, sep } from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { Selectable } from "kysely";
 import { root as fsSafeRoot, FsSafeError, type Root } from "../infra/fs-safe.js";
@@ -11,6 +10,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -56,7 +56,7 @@ class ClawWorkspaceSourceAliasError extends Error {}
 type WorkspaceDatabase = Pick<DB, "claw_workspace_files">;
 type WorkspaceFileRow = Selectable<DB["claw_workspace_files"]>;
 
-function selectWorkspaceFiles(db: DatabaseSync) {
+function selectWorkspaceFiles(db: EngineConnection) {
   return getNodeSqliteKysely<WorkspaceDatabase>(db)
     .selectFrom("claw_workspace_files")
     .select([

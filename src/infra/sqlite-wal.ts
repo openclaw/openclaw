@@ -1,11 +1,11 @@
 // Configures SQLite WAL and related pragmas for local stores.
-import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { GatewayScheduler } from "./gateway-scheduler.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { GatewayScheduler, type GatewayScheduledJob } from "./gateway-scheduler.js";
 import {
   normalizeSqliteNonNegativeInteger,
   runWithSqliteBusyTimeout,
@@ -13,6 +13,7 @@ import {
 } from "./sqlite-busy-timeout.js";
 import {
   getSqliteDatabaseAdmission,
+  onSqliteDatabaseWriteSettled,
   publishSqliteDatabaseAdmission,
   readSqliteDatabaseWriteRevision,
   type SqliteDatabaseAdmissionKey,
@@ -90,10 +91,6 @@ function sharedCompletedCheckpoint(
   }
   return shared ? new Int32Array(shared) : undefined;
 }
-
-// Gateway bootstrap loads the database owner before admitting turns. Long-lived
-// maintenance timers must not retain the context of a turn that opens a database.
-export const runInSqliteMaintenanceContext = AsyncLocalStorage.snapshot();
 
 export type SqliteWalMaintenance = {
   /** Last maintenance observation; reading it never checkpoints or probes storage. */
@@ -205,8 +202,7 @@ function enableWalJournalMode(
   try {
     while (true) {
       try {
-        db.exec("PRAGMA journal_mode = WAL;");
-        const journalMode = readJournalModeResult(db.prepare("PRAGMA journal_mode;").get());
+        const journalMode = readJournalModeResult(db.prepare("PRAGMA journal_mode = WAL;").get());
         if (journalMode === "wal") {
           return true;
         }
@@ -478,7 +474,7 @@ export function configureSqliteWalMaintenance(
     () => stopCheckpointTick?.(),
   );
   const schedule = (phase: string, intervalMs: number, run: () => Promise<void>) =>
-    runInSqliteMaintenanceContext(() =>
+    runInDetachedAsyncContext(() =>
       scope.schedule({
         id: `${maintenanceId}:${phase}`,
         delayMs: intervalMs,
@@ -512,11 +508,57 @@ export function configureSqliteWalMaintenance(
     });
   }
   if (checkpointTickMs > 0 && !isSqliteWalWorkerMaintained(db)) {
-    stopCheckpointTick = schedule("tick", checkpointTickMs, maintain).cancel;
+    let stopped = false;
+    let tick: GatewayScheduledJob | undefined;
+    const cancelTick = () => {
+      tick?.cancel();
+      tick = undefined;
+    };
+    const armTick = () => {
+      if (!stopped && !tick && !scope.signal.aborted && !invalidated) {
+        tick = runInDetachedAsyncContext(() =>
+          scope.schedule({
+            id: `${maintenanceId}:tick`,
+            delayMs: checkpointTickMs,
+            run: runTick,
+          }),
+        );
+      }
+    };
+    const runTick = async () => {
+      tick = undefined;
+      await maintain();
+      if (stopped) {
+        return;
+      }
+      const revision = readSqliteDatabaseWriteRevision(db);
+      const completed =
+        revision === undefined ? undefined : sharedCompletedCheckpoint(db, revision);
+      if (completed && Atomics.load(completed, 0) === revision) {
+        cancelTick();
+      } else {
+        // Blocked readers and suspended maintenance still need their existing retry deadline.
+        armTick();
+      }
+    };
+    const unregisterWrites =
+      periodicCheckpointMode === "PASSIVE" ? onSqliteDatabaseWriteSettled(db, armTick) : undefined;
+    if (unregisterWrites) {
+      stopCheckpointTick = () => {
+        stopped = true;
+        unregisterWrites();
+        cancelTick();
+      };
+      armTick();
+    } else {
+      // Untracked writers and explicit blocking policies retain their published cadence.
+      stopCheckpointTick = schedule("tick", checkpointTickMs, maintain).cancel;
+    }
   }
 
   const beginClose = () => {
-    runInSqliteMaintenanceContext(() => scope.beginClose());
+    stopCheckpointTick?.();
+    runInDetachedAsyncContext(() => scope.beginClose());
     return cancelSqliteWalWriteAdmission(db);
   };
 
@@ -532,7 +574,7 @@ export function configureSqliteWalMaintenance(
       try {
         await beginClose();
       } finally {
-        await runInSqliteMaintenanceContext(() => scope.stop());
+        await runInDetachedAsyncContext(() => scope.stop());
       }
     },
     close: (closeOptions) => {

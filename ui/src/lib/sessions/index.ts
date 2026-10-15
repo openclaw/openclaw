@@ -578,7 +578,6 @@ export function createSessionCapability(
       hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
     const isTerminalMessage = event.event === "session.message" && runEnded;
     const primarySnapshotApplied = reconciled.applied && canApplySnapshot;
-    let primaryPublished = false;
     if (
       claimChanged ||
       swarmChanged ||
@@ -591,10 +590,9 @@ export function createSessionCapability(
       const result = decorateRows(reconciled.result);
       if (claimChanged || result !== state.result) {
         publishReconciledState({ ...state, result });
-        primaryPublished = true;
       }
     }
-    notifyManaged?.(primaryPublished);
+    notifyManaged?.();
     if (eventObservation.scope && !connection.isCurrent(eventObservation.scope)) {
       return;
     }
@@ -616,6 +614,7 @@ export function createSessionCapability(
       primarySnapshotApplied,
       affectsPrimary: eventObservation.affectsPrimary,
       affectedLists: eventObservation.lists,
+      immediate: event.event === "sessions.changed" && eventReason === "create",
     });
     notifyEvent?.(event);
   });

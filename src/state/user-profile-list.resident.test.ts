@@ -22,6 +22,10 @@ import {
   readUserProfileAliases,
   readUserProfileIdentity,
   readResidentUserProfileAliases,
+  readResidentUserProfileId,
+  readResidentUserProfileIdentity,
+  hasMultipleResidentSessionSharingIdentities,
+  getResidentUserProfileDisplay,
   captureResidentUserProfileAccess,
   isUserProfileCatalogReady,
   resolveUserProfileReference,
@@ -85,10 +89,10 @@ describe("resident profile display and reference catalog", () => {
     const options = fixture();
     const absent = await prepareUserProfileCatalog(options);
     releases.push(absent.release);
-    expect(isUserProfileCatalogReady(options)).toBe(true);
+    expect(isUserProfileCatalogReady(options.path)).toBe(true);
     expect(fs.existsSync(options.path)).toBe(false);
     const profile = ensureProfileForEmail("appeared@example.test", options);
-    expect(isUserProfileCatalogReady(options)).toBe(false);
+    expect(isUserProfileCatalogReady(options.path)).toBe(false);
     const database = openOpenClawStateDatabase(options);
     await database.walMaintenance.stop();
     const native = vi.spyOn(database.db, "prepare");
@@ -96,8 +100,12 @@ describe("resident profile display and reference catalog", () => {
     releases.push(current.release);
     expect(current.readCurrentIdentity(profile.id)?.profileId).toBe(profile.id);
     expect(getUserProfileDisplay(profile.id, options).displayName).toBe("appeared");
-    expect(isUserProfileCatalogReady(options)).toBe(true);
+    expect(isUserProfileCatalogReady(options.path)).toBe(true);
     expect(native).not.toHaveBeenCalled();
+    absent.release();
+    expect(isUserProfileCatalogReady(options.path)).toBe(true);
+    current.release();
+    expect(isUserProfileCatalogReady(options.path)).toBe(false);
   });
 
   it("reads current batch identities through merges and refuses unsettled authority without host SQL", async () => {
@@ -106,12 +114,20 @@ describe("resident profile display and reference catalog", () => {
     const target = ensureProfileForEmail("target@example.test", options);
     const catalog = await prepareUserProfileCatalog(options);
     releases.push(catalog.release);
+    expect(hasMultipleResidentSessionSharingIdentities(options)).toBe(true);
     const access = captureResidentUserProfileAccess(alias.id, options);
     expect(catalog.readCurrentIdentity(alias.id)?.profileId).toBe(alias.id);
     linkEmail("alias@example.test", target.id, options);
     setUserProfileRole(target.id, "reader", options);
     const admission = captureOpenClawStateWorkerContext(options).admission;
     const native = vi.spyOn(openOpenClawStateDatabase(options).db, "prepare");
+    expect(readResidentUserProfileId(alias.id, options)).toBe(target.id);
+    expect(readResidentUserProfileIdentity(alias.id, options)?.role).toBe("reader");
+    expect(readResidentUserProfileAliases(target.id, options)).toEqual(
+      new Set([alias.id, target.id]),
+    );
+    expect(getResidentUserProfileDisplay(alias.id, options).id).toBe(target.id);
+    expect(hasMultipleResidentSessionSharingIdentities(options)).toBe(false);
     for (const id of [alias.id, target.id]) {
       expect(catalog.readCurrentIdentity(id)).toEqual({
         profileId: target.id,
@@ -272,7 +288,7 @@ describe("resident profile display and reference catalog", () => {
       fs.renameSync(replacement.path, options.path);
       expect(() => prepared.readCurrentFacts()).toThrow();
       expect(() => prepared.readCurrentProfile()).toThrow();
-      const seen = vi.fn(() => isUserProfileCatalogReady(options));
+      const seen = vi.fn(() => isUserProfileCatalogReady(options.path));
       releases.push(onUserProfilesChanged(seen));
       if (admission === "native") {
         openOpenClawStateDatabase(options);
@@ -332,14 +348,14 @@ describe("resident profile display and reference catalog", () => {
           merge();
           setDisplayName(second.id, "Rolled back", options);
           setUserProfileRole(second.id, "rolled-back-role", options);
-          expect(readUserProfileIdentity(second.id, options)?.role).toBeNull();
+          expect(readResidentUserProfileIdentity(second.id, options)?.role).toBeNull();
           expect(getUserProfileDisplay(first.id, options).id).toBe(first.id);
           expect(seen).not.toHaveBeenCalled();
           throw new Error("rollback");
         }, options),
       ).toThrow("rollback");
       expect(seen).not.toHaveBeenCalled();
-      expect(readUserProfileIdentity(second.id, options)?.role).toBeNull();
+      expect(readResidentUserProfileIdentity(second.id, options)?.role).toBeNull();
       merge();
       expect(seen.mock.results.at(-1)?.value).toEqual(new Set([first.id, second.id]));
       linkEmail("first@example.test", third.id, options);
@@ -360,7 +376,7 @@ describe("resident profile display and reference catalog", () => {
           hasAvatar: true,
           avatarRevision: expect.stringMatching(/-png$/),
         });
-        expect(readUserProfileIdentity(id, options)).toMatchObject({
+        expect(readResidentUserProfileIdentity(id, options)).toMatchObject({
           profileId: head.value,
           role: "reader",
         });
@@ -504,7 +520,7 @@ describe("resident profile display and reference catalog", () => {
     expect(reads).not.toHaveBeenCalled();
     const reopened = vi.spyOn(db, "prepare");
     expect(getUserProfileDisplay(source.id, canonical).displayName).toBe("alias-source");
-    expect(readUserProfileIdentity(source.id, canonical)?.role).toBe("reader");
+    expect(readResidentUserProfileIdentity(source.id, canonical)?.role).toBe("reader");
     expect(reopened).not.toHaveBeenCalled();
     reopened.mockRestore();
     setDisplayName(source.id, "Through alias", alias);
@@ -561,7 +577,7 @@ describe("resident profile display and reference catalog", () => {
         id: nextTarget.id,
         displayName: "Replacement person",
       });
-      expect(readUserProfileIdentity(nextSource.id, options)).toMatchObject({
+      expect(readResidentUserProfileIdentity(nextSource.id, options)).toMatchObject({
         profileId: nextTarget.id,
         role: "reader",
         aliases: new Set([nextSource.id, nextTarget.id]),

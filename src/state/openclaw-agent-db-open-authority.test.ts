@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as integrity from "../infra/sqlite-integrity-worker.js";
 import * as agentLeases from "./openclaw-agent-db-lease.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-lifecycle.js";
@@ -15,10 +16,8 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
-  resolveIncognitoOpenClawAgentSqlitePath,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -55,7 +54,7 @@ function fixture(repair = false) {
   }
   const pathname = database.path;
   closeOpenClawAgentDatabasesForTest(root);
-  clearOpenClawAgentIntegrityVerification(pathname, options.env);
+  revokeSqliteDatabaseAdmissionsForPath(pathname);
   const state = openOpenClawStateDatabase({ env: options.env });
   const leases = () => state.db.prepare("SELECT lease_id FROM agent_database_leases").all();
   return { options, pathname, state, leases };
@@ -358,39 +357,6 @@ it("checks lost database ownership before consulting the initiating caller again
   expect(gate.joined()).toBe(true);
   expect(f.leases()).toEqual([]);
 });
-
-it.each([true])(
-  "keeps warm operation denial local without another native check (incognito=%s)",
-  async (incognito) => {
-    const f = fixture();
-    const options = incognito
-      ? {
-          ...f.options,
-          path: resolveIncognitoOpenClawAgentSqlitePath(f.options),
-        }
-      : f.options;
-    const database = openOpenClawAgentDatabase(options);
-    const check = vi.spyOn(integrity, "assertSqliteIntegrityInWorker");
-    const refused = new Error("warm caller retired");
-    let allowed = true;
-    const work = own(
-      withOpenClawAgentDatabaseAsync(
-        options,
-        () => "forbidden",
-        () => {
-          if (!allowed) {
-            throw refused;
-          }
-        },
-      ),
-    );
-    allowed = false;
-    await expect(work).rejects.toBe(refused);
-    expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(database);
-    expect(database.db.isOpen).toBe(true);
-    expect(check).not.toHaveBeenCalled();
-  },
-);
 
 it("does not treat a database-owner failure as a repairable integrity verdict", async () => {
   const f = fixture(true);

@@ -2,6 +2,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveUsageProviderId } from "../../../src/infra/provider-usage.shared.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelAuthStatusProvider, ModelAuthStatusResult } from "../api/types.ts";
+import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import { authReads, type ModelAuthRequest } from "./model-auth-request-state.ts";
 import { subscribeToSharedRequest } from "./shared-request-subscription.ts";
 
@@ -88,6 +89,9 @@ export async function loadModelAuthStatus(
   opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
 ): Promise<ModelAuthStatusResult> {
   opts.signal?.throwIfAborted();
+  if (!hasOperatorReadAccess(client.auth)) {
+    return EMPTY_AUTH_STATUS;
+  }
   const params = {
     ...(opts?.refresh ? { refresh: true } : {}),
     agentId: opts.agentId,

@@ -37,6 +37,7 @@ import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { readRetainedAgentDeletionsFromDatabase } from "./agent-deletion-journal.read.js";
 import { readConfigMachineState } from "./config-machine-state.js";
 import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
@@ -857,7 +858,9 @@ describe("openclaw state database", () => {
     });
 
     const migrated = openOpenClawStateDatabase(options);
-    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    expect(readSqliteNumberPragma(requireNativeSqliteDatabase(migrated.db), "user_version")).toBe(
+      OPENCLAW_STATE_SCHEMA_VERSION,
+    );
     expect(
       migrated.db
         .prepare(
@@ -957,7 +960,7 @@ describe("openclaw state database", () => {
         warnings: [],
       });
       const migrated = openOpenClawStateDatabase({ env });
-      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
+      expect(readSqliteNumberPragma(requireNativeSqliteDatabase(migrated.db), "user_version")).toBe(
         OPENCLAW_STATE_SCHEMA_VERSION,
       );
       expect(
@@ -1057,7 +1060,9 @@ describe("openclaw state database", () => {
     });
 
     const migrated = openOpenClawStateDatabase(options);
-    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    expect(readSqliteNumberPragma(requireNativeSqliteDatabase(migrated.db), "user_version")).toBe(
+      OPENCLAW_STATE_SCHEMA_VERSION,
+    );
     expect(
       migrated.db
         .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
@@ -1170,7 +1175,9 @@ describe("openclaw state database", () => {
     });
 
     const migrated = openOpenClawStateDatabase(options);
-    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    expect(readSqliteNumberPragma(requireNativeSqliteDatabase(migrated.db), "user_version")).toBe(
+      OPENCLAW_STATE_SCHEMA_VERSION,
+    );
     expect(
       migrated.db
         .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
@@ -1433,10 +1440,13 @@ describe("openclaw state database", () => {
     });
 
     const migrated = openOpenClawStateDatabase(options);
-    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-    expect(collectSqliteSchemaShape(migrated.db).gateway_origin_device_tokens).toEqual(
-      createInitialStateSchemaShape().gateway_origin_device_tokens,
+    expect(readSqliteNumberPragma(requireNativeSqliteDatabase(migrated.db), "user_version")).toBe(
+      OPENCLAW_STATE_SCHEMA_VERSION,
     );
+    expect(
+      collectSqliteSchemaShape(requireNativeSqliteDatabase(migrated.db))
+        .gateway_origin_device_tokens,
+    ).toEqual(createInitialStateSchemaShape().gateway_origin_device_tokens);
     const cronColumns = migrated.db.prepare("PRAGMA table_info(cron_jobs)").all() as Array<{
       name: string;
     }>;
@@ -1785,7 +1795,9 @@ describe("openclaw state database", () => {
     );
 
     const migrated = openOpenClawStateDatabase(options);
-    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    expect(readSqliteNumberPragma(requireNativeSqliteDatabase(migrated.db), "user_version")).toBe(
+      OPENCLAW_STATE_SCHEMA_VERSION,
+    );
     expect(
       migrated.db.prepare("SELECT name FROM sqlite_schema WHERE name = 'commitments'").get(),
     ).toBeUndefined();
@@ -1834,7 +1846,9 @@ describe("openclaw state database", () => {
     });
     const migrated = openOpenClawStateDatabase(options);
 
-    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    expect(readSqliteNumberPragma(requireNativeSqliteDatabase(migrated.db), "user_version")).toBe(
+      OPENCLAW_STATE_SCHEMA_VERSION,
+    );
     expect(
       migrated.db
         .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
@@ -1854,9 +1868,11 @@ describe("openclaw state database", () => {
     }
     // Published v1 state has no deletion history to lose; migration initializes its journal.
     const expected = createInitialStateSchemaShape();
-    expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(migrated.db))).toEqual(
-      normalizeSqliteSchemaShapeSql(expected),
-    );
+    expect(
+      normalizeSqliteSchemaShapeSql(
+        collectSqliteSchemaShape(requireNativeSqliteDatabase(migrated.db)),
+      ),
+    ).toEqual(normalizeSqliteSchemaShapeSql(expected));
     expect(readRetainedAgentDeletionsFromDatabase(migrated.db, fixture.databasePath)).toEqual({
       status: "empty",
     });
@@ -2186,7 +2202,9 @@ describe("openclaw state database", () => {
         updated_at: 600,
       },
     ]);
-    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    expect(readSqliteNumberPragma(requireNativeSqliteDatabase(migrated.db), "user_version")).toBe(
+      OPENCLAW_STATE_SCHEMA_VERSION,
+    );
     expect(
       migrated.db
         .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
@@ -2226,9 +2244,11 @@ describe("openclaw state database", () => {
       expect.arrayContaining(["bootstrap_source_path", "bootstrap_content_digest"]),
     );
 
-    expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(reopened.db))).toEqual(
-      normalizeSqliteSchemaShapeSql(createInitialStateSchemaShape()),
-    );
+    expect(
+      normalizeSqliteSchemaShapeSql(
+        collectSqliteSchemaShape(requireNativeSqliteDatabase(reopened.db)),
+      ),
+    ).toEqual(normalizeSqliteSchemaShapeSql(createInitialStateSchemaShape()));
   });
 
   it("keeps GitHub publication lazy across current-schema open, first use, and reopen", async () => {
@@ -2253,9 +2273,9 @@ describe("openclaw state database", () => {
     beforeFirstUse?.walMaintenance.close();
 
     const currentSchema = openOpenClawStateDatabase(options);
-    expect(readSqliteNumberPragma(currentSchema.db, "user_version")).toBe(
-      OPENCLAW_STATE_SCHEMA_VERSION,
-    );
+    expect(
+      readSqliteNumberPragma(requireNativeSqliteDatabase(currentSchema.db), "user_version"),
+    ).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     ensureGitHubPublicationSchema(currentSchema.db);
     expect(
       currentSchema.db
@@ -2269,7 +2289,7 @@ describe("openclaw state database", () => {
     ]);
     expect(() =>
       assertSqliteSchemaContains(
-        currentSchema.db,
+        requireNativeSqliteDatabase(currentSchema.db),
         "previous v9 reader",
         getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }),
       ),
@@ -2582,7 +2602,7 @@ describe("openclaw state database", () => {
       if (!database) {
         throw new Error("Expected the existing state snapshot");
       }
-      const privatePath = database.db.location();
+      const privatePath = requireNativeSqliteDatabase(database.db).location();
       if (!privatePath) {
         throw new Error("Expected a filesystem-backed snapshot");
       }
@@ -2702,7 +2722,7 @@ describe("openclaw state database", () => {
     const stateDir = createTempStateDir();
     const writer = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
     writer.db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA wal_autocheckpoint = 0;");
-    insertTaskRunProbe(writer.db, "task-live-wal");
+    insertTaskRunProbe(requireNativeSqliteDatabase(writer.db), "task-live-wal");
     expect(fs.existsSync(`${writer.path}-wal`)).toBe(true);
     expect(fs.existsSync(`${writer.path}-shm`)).toBe(true);
     const beforeMain = fs.readFileSync(writer.path);
@@ -3114,10 +3134,7 @@ describe("openclaw state database", () => {
       path: databasePath,
     });
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-      changes: [
-        "Migrated shared state operator approvals → OpenClaw system changes",
-        expect.stringMatching(/^Rebuilt canonical shared-state SQLite indexes \(\d+\)$/u),
-      ],
+      changes: ["Migrated shared state operator approvals → OpenClaw system changes"],
       warnings: [],
     });
 
@@ -3605,7 +3622,9 @@ describe("openclaw state database", () => {
     ]) {
       expect(failureRows.some((row) => row.id === id)).toBe(false);
     }
-    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+    expect(readSqliteNumberPragma(requireNativeSqliteDatabase(database.db), "user_version")).toBe(
+      OPENCLAW_STATE_SCHEMA_VERSION,
+    );
 
     closeOpenClawStateDatabaseForTest();
     const reopened = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });

@@ -194,6 +194,11 @@ function Region(props: RegionProps, host: RegionElement) {
       // A pane that merely loads this way has neither, and takes no focus.
       if (origin) {
         focusBeforeSideLock = origin;
+        // Content with an opening focus request owns entry. Focusing its tab here
+        // would look like newer input and cancel that request. Keep the return target.
+        if (props.sideFocusManaged) {
+          return;
+        }
         // A tab strip rendered just now is focusable from its next frame.
         if (focusFrame !== null) {
           cancelAnimationFrame(focusFrame);
@@ -430,6 +435,7 @@ export const ChatSidebarRegion = defineSolidBridge<RegionProps, RegionMethods>(
       callbacks: { default: null, attribute: false },
       narrow: { default: false },
       sideFocusLocked: { default: false },
+      sideFocusManaged: { default: false },
       sideFocusOrigin: { default: undefined, attribute: false },
       availableWidth: { default: 0 },
     },

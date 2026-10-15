@@ -22,7 +22,7 @@ export function createUpdateCampaignPublisher(params: {
   signal: AbortSignal;
   activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
   onUpdateRunCreated?: () => void;
-  onAttempt: (version: string) => void;
+  onAttempt: (version: string) => Promise<void> | void;
   setSchedule: (schedule: UpdateScheduleState) => void;
 }) {
   return (

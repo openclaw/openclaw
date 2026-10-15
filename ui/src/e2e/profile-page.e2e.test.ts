@@ -652,14 +652,11 @@ suite.define(() => {
           await picker.locator(".picker-select__trigger").click();
           if (captureUiProof) {
             await expect(picker.locator('[role="option"][data-value="xai"]')).toBeVisible();
-            // Web Awesome exposes the options before the owning popup finishes fading in.
             await writeFile(
               path.join(proofDir, `connected-accounts-providers-${signInAttempt}.png`),
-              await takeControlUiViewportScreenshot(
-                page,
-                picker.locator('wa-popup [part="popup"]'),
-                [picker.locator('[role="option"][data-value="xai"]')],
-              ),
+              await takeControlUiViewportScreenshot(page, picker.locator(".picker-select__menu"), [
+                picker.locator('[role="option"][data-value="xai"]'),
+              ]),
             );
           }
           await picker.locator(`[role="option"][data-value="${providerId}"]`).click();

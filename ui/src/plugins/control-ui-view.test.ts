@@ -1,4 +1,5 @@
 import { html, LitElement } from "lit";
+import { createEffect, createSignal, getOwner, onCleanup, runWithOwner } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ControlUiHost,
@@ -12,7 +13,10 @@ import {
   PRESENTATION_CHANGED_EVENT,
   type PresentationBinding,
 } from "../lit/presentation-binding.ts";
+import { renderLegacyTemplate, solidContent } from "../lit/solid-content.tsx";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import { renderPluginSurface } from "./control-ui-view.ts";
 import "./control-ui-view.solid.tsx";
 import "./control-ui-contributions.solid.tsx";
@@ -137,6 +141,107 @@ afterEach(() => {
 });
 
 describe("native UI built-in delegation", () => {
+  it("updates and disposes a native default from a plugin effect without nested flushes", () => {
+    const warning = vi.spyOn(console, "warn");
+    const disposed = vi.fn();
+    const [label, setLabel] = createSignal("First");
+    function DefaultView(props: { label: string }) {
+      const button = document.createElement("button");
+      createEffect(
+        () => props.label,
+        (value) => {
+          button.textContent = value;
+        },
+      );
+      onCleanup(disposed);
+      return button;
+    }
+    const view = mountSolid(() => {
+      const owner = getOwner();
+      const target = document.createElement("div");
+      createEffect(label, (value) =>
+        runWithOwner(owner, () =>
+          renderLegacyTemplate(solidContent(DefaultView, { label: value }), target),
+        ),
+      );
+      onCleanup(() => renderLegacyTemplate(undefined, target));
+      return target;
+    });
+    const button = view.getByRole("button", { name: "First" });
+    setLabel("Second");
+    flush();
+    expect(view.getByRole("button", { name: "Second" })).toBe(button);
+    expect(
+      warning.mock.calls.flat().some((value) => String(value).includes("FLUSH_IN_EFFECT_CALLBACK")),
+    ).toBe(false);
+    view.unmount();
+    expect(button.isConnected).toBe(false);
+    expect(disposed).toHaveBeenCalledOnce();
+    expect(
+      warning.mock.calls.flat().some((value) => String(value).includes("RUN_WITH_DISPOSED_OWNER")),
+    ).toBe(false);
+    warning.mockRestore();
+  });
+
+  it("gives delegated renderer mounts independent lifetimes and restores fallback after failure", async () => {
+    const mounted: HTMLElement[] = [];
+    const disposed: HTMLElement[] = [];
+    let failUpdate = false;
+    const mountDefaultView = (target: HTMLElement) => {
+      const button = document.createElement("button");
+      button.textContent = "Renderer-owned default";
+      target.append(button);
+      mounted.push(button);
+      return () => {
+        disposed.push(button);
+        button.remove();
+      };
+    };
+    const { host, provider, select, listeners } = mountSurface({
+      id: "renderer-defaults",
+      label: "Renderer defaults",
+      surface: "workspace",
+      mount(container, context) {
+        const first = document.createElement("div");
+        const second = document.createElement("div");
+        container.append(first, second);
+        const retireFirstMount = context.mountDefault(first);
+        context.mountDefault(first);
+        retireFirstMount();
+        context.mountDefault(second);
+        return {
+          update() {
+            if (failUpdate) {
+              throw new Error("Replacement failed");
+            }
+          },
+        };
+      },
+    });
+    host.remove();
+    const view = document.createElement("openclaw-plugin-view");
+    view.mountDefaultView = mountDefaultView;
+    provider.append(view);
+    await view.updateComplete;
+    expect(mounted).toHaveLength(3);
+    expect(view.querySelectorAll("button")).toHaveLength(2);
+    expect(disposed).toEqual(mounted.slice(0, 1));
+    failUpdate = true;
+    for (const listener of listeners) {
+      listener();
+    }
+    await view.updateComplete;
+    await view.updateComplete;
+    expect(disposed).toEqual(mounted.slice(0, 3));
+    expect(mounted).toHaveLength(4);
+    expect(view.textContent).toContain("Renderer-owned default");
+    select();
+    await view.updateComplete;
+    view.remove();
+    await Promise.resolve();
+    expect(disposed).toEqual(mounted);
+  });
+
   it("keeps host controls beside a replacement and removes them when the built-in returns", async () => {
     const replacement: ControlUiReplacement<"composer"> = {
       id: "composer",

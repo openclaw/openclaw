@@ -173,8 +173,8 @@ export function createGatewayChatMetadataRuntime(params: {
     assertPreparedAgentCurrent(agent);
     const profiles = resolveSessionCatalogProfiles(sessionEntry, agent.owner.config, agent.agentId);
     const neutral = !hasSessionCatalogContext(profiles);
-    // Read links on every draft request so connecting an account takes effect immediately;
-    // viewers without personal defaults can reuse the already-published neutral projection.
+    // The profile owner invalidates cached links when an account connects or disconnects.
+    // Viewers without personal defaults reuse the already-published neutral projection.
     const defaultProfileId =
       useRequesterDefaults &&
       !profiles.preferredProfileId &&

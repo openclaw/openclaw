@@ -1,6 +1,7 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
 import { summarizeMcpServers } from "../../lib/config/mcp-servers.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { countSessionToolOverrides } from "../../lib/sessions/tool-overrides.ts";
@@ -66,7 +67,7 @@ export class NewSessionCapabilityController {
     }
     this.skillCatalog.synchronize(gateway.client, gateway.connectionEpoch);
     const config = context.runtimeConfig.state;
-    const runtimeConfig = config.configSnapshot?.runtimeConfig ?? null;
+    const runtimeConfig = currentDisplayRuntimeConfig(config);
     const gatewayAvailable = gateway.connected && Boolean(gateway.client);
     const access = readGatewayOperatorAccess(context.gateway.snapshot);
     const mutationBlockedReason = !gatewayAvailable

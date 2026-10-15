@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Insertable } from "kysely";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import {
   BACKUP_RUN_WINDOW,
@@ -19,7 +19,10 @@ type BackupRunDatabase = Pick<OpenClawStateDatabase, "backup_runs">;
 export type PreparedBackupRunRecord = Insertable<BackupRunDatabase["backup_runs"]>;
 
 /** The caller owns one transaction for both insertion and retention. */
-export function recordBackupRunInDatabase(db: DatabaseSync, row: PreparedBackupRunRecord): void {
+export function recordBackupRunInDatabase(
+  db: EngineConnection,
+  row: PreparedBackupRunRecord,
+): void {
   const kysely = getNodeSqliteKysely<BackupRunDatabase>(db);
   executeSqliteQuerySync(db, kysely.insertInto("backup_runs").values(row));
   const runs = readBackupRunsInDatabase(db);
@@ -49,7 +52,7 @@ export function recordBackupRunInDatabase(db: DatabaseSync, row: PreparedBackupR
 }
 
 /** Reads only the bounded ledger, using facts captured by database admission. */
-export function readBackupRunsInDatabase(db: DatabaseSync): BackupRunRecord[] {
+export function readBackupRunsInDatabase(db: EngineConnection): BackupRunRecord[] {
   if (!getAdmittedSqliteSchemaFacts(db)?.tables.has("backup_runs")) {
     return [];
   }

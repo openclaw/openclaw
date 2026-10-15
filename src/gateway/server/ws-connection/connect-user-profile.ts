@@ -23,6 +23,10 @@ import {
   rejectUnavailableProfileConnect,
   resolveGatewayConnectPolicyFailure,
 } from "./connect-admission.js";
+import {
+  bindGatewayConnectOperatorAccess,
+  prepareGatewayConnectOperatorAccess,
+} from "./connect-operator-access.js";
 import type {
   DeviceAuthorizedGatewayConnect,
   GatewayConnectPhaseContext,
@@ -137,6 +141,13 @@ export function createGatewayConnectProfileLifecycle(
       } else {
         registered.authenticatedUserProfile = profile;
       }
+      // Deferred attachment must prepare access without replacing an admitted grant.
+      if (registered.internal?.operatorAccessAuthority === undefined) {
+        prepareGatewayConnectOperatorAccess(registered);
+        if (!bindGatewayConnectOperatorAccess(context, registered)) {
+          return;
+        }
+      }
       prepareGatewayRecipientProfile(registered, { identity: prepared.recipient });
       attachGatewayLocalUserIngress(registered, prepareIngress(profile));
       const { profileId: id, ...display } = profile;
@@ -198,10 +209,8 @@ export async function resolveGatewayConnectProfileAdmission(params: {
   try {
     params.assertCurrent?.();
     const options = { assertCurrent: params.assertCurrent };
-    const ownerDisplayName = ownerProfileExpected ? await resolveHostAccountName() : undefined;
-    params.assertCurrent?.();
     const profile = ownerProfileExpected
-      ? await ensureCanonicalGatewayOwnerProfile(ownerDisplayName ?? null, options)
+      ? await ensureCanonicalGatewayOwnerProfile(resolveHostAccountName, options)
       : params.resolveAuthenticatedGitHubIdentity
         ? await params.resolveAuthenticatedGitHubIdentity()
         : state.authResult.tailscaleIdentity

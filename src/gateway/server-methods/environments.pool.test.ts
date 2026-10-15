@@ -33,6 +33,7 @@ beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(10_000);
   vi.mocked(collectNodeCatalogRuntimeState).mockReturnValue({
     sessionHostNodeIds: new Set(),
+    deviceFolderNodeIds: new Set(),
     issuesByNodeId: new Map(),
     workerSlotsByNodeId: new Map(),
     workerBundleByNodeId: new Map(),

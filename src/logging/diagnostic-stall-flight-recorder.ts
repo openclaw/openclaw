@@ -1,27 +1,18 @@
-import type { Runtime } from "node:inspector";
 import { performance } from "node:perf_hooks";
 import { versions } from "node:process";
 import * as v8 from "node:v8";
 import { isMainThread } from "node:worker_threads";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { hasProfilerConflict, sanitizeDiagnosticProfileFrame } from "./diagnostic-profile.js";
+import {
+  hasProfilerConflict,
+  parseNativeCpuProfile,
+  sanitizeDiagnosticProfileFrame,
+} from "./diagnostic-profile.js";
 
 const WINDOW_MS = 5_000;
 const SAMPLE_MS = 10;
 const MAX_SAMPLES = 1_024;
 const MAX_PROFILE_BYTES = 1_048_576;
-
-type NativeCpuProfile = {
-  startTime: number;
-  endTime: number;
-  nodes: {
-    id: number;
-    children?: number[];
-    callFrame: Omit<Runtime.CallFrame, "scriptId"> & { scriptId: number };
-  }[];
-  samples: number[];
-  timeDeltas: number[];
-};
 
 /** Two short native profiles retain recent stacks without a listener or on-demand heap scan. */
 export function createStallFlightRecorder(
@@ -89,15 +80,7 @@ export function createStallFlightRecorder(
             truncated = true;
             continue;
           }
-          // V8's native serializer writes names and URLs verbatim, including quotes,
-          // backslashes and control characters. Escape them before decoding the profile.
-          const profile = JSON.parse(
-            window.json.replace(
-              /"functionName":"(.*?)"(,"lineNumber":-?\d+,"columnNumber":-?\d+,"scriptId":-?\d+,"url":)"(.*?)"}(?=,"(?:children|deoptReason|positionTicks)":|})/gs,
-              (_match, name: string, location: string, url: string) =>
-                `"functionName":${JSON.stringify(name)}${location}${JSON.stringify(url)}}`,
-            ),
-          ) as NativeCpuProfile; // SAFETY: V8 owns the profile shape and numeric script IDs.
+          const profile = parseNativeCpuProfile(window.json);
           const nodes = new Map(profile.nodes.map((node) => [node.id, node]));
           const parents = new Map<number, number>();
           for (const node of profile.nodes) {
@@ -122,8 +105,7 @@ export function createStallFlightRecorder(
                 break;
               }
               const { callFrame: frame } = sanitizeDiagnosticProfileFrame(
-                // Native V8 JSON uses numeric IDs; the shared inspector policy uses strings.
-                { ...node.callFrame, scriptId: String(node.callFrame.scriptId) },
+                node.callFrame,
                 packageRoot,
               );
               if (

@@ -3,11 +3,9 @@ import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
-import {
-  registerSqliteCacheExitClose,
-  runInSqliteMaintenanceContext,
-} from "../infra/sqlite-wal.js";
+import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import {
@@ -125,7 +123,7 @@ export class OpenClawAgentDatabaseReadOnlyScope {
       this.idleTimer.refresh();
       return;
     }
-    this.idleTimer = runInSqliteMaintenanceContext(() =>
+    this.idleTimer = runInDetachedAsyncContext(() =>
       setTimeout(() => {
         this.idleTimer = undefined;
         try {
@@ -203,10 +201,8 @@ export class OpenClawAgentDatabaseReadOnlyScope {
       }
     }
     const database = this.database;
-    if (
-      this.target?.validation &&
-      !adoptOpenClawAgentDatabaseValidation(database, this.target.validation)
-    ) {
+    const validation = this.target?.validation;
+    if (validation && !adoptOpenClawAgentDatabaseValidation(database, validation)) {
       throw new Error("Session reader validation does not match its current physical owner");
     }
     // The open owner validates the schema once; runtime reads retain that admission.

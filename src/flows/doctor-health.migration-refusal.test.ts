@@ -75,6 +75,42 @@ afterEach(() => {
 });
 
 describe("Doctor refused-migration maintenance outcome", () => {
+  it.each([false, true])(
+    "publishes only after maintenance custody settles (fails=$fails)",
+    async (fails) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const resultPath = createUpdatePostInstallDoctorResultPath();
+        vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", resultPath);
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const failure = new Error("maintenance cleanup remains unsettled");
+        maintenance.release.mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+          if (fails) {
+            throw failure;
+          }
+        });
+        const work = runDoctorHealthFlow(
+          { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          { repair: true, nonInteractive: true },
+        );
+        const outcome = work.catch((error: unknown) => error);
+        await entered.promise;
+        expect(mocks.writeUpdatePostInstallDoctorResult).not.toHaveBeenCalled();
+        release.resolve();
+        if (fails) {
+          expect(await outcome).toBe(failure);
+          expect(mocks.writeUpdatePostInstallDoctorResult).not.toHaveBeenCalled();
+        } else {
+          await work;
+          expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledOnce();
+        }
+        await consumeUpdatePostInstallDoctorResult(resultPath);
+      });
+    },
+  );
+
   beforeEach(() => {
     vi.clearAllMocks();
     maintenance.enableSqliteReclamation.mockReset();

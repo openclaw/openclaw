@@ -41,6 +41,7 @@ import type {
 import { readSessionActorMemoryBoundedTail } from "./session-actor-memory-history-facts.js";
 import {
   createSessionActorMemoryHistoryNavigation,
+  resolveSessionActorMemoryHistoryStart,
   type SessionActorMemoryHistoryRow,
 } from "./session-actor-memory-history-navigation.js";
 import type { SessionActorMemoryWindow } from "./session-actor-memory-state.js";
@@ -276,27 +277,6 @@ export function readSessionActorMemoryProjection(
       ? undefined
       : { anchorSeq: seq };
   };
-  const startByBytes = (
-    rows: SessionActorMemoryHistoryRow[],
-    start: number,
-    end: number,
-    maxBytes: number,
-    maxMessages: number,
-    allowOversized: boolean,
-    initialBytes = 0,
-  ) => {
-    let selected = end;
-    let bytes = initialBytes;
-    while (selected > start && end - selected < maxMessages) {
-      const row = rows[selected - 1]!;
-      if ((!allowOversized || selected < end) && bytes + row.serializedBytes > maxBytes) {
-        break;
-      }
-      bytes += row.serializedBytes;
-      selected--;
-    }
-    return selected;
-  };
   const recent = (
     options: {
       maxMessages: number;
@@ -310,11 +290,14 @@ export function readSessionActorMemoryProjection(
     const start =
       !maxMessages || !maxLines
         ? history.length
-        : startByBytes(
+        : resolveSessionActorMemoryHistoryStart(
             history,
             Math.max(0, history.length - maxLines),
             history.length,
-            resolveIntegerOption(options.maxBytes, 8 * 1024 * 1024, { min: 1024 }),
+            Math.min(
+              resolveIntegerOption(options.maxBytes, SOURCE_PAGE_MAX_BYTES, { min: 1024 }),
+              SOURCE_PAGE_MAX_BYTES,
+            ),
             maxMessages,
             true,
           );
@@ -329,6 +312,67 @@ export function readSessionActorMemoryProjection(
       ...(changed ? { windowReset: true } : {}),
       transcriptPath: window.hot.target.sessionKey,
       transcriptSource: "active" as const,
+    };
+  };
+  const readPage = (
+    inputOptions: Extract<SessionTranscriptProjectionSelection, { kind: "page" }>["options"],
+  ) => {
+    let options = inputOptions;
+    const changed = change(options.expectedReadWindow);
+    if (changed) {
+      options = {
+        ...options,
+        captureReadWindow: true,
+        expectedReadWindow: undefined,
+        ...(changed.anchorSeq !== undefined && options.expectedReadWindow?.anchor
+          ? {
+              beforeSeq:
+                options.beforeSeq === undefined
+                  ? undefined
+                  : options.beforeSeq + changed.anchorSeq - options.expectedReadWindow.anchor.seq,
+            }
+          : { beforeSeq: undefined, offset: 0 }),
+      };
+    }
+    const end = resolveTranscriptPageEnd(history.length, options);
+    if (options.recentAtHead && end === history.length) {
+      return {
+        ...recent({ ...options.recentAtHead, captureReadWindow: options.captureReadWindow }),
+        ...(changed ? { windowReset: true } : {}),
+      };
+    }
+    const maxMessages = resolveIntegerOption(options.maxMessages, 0, { min: 0 });
+    const requestedStart = Math.max(0, end - maxMessages);
+    const start = resolveSessionActorMemoryHistoryStart(
+      history,
+      requestedStart,
+      end,
+      resolveIntegerOption(options.maxBytes, SOURCE_PAGE_MAX_BYTES, { min: 1024 }),
+      maxMessages,
+      options.allowOversizedFirst ?? options.maxBytes === undefined,
+      0,
+      options.maxBytes === undefined,
+    );
+    const omittedOversized = maxMessages > 0 && end > 0 && start === end;
+    const consumedStart = omittedOversized ? end - 1 : start;
+    const rows = history.slice(start, end);
+    return {
+      messages: messages(rows, start),
+      totalMessages: history.length,
+      activeLeafEntryId: tree.leafId,
+      displaySource,
+      transcriptPath: window.hot.target.sessionKey,
+      transcriptSource: "active" as const,
+      ...(options.maxBytes !== undefined && maxMessages > 0 && consumedStart > 0
+        ? {
+            olderOffset:
+              resolveTranscriptPageEnd(history.length, { beforeSeq: options.beforeSeq }) -
+              consumedStart,
+          }
+        : {}),
+      ...(omittedOversized ? { omittedOversized: true } : {}),
+      ...(options.captureReadWindow ? { readWindow: capture(rows, start) } : {}),
+      ...(changed ? { windowReset: true } : {}),
     };
   };
   const closedHistory = (row: SessionActorMemoryHistoryRow) => {
@@ -385,66 +429,8 @@ export function readSessionActorMemoryProjection(
     }
     case "recent":
       return recent(selection.options);
-    case "page": {
-      let options = selection.options;
-      const changed = change(options.expectedReadWindow);
-      if (changed) {
-        options = {
-          ...options,
-          captureReadWindow: true,
-          expectedReadWindow: undefined,
-          ...(changed.anchorSeq !== undefined && options.expectedReadWindow?.anchor
-            ? {
-                beforeSeq:
-                  options.beforeSeq === undefined
-                    ? undefined
-                    : options.beforeSeq + changed.anchorSeq - options.expectedReadWindow.anchor.seq,
-              }
-            : { beforeSeq: undefined, offset: 0 }),
-        };
-      }
-      const end = resolveTranscriptPageEnd(history.length, options);
-      if (options.recentAtHead && end === history.length) {
-        return {
-          ...recent({ ...options.recentAtHead, captureReadWindow: options.captureReadWindow }),
-          ...(changed ? { windowReset: true } : {}),
-        };
-      }
-      const maxMessages = resolveIntegerOption(options.maxMessages, 0, { min: 0 });
-      const requestedStart = Math.max(0, end - maxMessages);
-      const start =
-        options.maxBytes === undefined
-          ? requestedStart
-          : startByBytes(
-              history,
-              requestedStart,
-              end,
-              resolveIntegerOption(options.maxBytes, 1024 * 1024, { min: 1024 }),
-              maxMessages,
-              options.allowOversizedFirst ?? false,
-            );
-      const omittedOversized = maxMessages > 0 && end > 0 && start === end;
-      const consumedStart = omittedOversized ? end - 1 : start;
-      const rows = history.slice(start, end);
-      return {
-        messages: messages(rows, start),
-        totalMessages: history.length,
-        activeLeafEntryId: tree.leafId,
-        displaySource,
-        transcriptPath: window.hot.target.sessionKey,
-        transcriptSource: "active",
-        ...(options.maxBytes !== undefined && maxMessages > 0 && consumedStart > 0
-          ? {
-              olderOffset:
-                resolveTranscriptPageEnd(history.length, { beforeSeq: options.beforeSeq }) -
-                consumedStart,
-            }
-          : {}),
-        ...(omittedOversized ? { omittedOversized: true } : {}),
-        ...(options.captureReadWindow ? { readWindow: capture(rows, start) } : {}),
-        ...(changed ? { windowReset: true } : {}),
-      };
-    }
+    case "page":
+      return readPage(selection.options);
     case "by-id": {
       const row = find(selection.messageId);
       if (!row) {
@@ -508,9 +494,10 @@ export function readSessionActorMemoryProjection(
       const changed = change(options.expectedReadWindow);
       if (changed && (!row || !history.includes(row))) {
         return {
-          ...recent({
+          ...readPage({
+            offset: 0,
             maxMessages: options.maxMessages,
-            maxBytes: options.maxBytes,
+            maxBytes: Math.min(options.maxBytes ?? SOURCE_PAGE_MAX_BYTES, SOURCE_PAGE_MAX_BYTES),
             captureReadWindow: true,
           }),
           windowReset: true,
@@ -549,22 +536,21 @@ export function readSessionActorMemoryProjection(
         anchor = rows.length - 1;
       }
       const range = resolveHistoryAnchorPageRange(rows.length, anchor, options);
-      const start =
-        options.maxBytes === undefined
-          ? range.readStart
-          : startByBytes(
-              rows,
-              range.readStart,
-              range.endExclusive,
-              Math.max(1024, Math.floor(options.maxBytes)),
-              Infinity,
-              false,
-              2,
-            );
+      const limit = Math.min(options.maxBytes ?? SOURCE_PAGE_MAX_BYTES, SOURCE_PAGE_MAX_BYTES);
+      const start = resolveSessionActorMemoryHistoryStart(
+        rows,
+        range.readStart,
+        range.endExclusive,
+        Math.max(1024, Math.floor(limit)),
+        Infinity,
+        options.maxBytes === undefined,
+        2,
+        options.maxBytes === undefined,
+      );
       let selected = rows.slice(start, range.endExclusive);
       let selectedStart = start;
       if (options.maxBytes !== undefined) {
-        const limit = Math.max(1024, Math.floor(options.maxBytes));
+        const responseLimit = Math.max(1024, Math.floor(limit));
         let bytes = 2;
         let index = selected.length;
         while (index > 0) {
@@ -576,7 +562,7 @@ export function readSessionActorMemoryProjection(
             displayPosition: position(candidate),
           });
           const separator = index === selected.length ? 0 : 1;
-          if (bytes + size + separator > limit) {
+          if (bytes + size + separator > responseLimit) {
             break;
           }
           bytes += size + separator;
@@ -589,7 +575,7 @@ export function readSessionActorMemoryProjection(
         found: true,
         messages: messages(selected, selectedStart),
         totalMessages: rows.length,
-        hasOverreadContext: range.hasOverreadContext,
+        hasOverreadContext: range.hasOverreadContext && selectedStart === range.readStart,
         offset: range.offset,
         displaySource,
         transcriptPath: window.hot.target.sessionKey,

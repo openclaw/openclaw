@@ -66,6 +66,8 @@ Other volatile sections include **UI Presentation**, Control UI embed guidance, 
 
 Tool finalization prepares immutable provider-specific schema descriptors when an attempt settles. Warm turns reuse those descriptors while the enabled tools, plugin inventory, provider/model, configuration, and source schemas remain unchanged. Schema owners publish changes by replacing the schema object. Execution callbacks, cancellation, hooks, and permission bindings are created for each attempt; a retained descriptor never grants authority.
 
+Dynamic tool schemas reuse bounded, immutable variants keyed by their resolved capability and policy inputs. A changed action set, spawn policy, automation mode, or channel property selects a new variant. Published nested schemas cannot be edited in place; custom hooks that need different descriptors must replace them with their own copies.
+
 On supported direct Anthropic API-key routes and native OpenAI Responses routes, the embedded session pins both sides of this boundary. Refreshed sections are appended as instruction messages after the current user turn, preserving earlier prompt and history bytes. Route or selected personal-profile changes, reset, and compaction start a new series; skill and memory refresh contracts continue to deliver updated guidance. Prompt-cache diagnostics identify changed sections using a bounded set of names without logging their contents.
 
 Media task facts include only enabled media tools and tasks belonging to the current requester. Restored tasks without a recorded requester use the configured session owner; completed tasks are omitted.

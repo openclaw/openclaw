@@ -70,15 +70,6 @@ export function captureSqliteWorkerOpen(
   // Queued dispatch and native grants must retain the opener's live authority context.
   const assertOpening = checkOpening ? () => inCaller(checkOpening) : undefined;
   const databasePath = path.resolve(options.databasePath);
-  if (options.target && (options.admission || stateContext || custody.stateDatabasePath)) {
-    throw new Error("Ephemeral SQLite admission cannot borrow a file or shared-state owner");
-  }
-  if (
-    options.target &&
-    (options.target.kind !== "ephemeral" || !options.target.handle || !options.target.incarnation)
-  ) {
-    throw new Error("Ephemeral SQLite admission requires its captured handle and incarnation");
-  }
   if (
     options.admission &&
     (!options.existingOnly || !options.admission.identity.startsWith("file:"))
@@ -120,7 +111,6 @@ export function captureSqliteWorkerOpen(
         }
       : {}),
     moduleUrl: new URL(options.moduleUrl),
-    ...(options.target ? { target: Object.freeze({ ...options.target }) } : {}),
     databasePath,
     input: serialize(options.input),
     existingOnly: options.existingOnly === true,
@@ -138,14 +128,6 @@ export async function prepareSqliteWorkerDatabaseAdmission(options: PreparedSqli
   validateSqliteWorkerModuleUrl(options.moduleUrl);
   const databasePath = path.resolve(options.databasePath);
   const inputHash = createHash("sha256").update(options.input).digest("hex");
-  if (options.target) {
-    return {
-      databasePath,
-      inputHash,
-      key: `ephemeral:${JSON.stringify([options.target.handle, options.target.incarnation])}`,
-      identity: undefined,
-    };
-  }
   const identity = await readDatabasePathIdentity(databasePath);
   options.assertCurrent?.();
   if (options.expectedIdentity && identity.key !== options.expectedIdentity) {

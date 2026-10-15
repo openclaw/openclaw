@@ -113,11 +113,40 @@ export const RequiredNodeCommandSchema = closedObject({
 });
 
 /** Worker-only lifecycle metadata layered onto the existing environment projection. */
+export const WorkerEnvironmentStartStatusSchema = Type.Union([
+  closedObject({
+    mode: Type.Literal("snapshot"),
+    phase: Type.Optional(Type.Literal("saving")),
+  }),
+  closedObject({
+    mode: Type.Literal("cold"),
+    reason: Type.Union([
+      Type.Literal("no-snapshot-yet"),
+      Type.Literal("setup-changed"),
+      Type.Literal("snapshot-retiring"),
+      Type.Literal("snapshot-unavailable"),
+      Type.Literal("os-unsupported"),
+      Type.Literal("warm-images-off"),
+      Type.Literal("capture-paused"),
+      Type.Literal("backend-cannot-snapshot"),
+      Type.Literal("class-unknown"),
+    ]),
+    phase: Type.Union([
+      Type.Literal("provisioning"),
+      Type.Literal("preparing"),
+      Type.Literal("saving"),
+    ]),
+  }),
+]);
+
+export type WorkerEnvironmentStartStatus = Static<typeof WorkerEnvironmentStartStatusSchema>;
+
 export const WorkerEnvironmentMetadataSchema = closedObject({
   profileId: Type.Optional(NonEmptyString),
   providerId: NonEmptyString,
   leaseId: Type.Optional(NonEmptyString),
   state: WorkerEnvironmentStateSchema,
+  startStatus: Type.Optional(WorkerEnvironmentStartStatusSchema),
   ageMs: Type.Integer({ minimum: 0 }),
   idleMs: Type.Optional(Type.Integer({ minimum: 0 })),
   destroyRequestedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -139,6 +168,7 @@ function createEnvironmentSummaryProperties() {
     platform: Type.Optional(NonEmptyString),
     sessionHost: Type.Optional(Type.Boolean()),
     workerSlots: Type.Optional(WorkerSlotSummarySchema),
+    workerHost: Type.Optional(closedObject({ deviceFolders: Type.Optional(Type.Literal(true)) })),
     workerBundle: Type.Optional(NodeWorkerBundleStatusSchema),
     lastConnectedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     lastDisconnectedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -252,11 +282,34 @@ const WorkerEnvironmentProfileSummarySchema = closedObject({
   ),
 });
 
+/** A discoverable config proposal, never an admitted placement destination. */
+export const SuggestedWorkerProfileSummarySchema = closedObject({
+  id: NonEmptyString,
+  providerId: NonEmptyString,
+  providerDisplayId: Type.Optional(
+    Type.String({ pattern: "^[a-z][a-z0-9-]{0,63}(?![\\s\\S])", maxLength: 64 }),
+  ),
+});
+
+export const EnvironmentsAdoptSuggestedProfileParamsSchema = closedObject({});
+export const EnvironmentsAdoptSuggestedProfileResultSchema = closedObject({
+  profile: WorkerEnvironmentProfileSummarySchema,
+});
+export type SuggestedWorkerProfileSummary = Static<typeof SuggestedWorkerProfileSummarySchema>;
+export type WorkerEnvironmentProfileSummary = Static<typeof WorkerEnvironmentProfileSummarySchema>;
+export type EnvironmentsAdoptSuggestedProfileParams = Static<
+  typeof EnvironmentsAdoptSuggestedProfileParamsSchema
+>;
+export type EnvironmentsAdoptSuggestedProfileResult = Static<
+  typeof EnvironmentsAdoptSuggestedProfileResultSchema
+>;
+
 /** Profile-only requests leave environments empty without reading inventory. */
 export const EnvironmentsListResultSchema = closedObject({
   requiredProfile: Type.Optional(NonEmptyString),
   environments: Type.Array(EnvironmentSummarySchema),
   profiles: Type.Optional(Type.Array(WorkerEnvironmentProfileSummarySchema)),
+  suggestedProfile: Type.Optional(SuggestedWorkerProfileSummarySchema),
   preparedPool: Type.Optional(
     closedObject({
       maxTotal: Type.Integer({ minimum: 0 }),

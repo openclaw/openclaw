@@ -6,10 +6,14 @@ import Testing
 
 @MainActor
 struct ManagedNodeGatewayMigrationTests {
+    @MainActor
     private final class Fixture {
         var calls: [String] = []
         var version = "2026.9.6"
         var updateFails = false
+        var setupRecoveryAtDispatch: [Bool] = []
+        var canonicalRepairFails = false
+        var canonicalVersion: String?
         var healthFails = false
         var seedFails = false
         var serviceExists = true
@@ -45,14 +49,31 @@ struct ManagedNodeGatewayMigrationTests {
         var operations: ManagedNodeGatewayMigration.Operations {
             .init(
                 checkCurrent: {},
-                updateVersion: { _, version in
+                repairCanonicalUpdate: { receipt in
+                    self.calls.append("canonical")
+                    if self.canonicalRepairFails {
+                        throw ManagedNodeGatewayMigration.Failure(message: "canonical repair failed")
+                    }
+                    if let version = self.canonicalVersion {
+                        return .superseded(receipt, installedVersion: version, compatible: true)
+                    }
+                    self.version = receipt.toVersion
+                    return .repaired(PostAppUpdateReceipt(
+                        fromVersion: receipt.fromVersion, toVersion: receipt.toVersion, recordedAt: receipt.recordedAt,
+                        notificationAttempts: receipt.notificationAttempts,
+                        notificationInFlight: receipt.notificationInFlight,
+                        runtimeBuildID: receipt.runtimeBuildID, setupRecovery: receipt.setupRecovery))
+                },
+                updateVersion: { _, version, setupRecovery in
                     self.calls.append("update")
+                    self.setupRecoveryAtDispatch.append(setupRecovery)
                     if self.updateFails { throw ManagedNodeGatewayMigration.Failure(message: "offline") }
                     self.version = version
                     if let updatedPackageDirectory = self.updatedPackageDirectory {
                         self.packageDirectory = updatedPackageDirectory
                     }
                 },
+                resumeNode: { _ in self.calls.append("resume-node") },
                 recapture: { _, _ in self.calls.append("capture")
                     return self.candidate
                 },
@@ -76,6 +97,190 @@ struct ManagedNodeGatewayMigrationTests {
                     }
                 })
         }
+    }
+
+    @Test(arguments: ["unchanged", "operator-service", "runtime-pin"])
+    func `newer Node resume joins live daemon dispatch and preserves existing recovery state`(
+        change: String) async throws
+    {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let state = AppProfile.current.stateDirectoryURL()
+        let nodeRoot = state.appendingPathComponent("tools/node-resume-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: nodeRoot) }
+        let node = nodeRoot.appendingPathComponent("bin/node")
+        let package = nodeRoot.appendingPathComponent("lib/node_modules/openclaw")
+        let entry = package.appendingPathComponent("openclaw.mjs")
+        let sentinel = home.appendingPathComponent("installed-command")
+        let config = home.appendingPathComponent("existing-config.json")
+        let configBytes = Data("""
+        {"meta":{"lastTouchedVersion":"2026.10.3"},
+        "gateway":{"mode":"local"},
+        "env":{"vars":{"SYNTHETIC_PROVIDER_TOKEN":"fixture-only-token"}}}
+        """.utf8)
+        try FileManager.default.createDirectory(at: node.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+        try configBytes.write(to: config)
+        try Data().write(to: entry)
+        try Data(#"{"name":"openclaw","version":"2026.10.3"}"#.utf8)
+            .write(to: package.appendingPathComponent("package.json"))
+        try """
+        #!/bin/sh
+        for argument in "$@"; do
+          if [ "$argument" = --version ]; then
+            printf '%s\n' 'OpenClaw 2026.10.3'
+            exit 0
+          fi
+        done
+        printf '%s\n' "$*" > "$RECOVERY_DISPATCH_SENTINEL"
+        printf '%s\n' '{"ok":true}'
+        """.write(to: node, atomically: false, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
+        let prefix = [node.path, entry.path]
+        let cli = GatewayLaunchAgentManager.InstalledServiceCLI(
+            prefix: prefix, sqliteLibrary: nil,
+            environment: ["RECOVERY_DISPATCH_SENTINEL": sentinel.path])
+        try await TestIsolation.withIsolatedState(
+            launchAgentHomeDirectory: home,
+            env: [
+                "OPENCLAW_STATE_DIR": state.path,
+                "OPENCLAW_CONFIG_PATH": config.path,
+                "OPENCLAW_GATEWAY_PORT": "29871",
+            ],
+            defaults: [
+                onboardingSeenKey: true,
+                cliInstallPolicyKey: "exact",
+                postAppUpdateReceiptKey: nil,
+                GatewayHosting.defaultsKey: GatewayHosting.service.rawValue,
+            ]) {
+                let appState = AppStateStore.shared
+                let priorMode = appState.connectionMode
+                let priorOnboarding = appState.onboardingSeen
+                appState.connectionMode = .local
+                appState.onboardingSeen = true
+                defer {
+                    appState.connectionMode = priorMode
+                    appState.onboardingSeen = priorOnboarding
+                }
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(home.appendingPathComponent("disabled"))
+                // The native test contract intercepts daemon effects. Its existing final guards
+                // still run; only the approved install adapter executes this synthetic process.
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true) { arguments in
+                    guard arguments.first == "install" else { return }
+                    let response = await ShellExecutor.runDetailed(
+                        command: prefix + ["gateway"] + arguments,
+                        cwd: nil,
+                        env: ["PATH": "/usr/bin:/bin", "RECOVERY_DISPATCH_SENTINEL": sentinel.path],
+                        timeout: 10)
+                    #expect(response.success)
+                }
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":true,"service":{"loaded":false}}"#)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                defer {
+                    GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                    GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                    GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                    GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                }
+                let resumedCLI = try GatewayLaunchAgentManager.resumedServiceCLI(cli, stateDirectory: state)
+                let candidate = ManagedNodeGatewayMigration.Candidate(
+                    cli: resumedCLI, snapshot: nil, version: "2026.10.3",
+                    port: GatewayEnvironment.gatewayPort(), allowUnconfigured: false)
+                PostAppUpdateReceiptStore.record(fromVersion: "2026.10.0", toVersion: "2026.10.1")
+                let notice = try #require(PostAppUpdateReceiptStore.pending(currentVersion: "2026.10.1"))
+                PostAppUpdateReceiptStore.recordCoreUpdateDispatch(receipt: notice, owner: .gateway)
+                let receiptBytes = AppDefaults.standard.data(forKey: postAppUpdateReceiptKey)
+                let databaseURL = state.appendingPathComponent("state/openclaw.sqlite")
+                let pinKey = try GatewayLaunchAgentManager.runtimePinKey(
+                    profile: .current, configPath: state.appendingPathComponent("openclaw.json").path)
+                let databaseExisted = FileManager.default.fileExists(atPath: databaseURL.path)
+                let originalPin = try await GatewayLaunchAgentManager.runtimePinRecord(
+                    stateDirectory: state,
+                    profile: .current)
+                try #require(originalPin == nil)
+                var pinWritten = false
+                defer {
+                    if pinWritten {
+                        if databaseExisted, let database = try? OpenClawNativeStateSQLite(databaseURL: databaseURL) {
+                            if let deletion = try? database
+                                .prepare("DELETE FROM config_machine_state WHERE state_key = ?")
+                            {
+                                try? deletion.bindText(pinKey, at: 1)
+                                _ = try? deletion.step()
+                            }
+                        } else {
+                            try? FileManager.default.removeItem(at: databaseURL)
+                        }
+                    }
+                }
+                var checks = 0
+                let operations = ManagedNodeGatewayMigration.liveOperations(
+                    checkCurrent: {
+                        checks += 1
+                        guard checks == 2 else { return }
+                        if change == "operator-service" {
+                            let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: home, profile: .current)
+                            try FileManager.default.createDirectory(
+                                at: plist.deletingLastPathComponent(),
+                                withIntermediateDirectories: true)
+                            try PropertyListSerialization.data(
+                                fromPropertyList: ["ProgramArguments": [
+                                    "/operator/node",
+                                    "/operator/openclaw.mjs",
+                                    "gateway",
+                                ]],
+                                format: .xml, options: 0).write(to: plist)
+                        } else if change == "runtime-pin" {
+                            if databaseExisted {
+                                let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
+                                let insert = try database.prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)")
+                                try insert.bindText(pinKey, at: 1)
+                                try insert.bindText(#"{"pin":{"runtime":"node","path":"/operator/node"}}"#, at: 2)
+                                _ = try insert.step()
+                            } else {
+                                try FileManager.default.createDirectory(
+                                    at: databaseURL.deletingLastPathComponent(),
+                                    withIntermediateDirectories: true)
+                                try Self.writePinFixture(databaseURL: databaseURL, key: pinKey)
+                            }
+                            pinWritten = true
+                        }
+                    },
+                    resolveLegacyCLI: { resumedCLI },
+                    verifyHealth: {}, setServiceHosting: { _ in }, statusHandler: { _ in })
+                if change == "unchanged" {
+                    try await operations.resumeNode(candidate)
+                    let command = try String(contentsOf: sentinel, encoding: .utf8)
+                    #expect(command.contains("gateway install --port 29871 --runtime node"))
+                    #expect(!command.contains("--restore-service-cli"))
+                } else {
+                    await #expect(throws: (any Error).self) { try await operations.resumeNode(candidate) }
+                    #expect(!FileManager.default.fileExists(atPath: sentinel.path))
+                }
+                #expect(try Data(contentsOf: config) == configBytes)
+                #expect(AppDefaults.standard.data(forKey: postAppUpdateReceiptKey) == receiptBytes)
+                #expect(try String(contentsOf: package.appendingPathComponent("package.json"), encoding: .utf8)
+                    .contains("2026.10.3"))
+            }
+    }
+
+    @Test(arguments: [false, true])
+    func `newer Node runtime stays healthy without installing the older app bundle`(serviceExists: Bool) async throws {
+        let fixture = Fixture()
+        fixture.version = "2026.10.2"
+        fixture.serviceExists = serviceExists
+        let candidate = fixture.candidate
+        let outcome = try await ManagedNodeGatewayMigration.run(
+            candidate: candidate, targetVersion: "2026.10.1", operations: fixture.operations)
+        guard case .preservedNewerRuntime = outcome else {
+            Issue.record("Expected the newer Node runtime to be preserved")
+            return
+        }
+        #expect(fixture.calls == (serviceExists
+                ? ["capture", "service", "health"]
+                : ["capture", "service", "resume-node", "health"]))
+        #expect(fixture.version == "2026.10.2")
+        #expect(fixture.hostedCLI == candidate.cli)
     }
 
     @Test func `version changes stay in core updater without starting the runtime switch`() async throws {
@@ -230,43 +435,299 @@ struct ManagedNodeGatewayMigrationTests {
         #expect(fixture.calls == ["capture", "service", "seed", "capture", "bun", "health"])
     }
 
-    @Test(arguments: [true, false])
-    func `same version Node migration waits for unfinished core setup repair`(serviceExists: Bool) async throws {
-        let suite = "ManagedNodeGatewayMigrationTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+    @Test(arguments: ["same-version", "older-version", "failed"])
+    func `canonical package repair precedes selected Node work`(_ scenario: String) async throws {
         let fixture = Fixture()
-        fixture.serviceExists = serviceExists
-        try PostAppUpdateReceiptStore.recordSetupRecovery(
-            fromVersion: "2026.8.1", toVersion: fixture.version, defaults: defaults)
-        let receipt = try #require(PostAppUpdateReceiptStore.pendingSetupRecovery(defaults: defaults))
-        _ = try await ManagedNodeGatewayMigration.run(
-            candidate: fixture.candidate,
-            targetVersion: fixture.version,
-            pendingSetupRecovery: receipt,
-            operations: fixture.operations)
-        #expect(fixture.calls.isEmpty)
-        #expect(PostAppUpdateReceiptStore.pendingSetupRecovery(defaults: defaults) == receipt)
+        if scenario == "older-version" { fixture.version = "2026.8.1" }
+        fixture.canonicalRepairFails = scenario == "failed"
+        let pending = PostAppUpdateReceipt(
+            fromVersion: "2026.8.1", toVersion: "2026.9.6", recordedAt: .distantPast,
+            gatewayUpdateIncomplete: true, coreUpdate: .legacyCanonical)
+        if fixture.canonicalRepairFails {
+            await #expect(throws: ManagedNodeGatewayMigration.Failure.self) {
+                try await ManagedNodeGatewayMigration.run(
+                    candidate: fixture.candidate, targetVersion: pending.toVersion,
+                    pendingSetupRecovery: pending, operations: fixture.operations)
+            }
+            #expect(fixture.calls == ["canonical"])
+            return
+        }
+        let outcome = try await ManagedNodeGatewayMigration.run(
+            candidate: fixture.candidate, targetVersion: pending.toVersion,
+            pendingSetupRecovery: pending, operations: fixture.operations)
+        if scenario == "older-version" {
+            guard case .versionUpdated = outcome else {
+                Issue.record("Canonical version changes retain the installed service's two-activation boundary")
+                return
+            }
+            #expect(fixture.calls == ["canonical", "capture"])
+        } else {
+            guard case .migrated = outcome else {
+                Issue.record("Verified same-version canonical repair must allow the runtime phase")
+                return
+            }
+            #expect(fixture.calls == ["canonical", "capture", "service", "seed", "capture", "bun", "health"])
+        }
     }
 
-    @Test func `absent Resume leaves an ordinary incomplete update receipt to core repair`() async throws {
+    @Test(arguments: [false, true])
+    func `canonical repair rediscovers relocated absent CLI without adopting another retained selection`(
+        replaceRetained: Bool) async throws
+    {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        // Only the plist home is overridable. Migration and CLI admission use the
+        // fixed, disposable test-process profile directory, like the other live fixtures.
+        let processHome = FileManager.default.homeDirectoryForCurrentUser
+        let state = AppProfile.current.stateDirectoryURL()
+        let id = UUID().uuidString
+        let oldRoot = state.appendingPathComponent("tools/node-before-\(id)")
+        let newRoot = state.appendingPathComponent("tools/node-after-\(id)")
+        let alias = state.appendingPathComponent("tools/node")
+        let oldEntry = oldRoot.appendingPathComponent("lib/node_modules/openclaw/openclaw.mjs")
+        let newEntry = newRoot.appendingPathComponent("lib/node_modules/openclaw/dist/entry.js")
+        let config = home.appendingPathComponent("openclaw.json")
+        try Data(#"{"gateway":{"mode":"local"}}"#.utf8).write(to: config)
+        try await TestIsolation.withIsolatedState(
+            launchAgentHomeDirectory: processHome,
+            env: ["OPENCLAW_STATE_DIR": state.path, "OPENCLAW_CONFIG_PATH": config.path, "OPENCLAW_GATEWAY_PORT": nil],
+            defaults: [
+                cliInstallPolicyKey: "exact", connectionModeKey: "local", onboardingSeenKey: true,
+                GatewayHosting.defaultsKey: GatewayHosting.service.rawValue,
+            ]) {
+                try #require(GatewayLaunchAgentManager.launchdProgramArguments() == [])
+                try #require(!FileManager.default.fileExists(atPath: alias.path))
+                defer {
+                    for url in [alias, oldRoot, newRoot] {
+                        try? FileManager.default.removeItem(at: url)
+                    }
+                }
+                for (root, entry) in [(oldRoot, oldEntry), (newRoot, newEntry)] {
+                    let node = root.appendingPathComponent("bin/node")
+                    let package = root.appendingPathComponent("lib/node_modules/openclaw")
+                    try FileManager.default.createDirectory(
+                        at: node.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try FileManager.default.createDirectory(
+                        at: entry.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try Data().write(to: entry)
+                    try Data(#"{"name":"openclaw","version":"2026.9.6"}"#.utf8)
+                        .write(to: package.appendingPathComponent("package.json"))
+                    try Data("#!/bin/sh\nprintf 'OpenClaw 2026.9.6\\n'\n".utf8).write(to: node)
+                    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
+                }
+                try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: oldRoot)
+                let appState = AppStateStore.shared
+                let onboarding = appState.onboardingSeen
+                let mode = appState.connectionMode
+                appState.onboardingSeen = true
+                appState.connectionMode = .local
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload("""
+                {"ok":true,"service":{"loaded":false,"runtimeIntent":{"status":"known","revision":"absent"}}}
+                """)
+                defer {
+                    appState.onboardingSeen = onboarding
+                    appState.connectionMode = mode
+                    GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                    GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                }
+                let original = try #require(try GatewayLaunchAgentManager.legacyManagedNodeCLI())
+                var retained = original
+                let candidate = ManagedNodeGatewayMigration.Candidate(
+                    cli: original, snapshot: nil, version: "2026.9.6",
+                    port: GatewayEnvironment.gatewayPort(), allowUnconfigured: false)
+                var actions: [String] = []
+                var operations = ManagedNodeGatewayMigration.liveOperations(
+                    checkCurrent: {}, resolveLegacyCLI: { retained },
+                    verifyHealth: { actions.append("health") },
+                    setServiceHosting: { current in retained = current.cli
+                        actions.append("service")
+                    }, statusHandler: { _ in })
+                operations.repairCanonicalUpdate = { receipt in
+                    actions.append("canonical")
+                    try FileManager.default.removeItem(at: alias)
+                    try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: newRoot)
+                    try FileManager.default.removeItem(at: oldEntry)
+                    if replaceRetained { retained = .init(
+                        prefix: ["/operator/node", "/operator/entry.js"],
+                        sqliteLibrary: nil) }
+                    return .repaired(PostAppUpdateReceipt(
+                        fromVersion: receipt.fromVersion, toVersion: receipt.toVersion, recordedAt: receipt.recordedAt))
+                }
+                operations.seed = { current in
+                    #expect(current.cli.prefix.last == newEntry.path)
+                    actions.append("seed")
+                    return BundledRuntime(root: state.appendingPathComponent("unlaunched-runtime"))
+                }
+                operations.install = { _, _ in actions.append("install") }
+                operations.restore = { _ in Issue.record("Successful recapture must not require restoration") }
+                let pending = PostAppUpdateReceipt(
+                    fromVersion: "2026.8.1", toVersion: candidate.version, recordedAt: .distantPast,
+                    gatewayUpdateIncomplete: true, coreUpdate: .legacyCanonical)
+                if replaceRetained {
+                    await #expect(throws: ManagedNodeGatewayMigration.Failure.self) {
+                        try await ManagedNodeGatewayMigration.run(
+                            candidate: candidate, targetVersion: pending.toVersion,
+                            pendingSetupRecovery: pending, operations: operations)
+                    }
+                    #expect(actions == ["canonical"])
+                    #expect(retained.prefix.first == "/operator/node")
+                } else {
+                    let outcome = try await ManagedNodeGatewayMigration.run(
+                        candidate: candidate, targetVersion: pending.toVersion,
+                        pendingSetupRecovery: pending, operations: operations)
+                    guard case .migrated = outcome
+                    else { Issue.record("Expected refreshed same-version runtime migration")
+                        return
+                    }
+                    #expect(actions == ["canonical", "service", "seed", "install", "health"])
+                    #expect(retained.prefix.last == newEntry.path)
+                }
+                #expect(!FileManager.default.fileExists(atPath: oldEntry.path))
+            }
+    }
+
+    @Test func `canonical stage retains caller cancellation`() async throws {
+        let fixture = Fixture()
+        var operations = fixture.operations
+        let repair = operations.repairCanonicalUpdate
+        operations.repairCanonicalUpdate = { receipt in
+            try Task.checkCancellation()
+            return try await repair(receipt)
+        }
+        let pending = PostAppUpdateReceipt(
+            fromVersion: "2026.8.1", toVersion: fixture.version, recordedAt: .distantPast,
+            gatewayUpdateIncomplete: true, coreUpdate: .legacyCanonical)
+        let cancelled = Task { @MainActor in
+            withUnsafeCurrentTask { $0?.cancel() }
+            _ = try await ManagedNodeGatewayMigration.run(
+                candidate: fixture.candidate, targetVersion: pending.toVersion,
+                pendingSetupRecovery: pending, operations: operations)
+        }
+        await #expect(throws: CancellationError.self) { try await cancelled.value }
+        #expect(fixture.calls.isEmpty)
+    }
+
+    @Test func `expired canonical operation cannot start selected runtime work`() async throws {
+        let fixture = Fixture()
+        var current = true
+        var operations = fixture.operations
+        let repair = operations.repairCanonicalUpdate
+        operations.checkCurrent = {
+            guard current else { throw CancellationError() }
+        }
+        operations.repairCanonicalUpdate = { receipt in
+            let result = try await repair(receipt)
+            current = false
+            return result
+        }
+        let pending = PostAppUpdateReceipt(
+            fromVersion: "2026.8.1", toVersion: fixture.version, recordedAt: .distantPast,
+            gatewayUpdateIncomplete: true, coreUpdate: .legacyCanonical)
+        await #expect(throws: CancellationError.self) {
+            try await ManagedNodeGatewayMigration.run(
+                candidate: fixture.candidate, targetVersion: pending.toVersion,
+                pendingSetupRecovery: pending, operations: operations)
+        }
+        #expect(fixture.calls == ["canonical"])
+    }
+
+    @Test(arguments: ["2026.8.1", "2026.9.6", "2026.9.7"], [false, true])
+    func `superseded canonical intent still reconciles the selected service`(
+        selectedVersion: String, cached: Bool) async throws
+    {
+        let fixture = Fixture()
+        fixture.version = selectedVersion
+        fixture.canonicalVersion = "2026.9.7"
+        let pending = PostAppUpdateReceipt(
+            fromVersion: "2026.8.1", toVersion: "2026.9.6", recordedAt: .distantPast,
+            gatewayUpdateIncomplete: true, coreUpdate: .legacyCanonical)
+        let outcome = try await ManagedNodeGatewayMigration.run(
+            candidate: fixture.candidate, targetVersion: pending.toVersion,
+            pendingSetupRecovery: cached
+                ? CLIInstaller.CanonicalUpdateResult.superseded(
+                    pending, installedVersion: "2026.9.7", compatible: true).receipt : pending,
+            operations: fixture.operations)
+        let canonicalCalls = cached ? [] : ["canonical"]
+        switch selectedVersion {
+        case "2026.8.1":
+            guard case .versionUpdated = outcome else { Issue.record("Expected selected-service update")
+                return
+            }
+            #expect(fixture.calls == canonicalCalls + ["capture", "update", "capture"])
+            #expect(fixture.setupRecoveryAtDispatch == [true])
+        case "2026.9.6":
+            guard case .migrated = outcome else { Issue.record("Expected same-version runtime migration")
+                return
+            }
+            #expect(fixture.calls == canonicalCalls + ["capture", "service", "seed", "capture", "bun", "health"])
+            #expect(fixture.setupRecoveryAtDispatch.isEmpty)
+        default:
+            guard case .preservedNewerRuntime = outcome else { Issue.record("Expected newer service preservation")
+                return
+            }
+            #expect(fixture.calls == canonicalCalls + ["capture", "service", "health"])
+            #expect(fixture.version == selectedVersion)
+            #expect(fixture.setupRecoveryAtDispatch.isEmpty)
+        }
+    }
+
+    @Test(arguments: [true, false], [true, false])
+    func `same version recovery attempts core repair before runtime work`(
+        serviceExists: Bool,
+        repairFails: Bool) async throws
+    {
+        let fixture = Fixture()
+        fixture.serviceExists = serviceExists
+        fixture.updateFails = repairFails
+        let pending = PostAppUpdateReceipt(
+            fromVersion: "2026.8.1", toVersion: fixture.version, recordedAt: .distantPast,
+            gatewayUpdateIncomplete: true, coreUpdate: .gateway, setupRecovery: true)
+        if repairFails {
+            await #expect(throws: ManagedNodeGatewayMigration.Failure.self) {
+                try await ManagedNodeGatewayMigration.run(
+                    candidate: fixture.candidate, targetVersion: fixture.version,
+                    pendingSetupRecovery: pending, operations: fixture.operations)
+            }
+            #expect(fixture.calls == ["capture", "update"])
+            #expect(fixture.restoredCLI == nil)
+            return
+        }
+        let outcome = try await ManagedNodeGatewayMigration.run(
+            candidate: fixture.candidate, targetVersion: fixture.version,
+            pendingSetupRecovery: pending, operations: fixture.operations)
+        if serviceExists {
+            guard case .versionUpdated = outcome else {
+                Issue.record("Installed Node service must verify repair before a later runtime activation")
+                return
+            }
+            #expect(fixture.calls == ["capture", "update", "capture"])
+        } else {
+            guard case .migrated = outcome else {
+                Issue.record("Resume must continue through runtime health after successful core repair")
+                return
+            }
+            #expect(fixture.calls == ["capture", "update", "capture", "service", "seed", "capture", "bun", "health"])
+        }
+    }
+
+    @Test(arguments: ["other-target", "other-owner"])
+    func `Resume ignores checkpoints for another target or runtime owner`(_ foreign: String) async throws {
         let fixture = Fixture()
         fixture.serviceExists = false
         let pending = PostAppUpdateReceipt(
             fromVersion: "2026.8.1",
-            toVersion: fixture.version,
-            recordedAt: .distantPast,
-            gatewayUpdateIncomplete: true,
-            coreUpdate: .gateway)
+            toVersion: foreign == "other-target" ? "2026.9.7" : fixture.version,
+            recordedAt: .distantPast, gatewayUpdateIncomplete: true,
+            coreUpdate: foreign == "other-target" ? .gateway : .node)
         let outcome = try await ManagedNodeGatewayMigration.run(
-            candidate: fixture.candidate,
-            targetVersion: fixture.version,
-            pendingSetupRecovery: pending,
-            operations: fixture.operations)
-        guard case .coreRepairRequired = outcome else { Issue.record("Expected core repair before Resume")
+            candidate: fixture.candidate, targetVersion: fixture.version,
+            pendingSetupRecovery: pending, operations: fixture.operations)
+        guard case .migrated = outcome else {
+            Issue.record("A foreign checkpoint must not request core repair or prevent the runtime switch")
             return
         }
-        #expect(fixture.calls.isEmpty)
+        #expect(fixture.calls == ["capture", "service", "seed", "capture", "bun", "health"])
     }
 
     @Test func `verified core repair admits the runtime step while notification work remains pending`() async throws {
@@ -329,7 +790,7 @@ struct ManagedNodeGatewayMigrationTests {
         let fixture = Fixture()
         fixture.version = "2026.8.1"
         var operations = fixture.operations
-        operations.updateVersion = { _, _ in fixture.calls.append("update") }
+        operations.updateVersion = { _, _, _ in fixture.calls.append("update") }
         await #expect(throws: ManagedNodeGatewayMigration.Failure.self) {
             try await ManagedNodeGatewayMigration.run(
                 candidate: fixture.candidate, targetVersion: "2026.9.6", operations: operations)
@@ -397,9 +858,11 @@ struct ManagedNodeGatewayMigrationTests {
                 }
                 PostAppUpdateReceiptStore.record(fromVersion: "2026.8.1", toVersion: "2026.9.6")
                 let dispatched = try #require(PostAppUpdateReceiptStore.pending(currentVersion: "2026.9.6"))
-                try PostAppUpdateReceiptStore.recordCoreUpdateDispatch(receipt: dispatched, owner: .gateway)
-                let pending = try #require(PostAppUpdateReceiptStore.completeCoreRepair(
-                    currentVersion: "2026.9.6", owner: .gateway))
+                PostAppUpdateReceiptStore.recordCoreUpdateDispatch(receipt: dispatched, owner: .gateway)
+                let pending = try PostAppUpdateReceiptStore.completeCoreRepair(
+                    receipt: #require(PostAppUpdateReceiptStore.pending(
+                        currentVersion: "2026.9.6")),
+                    owner: .gateway)
                 #expect(pending.hasPendingRuntimeMigration)
                 let manager = GatewayProcessManager()
                 manager.desiredActive = true
@@ -424,8 +887,7 @@ struct ManagedNodeGatewayMigrationTests {
             }
     }
 
-    @Test(arguments: ["memory", "receipt", "pause"])
-    func `automatic service ensure cannot bypass a failed managed version update`(failureSource: String) async throws {
+    @Test func `automatic service ensure cannot bypass a live managed version update failure`() async throws {
         let directory = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: directory) }
         // A named process keeps its port reservation for its lifetime, beyond this fixture's config.
@@ -448,18 +910,6 @@ struct ManagedNodeGatewayMigrationTests {
             manager.retainedServiceCLI = Fixture().candidate.cli
             manager.desiredActive = true
             manager.nodeMigrationFailure = "The Node update needs repair."
-            if failureSource != "memory" {
-                try PostAppUpdateReceiptStore.recordSetupRecovery(fromVersion: "2026.8.1", toVersion: "2026.9.6")
-                if failureSource == "pause" {
-                    manager.nodeMigrationAttempted = true
-                    manager.stop()
-                    await manager.waitForPendingLaunchAgentDisable()
-                    #expect(!manager.nodeMigrationAttempted)
-                    manager.desiredActive = true
-                } else {
-                    manager.nodeMigrationFailure = nil
-                }
-            }
             defer { manager.desiredActive = false }
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             let result = await manager.enableLaunchAgentIfNeeded(port: port)

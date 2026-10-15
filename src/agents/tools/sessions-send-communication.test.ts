@@ -261,6 +261,33 @@ describe("sessions_send communication boundary", () => {
       gate.close();
     },
   );
+  it("ignores metadata notifications but fences unknown storage changes", async () => {
+    const input = operation();
+    const gate = await prepareSessionsSendCommunication(input);
+    try {
+      sessionChanges.emit({ agentId: "main", sessionKey: input.target.sessionKey });
+      await gate.refresh();
+      expect(gate.assertCurrent).not.toThrow();
+      sessionChanges.emit({
+        agentId: "main",
+        sessionKey: input.target.sessionKey,
+        factsInvalidated: true,
+      });
+      expect(gate.assertCurrent).toThrow("changed");
+    } finally {
+      gate.close();
+    }
+  });
+
+  it("does not request fresh consent during durable delivery recovery", async () => {
+    const input = operation(endpoint("source", { communication: { send: "ask" } }));
+    await expect(
+      prepareSessionsSendCommunication({ ...input, allowApproval: false }),
+    ).rejects.toThrow("fresh human communication approval");
+    expect(state.approve).not.toHaveBeenCalled();
+    expect(input.callGateway).not.toHaveBeenCalled();
+  });
+
   it("refuses a replacement without current communication facts", async () => {
     const input = operation();
     const gate = await prepareSessionsSendCommunication(input);

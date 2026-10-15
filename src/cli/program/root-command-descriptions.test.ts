@@ -441,7 +441,12 @@ describe("root command descriptions", () => {
       context.command.action(async () => {
         throw failure;
       });
-      const args = [...requiredCommandArgs(context.command), "--json"];
+      const args = [
+        ...requiredCommandArgs(context.command),
+        // Conditional alternatives are not represented by Commander's mandatory options.
+        ...(path === "database port" ? ["--to", "sqlite"] : []),
+        "--json",
+      ];
 
       await expect(context.command.parseAsync(args, { from: "user" }), path).rejects.toBe(failure);
     }

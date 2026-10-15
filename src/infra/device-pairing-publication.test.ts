@@ -10,9 +10,10 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
-  issueDeviceBootstrapToken,
-  pruneExpiredDevicePairSetupCompletions,
-} from "./device-bootstrap.js";
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import { issueDeviceBootstrapToken, startDevicePairSetupMaintenance } from "./device-bootstrap.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
 import {
@@ -38,7 +39,6 @@ import {
   updatePairedDeviceMetadata,
   updatePairedDevicePresence,
 } from "./device-pairing.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
 
 let baseDir: string;
@@ -110,32 +110,40 @@ test("keeps committed node bindings across bootstrap writes and caller-owned row
 });
 
 test("keeps node authority available while retained setup cleanup is pending", async () => {
-  const snapshot = await readDevicePairingNodeSnapshot(baseDir);
-  const binding = getPublishedPairedDeviceBinding("node", baseDir);
-  expect(binding).not.toBeNull();
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const run = stateWorker.runOpenClawStateWorkerOperation;
-  const writer = vi
-    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-    .mockImplementationOnce(async (...args) => {
-      entered.resolve();
-      await release.promise;
-      return run(...args);
-    });
-  const pruning = pruneExpiredDevicePairSetupCompletions({ baseDir });
-  try {
-    await awaitGateBeforeSettlement(entered.promise, pruning, "setup cleanup was not held");
-    expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
-    release.resolve();
-    await expect(pruning).resolves.toBe(0);
-    expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
-    expect(await readDevicePairingNodeSnapshot(baseDir)).toBe(snapshot);
-  } finally {
-    release.resolve();
-    await Promise.allSettled([pruning]);
-    writer.mockRestore();
-  }
+  await withEnvAsync({ OPENCLAW_STATE_DIR: baseDir }, async () => {
+    const snapshot = await readDevicePairingNodeSnapshot(baseDir);
+    const binding = getPublishedPairedDeviceBinding("node", baseDir);
+    expect(binding).not.toBeNull();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const run = stateWorker.runOpenClawStateWorkerOperation;
+    const writer = vi
+      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+      .mockImplementationOnce(async (...args) => {
+        entered.resolve();
+        await release.promise;
+        return run(...args);
+      });
+    const clock = createGatewaySchedulerClock(Date.now());
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const onError = vi.fn();
+    startDevicePairSetupMaintenance({ scheduler: scheduler.scope(), onError });
+    const pruning = Promise.resolve(clock.wake());
+    try {
+      await awaitGateBeforeSettlement(entered.promise, pruning, "setup cleanup was not held");
+      expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
+      release.resolve();
+      await pruning;
+      expect(onError).not.toHaveBeenCalled();
+      expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
+      expect(await readDevicePairingNodeSnapshot(baseDir)).toBe(snapshot);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pruning]);
+      await scheduler.stop();
+      writer.mockRestore();
+    }
+  });
 });
 
 test.each([
@@ -495,7 +503,7 @@ test("retains pairing admission through final publication preparation and synchr
   expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();
 });
 
-test.each(["worker commit", "sibling owner commit"] as const)(
+test.each(["worker commit", "native owner commit"] as const)(
   "does not restore revoked node authority from a read delayed past a newer %s",
   async (commit) => {
     await listDevicePairing(baseDir);
@@ -546,12 +554,11 @@ test.each(["worker commit", "sibling owner commit"] as const)(
             releaseMutation.resolve();
             await mutation;
           } else {
-            const other = openNodeSqliteDatabase(database.path);
-            try {
-              other.prepare("DELETE FROM device_pairing_paired WHERE device_id = ?").run("node");
-            } finally {
-              other.close();
-            }
+            persistDevicePairingStoreState(
+              { pendingById: {}, pairedByDeviceId: {} },
+              baseDir,
+              "paired",
+            );
             expect(await getPairedDevice("node", baseDir)).toBeNull();
           }
           expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();

@@ -35,10 +35,7 @@ import {
 } from "../../agents/tools-effective-mcp-inventory.js";
 import { resolveReplyToMode } from "../../auto-reply/reply/reply-threading.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/config.js";
-import {
-  captureIncognitoSessionSource,
-  withIncognitoSessionEntry,
-} from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { logDebug, logWarn } from "../../logger.js";
@@ -54,7 +51,7 @@ import {
 import { getConnectedNodePluginToolsVersion } from "../node-plugin-tool-snapshot.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
-import { resolveSessionModelRef, type loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { resolveSessionModelRef, type GatewaySessionEntryRead } from "../session-utils.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
@@ -68,8 +65,6 @@ const TOOLS_EFFECTIVE_STALE_TTL_MS = 120_000;
 const TOOLS_EFFECTIVE_SLOW_LOG_MS = 250;
 const TOOLS_EFFECTIVE_CACHE_LIMIT = 128;
 const MCP_CONFIG_SUMMARY_CACHE_LIMIT = 128;
-
-let nowForToolsEffectiveCache = () => Date.now();
 
 type ToolsEffectiveCacheEntry = {
   value: EffectiveToolInventoryResult;
@@ -163,15 +158,15 @@ function scheduleBaseToolsEffectiveRefresh(
   if (existing) {
     return existing;
   }
-  const startedAt = nowForToolsEffectiveCache();
+  const startedAt = Date.now();
   const task = new Promise<EffectiveToolInventoryResult>((resolve, reject) => {
     setImmediate(() => {
       void resolveBaseToolsEffectiveInventory(context)
         .then((value) => {
           toolsEffectiveCache.delete(key);
-          toolsEffectiveCache.set(key, { value, createdAtMs: nowForToolsEffectiveCache() });
+          toolsEffectiveCache.set(key, { value, createdAtMs: Date.now() });
           pruneMapToMaxSize(toolsEffectiveCache, TOOLS_EFFECTIVE_CACHE_LIMIT);
-          const durationMs = nowForToolsEffectiveCache() - startedAt;
+          const durationMs = Date.now() - startedAt;
           if (durationMs >= TOOLS_EFFECTIVE_SLOW_LOG_MS) {
             logDebug(
               `tools-effective: refresh durationMs=${durationMs} agent=${context.agentId} session=${context.sessionKey} tools=${value.groups.reduce((sum, group) => sum + group.tools.length, 0)}`,
@@ -191,7 +186,7 @@ async function resolveCachedBaseToolsEffective(
   context: TrustedToolsEffectiveContext,
 ): Promise<EffectiveToolInventoryResult> {
   const key = buildToolsEffectiveCacheKey(context);
-  const now = nowForToolsEffectiveCache();
+  const now = Date.now();
   const cached = toolsEffectiveCache.get(key);
   if (cached) {
     const ageMs = now - cached.createdAtMs;
@@ -438,10 +433,7 @@ async function resolveTrustedToolsEffectiveContext(
     requestedAgentId?: string;
     respond: RespondFn;
   },
-  loaded: Pick<
-    ReturnType<typeof loadGatewaySessionEntryReadOnly>,
-    "entry" | "canonicalKey" | "cfg"
-  >,
+  loaded: Pick<GatewaySessionEntryRead, "entry" | "canonicalKey" | "cfg">,
 ) {
   // The effective tools request is read-only but security-sensitive. Derive
   // routing/account/model context from the persisted session, not client params.
@@ -555,10 +547,7 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
       }
       const authority = readGatewayRequestMutationAuthority(options);
       const consume = async (
-        loaded: Pick<
-          ReturnType<typeof loadGatewaySessionEntryReadOnly>,
-          "entry" | "canonicalKey" | "cfg"
-        >,
+        loaded: Pick<GatewaySessionEntryRead, "entry" | "canonicalKey" | "cfg">,
         assertSourceCurrent: () => void,
       ) => {
         const trustedContext = await resolveTrustedToolsEffectiveContext(
@@ -578,18 +567,24 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
         respond(true, inventory, undefined);
       };
       try {
-        const binding = captureIncognitoSessionSource({
-          agentId: sessionOwner.agentId,
-          sessionKey: params.sessionKey,
-        });
-        if (binding) {
-          await withIncognitoSessionEntry(
-            binding,
-            params.sessionKey,
-            authority.assertCurrent,
-            (entry, assertCurrent) =>
-              consume({ cfg, canonicalKey: params.sessionKey, entry }, assertCurrent),
-          );
+        const memory = captureSessionEntryMetadataRead(
+          {
+            agentId: sessionOwner.agentId,
+            sessionKey: params.sessionKey,
+          },
+          authority.assertCurrent,
+        );
+        if (memory) {
+          const entry = memory.readCurrent();
+          await consume({ cfg, canonicalKey: params.sessionKey, entry }, () => {
+            const current = memory.readCurrent();
+            if (
+              current?.sessionId !== entry?.sessionId ||
+              current?.lifecycleRevision !== entry?.lifecycleRevision
+            ) {
+              throw new Error("Session changed while resolving effective tools");
+            }
+          });
         } else {
           await withGatewaySessionEntryReadOnly(
             {
@@ -617,8 +612,5 @@ export const testing = {
     toolsEffectiveCache.clear();
     toolsEffectiveInflight.clear();
     mcpConfigSummaryCache.clear();
-  },
-  setToolsEffectiveNowForTest(now: () => number = () => Date.now()) {
-    nowForToolsEffectiveCache = now;
   },
 } as const;

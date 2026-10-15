@@ -85,7 +85,11 @@ async function actualDashboardTitleScheduler(): Promise<ScheduleChatDashboardSes
 export function setupSessionCreateTestHarness(
   setup?: Parameters<typeof setupGatewaySessionsTestHarness>[0],
 ) {
-  const fixture = setupGatewaySessionsTestHarness(setup);
+  const fixture = setupGatewaySessionsTestHarness(async (makeTempDir) => {
+    await setup?.(makeTempDir);
+    // Load the lazy creation family before wire requests start their response deadline.
+    await import("./server-methods/sessions-create.js");
+  });
   installSessionCreateTestMocks();
   return fixture;
 }

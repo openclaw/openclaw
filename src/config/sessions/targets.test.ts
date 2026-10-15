@@ -16,11 +16,8 @@ import type { OpenClawConfig } from "../config.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { listSessionEntriesReadOnly, replaceSessionEntry } from "./session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import {
-  isConfiguredSessionStoreAgentId,
-  resolveExistingAgentSessionStoreTargetsSync,
-  resolveSessionStoreTargets,
-} from "./targets.js";
+import { resolveExistingAgentSessionStoreTargetsSync } from "./targets-discovery.native.js";
+import { isConfiguredSessionStoreAgentId, resolveSessionStoreTargets } from "./targets.js";
 import { EXPLICIT_MAIN_CONFIG } from "./targets.test-support.js";
 
 async function withSessionStoreHome<T>(fn: (home: string) => Promise<T>): Promise<T> {

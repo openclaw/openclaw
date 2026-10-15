@@ -29,12 +29,18 @@ workflow and job selection support explicit focused, routine, and high-memory
 profiles. The default stays 16-class until real smaller-machine qualification
 passes; neither `--class` nor `--type` sizes delegated Testbox leases.
 
-| Workload                                     | Workflow                           | Runner tier | Runtime ceiling |
-| -------------------------------------------- | ---------------------------------- | ----------- | --------------- |
-| Focused tests and narrow checks              | `ci-check-focused-testbox.yml`     | 4 vCPU      | 60 minutes      |
-| Bounded routine proof                        | `ci-check-routine-testbox.yml`     | 8 vCPU      | 120 minutes     |
-| Broad compiler/lint graphs (current default) | `ci-check-testbox.yml`             | 16 vCPU     | 240 minutes     |
-| Measured memory-heavy proof                  | `ci-check-high-memory-testbox.yml` | 32 vCPU     | 240 minutes     |
+| Workload                                     | Workflow                           | Runner tier | Default job deadline | Maximum explicit deadline |
+| -------------------------------------------- | ---------------------------------- | ----------- | -------------------- | ------------------------- |
+| Focused tests and narrow checks              | `ci-check-focused-testbox.yml`     | 4-class     | 60 minutes           | 60 minutes                |
+| Bounded routine proof                        | `ci-check-routine-testbox.yml`     | 8-class     | 60 minutes           | 120 minutes               |
+| Broad compiler/lint graphs (current default) | `ci-check-testbox.yml`             | 16-class    | 60 minutes           | 240 minutes               |
+| Measured memory-heavy proof                  | `ci-check-high-memory-testbox.yml` | 32-class    | 240 minutes          | 240 minutes               |
+
+Deadlines include hydration. The larger maximum requires an explicit workflow
+`timeout_minutes` input; Crabbox does not forward that input, and `--ttl` does
+not extend a Testbox job. Runner classes are requested labels; verify actual
+CPU and RAM before selecting a workload. See the
+[observed runner capacity](/ci/runners#blacksmith-runner-capacity).
 
 Select with `--blacksmith-workflow .github/workflows/<workflow> --blacksmith-job check`
 on a fresh lease. Small profiles are opt-in qualification candidates, not proof
@@ -59,7 +65,11 @@ path; it does not permit raw native callers or untrusted proof to reuse a
 lease across revisions.
 Older or missing receipts require stopping the owned lease and allocating a
 fresh one through the wrapper. `OPENCLAW_TESTBOX_ALLOW_STALE` cannot bypass
-these checks. All providers require Crabbox 0.73.0 or newer.
+these checks. All providers require Crabbox 0.77.0 or newer.
+
+For direct and coordinator-managed leases, TTL is total lifetime from creation, including hydration; idle timeout is the inactivity window, and the earlier deadline wins. Crabbox defaults both to 30 minutes and the maximum to four hours; coordinator owner or organization overrides and trusted direct-provider configuration can allow up to 24 hours. Read effective policy and clamp notices rather than assuming the requested duration was granted. `--keep` skips normal command cleanup but does not prevent expiry. Plain heartbeats and manual desktop use do not extend total TTL; `run` requests bounded auto-extension only while the command executes. Creation-fixed providers need enough TTL at allocation. Extension refusals and budget exhaustion do not authorize another provider or an unlimited chain of leases.
+
+Crabbox trusted configuration owns `directLeases: deny` and its `directLeaseAllow` exceptions; use its configured coordinator route instead of direct credentials when denied. Coordinator-backed `crabbox list` shows live leases by default; `--retained` adds kept terminal resources whose cleanup is unconfirmed. Retain the exact lease ID and local recovery state until blocking `crabbox stop --provider <provider> --id <lease> --wait` confirms cleanup. A successful workload or a missing live-list row is not cleanup proof.
 
 The Testbox workflow registers a separate disposable checkout for native sync.
 The hydrated execution workspace stays at its original absolute path, so native
@@ -95,7 +105,7 @@ conflicting with required tracked source stops the run before upload.
 The command binds the bundle digest and raw source tree. Before running the payload,
 the receiver applies deletions and restores file bytes, symlink target bytes, and
 Git executable modes, then verifies the filesystem directly. Git text filters do not
-normalize this snapshot. Missing, stale, or mismatched bundles fail closed.
+normalize this snapshot. Missing, stale, or mismatched bundles are rejected.
 Producer-declared deletions must also be absent, even when the remote index has lost
 them. Deletions use the same privacy policy as source selection; unknown ignored
 runtime data is preserved. Unexpected nonignored receiver files stop the run instead
@@ -107,6 +117,12 @@ names must be UTF-8; symlink targets remain raw bytes. Symlinked repository Crab
 configuration or ignore files, and privacy-excluded runtime configuration, are
 rejected before upload rather than changing their trust or privacy treatment.
 
+The synthetic transport commit can change between wrapper calls even when the
+source tree is unchanged. Build and consume artifacts whose freshness is bound
+to Git `HEAD` in one payload, as CI does within one checkout. Separate calls can
+trigger an unintended rebuild. Do not rewrite freshness stamps to bypass this
+check.
+
 See [local commands](/reference/test/local) for focused development proof.
 
 For untrusted proof, lazily warm with `--provider aws`. Every run must set
@@ -116,7 +132,7 @@ tests. Use a newly warmed lease dedicated to that untrusted source; never reuse
 a trusted or previously hydrated lease. Launch an installed trusted Crabbox
 binary from a clean trusted `main` checkout and fetch only the remote PR with
 `--fresh-pr`; never execute the untrusted checkout's wrapper or config locally.
-Unset `CRABBOX_AWS_INSTANCE_PROFILE` and fail closed unless resolved
+Unset `CRABBOX_AWS_INSTANCE_PROFILE` and refuse to run unless resolved
 `aws.instanceProfile` is empty. Before any install/test, use trusted
 absolute-path tools to require an IMDSv2 token, prove the IAM credentials
 endpoint returns 404, and verify remote `git rev-parse HEAD` equals the full
@@ -409,7 +425,7 @@ absent; recovery does not probe its potentially recycled PID. Same-boot recovery
 still checks PID absence. Missing host provenance and legacy domain mismatches
 remain protected unless explicitly qualified below.
 Idle mirrors retain their separate exclusive-lock recovery contract. Directory
-ownership records include the canonical path, inode, birthtime, and macOS volume
+ownership records include the resolved filesystem path, inode, birthtime, and macOS volume
 UUID, so APFS device-number changes across reboots do not invalidate that identity.
 Legacy device/inode records accept a macOS device-only change only when the
 directory predates its receipt and the existing path and ownership checks pass.

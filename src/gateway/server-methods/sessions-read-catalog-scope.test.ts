@@ -4,6 +4,7 @@ import type {
   SessionsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../../agents/auth-profiles/path-resolve.native.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import * as preparedRuntime from "../../agents/prepared-model-runtime.js";
 import { notifyPreparedModelRuntimePublication } from "../../agents/prepared-model-runtime.publication-events.js";
@@ -143,6 +144,7 @@ function publishedCatalogContext(
   config: OpenClawConfig,
   owners: ReadonlyMap<string, PreparedModelRuntimeSnapshot>,
 ): GatewayRequestContext {
+  prepareSharedAuthStoreOwnershipForNative();
   vi.spyOn(preparedRuntime, "getPreparedModelRuntimeSnapshot").mockImplementation((input) => {
     const owner = input.agentId ? owners.get(input.agentId) : undefined;
     return owner?.agentDir === input.agentDir ? owner : undefined;

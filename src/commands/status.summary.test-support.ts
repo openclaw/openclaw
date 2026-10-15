@@ -69,7 +69,7 @@ export function registerStatusSummarySessionRowCases(params: {
       vi.mocked(params.getStatusSummaryRuntime().resolveContextTokensForModel).mockReturnValue(
         1_000_000,
       );
-      vi.mocked(params.getStatusSummaryRuntime().resolveSessionRuntime).mockResolvedValue({
+      vi.mocked(params.getStatusSummaryRuntime().resolveSessionRuntime).mockReturnValue({
         id: "codex",
         label: "OpenAI Codex",
       });

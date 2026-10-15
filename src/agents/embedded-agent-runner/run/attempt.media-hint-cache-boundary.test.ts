@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import * as mediaTaskStatus from "../../media-generation-task-status.js";
+import { forgetPromptBuildDrainCacheForRun } from "../../plugin-turn-context.js";
 import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
@@ -16,7 +17,6 @@ import {
   prepareEmbeddedAttemptPromptAssembly,
   prepareEmbeddedAttemptPromptContext,
 } from "./attempt-prompt-build.js";
-import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 vi.mock("../../../plugins/host-hook-state.js", () => ({

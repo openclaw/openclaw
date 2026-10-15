@@ -13,9 +13,9 @@ import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts"
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { LitContent } from "../../../lit/solid-content.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
-import { renderActivityGroup } from "./chat-message-group.ts";
+import { renderActivityGroup } from "./chat-message-group.test-support.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
 const hosts: HTMLElement[] = [];
@@ -339,9 +339,13 @@ describe("browser tab card", () => {
       }
       const toggle = vi.fn();
       element.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, toggle);
-      const menu = () => element.querySelector("wa-dropdown")!;
-      const select = (value: string) =>
-        menu().dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } } }));
+      const menu = () => element.querySelector('[role="menu"]')!;
+      const select = async (value: string) => {
+        element.querySelector<HTMLButtonElement>(".more")!.click();
+        await waitForSolid(() => expect(menu().matches(":popover-open")).toBe(true));
+        menu().querySelector<HTMLButtonElement>(`[value="${value}"]`)!.click();
+        await waitForSolid(() => expect(menu().matches(":popover-open")).toBe(false));
+      };
       expect(menu().textContent).toContain("Open in new tab");
 
       gateway.context.theme.settings.openLinksExternally = true;
@@ -367,7 +371,7 @@ describe("browser tab card", () => {
       expect(internal.textContent).toContain("Open in OpenClaw");
       expect(internal.hasAttribute("data-new-tab-action")).toBe(false);
       expect(menu().querySelector('[value="open-new-tab"]')).toBeNull();
-      select("open-within-openclaw");
+      await select("open-within-openclaw");
       expect(toggle).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           detail: {
@@ -384,7 +388,7 @@ describe("browser tab card", () => {
       expect(menu().querySelector('[value="open-within-openclaw"]')).toBeNull();
       element.querySelector<HTMLButtonElement>(".shot")!.click();
       expect(toggle).toHaveBeenCalledTimes(2);
-      select("open-new-tab");
+      await select("open-new-tab");
       expect(native ? postMessage : openWindow).toHaveBeenCalledTimes(3);
     },
   );

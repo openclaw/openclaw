@@ -374,7 +374,7 @@ it.each([false, true])(
 );
 
 it.each([false, true])("routes Bun PTYs with Terminal.pause=%s", async (flowControl) => {
-  vi.spyOn(process, "versions", "get").mockReturnValue({ ...process.versions, bun: "1.4.2" });
+  vi.spyOn(process, "versions", "get").mockReturnValue({ ...process.versions, bun: "1.4.3" });
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
   const prototype = bun?.Terminal?.prototype ?? {};
   const pause = Object.getOwnPropertyDescriptor(prototype, "pause");

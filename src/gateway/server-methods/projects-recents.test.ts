@@ -1,7 +1,11 @@
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import * as transcriptWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -24,6 +28,10 @@ import { initializeRepository, invokeProjectMethod } from "./projects.test-suppo
 
 test("projects.list returns only the caller's deterministic resolved recents", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
+  const memoryLocation = {
+    agentId: "main",
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+  };
   let releaseCatalog: (() => void) | undefined;
   let projection: SessionRowProjection | undefined;
   try {
@@ -93,11 +101,11 @@ test("projects.list returns only the caller's deterministic resolved recents", a
         spawnedCwd: "/work/private-bob",
       },
     );
-    replaceSessionEntrySync(
+    await replaceSessionEntry(
       {
         agentId: "main",
         sessionKey: "agent:main:dashboard:incognito-recent",
-        storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+        storePath: memoryLocation.path,
       },
       {
         sessionId: "incognito-recent",
@@ -287,6 +295,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
   } finally {
     projection?.dispose();
     releaseCatalog?.();
+    memorySessionActorOwners.closeDatabase(memoryLocation);
     await state.cleanup();
   }
 });

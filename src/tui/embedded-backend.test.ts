@@ -267,8 +267,9 @@ vi.mock("../gateway/session-utils-row.js", () => ({
     buildGatewaySessionRowMock(params),
 }));
 
-vi.mock("../gateway/session-utils-store-lookup.js", () => ({
-  createGatewaySessionEntryReader: () => () => undefined,
+// mock-isolation: The embedded fixture has no stored parent sessions; never query a real lineage database.
+vi.mock("../gateway/session-utils-store-lineage.js", () => ({
+  prepareGatewaySessionEntryReader: async () => () => undefined,
 }));
 
 vi.mock("../gateway/session-utils-list.js", () => ({

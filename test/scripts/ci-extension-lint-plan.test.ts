@@ -79,6 +79,17 @@ type SelectionCase = {
   reasons?: Record<string, string[]>;
 };
 const selectedCases: SelectionCase[] = [
+  { files: ["ui/src/leaf.ts", "extensions/unrelated/README.md"], roots: [] },
+  { files: ["src/leaf.ts", "extensions/unrelated/README.md"], roots: smokeRoots },
+  {
+    files: ["extensions/alpha/index.ts", "extensions/unrelated/README.md"],
+    roots: ["extensions/alpha"],
+  },
+  { files: ["config/oxlint/README.md"], roots: [] },
+  { files: [".github/actions/setup-node-env/README.md"], roots: [] },
+  { files: ["extensions/alpha/test/fixtures/README.md"], roots: ["extensions/alpha"] },
+  { files: ["extensions/alpha/prompts/runtime.md"], roots: ["extensions/alpha"] },
+
   {
     files: ["src/plugin-sdk/public.ts", "extensions/unrelated/openclaw.plugin.json"],
     roots: ["extensions/alpha", ...smokeRoots, "extensions/unrelated"],
@@ -134,6 +145,13 @@ const fullCases: FullCase[] = [
 ];
 
 describe("extension lint package selection", () => {
+  it("rejects invalid paths before excluding documentation", async () => {
+    const { cwd } = workspace();
+    await expect(resolveCiExtensionLintSelection(["../docs/README.md"], cwd)).rejects.toThrow(
+      "Invalid changed extension lint path",
+    );
+  });
+
   it.each(selectedCases)(
     "selects direct owners and smoke consumers of $files",
     async (testCase) => {

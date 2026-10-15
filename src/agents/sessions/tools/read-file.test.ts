@@ -4,6 +4,8 @@ import { serialize } from "node:v8";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import * as command from "../../../process/exec.js";
+import { runWithSpawnBroker } from "../../../process/spawn-broker/context.js";
+import { createSpawnBrokerHost } from "../../../process/spawn-broker/host.js";
 import { readLocalFile } from "./read-file.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -101,4 +103,55 @@ it("resolves a symlinked state root before classifying its files", async () => {
 
   await expect(readLocalFile(filePath)).resolves.toEqual(Buffer.from("isolated bytes"));
   expect(command.runCommandBuffered).toHaveBeenCalledOnce();
+});
+
+it("reuses the broker for isolated reads, preserving bytes, failures, and cancellation", async () => {
+  const broker = createSpawnBrokerHost();
+  const filePath = path.join(root, "state", "notes.txt");
+  const bytes = Buffer.alloc(1024 * 1024 + 13, 0xa7);
+  fs.writeFileSync(filePath, bytes);
+  fs.writeFileSync(path.join(root, "state", "empty.txt"), "");
+  try {
+    await broker.ready();
+    await runWithSpawnBroker(broker, async () => {
+      const results = await Promise.all([
+        readLocalFile(filePath),
+        readLocalFile(path.join(root, "state", "empty.txt")),
+        readLocalFile(filePath),
+      ]);
+      expect(results).toEqual([bytes, Buffer.alloc(0), bytes]);
+      await expect(readLocalFile(path.join(root, "state", "missing.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(readLocalFile(path.join(root, "state"))).rejects.toThrow("regular file");
+      const link = path.join(root, "state", "link.txt");
+      fs.symlinkSync(filePath, link);
+      await expect(readLocalFile(link)).rejects.toThrow("regular file");
+      const controller = new AbortController();
+      const reason = new Error("read canceled");
+      controller.abort(reason);
+      await expect(readLocalFile(filePath, controller.signal)).rejects.toBe(reason);
+      const active = new AbortController();
+      const reading = readLocalFile(filePath, active.signal);
+      await Promise.resolve();
+      active.abort(reason);
+      await expect(reading).rejects.toBe(reason);
+      await expect(readLocalFile(filePath)).resolves.toEqual(bytes);
+      expect(command.runCommandBuffered).not.toHaveBeenCalled();
+    });
+  } finally {
+    await broker.close();
+  }
+  await expect(broker.readFile(filePath)).rejects.toThrow("closing");
+});
+
+it("refuses raw reads in a broker that owns native resources", async () => {
+  const broker = createSpawnBrokerHost({ nativeResources: true });
+  try {
+    await expect(broker.readFile(path.join(root, "state", "notes.txt"))).rejects.toThrow(
+      "cannot admit a raw file read",
+    );
+  } finally {
+    await broker.close();
+  }
 });

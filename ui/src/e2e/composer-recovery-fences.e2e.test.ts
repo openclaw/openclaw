@@ -1,4 +1,3 @@
-import type { LitElement } from "lit";
 import { expect, it } from "vitest";
 import type { ChatQueueItem, ChatReplyTarget } from "../lib/chat/chat-types.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
@@ -168,7 +167,7 @@ suite.define(() => {
           };
         });
         await page.goto(`${suite.server.baseUrl}settings`);
-        await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.ts")');
+        await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.tsx")');
         await page.evaluate(() => {
           const component = Object.assign(document.createElement("openclaw-chat-outbox-recovery"), {
             host: {
@@ -363,7 +362,7 @@ suite.define(() => {
       await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         await installMockGateway(page);
         await page.goto(`${suite.server.baseUrl}settings`);
-        await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.ts")');
+        await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.tsx")');
         const legacyKey = `openclaw.control.chatComposer.v2:${encodeURIComponent("ws://recovery-fence.test")}`;
         const legacyValue = JSON.stringify({
           version: 2,
@@ -416,7 +415,8 @@ suite.define(() => {
         const restore = notice.getByRole("button", { name: "Restore", exact: true });
         if (change === "incognito") {
           await notice.evaluate(async (element) => {
-            const component = element as LitElement;
+            // SAFETY: This locator selects the registered recovery element created above.
+            const component = element as HTMLElementTagNameMap["openclaw-chat-outbox-recovery"];
             await component.updateComplete;
             await component.updateComplete;
           });
@@ -435,9 +435,10 @@ suite.define(() => {
           // Leaving Incognito reveals the retained source, never an adopted destination.
           await hostHandle.evaluate((host) => {
             host.selectedChatSessionIncognito = false;
-            const component = document.querySelector("#recovery-fence-fixture") as LitElement & {
-              identity: string;
-            };
+            // SAFETY: The fixture above creates this registered recovery element with this ID.
+            const component = document.querySelector(
+              "#recovery-fence-fixture",
+            ) as HTMLElementTagNameMap["openclaw-chat-outbox-recovery"];
             component.identity = "non-incognito-review-owner";
           });
         }

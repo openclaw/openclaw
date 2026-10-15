@@ -195,7 +195,17 @@ export function projectWorkerPlacementMove(
   return {
     target: intent.target,
     updatedAtMs: intent.updatedAtMs,
-    ...(intent.lastError ? { error: intent.lastError } : {}),
+    ...(intent.lastError
+      ? {
+          error: intent.lastError,
+          // Draining advances placement generation; retries retain the original source CAS.
+          retry: {
+            expected: { ...intent.source },
+            target: { ...intent.target },
+            ...(intent.abandonSource ? { abandonSource: true as const } : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -208,7 +218,10 @@ export function projectWorkerSessionPlacement(
   failedRecoveryAction?: "restart" | "stop-first",
   workspaceResultReconciling = false,
   retryOnSend = false,
-  options: { workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall } = {},
+  options: {
+    workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall;
+    startStatus?: import("../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
+  } = {},
 ): SessionPlacement {
   const { inference, ...provenance } = identity ?? {};
   const timing = {
@@ -230,6 +243,7 @@ export function projectWorkerSessionPlacement(
       ...worker,
       ...(record.environmentId ? { environmentId: record.environmentId } : {}),
       ...workerRuntimeInstall,
+      ...(options.startStatus ? { startStatus: options.startStatus } : {}),
     };
   }
   const progress = {

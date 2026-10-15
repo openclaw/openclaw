@@ -7,6 +7,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { closeAuthProfileReadPool } from "../agents/auth-profiles/sqlite-read-pool.js";
 import { readPersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
@@ -117,7 +118,7 @@ describe("cleanupSessionStateForTest", () => {
     }
   });
 
-  it("closes pooled auth readers only within the requested state root", async () => {
+  it("closes memory owners and pooled auth readers only within the requested state root", async () => {
     // openclaw-temp-dir: allow verifies state-root removal after scoped database cleanup
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-cleanup-auth-"));
     const targets = ["state", "state-sibling"].map((name) => {
@@ -125,6 +126,12 @@ describe("cleanupSessionStateForTest", () => {
       const agentDir = path.join(stateDir, "agents", "main", "agent");
       return { stateDir, agentDir, databasePath: path.join(agentDir, "openclaw-agent.sqlite") };
     });
+    const memoryOwners = targets.map((target) =>
+      memorySessionActorOwners.get({
+        agentId: "main",
+        path: path.join(target.agentDir, "incognito-openclaw-agent.sqlite"),
+      }),
+    );
     const readers = new Map<string, ReturnType<typeof nodeSqlite.openNodeSqliteDatabase>>();
     const actualOpen = nodeSqlite.openNodeSqliteDatabase;
     const observer = vi
@@ -157,10 +164,18 @@ describe("cleanupSessionStateForTest", () => {
       await cleanupSessionStateForTest();
       expect(selected.isOpen).toBe(true);
       expect(unrelated.isOpen).toBe(true);
+      for (const owner of memoryOwners) {
+        expect(memorySessionActorOwners.read(owner)).toBe(owner);
+        expect(() => owner.assertCurrent()).not.toThrow();
+      }
 
       await cleanupSessionStateForTest({ stateDir: targets[0]!.stateDir });
       expect(selected.isOpen).toBe(false);
       expect(unrelated.isOpen).toBe(true);
+      expect(memorySessionActorOwners.read(memoryOwners[0]!)).toBeUndefined();
+      expect(() => memoryOwners[0]!.assertCurrent()).toThrow("closed");
+      expect(memorySessionActorOwners.read(memoryOwners[1]!)).toBe(memoryOwners[1]);
+      expect(() => memoryOwners[1]!.assertCurrent()).not.toThrow();
       await fs.rm(targets[0]!.stateDir, { recursive: true, force: true });
       await expect(fs.stat(targets[0]!.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {

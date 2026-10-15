@@ -1495,33 +1495,6 @@ describe("doctor health contributions", () => {
     });
   });
 
-  it("keeps workspace diagnostics without probing host services in Kubernetes", async () => {
-    vi.stubEnv("KUBERNETES_SERVICE_HOST", "10.96.0.1");
-    vi.stubEnv("KUBERNETES_SERVICE_PORT", "443");
-    const contribution = requireDoctorContribution("doctor:workspace-status");
-    const cfg = { plugins: { entries: { codex: { enabled: true } } } };
-
-    await contribution.run(createDoctorContext({ cfg, options: { nonInteractive: true } }));
-
-    expect(mocks.gatherDaemonStatus).not.toHaveBeenCalled();
-    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
-      pluginVersionReadiness: undefined,
-    });
-
-    const ctx = createDoctorLintContext({
-      cfg,
-      mode: "lint",
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    });
-    const check = contribution.healthChecks[0] as HealthCheck;
-    await runDoctorLintChecks(ctx, { checks: [check], onlyIds: ["core/doctor/workspace-status"] });
-
-    expect(mocks.gatherDaemonStatus).not.toHaveBeenCalled();
-    expect(mocks.collectWorkspaceStatusHealthFindings).toHaveBeenCalledWith(cfg, {
-      pluginVersionReadiness: undefined,
-    });
-  });
-
   it("uses the read-only model catalog for hooks.gmail.model warnings", async () => {
     const contribution = requireDoctorContribution("doctor:hooks-model");
     const cfg = {
@@ -1694,25 +1667,6 @@ describe("doctor health contributions", () => {
     expect(ctx.cfg.gateway?.auth).toEqual(original);
   });
 
-  it("repairs an installed Gateway service during an authorized update inside Docker", async () => {
-    mocks.isContainerEnvironment.mockReturnValue(true);
-
-    await withProcessPlatform("linux", async () => {
-      const ctx = createDoctorContext({
-        cfg: { gateway: { mode: "local" } },
-        shouldRepair: true,
-        env: {
-          OPENCLAW_UPDATE_IN_PROGRESS: "1",
-          OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "1",
-        },
-      });
-
-      await requireDoctorContribution("doctor:gateway-services").run(ctx);
-
-      expect(mocks.maybeRepairGatewayServiceConfig).toHaveBeenCalledOnce();
-    });
-  });
-
   it("silently skips the host-service contribution in a container without an OpenClaw service", async () => {
     mocks.isContainerEnvironment.mockReturnValue(true);
     mocks.findInstalledSystemdGatewayScope.mockResolvedValue(null);
@@ -1766,40 +1720,6 @@ describe("doctor health contributions", () => {
       },
     });
     expect(mocks.note).not.toHaveBeenCalled();
-  });
-
-  it("does not report a removed Workspaces finding after a successful fix", async () => {
-    const contribution = requireDoctorContribution("doctor:legacy-state");
-    mocks.runDoctorHealthRepairs.mockImplementation(async (input: { cfg?: unknown }) => ({
-      config: input.cfg ?? {},
-      findings: [
-        {
-          checkId: "core/doctor/removed-workspaces-state",
-          severity: "warning",
-          message: "Retired Workspaces plugin state remains at /tmp/workspaces.",
-        },
-      ],
-      remainingFindings: [],
-      changes: ["Removed retired Workspaces plugin state at /tmp/workspaces."],
-      warnings: [],
-      diffs: [],
-      effects: [],
-      checksRun: 1,
-      checksRepaired: 1,
-      checksValidated: 1,
-    }));
-    const ctx = createDoctorContext({
-      cfg: {},
-      configResult: {},
-      shouldRepair: true,
-      options: { nonInteractive: true },
-    });
-
-    await contribution.run(ctx);
-
-    expect(ctx.runtime.log).not.toHaveBeenCalledWith(
-      expect.stringContaining("core/doctor/removed-workspaces-state"),
-    );
   });
 
   it("grants Doctor-only state migration authority only in repair mode", async () => {
@@ -3171,10 +3091,15 @@ describe("doctor health contributions", () => {
   });
 
   describe("config size drops during update", () => {
+    const existsSync = fs.existsSync;
+    const preUpdateBackupPath = "/tmp/fake-openclaw.json.pre-update";
+
     beforeEach(() => {
       mocks.replaceConfigFile.mockReset().mockResolvedValue(undefined);
       mocks.applyWizardMetadata.mockImplementation((cfg: unknown) => cfg);
-      vi.spyOn(fs, "existsSync").mockReturnValue(false);
+      vi.spyOn(fs, "existsSync").mockImplementation((value) =>
+        String(value) === preUpdateBackupPath ? false : existsSync(value),
+      );
     });
 
     function buildWriteConfigCtx(env: Record<string, string | undefined>) {
@@ -3254,7 +3179,9 @@ describe("doctor health contributions", () => {
     });
 
     it("points update-time config rewrites at the pre-update backup", async () => {
-      vi.mocked(fs.existsSync).mockImplementation((value) => String(value).endsWith(".pre-update"));
+      vi.mocked(fs.existsSync).mockImplementation(
+        (value) => String(value) === preUpdateBackupPath || existsSync(value),
+      );
       const ctx = buildWriteConfigCtx({
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
         OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",

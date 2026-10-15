@@ -112,6 +112,7 @@ Before compacting, OpenClaw automatically reminds the agent to save important no
     - `input exceeds the maximum number of tokens`
     - `input token count exceeds the maximum number of input tokens` (Bedrock)
     - `input is too long for the model`
+    - `` `inputs` must have less than N tokens `` and `` `inputs` tokens + `max_new_tokens` must be <= N `` (Hugging Face TGI; output-only `max_new_tokens` limits do not trigger compaction)
     - `ollama error: context length exceeded`
 
   </Accordion>
@@ -136,11 +137,20 @@ cancelling it and waiting up to 15 more seconds for it to stop. When cancellatio
 succeeds, the command's reply asks you to resend the interrupted request, including
 when the run is still stopping and compaction cannot proceed.
 
+On channels such as Telegram, `/compact` acknowledges the incoming command before
+interrupting an active run or starting compaction, so the channel's five-minute
+adoption watchdog does not abort and replay it. Compaction uses `agents.defaults.compaction.timeoutSeconds`
+and reports its result in a reply; cancellation still stops the work.
+
 Client-side compaction in the built-in OpenClaw runtime passes focus to both older-history and split-turn-prefix summaries. The host limits operator-provided focus to 800 Unicode code points and escapes it as prompt data before adding it to model requests.
 
 Automatic session title generation runs in the background and does not block manual compaction. Gateway compaction requests promptly refuse admitted turns and accepted queued work. Once foreground admission has ended, a completed reply that is still saving or cleaning up can take up to 15 seconds to settle before the request rechecks the session. In-band commands exclude their own execution from this wait, but still wait for other completed writers.
 
 Client-side manual compaction uses `agents.defaults.compaction.keepRecentTokens` (default: 20,000) as its cut-point budget and keeps that recent tail in rebuilt context.
+
+The session's per-model `contextTokens` cap does not shrink the summarization
+model's native `contextWindow`. A small active-input budget still applies to
+normal turns, while the summarizer uses its own window to read older history.
 
 When the built-in OpenClaw runtime has prepared the foreground request,
 client-side automatic compaction also accounts for its system prompt, tool

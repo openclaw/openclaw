@@ -14,7 +14,7 @@ import {
   registerSessionResourceCleanup,
   type SessionResourceOwner,
 } from "../session-resources.js";
-import type { StreamOptions, UserMessage } from "../types.js";
+import type { Model, StreamOptions, UserMessage } from "../types.js";
 import {
   recordResponsesContinuationState,
   resolveResponsesContinuationRequest,
@@ -27,8 +27,12 @@ import {
   OpenAIResponsesWebSocketPostDispatchError,
   OpenAIResponsesWebSocketPreDispatchError,
   OpenAIResponsesWebSocketSafeRetryError,
+  type OpenAIResponsesOptions,
 } from "./openai-responses-contracts.js";
-import { isOfficialOpenAIResponsesBaseUrl } from "./openai-responses-endpoint.js";
+import {
+  isOfficialOpenAIResponsesBaseUrl,
+  supportsNativeOpenAIResponsesEndpoint,
+} from "./openai-responses-endpoint.js";
 import {
   responsesInputFingerprint,
   type ResponsesInputReplay,
@@ -66,6 +70,34 @@ type SteeringContinuation = {
 };
 
 export type OpenAIResponsesWebSocketMode = "websocket" | "websocket-cached" | "auto";
+
+export function resolveNativeOpenAIResponsesWebSocketMode(
+  model: Model,
+  transport: OpenAIResponsesOptions["transport"],
+): OpenAIResponsesWebSocketMode | undefined {
+  if (transport !== "websocket" && transport !== "websocket-cached" && transport !== "auto") {
+    return undefined;
+  }
+  if (getAiTransportHost().requiresManagedTransport(model)) {
+    return undefined;
+  }
+  return supportsNativeOpenAIResponsesEndpoint(model) ? transport : undefined;
+}
+
+export function combineWebSocketTimeoutSignal(
+  signal: AbortSignal,
+  model: Model,
+  timeoutMs: number | undefined,
+) {
+  const resolvedTimeoutMs =
+    timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? timeoutMs
+      : getAiTransportHost().resolveModelRequestTimeoutMs(model);
+  if (resolvedTimeoutMs === undefined || !Number.isFinite(resolvedTimeoutMs)) {
+    return signal;
+  }
+  return AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, resolvedTimeoutMs))]);
+}
 
 type OpenAIResponsesWebSocketStream = {
   stream: AsyncIterable<unknown>;

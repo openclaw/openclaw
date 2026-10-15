@@ -525,8 +525,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   it does not promote serial jobs or change worker limits. Preserve the separate
   300s ordered two-slot queue bound and runtime preparation charge.
   Gateway-exclusive serial bins and native numbered tooling bins use a 300s test
-  budget. Native tooling rows containing the partitioned changed-Node planner proof
-  retain a 150s test budget through initial and measured packing. The partition keeps
+  budget; hourly hybrid main validation packs its tooling rows within 420s plus
+  60s setup to keep headroom under its 77-row cap. Native tooling rows containing
+  the partitioned changed-Node planner proof retain a 150s test budget through
+  initial and measured packing. The partition keeps
   two workers and serial outer admission. Ordinary self-hosted bins share promoted capacity across logical
   classes; the existing group exchange fills stranded slots without raising caps.
   Parallel admission also bounds the ordered two-slot queue at 300 test seconds;
@@ -670,6 +672,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   queue savings; observe the next exact-head CI cycle.
 - Normal canonical hybrid first attempts use the existing four-part QA smoke
   plan, removing two repeated checkouts, setups and private runtime builds.
+  Canonical `main` push/schedule first attempts on that plan use the 8-class
+  only with explicit non-frozen, non-compatibility classification. A cold private
+  runtime build and all 24 scenarios passed on two usable CPUs under a 7-GiB
+  no-swap cap (5.96-GiB peak, no OOMs). This does not qualify older backport
+  source: those targets may build with higher compiler concurrency. Other
+  contexts retain the shared 16-class/hosted/release-group routing.
   Blacksmith profiles retain four parts; GitHub profiles and fresh hybrid
   retry/manual plans retain six. Failed-job-only retries retain their original
   matrix. Keep the complete scenario inventory, separate Matrix run, worker

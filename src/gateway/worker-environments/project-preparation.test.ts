@@ -7,7 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { requireGit } from "../../agents/worktrees/git.js";
 import {
   createWorkerProjectPreparation,
-  readWorkerProjectSetupRecipe,
+  readWorkerProjectEnvironmentRecipe,
 } from "./project-preparation.js";
 import {
   createProjectPreparationFixture,
@@ -59,22 +59,78 @@ describe("project checkout preparation", () => {
     expect(retained).not.toContain(path.basename(stale));
   });
 
-  it.each([".openclaw-worker", ".openclaw-worker/git-seeds"])(
-    "rejects a symlinked %s parent before writing outside the worker cache",
-    async (relative) => {
+  it.each([
+    { relative: ".openclaw-worker", phase: "seed" },
+    { relative: ".openclaw-worker/git-seeds", phase: "seed" },
+    { relative: ".openclaw-worker", phase: "inspection" },
+  ] as const)(
+    "rejects a symlinked $relative parent before writing outside the worker cache ($phase)",
+    async ({ relative, phase }) => {
       const f = await fixture();
       const outside = path.join(f.home, "outside");
       await fs.mkdir(outside);
       const link = path.join(f.home, relative);
       await fs.mkdir(path.dirname(link), { recursive: true });
       await fs.symlink(outside, link);
-      const operation = f.operation();
-      await expect(operation.project.prepare(f)).rejects.toThrow(
-        "Project seed directory escaped its owner",
+      const bin = path.join(f.home, "bin");
+      const download = path.join(f.home, "download-attempted");
+      await fs.mkdir(bin);
+      // Exercise bootstrap admission even when the test host already has Node and Corepack.
+      await fs.writeFile(
+        path.join(bin, "node"),
+        '#!/bin/sh\nif [ "$1" = -e ]; then exit 1; fi\nexec "$PREPARATION_NODE_PATH" "$@"\n',
+        { mode: 0o755 },
       );
-      operation.close();
-      expect(await fs.readdir(outside)).toEqual([]);
-      expect(f.upload).not.toHaveBeenCalled();
+      await fs.writeFile(
+        path.join(bin, "curl"),
+        '#!/bin/sh\nprintf attempted > "$PREPARATION_DOWNLOAD_MARKER"\nexit 99\n',
+        { mode: 0o755 },
+      );
+      const runScript = async (script: string) => {
+        const result = spawnSync("sh", ["-c", script], {
+          env: {
+            ...process.env,
+            HOME: f.home,
+            PATH: bin + path.delimiter + process.env.PATH,
+            PREPARATION_NODE_PATH: process.execPath,
+            PREPARATION_DOWNLOAD_MARKER: download,
+          },
+          encoding: "utf8",
+          timeout: 30_000,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        if (result.error) {
+          throw result.error;
+        }
+        if (result.status !== 0) {
+          // execFileSync includes the whole script in its error, including guard messages.
+          throw new Error(result.stderr);
+        }
+        return result.stdout;
+      };
+      const operation = phase === "seed" ? f.operation() : await f.preparedOperation();
+      const preparation =
+        phase === "seed"
+          ? operation.project.prepare({ runScript, upload: f.upload })
+          : operation.project.inspectPreparedWorkspace!({ runScript });
+      try {
+        await preparation.catch(() => undefined);
+        expect(await fs.readdir(outside)).toEqual([]);
+        expect(f.upload).not.toHaveBeenCalled();
+        await expect(preparation).rejects.toThrow(
+          phase === "seed"
+            ? "Project seed directory escaped its owner"
+            : "Prepared project directory escaped its owner",
+        );
+        expect(
+          await fs.stat(download).then(
+            () => true,
+            () => false,
+          ),
+        ).toBe(false);
+      } finally {
+        operation.close();
+      }
     },
   );
 
@@ -144,6 +200,9 @@ describe("project checkout preparation", () => {
       `#!/bin/sh
 set -eu
 test -z "\${PREPARATION_UNRELATED_ENV:-}"
+test "$TOKEN" = sentinel_fixture
+test "$HTTPS_PROXY" = http://127.0.0.1:3131
+test "$NODE_EXTRA_CA_CERTS" = /tmp/owned/ca.pem
 test "$PWD" = "$OPENCLAW_SOURCE_TREE_PATH"
 test "$PWD" = "$OPENCLAW_WORKTREE_PATH"
 mkdir build
@@ -157,7 +216,17 @@ printf 'setup\\n' >> "$HOME/count"
     const first = await f.preparedOperation();
     // Mutable local script bytes are never admitted into the pristine generation.
     await fs.writeFile(path.join(f.repository, ".openclaw", "worktree-setup.sh"), "exit 99\n");
-    const result = await first.project.prepare(f);
+    const result = await first.project.prepare({
+      ...f,
+      runScriptWithBudget: (createScript) =>
+        f.runScript(
+          createScript(30_000, {
+            TOKEN: "sentinel_fixture",
+            HTTPS_PROXY: "http://127.0.0.1:3131",
+            NODE_EXTRA_CA_CERTS: "/tmp/owned/ca.pem",
+          }),
+        ),
+    });
     first.close();
     const prepared = result.preparedWorkspace!;
     expect(first.getPreparedWorkspace()).toEqual(prepared);
@@ -306,7 +375,7 @@ printf 'setup\\n' >> "$HOME/count"
       preparationKey: "a".repeat(64),
       cacheKey: "c".repeat(64),
       baseCommit: f.project.baseCommit,
-      setupRecipe: await readWorkerProjectSetupRecipe(f.project),
+      setupRecipe: (await readWorkerProjectEnvironmentRecipe(f.project)).identity,
       timeoutMs: 30_000,
     };
     await expect(
@@ -742,24 +811,23 @@ ${action}
       const seed = f.operation();
       await seed.project.prepare(f);
       seed.close();
-      const input = {
-        namespace: "gateway",
-        seedKey: workerProjectSeedKey(f.project),
-        preparationKey: "a".repeat(64),
-        cacheKey: "c".repeat(64),
-        baseCommit: f.project.baseCommit,
-        setupRecipe: await readWorkerProjectSetupRecipe(f.project),
-        timeoutMs,
-      };
-      await expect(f.runScript(createProjectSetupScript(input))).rejects.toMatchObject({
-        stderr: expect.stringMatching(error),
-      });
+      const operation = await f.preparedOperation();
+      try {
+        await expect(
+          operation.project.prepare({
+            ...f,
+            runScriptWithBudget: (createScript) => f.runScript(createScript(timeoutMs)),
+          }),
+        ).rejects.toThrow(error);
+      } finally {
+        operation.close();
+      }
       const home = path.join(
         f.home,
         ".openclaw-worker",
         "prepared",
         "gateway",
-        input.cacheKey,
+        "c".repeat(64),
         "home",
       );
       const files = await fs.readdir(home);
@@ -824,7 +892,7 @@ ${failure === "failed recipe" ? "exit 17" : "printf '#' >> .openclaw/worktree-se
 
   it("requires administrator authority for a pinned setup and rechecks the owner after seed installation", async () => {
     const f = await fixture('#!/bin/sh\nprintf setup > "$HOME/count"\n');
-    const setupRecipe = await readWorkerProjectSetupRecipe(f.project);
+    const setupRecipe = (await readWorkerProjectEnvironmentRecipe(f.project)).identity;
     expect(setupRecipe).toMatch(/^[a-f0-9]{40}$/u);
     expect(() =>
       createWorkerProjectPreparation({

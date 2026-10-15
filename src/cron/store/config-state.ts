@@ -7,6 +7,7 @@ export function readCronStoreStatePath(env: NodeJS.ProcessEnv = process.env): st
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+/** Runtime selection reads through the shared-state worker. */
 export async function readCronStoreStatePathAsync(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string | undefined> {

@@ -97,13 +97,17 @@ export function enableSessionSuspensionWritesForGatewayStart(): void {
 export async function suspendSession(params: SessionSuspensionParams) {
   const state = suspensionState;
   const queuedGeneration = state.cleanupGeneration;
-  const run = state.suspensionWriteChain.then(() => suspendSessionQueued(params, queuedGeneration));
+  const run = state.suspensionWriteChain
+    .then(() => suspendSessionQueued(params, queuedGeneration))
+    .catch((err: unknown) => {
+      log.warn("failed to persist quota suspension", {
+        sessionId: params.sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
   // Suspension persistence is per-process and rare; serialize it so cleanup
   // rollback has one winner and cannot erase another in-flight suspension.
-  state.suspensionWriteChain = run.then(
-    () => undefined,
-    () => undefined,
-  );
+  state.suspensionWriteChain = run;
   await run;
 }
 
@@ -136,39 +140,29 @@ async function suspendSessionQueued(params: SessionSuspensionParams, queuedGener
   }
   const suspensionGeneration = state.cleanupGeneration;
   let previousQuotaSuspension: QuotaSuspension | undefined;
-  let persistedSuspension: boolean;
-
-  try {
-    const patchedEntry = await patchSessionEntryCore(
-      { storePath, sessionKey },
-      (entry) => {
-        if (state.cleanupGeneration !== suspensionGeneration) {
-          return null;
-        }
-        previousQuotaSuspension = entry.quotaSuspension;
-        return {
-          quotaSuspension: {
-            schemaVersion: 1,
-            suspendedAt: now,
-            reason: params.reason,
-            failedProvider: params.failedProvider,
-            failedModel: params.failedModel,
-            summary: params.summary,
-            expectedResumeBy,
-            state: "suspended",
-          },
-        };
-      },
-      { skipMaintenance: true, takeCacheOwnership: true },
-    );
-    persistedSuspension = patchedEntry !== null;
-  } catch (err) {
-    log.warn("failed to persist quota suspension", {
-      sessionId: params.sessionId,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return;
-  }
+  const patchedEntry = await patchSessionEntryCore(
+    { storePath, sessionKey },
+    (entry) => {
+      if (state.cleanupGeneration !== suspensionGeneration) {
+        return null;
+      }
+      previousQuotaSuspension = entry.quotaSuspension;
+      return {
+        quotaSuspension: {
+          schemaVersion: 1,
+          suspendedAt: now,
+          reason: params.reason,
+          failedProvider: params.failedProvider,
+          failedModel: params.failedModel,
+          summary: params.summary,
+          expectedResumeBy,
+          state: "suspended",
+        },
+      };
+    },
+    { skipMaintenance: true, takeCacheOwnership: true },
+  );
+  const persistedSuspension = patchedEntry !== null;
 
   if (
     persistedSuspension &&

@@ -424,6 +424,7 @@ describe("node worker workspace retention", () => {
     const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);
     const input = testWorkerLaunchInput(workspaceDir, "active-retention", "background-start");
     const active = seedGeneration(bundleRoot, input, input.descriptor.admission.ownerEpoch);
+    input.descriptor.assignment.workspaceDir = fs.realpathSync.native(active);
     const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
 
     try {

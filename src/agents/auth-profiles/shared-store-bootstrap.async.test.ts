@@ -5,7 +5,6 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
-import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../../state/config-machine-state.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -39,8 +38,7 @@ async function prepareActor(env: NodeJS.ProcessEnv) {
   openOpenClawStateDatabase({ env });
   await workerStore.runOpenClawStateWorkerOperation(
     captureOpenClawStateWorkerContext({ env }),
-    (scope) =>
-      scope.execute({ type: "authProfiles.sharedOwnership", input: { artifactPreserving: false } }),
+    async () => undefined,
   );
 }
 
@@ -52,21 +50,16 @@ function interceptBootstrap(intercept: <T>(execute: () => Promise<T>) => Promise
   );
 }
 
-it.each(["missing", "empty", "credentials", "owned"] as const)(
+it.each(["missing", "credentials"] as const)(
   "prepares the %s legacy auth source without caller-thread SQL",
   async (source) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env, stateDir }) => {
       const sourcePath = resolveAuthProfileDatabasePath(resolveSharedMainAuthAgentDir(env));
-      if (source === "empty" || source === "credentials") {
+      if (source === "credentials") {
         const database = openOpenClawAgentDatabase({ agentId: "main", path: sourcePath, env });
-        if (source === "credentials") {
-          writeAuthProfileJsonCell(database.db, "store", "agent", { version: 1, profiles: {} });
-        }
+        writeAuthProfileJsonCell(database.db, "store", "agent", { version: 1, profiles: {} });
       }
       await prepareActor(env);
-      if (source === "owned") {
-        writeConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { location: "state-db" }, { env });
-      }
       const sql = observeHostDataSql();
       try {
         expect(
@@ -112,51 +105,22 @@ it("holds an empty legacy source against a foreign writer through shared commit 
   });
 });
 
-it("accepts the initial owner binding installed by a concurrent first reader", async () => {
+it("fences replacement of the selected legacy source", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const sourceDir = resolveSharedMainAuthAgentDir(env);
+    const sourcePath = resolveAuthProfileDatabasePath(sourceDir);
     await prepareActor(env);
-    const reading = resolveSharedAuthStoreOwnershipAsync(
-      captureOpenClawStateWorkerContext({ env }),
-    );
-    const writing = prepareAuthProfileWriteTransactionAsync(undefined, { env });
-    const [observed, prepared] = await Promise.all([reading, writing]);
-    expect(observed.location).toBe("legacy-main");
-    expect(prepared.sharedOwner.location).toBe("state-db");
-    expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toEqual({
-      location: "state-db",
+    interceptBootstrap((execute) => {
+      fs.mkdirSync(sourceDir, { recursive: true });
+      fs.writeFileSync(sourcePath, "replacement source");
+      return execute();
     });
+    const prepared = prepareAuthProfileWriteTransactionAsync(undefined, { env });
+    await expect(prepared).rejects.toThrow(/identity changed/);
+    expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toBeUndefined();
+    expect(fs.readFileSync(sourcePath, "utf8")).toBe("replacement source");
   });
 });
-
-it.each([false, true])(
-  "fences replacement only for the selected legacy source (sharedOwned=%s)",
-  async (sharedOwned) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      const sourceDir = resolveSharedMainAuthAgentDir(env);
-      const sourcePath = resolveAuthProfileDatabasePath(sourceDir);
-      await prepareActor(env);
-      if (sharedOwned) {
-        writeConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { location: "state-db" }, { env });
-      }
-      interceptBootstrap((execute) => {
-        fs.mkdirSync(sourceDir, { recursive: true });
-        fs.writeFileSync(sourcePath, "replacement source");
-        return execute();
-      });
-      const prepared = prepareAuthProfileWriteTransactionAsync(undefined, { env });
-      if (sharedOwned) {
-        expect((await prepared).sharedOwner.location).toBe("state-db");
-        expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toEqual({
-          location: "state-db",
-        });
-      } else {
-        await expect(prepared).rejects.toThrow(/identity changed/);
-        expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toBeUndefined();
-      }
-      expect(fs.readFileSync(sourcePath, "utf8")).toBe("replacement source");
-    });
-  },
-);
 
 it("publishes acknowledged relocation without replay when its result is lost", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -183,7 +147,7 @@ it.each(["caller", "source"] as const)(
       await prepareActor(env);
       const sourceDir = resolveSharedMainAuthAgentDir(env);
       const sourcePath = resolveAuthProfileDatabasePath(sourceDir);
-      resolveSharedAuthStoreOwnership(env);
+      await resolveSharedAuthStoreOwnershipAsync(captureOpenClawStateWorkerContext({ env }));
       setRuntimeAuthProfileStoreSnapshot({ version: 1, profiles: {} }, sourceDir);
       let revoked = false;
       interceptBootstrap(async (execute) => {

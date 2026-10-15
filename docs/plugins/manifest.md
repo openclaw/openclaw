@@ -234,6 +234,7 @@ The anchors from the single-page version still resolve here.
 | `modelPricing`                       | No       | `object`                     | Provider-owned hosted-pricing publication policy. Use it to opt local/self-hosted providers out of published pricing or map provider refs to supported public pricing catalogs without hardcoding provider ids in core.                                                                                                                                                                        |
 | `modelIdNormalization`               | No       | `object`                     | Provider-owned model-id alias/prefix cleanup that must run before provider runtime loads.                                                                                                                                                                                                                                                                                                      |
 | `providerEndpoints`                  | No       | `object[]`                   | Manifest-owned endpoint host/baseUrl metadata for provider routes that core must classify before provider runtime loads.                                                                                                                                                                                                                                                                       |
+| `managesOwnAvailability`             | No       | `boolean`                    | Declares that this plugin's providers manage their own rate-limit and overload recovery. Only transient capacity cooldowns are bypassed; authentication, billing, and subscription blocks remain enforced. Read from metadata before plugin runtime loads.                                                                                                                                     |
 | `providerRequest`                    | No       | `object`                     | Cheap provider-family and request-compatibility metadata used by generic request policy before provider runtime loads.                                                                                                                                                                                                                                                                         |
 | `secretProviderIntegrations`         | No       | `Record<string, object>`     | Declarative [SecretRef](/gateway/secrets) exec provider presets that setup or install surfaces can offer without hardcoding provider-specific integrations in core.                                                                                                                                                                                                                            |
 | `cliBackends`                        | No       | `string[]`                   | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                                                                                                                                                                                                    |
@@ -409,6 +410,26 @@ prepared metadata generation, and source/built artifact policy as other plugin
 surfaces. Repository builds include declared entries and rewrite emitted manifest
 paths to the corresponding JavaScript artifacts. Plugin reload owns invalidation;
 catalog requests do not poll files for changes.
+
+### Cloud worker profile suggestions
+
+`contracts.workerProfileSuggestions` lists worker provider IDs whose plugin exposes
+`worker-profile-api.ts` (or its built JavaScript artifact). The artifact exports
+`discoverWorkerProfile`, typed as `WorkerProfileSuggestionDiscovery` from
+`openclaw/plugin-sdk/plugin-entry`. It returns a proposed config entry or `undefined`.
+
+When no cloud profiles exist, the Gateway loads only this declared setup surface,
+even when the plugin declares `activation.onStartup: false`. Plugin disablement,
+allowlists, and deny lists still apply. The artifact must stay lightweight, reuse
+plugin lifecycle caches, and avoid importing the full plugin entry. Discovery may
+inspect local CLI configuration and machine catalogs; it must not allocate machines
+or modify configuration. The explicit `refresh` option rechecks discovery when an
+administrator adopts the suggestion.
+
+Suggestions are not runtime profiles. The Gateway saves an adopted suggestion
+through its config owner before normal placement can use it. Existing profiles
+suppress suggestions. Discovery describes configured inputs, not live provider health;
+normal allocation retains its authentication and provisioning checks.
 
 ### Configuration validation
 

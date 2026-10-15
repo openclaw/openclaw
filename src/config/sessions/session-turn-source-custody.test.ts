@@ -21,6 +21,122 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.each([false, true])(
+  "commits initialized first input from an absent preimage (warm=%s)",
+  async (warm) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const f = fixture();
+      const scope = { ...f.scope, sessionKey: "agent:main:first-input", sessionId: "first-input" };
+      const input = expectDefined(
+        await acquireSessionInputActor(
+          { ...scope, target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] } },
+          { assertCurrent() {}, assertReadable() {} },
+        ),
+        "initial input actor",
+      );
+      const recorder = createUserTurnTranscriptRecorder({
+        message: {
+          role: "user",
+          content: "Initial lifecycle",
+          timestamp: 1,
+          idempotencyKey: "first-input:user",
+        },
+        target: {
+          ...scope,
+          expectedSessionId: scope.sessionId,
+          sessionEntry: undefined,
+          initialSessionEntry: {
+            sessionId: scope.sessionId,
+            updatedAt: 1,
+            status: "done",
+            abortedLastRun: false,
+          },
+        },
+        updateMode: "none",
+      });
+      try {
+        if (warm) {
+          await input.actor.read({ assertCurrent() {}, authorize() {} });
+        }
+        bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
+        await expect(recorder.persistApproved()).resolves.toMatchObject({ appended: true });
+        expect(readExactSessionEntryRow(f.database, scope.sessionKey)?.entry).toMatchObject({
+          sessionId: scope.sessionId,
+          status: "done",
+          abortedLastRun: false,
+        });
+        expect(
+          readTranscriptEventRows(f.database, scope.sessionId)
+            .map((row) => JSON.parse(row.eventJson))
+            .filter((event) => event.type === "message"),
+        ).toHaveLength(1);
+      } finally {
+        await input.actor.release();
+      }
+    });
+  },
+);
+
+it("returns the durable committed message when prepared input arrives after its key", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const f = fixture();
+    const input = expectDefined(
+      await acquireSessionInputActor(
+        { agentId: f.scope.agentId, storePath: f.scope.storePath, target: f.target },
+        { assertCurrent() {}, assertReadable() {} },
+      ),
+      "durable input actor",
+    );
+    const original = { role: "user", content: "Original", idempotencyKey: "prepared-input" };
+    const accepted = { ...original, content: "Accepted" };
+    const append = (commandId: string, message: unknown) =>
+      input.actor.appendToolResult(
+        {
+          commandId,
+          phaseId: "prepared-input",
+          turn: {
+            agentId: f.scope.agentId,
+            sessionKey: f.scope.sessionKey,
+            options: {
+              expectedSessionId: f.scope.sessionId,
+              sessionFile: "synthetic-session.jsonl",
+              messages: [
+                {
+                  eventId: "accepted-input",
+                  message: original,
+                  preparedMessage: { prepared: true, message },
+                },
+              ],
+            },
+          },
+        },
+        { assertCurrent() {}, authorize() {} },
+      );
+    try {
+      expect(await append("first", accepted)).toMatchObject({ kind: "committed" });
+      const replay = await append("retry", {
+        ...original,
+        content: "Must not replace accepted input",
+      });
+      expect(replay).toMatchObject({
+        kind: "committed",
+        receipt: {
+          transcript: {
+            appendedMessages: [{ appended: false, messageId: "accepted-input", message: accepted }],
+          },
+        },
+      });
+      expect(f.events().filter((event) => event.type === "message")).toEqual([
+        expect.objectContaining({ id: "accepted-input", message: accepted }),
+      ]);
+    } finally {
+      await input.actor.release();
+    }
+  });
+});
+
 it.each([
   { phase: "acceptInput", change: "metadata" },
   { phase: "adoptRun", change: "metadata" },

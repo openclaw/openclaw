@@ -14,6 +14,7 @@ import {
 } from "../../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -321,17 +322,19 @@ describe("session accessor readonly listing", () => {
     listSessionEntriesReadOnly(scope);
     const database = openOpenClawAgentDatabase(scope);
     const update = database.db.prepare(
-      "UPDATE session_nodes SET entry_json = ?, updated_at = ?, entry_valid = 0 WHERE session_key = ?",
+      "UPDATE session_nodes SET entry_json = ?, updated_at = ?, current_session_id = ?, entry_valid = 0 WHERE session_key = ?",
     );
     update.run(
       JSON.stringify({ sessionId: "pending", updatedAt: 30, label: "fresh" }),
       30,
+      "pending",
       "agent:main:pending",
     );
-    update.run("{", 40, "agent:main:bad-json");
+    update.run("{", 40, "bad-json", "agent:main:bad-json");
     update.run(
       JSON.stringify({ sessionId: "bad-timestamp", updatedAt: 99 }),
       50,
+      "bad-timestamp",
       "agent:main:bad-timestamp",
     );
     const expectedKeys = [
@@ -419,6 +422,7 @@ describe("session accessor readonly listing", () => {
     update.run(
       JSON.stringify({ skillsSnapshot: { prompt: "invalid prompt-only row" } }),
       2000,
+      "retained",
       retainedScope.sessionKey,
     );
     expect(() => loadExactSessionEntryReadOnly({ ...retainedScope, projection: "list" })).toThrow(
@@ -426,6 +430,7 @@ describe("session accessor readonly listing", () => {
     );
 
     closeOpenClawAgentDatabasesForTest();
+    revokeSqliteDatabaseAdmissionsForPath(database.path);
     expect(() => readSessionStoreSummaryReadOnly(scope, options)).toThrow("openclaw doctor --fix");
     expect(
       loadExactSessionEntryCandidatesReadOnlyBatch(

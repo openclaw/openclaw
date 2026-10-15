@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -45,9 +45,9 @@ export const generatedHtmlProvenanceReadOperations = {
         .selectAll(),
     ).rows,
   }),
-} satisfies WorkerOperationHandlers<DatabaseSync>;
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
-function mutation<Input>(type: string, apply: (db: DatabaseSync, input: Input) => number) {
+function mutation<Input>(type: string, apply: (db: EngineConnection, input: Input) => number) {
   return (input: Input, { open }: WorkerOperationContext) =>
     runOpenClawStateWriteTransaction(
       ({ db }) => {

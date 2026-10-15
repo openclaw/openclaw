@@ -43,14 +43,7 @@ export const ToolCatalogEntrySchema = closedObject({
       }),
     ),
   ),
-  defaultProfiles: Type.Array(
-    Type.Union([
-      Type.Literal("minimal"),
-      Type.Literal("coding"),
-      Type.Literal("messaging"),
-      Type.Literal("full"),
-    ]),
-  ),
+  defaultProfiles: Type.Array(ToolCatalogProfileSchema.properties.id),
 });
 
 /** Group of related catalog tools from core or a plugin. */
@@ -83,9 +76,8 @@ export const ToolsEffectiveParamsSchema = closedObject({
 
 /** Effective tool entry after session/profile/channel/plugin filtering. */
 export const ToolsEffectiveEntrySchema = closedObject({
-  id: NonEmptyString,
-  label: NonEmptyString,
-  description: Type.String(),
+  ...Type.Pick(ToolCatalogEntrySchema, ["id", "label", "description", "pluginId", "risk", "tags"])
+    .properties,
   rawDescription: Type.String(),
   source: Type.Union([
     Type.Literal("core"),
@@ -93,32 +85,17 @@ export const ToolsEffectiveEntrySchema = closedObject({
     Type.Literal("channel"),
     Type.Literal("mcp"),
   ]),
-  pluginId: Type.Optional(NonEmptyString),
   channelId: Type.Optional(NonEmptyString),
   mcpServer: Type.Optional(NonEmptyString),
   mcpToolName: Type.Optional(NonEmptyString),
   deniedBySession: Type.Optional(Type.Literal(true)),
-  risk: Type.Optional(
-    Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
-  ),
-  tags: Type.Optional(Type.Array(NonEmptyString)),
 });
 
 /** Effective tool group shown to runtime/session callers. */
 export const ToolsEffectiveGroupSchema = closedObject({
-  id: Type.Union([
-    Type.Literal("core"),
-    Type.Literal("plugin"),
-    Type.Literal("channel"),
-    Type.Literal("mcp"),
-  ]),
+  id: ToolsEffectiveEntrySchema.properties.source,
   label: NonEmptyString,
-  source: Type.Union([
-    Type.Literal("core"),
-    Type.Literal("plugin"),
-    Type.Literal("channel"),
-    Type.Literal("mcp"),
-  ]),
+  source: ToolsEffectiveEntrySchema.properties.source,
   tools: Type.Array(ToolsEffectiveEntrySchema),
 });
 

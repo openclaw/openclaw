@@ -39,6 +39,43 @@ function expectIconShape(actual: SVGElement | null, paths: readonly string[]) {
 }
 
 describe("Where chip", () => {
+  it("offers the suggested Cloud profile with its provider icon before adoption", () => {
+    const onAdoptSuggestedProfile = vi.fn();
+    const container = renderPicker(
+      true,
+      undefined,
+      { cloudProfiles: [] },
+      {
+        suggestedProfile: { id: "cloud", providerId: "crabbox", providerDisplayId: "aws" },
+        onAdoptSuggestedProfile,
+      },
+    );
+    const item = container.querySelector<HTMLButtonElement>('[data-value="suggested-cloud"]');
+    expect(item?.textContent?.trim()).toBe("Cloud");
+    expect(item?.querySelector('[data-provider-icon="aws"]')).not.toBeNull();
+    expect(container.querySelector('[data-action="manage-cloud-workers"]')).toBeNull();
+    item?.click();
+    expect(onAdoptSuggestedProfile).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { isAdmin: false, profiles: [] },
+    { isAdmin: true, profiles: [{ id: "configured", providerId: "crabbox" }] },
+  ])(
+    "does not offer a suggestion without admin authority or beside configured profiles: %j",
+    ({ isAdmin, profiles }) => {
+      const container = renderPicker(
+        isAdmin,
+        undefined,
+        { cloudProfiles: profiles },
+        {
+          suggestedProfile: { id: "cloud", providerId: "crabbox", providerDisplayId: "aws" },
+        },
+      );
+      expect(container.querySelector('[data-value="suggested-cloud"]')).toBeNull();
+    },
+  );
+
   it("shows device and cloud skeletons while the catalog loads", () => {
     const container = renderPicker(
       true,

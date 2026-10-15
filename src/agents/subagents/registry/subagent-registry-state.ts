@@ -7,7 +7,10 @@ import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db
 import { prepareOpenClawStateReadSource } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
-import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
+import {
+  projectSubagentRunForMaintenance,
+  projectSubagentRunForSessionList,
+} from "./subagent-delivery-state.js";
 import {
   getSubagentRunsForChildSession,
   getSubagentSessionReadLookup,
@@ -16,6 +19,7 @@ import {
   subagentRuns,
 } from "./subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
+import { countActiveRunsForSessionFromRuns } from "./subagent-registry-queries.js";
 import {
   consumeFreshSubagentRuns,
   getSessionListLookup,
@@ -23,6 +27,7 @@ import {
   indexedSnapshotRows,
   getPersistedSubagentRunsSnapshot,
   loadPersistedSubagentRunsForRead,
+  mergeSelectedFullRuns,
   prepareSubagentRunsCache,
   readCompactSubagentRuns,
   rememberSubagentRunsSnapshot,
@@ -31,6 +36,7 @@ import {
   type SubagentRunsCache,
 } from "./subagent-registry-read-cache.js";
 import {
+  mergeSubagentRunReadScope,
   prepareSubagentRunReadSnapshot,
   prepareSubagentMaintenanceReadSnapshot,
   prepareSubagentSessionRunReadSnapshot,
@@ -40,7 +46,8 @@ import {
 } from "./subagent-registry-read-snapshot.js";
 import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
+import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const persistedSubagentRunsReadCache: SubagentRunsCache<SubagentRunRecord> = {
   state: {},
@@ -51,6 +58,11 @@ const persistedSubagentSessionListRunsReadCache: SubagentRunsCache<SubagentRunRe
   state: {},
   copy: immutableSubagentRunSessionList,
   project: projectSubagentRunForSessionList,
+};
+const persistedSubagentMaintenanceReadCache: SubagentRunsCache<SubagentRunMaintenanceRecord> = {
+  state: {},
+  copy: projectSubagentRunForMaintenance,
+  project: projectSubagentRunForMaintenance,
 };
 
 // Notification facts advance only with acknowledged row publications.
@@ -138,6 +150,12 @@ function rememberPersistedSubagentRunsSnapshot(
   for (const cache of [persistedSubagentRunsReadCache, persistedSubagentSessionListRunsReadCache]) {
     rememberSubagentRunsSnapshot(cache, runs, changedRunIds, databasePath);
   }
+  rememberSubagentRunsSnapshot(
+    persistedSubagentMaintenanceReadCache,
+    runs,
+    changedRunIds,
+    databasePath,
+  );
   return keys;
 }
 
@@ -264,6 +282,7 @@ export function clearSubagentRunsReadCacheForTest(): void {
   committedSwarmNotifications.clear();
   persistedSubagentRunsReadCache.state = {};
   persistedSubagentSessionListRunsReadCache.state = {};
+  persistedSubagentMaintenanceReadCache.state = {};
 }
 
 /** Consume a canonical worker read without crossing a cache-publication invalidation. */
@@ -272,6 +291,28 @@ export function consumeFreshSubagentRegistryRows<T>(
   consume: (runs: ReadonlyMap<string, SubagentRunRecord>) => T,
 ): Promise<T> {
   return consumeFreshSubagentRuns(persistedSubagentRunsReadCache, context, consume);
+}
+
+/** Registration shares the loaded registry; committed receipts keep retained generations current. */
+export async function prepareSubagentRegistrationRows(
+  childSessionKey: string,
+  selectedRunIds: readonly string[],
+  context: OpenClawStateWorkerContext,
+): Promise<() => ReadonlyMap<string, SubagentRunRecord>> {
+  const prepared = await prepareSubagentRunsCache(
+    persistedSubagentRunsReadCache,
+    readAllSubagentRunsInWorker,
+    context,
+  );
+  const runIds = new Set(selectedRunIds);
+  return () =>
+    mergeSelectedFullRuns(
+      persistedSubagentRunsReadCache,
+      subagentRuns,
+      prepared,
+      (entry) => runIds.has(entry.runId) || entry.childSessionKey.trim() === childSessionKey,
+      { context },
+    );
 }
 
 export function getSubagentRunsSnapshotForRead(
@@ -317,7 +358,7 @@ export function prepareSubagentMaintenanceRunsSnapshotForRead(
 ) {
   return prepareSubagentMaintenanceReadSnapshot(
     inMemoryRuns,
-    persistedSubagentRunsReadCache,
+    persistedSubagentMaintenanceReadCache,
     options,
   );
 }
@@ -388,6 +429,23 @@ export async function prepareSubagentRunsSnapshotForRunIds(
   };
 }
 
+/** Admission needs current raw owners, not newly projected session-list rows. */
+export function countActiveSubagentRunsForSession(
+  inMemoryRuns: Map<string, SubagentRunRecord>,
+  requesterSessionKey: string,
+  options?: { collect?: boolean; requesterAgentId?: string },
+): number {
+  const runs = new Map<string, SubagentRunReadRecord>(
+    shouldReadPersistedSubagentRuns()
+      ? loadPersistedSubagentRunsForRead(persistedSubagentSessionListRunsReadCache)
+      : undefined,
+  );
+  for (const [runId, entry] of inMemoryRuns) {
+    runs.set(runId, entry);
+  }
+  return countActiveRunsForSessionFromRuns(runs, requesterSessionKey, options);
+}
+
 export function getSubagentSessionListRunsSnapshotForRead(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   controllerSessionKeys?: readonly string[],
@@ -417,6 +475,20 @@ export function getSubagentSessionListRunsSnapshotForRead(
     });
   }
   return getSubagentRunsSnapshot(inMemoryRuns, persistedSubagentSessionListRunsReadCache);
+}
+
+/** Current control facts reuse the same membership owner as asynchronous payload reads. */
+export function getSubagentControlRunsSnapshotForRead(
+  sessionKey: string,
+): Map<string, SubagentRunReadRecord> {
+  const cache = persistedSubagentSessionListRunsReadCache;
+  const compact = shouldReadPersistedSubagentRuns()
+    ? loadPersistedSubagentRunsForRead(cache)
+    : new Map<string, SubagentRunReadRecord>();
+  return mergeSubagentRunReadScope(subagentRuns, cache, compact, {
+    sessionKeys: [sessionKey],
+    descendants: false,
+  });
 }
 
 /** Exact rows share the owner snapshot while projecting only their complete requester trees. */

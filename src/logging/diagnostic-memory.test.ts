@@ -8,6 +8,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import * as workerMemory from "../infra/worker-cpu.js";
+import * as workerMessages from "../infra/worker-message-metrics.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
 import {
@@ -51,6 +52,7 @@ describe("diagnostic memory", () => {
     uninstallDiagnosticStabilityFatalHook();
     resetDiagnosticStabilityRecorderForTest();
     resetLogger();
+    vi.spyOn(workerMessages, "getWorkerMessageMetrics").mockReturnValue([]);
     // Cumulative Worker history survives earlier test files even when no Worker remains alive.
     vi.spyOn(workerMemory, "sampleTrackedWorkerMemory").mockReturnValue({
       workerCount: 0,
@@ -163,6 +165,7 @@ describe("diagnostic memory", () => {
           workerMemoryMissing: [],
           workerHeaps: [],
           workerLifecycle,
+          workerMessages: [],
           externalBytes: 10,
           heapTotalBytes: 80,
           heapUsedBytes: 40,
@@ -193,6 +196,7 @@ describe("diagnostic memory", () => {
           workerMemoryMissing: [],
           workerHeaps: [],
           workerLifecycle,
+          workerMessages: [],
           externalBytes: 10,
           heapTotalBytes: 80,
           heapUsedBytes: 40,

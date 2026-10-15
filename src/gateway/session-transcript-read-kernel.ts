@@ -91,6 +91,7 @@ function projectSqliteHistoryEvents(entries: readonly SessionTranscriptMessageEv
   return messages;
 }
 
+// Raw admission bounds decoding; this cap also accounts for projected event metadata.
 function capAnchorEventsByBytes(
   events: SessionTranscriptMessageEvent[],
   maxBytes: number | undefined,
@@ -143,14 +144,12 @@ function filterSessionMessagesMatchingId(messages: unknown[], messageId: string)
 }
 
 /** Select and format one admitted projection; acquisition and archive fallback stay outside. */
-export function selectSessionTranscriptProjection<
-  Selection extends SessionTranscriptProjectionSelection,
->(
+function selectSessionTranscriptProjection<Selection extends SessionTranscriptProjectionSelection>(
   projection: CurrentTranscriptProjection,
   selection: Selection,
   sessionFile?: string,
 ): SessionTranscriptProjectionSelectionResults[Selection["kind"]];
-export function selectSessionTranscriptProjection(
+function selectSessionTranscriptProjection(
   projection: CurrentTranscriptProjection,
   selection: SessionTranscriptProjectionSelection,
   sessionFile?: string,
@@ -372,6 +371,19 @@ export async function filterSessionMessageHistoryVisibility(
       return { found: false, oversized: false, historyHidden: true };
     }
     return { ...result, message: projectedMessage };
+  }
+  if (visibility.requireVisible) {
+    const projected = projectChatDisplayMessagesWithState([result.message], {
+      maxChars: MAX_PAYLOAD_BYTES,
+      includeCommentaryFallbacks: true,
+      subagentCoordination: readers.subagentCoordination,
+    });
+    const message = projected.messages.find(
+      (entry) => readChatHistoryMessageId(entry) === messageId,
+    );
+    return message
+      ? { ...result, message }
+      : { found: false, oversized: false, historyHidden: true };
   }
   return result;
 }

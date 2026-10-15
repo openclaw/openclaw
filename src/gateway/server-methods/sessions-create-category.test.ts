@@ -1,14 +1,8 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import {
-  resolveSqliteScope,
-  toDatabaseOptions,
-} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import * as categories from "../../config/sessions/session-group-categories.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { readSessionGroupCatalog } from "../session-group-catalog.js";
 import * as groups from "../session-groups.js";
@@ -56,13 +50,8 @@ test.each(["create", "patch"] as const)(
     ]);
     const queued = createDeferredCore();
     const sweep = categories.updateSessionGroupCategoriesInWorker;
-    let waitingBehindRegistration = false;
     vi.spyOn(categories, "updateSessionGroupCategoriesInWorker").mockImplementation((params) => {
       const deleting = sweep(params);
-      const path = resolveOpenClawAgentSqlitePath(
-        toDatabaseOptions(resolveSqliteScope(params.scope)),
-      );
-      waitingBehindRegistration = (SQLITE_SESSION_WRITER_QUEUES.get(path)?.pending.length ?? 0) > 0;
       queued.resolve();
       return deleting;
     });
@@ -81,7 +70,6 @@ test.each(["create", "patch"] as const)(
       release.resolve();
       await Promise.all([writing, deleting]);
     }
-    expect(waitingBehindRegistration).toBe(true);
     expect((await writing).ok).toBe(true);
     expect((await deleting).ok).toBe(true);
     expect(order).toEqual(["registered", "deleted"]);

@@ -89,22 +89,22 @@ type SessionBindingAdapterCapabilities = {
   unbindSupported?: boolean;
 };
 
-/** @deprecated Implement SessionBindingAdapterV2; removed in the next Plugin SDK major. */
+/** @deprecated Implement SessionBindingAdapterV2; final compatibility day: 2026-12-31. */
 export type SessionBindingAdapter = {
   channel: string;
   accountId: string;
   capabilities?: SessionBindingAdapterCapabilities;
   bind?: (input: SessionBindingBindInput) => Promise<SessionBindingRecord | null>;
-  /** @deprecated Use listBySessionAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use listBySessionAsync; final compatibility day: 2026-12-31. */
   listBySession: (targetSessionKey: string) => SessionBindingRecord[];
-  /** @deprecated Use resolveByConversationAsync. The synchronous form will be removed in the next Plugin SDK major. */
+  /** @deprecated Use resolveByConversationAsync; final compatibility day: 2026-12-31. */
   resolveByConversation: (ref: ConversationRef) => SessionBindingRecord | null;
-  /** @deprecated Use inspectByConversationAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use inspectByConversationAsync; final compatibility day: 2026-12-31. */
   inspectByConversation?: (ref: ConversationRef) => SessionBindingRecord | null;
   /** Inspects committed ownership without creating storage or pruning rows. */
   inspectByConversationAsync?: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
   resolveByConversationAsync?: (ref: ConversationRef) => Promise<SessionBindingRecord | null>;
-  /** @deprecated Use touchAsync. The synchronous form will be removed in the next Plugin SDK major. */
+  /** @deprecated Use touchAsync; final compatibility day: 2026-12-31. */
   touch?: (bindingId: string, at?: number) => void;
   /** Settles accepted persistence before resolving. */
   touchAsync?: (bindingId: string, at?: number) => Promise<void>;

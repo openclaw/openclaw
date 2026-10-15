@@ -90,7 +90,7 @@ const MACOS_NATIVE_RE =
 const GIT_OWNER_SCOPE_RE =
   /^(?:\.github\/(?:actions\/(?:git-owner|ensure-base-commit|publish-generated-pr|mantis-validate-trusted-ref)\/|workflows\/(?:workflow-sanity|qa-profile-evidence|maturity-scorecard|docs-agent|docs-sync-publish|openclaw-performance|linux-app-release|macos-release|npm-placeholder-bootstrap|plugin-clawhub-release|plugin-npm-release|mantis-(?:discord-(?:smoke|status-reactions|thread-attachment)|slack-desktop-smoke|web-ui-chat-proof))\.yml$)|scripts\/generate-ci-git-owner\.mts$|test\/scripts\/(?:ci-(?:checkout|git-owner|linux-git|platform-checkout|windows-process-census)\.test(?:-support)?\.ts|generated-publisher\.test-support\.ts|openclaw-performance-(?:workflow\.test(?:-support)?|git-lifecycle\.test)\.ts|plugin-release-git-lifecycle\.test\.ts|release-workflow-git-lifecycle\.test\.ts|fixtures\/(?:ci-platform-checkout\.mjs|ci-windows-process-census\.(?:mjs|py)))$)/;
 const MACOS_SCRIPT_SCOPE_RE =
-  /^(?:scripts\/(?:build-and-run-mac|check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|prepush-ci|restart-mac|stage-cua-driver-macos|stage-mac-runtime|stage-openclaw-bun|build-mac-sqlite)\.sh|scripts\/lib\/(?:openclaw-bun|sqlite-macos)\.json|scripts\/test-macos-native\.mts|scripts\/(?:verify-mac-runtime(?:-fs)?|lib\/(?:mac-node-worker-proof-state|mac-runtime-portability))\.mjs|scripts\/(?:materialize-mac-runtime|swift-build-cache-metadata|lib\/(?:mac-native-inventory|mac-bundle-mutation))\.py|scripts\/lib\/(?:mac-app-bundle|mac-signing-identity|plistbuddy|swift-toolchain)\.sh|test\/helpers\/mac-(?:native|signing)\.ts|test\/scripts\/(?:build-mac-sqlite|stage-openclaw-bun|codesign-mac-app|create-dmg|mac-elevation-artifact|mac-elevation-host|mac-runtime|macos-native-test-launch|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|swift-build-cache-metadata|verify-mac-runtime-fs)\.test\.ts|test\/scripts\/(?:mac-elevation-artifact|mac-native-fixtures|mac-runtime-materialization)\.test-support\.ts)$/;
+  /^(?:scripts\/(?:build-and-run-mac|check-swift-tools|codesign-mac-app|create-dmg|format-swift|install-swift-tools|install-xcodegen|lint-swift|mac-elevation-host|notarize-mac-artifact|package-mac-app|package-mac-dist|prepush-ci|restart-mac|stage-cua-driver-macos|stage-mac-runtime|stage-openclaw-bun|build-mac-sqlite)\.sh|scripts\/lib\/(?:openclaw-bun|sqlite-macos)\.json|scripts\/test-macos-native\.mts|scripts\/(?:verify-mac-runtime(?:-fs)?|lib\/(?:mac-node-worker-proof-state|mac-runtime-portability|desktop-runtime-prune))\.mjs|scripts\/(?:materialize-mac-runtime|swift-build-cache-metadata|lib\/(?:mac-native-inventory|mac-bundle-mutation))\.py|scripts\/lib\/(?:mac-app-bundle|mac-signing-identity|plistbuddy|swift-toolchain)\.sh|test\/helpers\/mac-(?:native|signing)\.ts|test\/scripts\/(?:build-mac-sqlite|stage-openclaw-bun|codesign-mac-app|create-dmg|mac-elevation-artifact|mac-elevation-host|mac-runtime|macos-native-test-launch|notarize-mac-artifact|package-mac-app|package-mac-dist|restart-mac|swift-build-cache-metadata|verify-mac-runtime-fs)\.test\.ts|test\/scripts\/(?:mac-elevation-artifact|mac-native-fixtures|mac-runtime-materialization)\.test-support\.ts)$/;
 const WORKER_DEPLOY_ARTIFACT_SCOPE_RE =
   /^src\/(?:agents\/github-exec-(?:launcher|credential)\.ts|shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$/;
 const IOS_BUILD_RE =
@@ -160,13 +160,13 @@ const WINDOWS_WORKER_BUNDLE_SCOPE_RE =
 const WINDOWS_WORKER_WORKSPACE_SCOPE_RE =
   /^src\/(?:infra\/git-exec(?:\.test)?|agents\/worktrees\/(?:git|base-ref)(?:\.test)?|node-host\/node-worker-transfer-client(?:\.test)?|gateway\/worker-environments\/(?:node-worker-tunnel(?:\.test)?|workspace-result-(?:git(?:\.test)?|staging|ref-mutation\.test)|session-repository-checkpoints(?:\.test)?|workspace-sync-(?:scripts|manifest\.test)))\.ts$/;
 const CONTROL_UI_I18N_SCOPE_RE =
-  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|extensions\/[^/]+\/(?:package\.json$|(?:.*\/)?i18n\/locales\/)|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/(?:control-ui-plugin-i18n-catalog\.ts|control-ui-i18n-(?:(?:catalog(?:-values)?|config|raw-copy|sync-plan)\.ts|config\.json)))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
+  /^(ui\/src\/i18n\/|ui\/config\/control-ui-locales\.ts$|extensions\/(?:active-memory|memory-wiki)\/control-ui\.presentation\.json$|extensions\/[^/]+\/(?:package\.json$|(?:.*\/)?i18n\/(?:locales|\.i18n)\/)|scripts\/(?:control-ui-i18n(?:-verify)?\.ts|lib\/(?:control-ui-plugin-i18n-catalog\.ts|control-ui-i18n-(?:(?:catalog(?:-values)?|config|raw-copy|sync-plan)\.ts|config\.json)))$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
 // A plugin can declare its browser entry in any package directory. Keep this
 // path-only planner conservative; source discovery selects actual UI owners.
 const CONTROL_UI_I18N_PRODUCTION_SOURCE_RE =
   /^(?:ui\/src\/(?:app|components|lib|pages)\/.*\.tsx?|extensions\/[^/]+\/.*\.tsx?|src\/config\/(?:schema[^/]*|zod-schema[^/]*|media-audio-field-metadata|talk-defaults|channel-config-keys)\.ts)$/;
 const CONTROL_UI_HARD_GENERATED_I18N_RE =
-  /^ui\/src\/i18n\/\.i18n\/(?:catalog-fallbacks\.json|[^/]+\.(?:meta\.json|tm\.jsonl))$/;
+  /^(?:ui\/src\/i18n\/\.i18n\/(?:catalog-fallbacks\.json|[^/]+\.(?:meta\.json|tm\.jsonl))|extensions\/[^/]+\/(?:.*\/)?i18n\/\.i18n\/[^/]+\.(?:meta\.json|tm\.jsonl))$/;
 const RELEASE_BRANCH_RE = /^release\/\d{4}\.\d+\.\d+$/;
 
 class ControlUiGeneratedArtifactsMixedError extends Error {}
@@ -176,7 +176,7 @@ class NativeGeneratedArtifactsMixedError extends Error {}
 // QA Lab real-Gateway suites share the same Chromium owner. The test runtime
 // owner sets the Bun UI env; main runs UI on Node, so only PRs prove it.
 const CHROMIUM_UI_TEST_SCOPE_RE =
-  /^(ui\/|extensions\/[^/]+\/browser(?:\/|$)|extensions\/browser\/chrome-extension\/|extensions\/qa-lab\/src\/[^/]+\.real-gateway\.e2e\.test\.ts$|test\/vitest\/vitest\.(?:ui-(?:e2e|browser)(?:-[^/.]+)?\.[^/]+\.ts|(?:pattern-file|performance-config|timeouts|weighted-sharding)\.ts|ui-(?:isolated-)?paths\.mjs)$|test\/helpers\/temp-dir\.ts$|scripts\/(?:ensure-playwright-chromium\.mts|test-desktop-resize-real\.mts|check-control-ui-(?:performance(?:-base)?|precompressed-assets)\.mts|ui\.(?:mts|js)|control-ui-mock-[^/]+\.ts|lib\/(?:ci-test-(?:runtime|timings(?:-schema)?)|desktop-resize-proof|vitest-local-scheduling)\.mts)$|config\/(?:ci-test-timings|control-ui-startup-budget-baseline)\.json$|\.github\/workflows\/ci\.yml$)/;
+  /^(ui\/|extensions\/(?:active-memory|memory-wiki)\/control-ui\.presentation\.json$|extensions\/[^/]+\/control-ui\.channel-detail\.json$|extensions\/[^/]+\/browser(?:\/|$)|extensions\/browser\/chrome-extension\/|extensions\/qa-lab\/src\/[^/]+\.real-gateway\.e2e\.test\.ts$|test\/vitest\/vitest\.(?:ui-(?:e2e|browser)(?:-[^/.]+)?\.[^/]+\.ts|(?:pattern-file|performance-config|timeouts|weighted-sharding)\.ts|ui-(?:isolated-)?paths\.mjs)$|test\/helpers\/temp-dir\.ts$|scripts\/(?:ensure-playwright-chromium\.mts|test-desktop-resize-real\.mts|check-control-ui-(?:performance(?:-base)?|precompressed-assets)\.mts|ui\.(?:mts|js)|control-ui-mock-[^/]+\.ts|lib\/(?:ci-test-(?:runtime|timings(?:-schema)?)|desktop-resize-proof|vitest-local-scheduling)\.mts)$|config\/(?:ci-test-timings|control-ui-startup-budget-baseline)\.json$|\.github\/workflows\/ci\.yml$)/;
 const NATIVE_I18N_SCOPE_RE =
   /^(?:apps\/\.i18n\/|apps\/android\/(?:app\/src\/(?:main|play|thirdParty)\/|wear\/src\/main\/)|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-(?:app-i18n|i18n-(?:inventory|locales)))\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
 const FAST_INSTALL_SMOKE_SCOPE_RE =
@@ -455,9 +455,20 @@ export function assertControlUiGeneratedArtifactsIsolated(changedPaths, branchNa
   if (generatedPaths.length === 0) {
     return;
   }
-  const sourcePaths = changedPaths.filter(
-    (filePath) => !CONTROL_UI_HARD_GENERATED_I18N_RE.test(filePath),
-  );
+  // Only the trusted locale publisher may pair generated memory with authored
+  // plugin bundles/manifests. Its native builder can repair a manifest even
+  // when that plugin's memory is unchanged; ordinary source PRs remain isolated.
+  const sourcePaths = changedPaths.filter((filePath) => {
+    if (CONTROL_UI_HARD_GENERATED_I18N_RE.test(filePath)) {
+      return false;
+    }
+    return (
+      branchName !== "automation/control-ui-locale-refresh" ||
+      !/^extensions\/[^/]+\/(?:openclaw\.plugin\.json|(?:.*\/)?i18n\/locales\/translated\.json)$/.test(
+        filePath,
+      )
+    );
+  });
   if (sourcePaths.length === 0) {
     return;
   }
@@ -689,7 +700,7 @@ export function resolveAllowedGeneratedMixBranch(
   if (env.GITHUB_ACTIONS === "true" && env.OPENCLAW_ALLOW_RELEASE_GENERATED_MIX !== "true") {
     return "";
   }
-  if (RELEASE_BRANCH_RE.test(branchName)) {
+  if (RELEASE_BRANCH_RE.test(branchName) || branchName === "automation/control-ui-locale-refresh") {
     return branchName;
   }
   if (

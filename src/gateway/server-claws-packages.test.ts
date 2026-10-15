@@ -33,6 +33,7 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { clawsPackageHandlers } from "./server-methods/claws-packages.js";
@@ -304,7 +305,7 @@ describe("Gateway Claw package cleanup owner", () => {
   ])("returns actual removal application and all cleanup warnings %j", async (warnings) => {
     const f = await fixture(warnings.uninstallWarnings);
     f.applyRuntime.mockResolvedValue({ ...f.application, warnings: warnings.runtimeWarnings });
-    const { db } = openOpenClawStateDatabase();
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
     db.setAuthorizer((action, table) =>
       action === constants.SQLITE_UPDATE && table === "claw_package_refs"
         ? constants.SQLITE_DENY

@@ -134,6 +134,90 @@ describe("Anthropic runtime-context cache lifecycle", () => {
     },
   );
 
+  it.each([false, true])(
+    "preserves excluded-consult updates and the prompt prefix (prior conversation=%s)",
+    async (priorConversation) => {
+      const model = { ...anthropicModel, id: "claude-opus-5-5" };
+      const answer: Message = {
+        role: "assistant",
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        timestamp: 1,
+        stopReason: "stop",
+        usage: createZeroUsage(),
+        content: [{ type: "text", text: "Answer" }],
+      };
+      const prior: Context["messages"] = priorConversation
+        ? [{ role: "user", content: "Earlier question", timestamp: 0 }, answer]
+        : [];
+      // The generated consult prompt was excluded from replay; both updates survive.
+      const messages: Context["messages"] = [
+        ...prior,
+        {
+          role: "user",
+          content: "Changed instructions",
+          timestamp: 2,
+          operatorMessage: { turnScoped: false },
+        },
+        {
+          role: "user",
+          content: "Consult facts",
+          timestamp: 3,
+          operatorMessage: { turnScoped: true },
+        },
+      ];
+      appendToolRound(messages, model, 2);
+      const expected = [
+        ...(priorConversation
+          ? [
+              { role: "user", content: "Earlier question" },
+              { role: "assistant", content: [{ type: "text", text: "Answer" }] },
+            ]
+          : []),
+        { role: "user", content: "." },
+        { role: "system", content: [{ type: "text", text: "Changed instructions" }] },
+        {
+          role: "system",
+          content: [{ type: "text", text: "Consult facts" }],
+          clear_at: "next_user_message",
+        },
+        { role: "assistant", content: [{ type: "tool_use" }, { type: "tool_use" }] },
+        { role: "user", content: [{ type: "tool_result" }, { type: "tool_result" }] },
+      ];
+      for (const implementation of ["provider", "transport"] as const) {
+        const first = await captureAnthropicRequest(implementation, {
+          model,
+          cacheRetention: "none",
+          context: { ...context, messages },
+        });
+        expect(first.payload.messages).toMatchObject(expected);
+        const second = await captureAnthropicRequest(implementation, {
+          model,
+          cacheRetention: "none",
+          context: {
+            ...context,
+            messages: [
+              ...messages,
+              answer,
+              { role: "user", content: "Next question", timestamp: 6 },
+            ],
+          },
+        });
+        expect(second.payload.messages).toMatchObject([
+          ...expected,
+          { role: "assistant", content: [{ type: "text", text: "Answer" }] },
+          { role: "user", content: "Next question" },
+        ]);
+        expect(second.payload.system).toEqual(first.payload.system);
+        expect(second.payload.system).toEqual([{ type: "text", text: context.systemPrompt }]);
+        expect((second.payload.messages as unknown[]).slice(0, expected.length)).toEqual(
+          first.payload.messages,
+        );
+      }
+    },
+  );
+
   it.each([true])(
     "sends operator context with system authority (turn-scoped=%s)",
     async (turnScoped) => {

@@ -104,6 +104,18 @@ session reservation or temporary output, await `withCommandProcessScope` from th
 same subpath around execution before releasing those resources. The scope joins
 late startup and process cleanup; uncertain cleanup remains an error.
 
+For plugin-owned long-lived children, use `spawnOomScoreAdjusted` from the same
+subpath with native `spawn` options. On Linux it raises the child's
+`oom_score_adj` to `1000` immediately after native spawn so memory pressure
+preferentially kills the child. This preserves custom `argv0`, the environment,
+and native launch errors. There is a brief window before the score write;
+descendants created in that window can retain the inherited score. The Gateway's
+score is never changed. `OPENCLAW_CHILD_OOM_SCORE_ADJ=0` disables the policy,
+including for sanitized child environments; an explicit child value overrides the parent.
+Explicit `shell` launches remain caller-owned. Lower-level users of
+`prepareOomScoreAdjustedSpawn` must call its optional `afterSpawn(child.pid)`
+immediately after spawning to apply the custom-`argv0` adjustment.
+
 `reapOrphanedProcesses` from the same subpath supports recovery of plugin-owned
 macOS process trees after their original host dies. Supply the exact managed
 executable and an argument predicate for its configured instance; also supply
@@ -279,6 +291,13 @@ compatible, clears an incompatible pin, and enforces the model-selection lock.
 The caller still owns model allowlist validation, atomic persistence,
 `markLiveSwitchPending`, and any post-commit effects. Prefer
 `applySessionModelSelection(...)` whenever the full transaction is available.
+
+In an async session-entry patch, prepare an existing auth pin with
+`await prepareAuthProfileProvider({ agentDir, profileId })` from the same subpath
+and pass its result as `recordedProvider`. This reuses the runtime snapshot or
+reads persisted credentials through the auth owner. Pass the result even when
+its `provider` is `undefined`: it records completed preparation and prevents a
+synchronous fallback lookup. Skip preparation when the entry has no auth pin.
 
 Model-picker actions carry only bounded snapshot and catalog tokens. Channel
 actor identity, source-message binding, and serialized callback data stay in

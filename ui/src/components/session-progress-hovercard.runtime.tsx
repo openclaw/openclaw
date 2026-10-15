@@ -17,7 +17,7 @@ import {
 } from "../lib/session-pull-requests.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
-import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
+import type { AppSidebarElement } from "./app-sidebar.tsx";
 import { personActivityRouting, type PersonActivityRouting } from "./person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 import { SessionHovercard, type SessionHovercardInput } from "./session-hovercard-solid.tsx";
@@ -286,7 +286,7 @@ class SessionProgressHovercardController {
     }
     const agentId =
       parseAgentSessionKey(sessionKey)?.agentId ??
-      target.closest<AppSidebarSessionNavigationElement>("openclaw-app-sidebar")?.expandedAgentId();
+      target.closest<AppSidebarElement>("openclaw-app-sidebar")?.expandedAgentId();
     if (!agentId) {
       return;
     }
@@ -387,7 +387,7 @@ class SessionProgressHovercardController {
       return;
     }
     const sidebarRow = this.host
-      .querySelector<AppSidebarSessionNavigationElement>("openclaw-app-sidebar")
+      .querySelector<AppSidebarElement>("openclaw-app-sidebar")
       ?.findSidebarHovercardRowByKey(sessionKey);
     const pullRequests = this.pullRequests?.get(artifactKey);
     const currentProgressCard = this.progressCards?.get(session);
@@ -473,12 +473,19 @@ class SessionProgressHovercardController {
       personActivity: this.personActivity(),
       automationLink: this.applicationContext
         ? {
+            gateway: this.applicationGateway,
+            sessionKey,
+            agentId: session.agentId!,
             href: `${pathForRoute("cron", this.applicationContext.basePath)}?${new URLSearchParams({ session: sessionKey, agent: session.agentId! })}`,
-            navigate: () => {
+            navigate: (jobId) => {
               const context = this.applicationContext;
+              const search = new URLSearchParams({ session: sessionKey, agent: session.agentId! });
+              if (jobId) {
+                search.set("job", jobId);
+              }
               this.close();
               context?.navigate("cron", {
-                search: `?${new URLSearchParams({ session: sessionKey, agent: session.agentId! })}`,
+                search: `?${search}`,
               });
             },
           }

@@ -127,6 +127,11 @@ function parseDirectiveToken(
 }
 
 export function buildVolcengineSpeechProvider(): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) => {
+    const cfg = readProviderConfig(providerConfig);
+    const legacy = resolveLegacyVolcengineCredentials(cfg);
+    return Boolean(resolveSeedSpeechApiKey(cfg.apiKey) || (legacy.appId && legacy.token));
+  };
   return {
     id: "volcengine",
     label: "Volcengine",
@@ -144,12 +149,9 @@ export function buildVolcengineSpeechProvider(): SpeechProviderPlugin {
         gender: v.includes("_female_") ? "female" : "male",
       })),
 
-    isConfigured: ({ providerConfig }) => {
-      const cfg = readProviderConfig(providerConfig);
-      const legacy = resolveLegacyVolcengineCredentials(cfg);
-      return Boolean(resolveSeedSpeechApiKey(cfg.apiKey) || (legacy.appId && legacy.token));
-    },
-
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     synthesize: async (req) => {
       const cfg = readProviderConfig(req.providerConfig);
       const overrides = req.providerOverrides;

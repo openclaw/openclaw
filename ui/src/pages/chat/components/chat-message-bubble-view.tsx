@@ -20,6 +20,7 @@ import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { presentedContent } from "../../../lit/presentation-binding.ts";
 import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
+import { renderPluginSurface } from "../../../plugins/control-ui-view.ts";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { renderAsyncQuestionSummary } from "./chat-async-question.ts";
 import "../../../components/person-reference.ts";
@@ -45,17 +46,14 @@ import { MarkdownText, MessageJson, MessageMarkdown } from "./chat-message-text-
 import { renderReplyLine } from "./chat-reply-attribution.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
-  renderPluginToolResult,
-  renderToolApprovalReviews,
-  renderToolCard,
-  renderToolIcon,
+  ChatToolApprovalReviews,
+  ChatToolCard,
+  ChatToolIcon,
   syncToolDisclosureOverflow,
-} from "./chat-tool-cards.ts";
-import {
-  renderExpandedToolCardContent,
-  renderRawOutputToggle,
-  renderToolOutcome,
-} from "./chat-tool-content.ts";
+  type ToolCardOptions,
+} from "./chat-tool-cards.solid.tsx";
+import { ChatToolContent, ChatToolRawOutput, ChatToolOutcome } from "./chat-tool-content.solid.tsx";
+import { toolResultSurfaceProps } from "./chat-tool-render-model.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
@@ -180,7 +178,7 @@ export function GroupedMessage(props: GroupedMessageProps) {
 
 function InlineToolCards(props: {
   cards: ToolCard[];
-  options: Omit<Parameters<typeof renderToolCard>[1], "expanded" | "onToggleExpanded"> & {
+  options: Omit<ToolCardOptions, "expanded" | "onToggleExpanded"> & {
     isToolExpanded?: (id: string) => boolean;
     onToggleToolExpanded?: (id: string, expanded?: boolean) => void;
     toolCardOverrides?: ReadonlyMap<ToolCard, unknown>;
@@ -193,18 +191,22 @@ function InlineToolCards(props: {
           const disclosureId = () => `${props.options.messageKey}:toolcard:${index()}`;
           const expanded = () => props.options.isToolExpanded?.(disclosureId()) ?? false;
           return (
-            <LitContent
-              value={
-                props.options.toolCardOverrides?.has(card())
-                  ? props.options.toolCardOverrides.get(card())
-                  : renderToolCard(card(), {
-                      ...props.options,
-                      expanded: expanded(),
-                      onToggleExpanded: () =>
-                        props.options.onToggleToolExpanded?.(disclosureId(), expanded()),
-                    })
+            <Show
+              when={props.options.toolCardOverrides?.has(card())}
+              fallback={
+                <ChatToolCard
+                  card={card()}
+                  options={{
+                    ...props.options,
+                    expanded: expanded(),
+                    onToggleExpanded: () =>
+                      props.options.onToggleToolExpanded?.(disclosureId(), expanded()),
+                  }}
+                />
               }
-            />
+            >
+              <LitContent value={props.options.toolCardOverrides?.get(card())} />
+            </Show>
           );
         }}
       </For>
@@ -268,7 +270,7 @@ function AssistantViews(props: ContentProps) {
             />
             <Show when={block().rawText}>
               <div class="chat-tool-card__widget-raw">
-                <LitContent value={renderRawOutputToggle(block().rawText!)} />
+                <ChatToolRawOutput text={block().rawText!} style={{ display: "contents" }} />
               </div>
             </Show>
           </div>
@@ -464,16 +466,19 @@ function BubbleContents(props: ContentProps) {
             />
           }
         >
-          <LitContent
-            value={renderExpandedToolCardContent(
-              props.state().singleToolCard!,
-              props.state().toolRenderOptions,
-            )}
+          <ChatToolContent
+            card={props.state().singleToolCard!}
+            options={props.state().toolRenderOptions}
+            style={{ display: "contents" }}
           />
         </Show>
       </Show>
       <Show when={props.state().isStandaloneToolMessage && props.state().failedToolCard}>
-        <LitContent value={renderToolOutcome("failed", props.state().failedToolCard!.exitCode)} />
+        <ChatToolOutcome
+          outcome="failed"
+          exitCode={props.state().failedToolCard!.exitCode}
+          style={{ display: "contents" }}
+        />
       </Show>
     </>
   );
@@ -502,11 +507,13 @@ function ToolMessageFallback(props: ContentProps) {
       >
         <span class="chat-tool-msg-summary__icon">
           <Show when={props.state().singleToolDisplay} fallback={<Icon name="zap" />}>
-            <LitContent
-              value={renderToolIcon(props.state().singleToolDisplay!.icon, {
+            <ChatToolIcon
+              name={props.state().singleToolDisplay!.icon}
+              tool={{
                 toolName: props.state().singleToolDisplay!.name,
                 pluginToolIcons: props.options.pluginToolIcons,
-              })}
+              }}
+              style={{ display: "contents" }}
             />
           </Show>
         </span>
@@ -536,7 +543,7 @@ function ToolMessageFallback(props: ContentProps) {
         </div>
       </Show>
       <For each={props.state().toolCards} keyed={(card) => card.callId ?? card}>
-        {(card) => <LitContent value={renderToolApprovalReviews(card())} />}
+        {(card) => <ChatToolApprovalReviews card={card()} style={{ display: "contents" }} />}
       </For>
     </div>
   );
@@ -552,16 +559,21 @@ function ToolMessage(props: ContentProps) {
     <Show
       when={permission()}
       fallback={
-        <LitContent
-          value={renderPluginToolResult(
-            props.state().singleToolCard,
-            {
-              ...props.state().toolRenderOptions,
-              expanded: props.state().toolMessageExpanded,
-            },
-            fallback,
+        <Show when={props.state().singleToolCard} fallback={<LitContent value={fallback} />}>
+          {(card) => (
+            <LitContent
+              value={renderPluginSurface(
+                "tool-result",
+                toolResultSurfaceProps(card(), {
+                  ...props.state().toolRenderOptions,
+                  expanded: props.state().toolMessageExpanded,
+                }),
+                fallback,
+                props.options.presented ?? true,
+              )}
+            />
           )}
-        />
+        </Show>
       }
     >
       {(request) => (

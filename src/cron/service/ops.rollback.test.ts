@@ -4,6 +4,7 @@ import { observeCronStoreCommits } from "../../../test/helpers/cron/runtime-muta
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { AgentDeletionCommitUncertainError } from "../../agents/agent-lifecycle-registry.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import * as cronSchedule from "../schedule.js";
 import { readCronJobScratchState, writeCronJobScratch } from "../scratch-store.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
@@ -264,7 +265,7 @@ describe("cron service ops persist rollback", () => {
         return "roster committed";
       });
       const scratchWrites = trackSqliteStatementExecutions(
-        openOpenClawStateDatabase().db,
+        requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
         ["deletes"] as const,
         (sql) => (sql.includes('delete from "cron_job_scratch"') ? "deletes" : null),
       );

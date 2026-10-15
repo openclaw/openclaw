@@ -2,7 +2,6 @@ import {
   embeddedAgentLog,
   type AgentHarnessRuntimeArtifactBinding,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import {
@@ -96,7 +95,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
   let nativeProcessAuthorityReleased = false;
   // Cancellation still owes cleanup. Keep host/lineage authority until this
   // resource owner closes, without inheriting the foreground abort signal.
-  const cleanupAuthority = createNativeSessionBindingAuthority(connection.authority.lineage, () => {
+  const cleanupAuthority = connection.authority.withLiveness(() => {
     params.hostCapabilities.assertActive();
     if (nativeProcessAuthorityReleased) {
       throw new Error("Codex attempt cleanup authority has ended");

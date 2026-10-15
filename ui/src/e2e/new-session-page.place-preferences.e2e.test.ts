@@ -164,7 +164,7 @@ suite.define(() => {
       const where = page.locator("#new-session-where-trigger");
       await expect.poll(() => where.getAttribute("data-cloud-profile")).toBeNull();
       await where.click();
-      const picker = page.locator("wa-popover.new-session-page__where-popover");
+      const picker = page.locator(".oc-popover.new-session-page__where-popover");
       await picker.locator('[data-value="device:writer-runner"]').waitFor();
       expect(await picker.locator('[data-value="cloud:aws"]').count()).toBe(0);
       await page.keyboard.press("Escape");
@@ -345,7 +345,7 @@ suite.define(() => {
       await pollLocatorText(project.locator(".new-session-page__trigger-label")).toBe("Registered");
       await expect.poll(() => checkout.getAttribute("data-worktree")).toBe("true");
       await checkout.click();
-      const checkoutPopover = page.locator("wa-popover.new-session-page__checkout-popover");
+      const checkoutPopover = page.locator(".oc-popover.new-session-page__checkout-popover");
       await expect
         .poll(() => checkoutBaseRefInput(checkoutPopover).inputValue())
         .toBe("release/next");

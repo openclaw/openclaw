@@ -8,7 +8,7 @@ title: "Exec tool"
 
 Run shell commands in the workspace. `exec` is a mutating shell surface: commands can create, edit, or delete files wherever the selected host or sandbox filesystem permits. Disabling OpenClaw filesystem tools such as `write`, `edit`, or `apply_patch` does not make `exec` read-only.
 
-Supports foreground and background execution via `process`. If `process` is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`. Background sessions are scoped per agent. `process` only sees sessions from the same agent.
+Gateway, sandbox, and worker-local execution support foreground and background execution via `process`. Remote `host=node` execution uses synchronous `system.run` and never creates a `process` session, even when `process` is enabled. If `process` is disallowed, local `exec` also runs synchronously and ignores `yieldMs`/`background`. Background sessions are scoped per agent. `process` only sees sessions from the same agent.
 
 Completed calls return command output directly. Use `process` only when `exec` reports that a command is still running and provides a `sessionId`; an identifier printed by the command is ordinary output, not a process handle.
 
@@ -54,7 +54,7 @@ Run in a pseudo-terminal when available. Use for TTY-only CLIs, coding agents, a
 </ParamField>
 
 <ParamField path="host" type="'auto' | 'sandbox' | 'gateway' | 'node'" default="auto">
-Where to execute. Omit `host` or use `auto` to inherit the configured exec host, including agent and session overrides. When that configured host is also `auto`, it resolves to `sandbox` when a sandbox runtime is active and `gateway` otherwise. A session that requires a sandbox stays sandboxed regardless of the configured host.
+Where to execute. With no `node` argument, omit `host` or use `auto` to inherit the configured exec host, including agent and session overrides. When that configured host is also `auto`, it resolves to `sandbox` when a sandbox runtime is active and `gateway` otherwise. A session that requires a sandbox stays sandboxed regardless of the configured host.
 
 The model-facing schema and code-mode signature list only hosts permitted by the session's host policy, and omit `sandbox` when no sandbox runtime is active. These choices are captured when the tool is created. Node connectivity is checked at execution time.
 </ParamField>
@@ -64,7 +64,7 @@ The baseline ask mode is derived from `tools.exec.mode` and host approvals. For 
 </ParamField>
 
 <ParamField path="node" type="string">
-Node id/name when `host=node`.
+Node id/name. With `host` omitted, `node` implies `host=node` and follows the same host policy and approvals. An explicit host other than `node` (including `auto`) conflicts and is rejected before execution; omit `host` or set it to `node`.
 </ParamField>
 
 <ParamField path="elevated" type="boolean" default="false">
@@ -79,10 +79,11 @@ Notes:
 - `elevated` escapes the sandbox onto the configured host path: `gateway` by default, or `node` when `tools.exec.host=node` (or the session default is `host=node`). It is only available when elevated access is enabled for the current session/provider.
 - `gateway`/`node` approvals are controlled by the host approvals file.
 - `node` requires a paired, connected node that supports `system.run` (companion app or headless node host). With no target set, exec selects the sole eligible node. If multiple eligible nodes are connected, set `exec.node`, `tools.exec.node`, or `/exec node=...` to select one. It never uses the active Canvas target. An explicit or bound target must itself be connected and executable. Completed results identify the selected node alongside command output.
-- `exec host=node` is the only shell-execution path for nodes. The legacy `nodes.run` wrapper was removed in 2026.3.31.
+- Remote `host=node` calls ignore `background`/`yieldMs` and return output when `system.run` finishes. Explicit `background: true` or `yieldMs` requests produce a warning with the execution result, not while approval is pending. No process `sessionId` is returned. For background work on a paired device, use an [OpenClaw worker session](/nodes/session-hosting) with worker-local `exec` and `process`; see [Worker environments](/gateway/background-process#worker-environments).
+- `exec host=node` is the remote shell-execution path for nodes. The legacy `nodes.run` wrapper was removed in 2026.3.31.
 - On non-Windows hosts, exec uses `SHELL` when set. If `SHELL` is `fish`, it prefers `bash` (or `sh`) from `PATH` to avoid fish-incompatible bashisms, then falls back to `SHELL` if neither exists.
 - On Windows hosts, exec prefers PowerShell 7 (`pwsh`) discovery: Program Files, ProgramW6432, then PATH. It falls back to Windows PowerShell 5.1.
-- On non-Windows gateway hosts, bash and zsh exec commands use a startup snapshot. OpenClaw captures sourceable aliases/functions and a small safe environment set from shell startup files into `$OPENCLAW_STATE_DIR/cache/shell-snapshots/`, then sources that snapshot before each exec command. Secret-looking variables are excluded. The in-memory cache keeps up to 128 recently used snapshot keys; evicted keys can reuse fresh snapshots on disk. Sandbox and node exec do not use this snapshot. Set `OPENCLAW_EXEC_SHELL_SNAPSHOT=0` in the Gateway process environment to disable this snapshot path.
+- On non-Windows gateway hosts, bash and zsh exec commands use a startup snapshot. OpenClaw captures sourceable aliases/functions and a small safe environment set from shell startup files into `$OPENCLAW_STATE_DIR/cache/shell-snapshots/`, then sources that snapshot before each exec command. Secret-looking variables are excluded. The in-memory cache keeps up to 128 recently used snapshot keys; evicted keys can reuse fresh snapshots on disk without launching another validation shell. New captures are validated before atomic publication. Sandbox and node exec do not use this snapshot. Set `OPENCLAW_EXEC_SHELL_SNAPSHOT=0` in the Gateway process environment to disable this snapshot path.
 - Host execution (`gateway`/`node`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to prevent binary hijacking or injected code.
 - Exact `"cat"` or empty `GIT_PAGER` and `PAGER` overrides are normalized to empty values, including on node shell-wrapper execution. This disables Git paging without passing an executable pager name through `PATH`. Other programs may interpret an empty `PAGER` differently. Use their noninteractive flags when needed. Other pager commands, paths, whitespace variants, and `MANPAGER` overrides remain blocked.
 - OpenClaw sets `OPENCLAW_SHELL=exec` in the spawned command environment (including PTY and sandbox execution) so shell/profile rules can detect exec-tool context.

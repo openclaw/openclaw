@@ -4,6 +4,7 @@ import type { TranscriptUtterance as ProjectedTranscriptUtterance } from "../../
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { ensureAbsoluteDirectory } from "../infra/fs-safe.js";
+import { readSqliteDatabaseWriteTokenForPath } from "../infra/sqlite-database-admission.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -54,6 +55,15 @@ export type * from "./store-types.js";
 export { safeTranscriptPathSegment, transcriptSessionExportKey, transcriptSessionSelector };
 
 type TranscriptSessionMatchEntry = StoreTypes.TranscriptsSessionEntry & { inputRevision: string };
+
+// Retain only the latest bounded page across the short-lived RPC store instances.
+let transcriptListCache:
+  | {
+      key: string;
+      writeToken: string;
+      page: TranscriptReadRequests["transcripts.readEntries"]["output"];
+    }
+  | undefined;
 
 /** Canonical meeting-capture transcript store. Files are explicit exports only. */
 export class TranscriptsStore {
@@ -305,7 +315,28 @@ export class TranscriptsStore {
     options: read.TranscriptReadOptions,
   ): Promise<read.TranscriptReadPage<StoreTypes.TranscriptReadEntry>>;
   async listReadEntries(options: read.TranscriptReadOptions & { projection?: "public" }) {
-    return this.readWorker("transcripts.readEntries", { params: options });
+    const operation = createTranscriptStoreOperation(this.databaseOptions);
+    operation.assertCurrent();
+    const writeToken = readSqliteDatabaseWriteTokenForPath(operation.databaseOptions.path);
+    const key = JSON.stringify([
+      operation.databaseOptions.path,
+      operation.databaseOptions.readOnly,
+      process.env.TZ,
+      options,
+    ]);
+    if (
+      writeToken &&
+      transcriptListCache?.writeToken === writeToken &&
+      transcriptListCache.key === key
+    ) {
+      return structuredClone(transcriptListCache.page);
+    }
+    const page = await operation.read("transcripts.readEntries", { params: options });
+    if (writeToken) {
+      // A write during the read invalidates this pre-read token on the next lookup.
+      transcriptListCache = { key, writeToken, page: structuredClone(page) };
+    }
+    return page;
   }
 
   async writeSession(

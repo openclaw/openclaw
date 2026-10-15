@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -8,6 +7,8 @@ import { isPathInside } from "../infra/path-guards.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
+  readSqliteDatabaseIntegrityVerification,
+  recordSqliteDatabaseIntegrity,
 } from "../infra/sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import {
@@ -29,6 +30,7 @@ import {
 import {
   clearPersistedOpenClawAgentCanonicalValidation,
   hasPersistedOpenClawAgentCanonicalValidation,
+  loadOpenClawAgentCanonicalValidationReceipt,
 } from "./openclaw-agent-canonical-validation-receipt.js";
 import {
   adoptCanonicalSessionValidationSchema,
@@ -45,6 +47,7 @@ import {
 } from "./openclaw-agent-db-resources.js";
 import {
   agentDatabaseValidationKey,
+  createOpenClawAgentDatabaseValidationReceipt,
   type OpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-facts.js";
 
@@ -94,16 +97,20 @@ function observeValidationPath(pathname: string, admission: boolean): void {
       invalidateOpenClawAgentDatabaseValidation(pathname, validation.identity);
     }
   };
-  const watched = observeOwnedDirectory(path.dirname(pathname), (filename) => {
-    if (
-      filename === undefined ||
-      (process.platform === "win32"
-        ? filename.toLowerCase() === path.basename(pathname).toLowerCase()
-        : filename === path.basename(pathname))
-    ) {
-      revalidate();
-    }
-  });
+  const watched = observeOwnedDirectory(
+    path.dirname(pathname),
+    (filename) => {
+      if (
+        filename === undefined ||
+        (process.platform === "win32"
+          ? filename.toLowerCase() === path.basename(pathname).toLowerCase()
+          : filename === path.basename(pathname))
+      ) {
+        revalidate();
+      }
+    },
+    { recoveryIntervalMs: 30_000 },
+  );
   // Retained proof outlives native handles; its cache owns observation cleanup.
   validationObservations.set(pathname, {
     revalidate,
@@ -212,6 +219,17 @@ export function adoptOpenClawAgentDatabaseSchema(
   }
   if (adopted) {
     adoptCanonicalSessionValidationSchema(database.db);
+    if (validation?.integrityVerifiedAt !== undefined) {
+      if (readSqliteDatabaseIntegrityVerification(database.db) === undefined) {
+        recordSqliteDatabaseIntegrity(database.db, validation.integrityVerifiedAt);
+      }
+      if (
+        getSqliteDatabaseAdmission(database.db, agentDatabaseValidationKey)?.receiptId !==
+        validation.receiptId
+      ) {
+        publishSqliteDatabaseAdmission(database.db, agentDatabaseValidationKey, validation);
+      }
+    }
   }
   return adopted;
 }
@@ -286,9 +304,8 @@ export function getOpenClawAgentDatabaseValidation(
   ) {
     return undefined;
   }
-  const validation = entry.validation;
-  bindValidationLifetime(database, validation);
-  return validation;
+  bindValidationLifetime(database, entry.validation);
+  return entry.validation;
 }
 
 /** The receiving opener must adopt this proof against its own physical file identity. */
@@ -579,7 +596,7 @@ export function hasOpenClawAgentCanonicalValidation(
   ) {
     return false;
   }
-  const canonical = createValidationReceipt({ ...database, path: pathname }, true);
+  const canonical = createOpenClawAgentDatabaseValidationReceipt(database, true);
   const entry: ValidationEntry = validatedPaths.get(pathname) ?? {
     integrityVerified: false,
   };
@@ -597,6 +614,11 @@ export function invalidateOpenClawAgentCanonicalValidation(
   const validation = canonicalValidationReceipt(database);
   if (validation) {
     Atomics.store(new Int32Array(validation.canonicalReady), 0, 0);
+    // A seal can restore a separate copy of this receipt after the last handle closes.
+    const pathname = findOpenClawAgentDatabaseIdentity(database)?.canonicalPath;
+    if (pathname && validatedPaths.get(pathname)?.integrityVerified) {
+      publishSqliteDatabaseAdmission(database.db, agentDatabaseValidationKey, validation);
+    }
   }
   clearPersistedOpenClawAgentCanonicalValidation(database);
 }
@@ -667,40 +689,17 @@ function isOpenClawAgentCanonicalStoreEmpty(database: { db: DatabaseSync }): boo
   );
 }
 
-function createValidationReceipt(
-  database: ValidationDatabase,
-  canonicalReady: boolean,
-): OpenClawAgentDatabaseValidation {
-  const { identity, birthtime } = readOpenClawAgentDatabaseIdentity(database);
-  if (typeof identity !== "string" || birthtime === undefined) {
-    throw new Error("Only persistent agent databases retain integrity validation");
-  }
-  const validation = {
-    agentId: database.agentId,
-    identity,
-    birthtime,
-    receiptId: randomUUID(),
-    valid: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
-    canonicalReady: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
-  };
-  if (canonicalReady) {
-    Atomics.store(new Int32Array(validation.canonicalReady), 0, 1);
-  }
-  Atomics.store(new Int32Array(validation.valid), 0, 1);
-  return validation;
-}
-
 export function setOpenClawAgentDatabaseValidation(
   database: ValidationDatabase,
 ): OpenClawAgentDatabaseValidation {
   const pathname = readOpenClawAgentDatabaseIdentity(database).canonicalPath;
   const revoked = hasRevokedOpenClawAgentDatabaseValidation(pathname);
-  let validation = createValidationReceipt(
+  let validation = createOpenClawAgentDatabaseValidationReceipt(
     database,
     isOpenClawAgentCanonicalStoreEmpty(database) ||
       (!revoked &&
         !database.db.isTransaction &&
-        hasPersistedOpenClawAgentCanonicalValidation(database)),
+        loadOpenClawAgentCanonicalValidationReceipt(database)),
   );
   const entry = validatedPaths.get(pathname);
   if (
@@ -711,6 +710,9 @@ export function setOpenClawAgentDatabaseValidation(
   ) {
     // Successful admission promotes this owner; only revocation retires pending handoffs.
     if (entry.validation) {
+      if (validation.integrityVerifiedAt !== undefined) {
+        entry.validation.integrityVerifiedAt = validation.integrityVerifiedAt;
+      }
       Atomics.store(
         new Int32Array(entry.validation.canonicalReady),
         0,

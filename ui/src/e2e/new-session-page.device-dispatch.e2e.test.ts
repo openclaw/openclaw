@@ -287,9 +287,7 @@ suite.define(() => {
           page,
           `failed-topology-${value.replace(":", "-")}.png`,
           {
-            surface: page.locator(
-              '.new-session-page__where-popover > dialog > wa-popup > [part="popup"]',
-            ),
+            surface: page.locator(".oc-popover.new-session-page__where-popover"),
             content: [selectedDevice, automaticDevice],
           },
         );

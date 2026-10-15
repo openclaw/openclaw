@@ -5,15 +5,14 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,
-  defineChannelMessageAdapter,
+  createChannelMessageAdapterFromOutbound,
   listMessageReceiptPlatformIds,
-  type ChannelMessageSendResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createAttachedChannelResultAdapter,
   createEmptyChannelResult,
 } from "openclaw/plugin-sdk/channel-send-result";
-import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import type { ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
@@ -364,54 +363,26 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
   }),
 };
 
-function toLineMessageSendResult(
-  result: Awaited<ReturnType<NonNullable<typeof lineOutboundAdapter.sendPayload>>>,
-): ChannelMessageSendResult {
-  const { receipt } = result;
-  if (!receipt) {
-    throw new Error("LINE message adapter send did not return a receipt");
-  }
-  return {
-    messageId: result.messageId || receipt.primaryPlatformMessageId,
-    receipt,
-  };
-}
-
-export const lineMessageAdapter = defineChannelMessageAdapter({
+export const lineMessageAdapter = createChannelMessageAdapterFromOutbound<OpenClawConfig>({
   id: "line",
-  durableFinal: {
-    capabilities: {
-      text: true,
-      media: true,
-      // Core withholds durable final delivery from any payload whose declared
-      // capabilities it cannot find, so a reply that names a target has to say so.
-      replyTo: true,
-      messageSendingHooks: true,
-    },
+  capabilities: {
+    text: true,
+    media: true,
+    replyTo: true,
+    messageSendingHooks: true,
   },
-  send: {
-    // Core owns this context; forward it whole. Picking fields by hand is how the
-    // reply target it resolved stopped reaching the send.
-    text: async ({ onDeliveryResult, ...ctx }) => {
-      const result = await lineOutboundAdapter.sendPayload!({
+  outbound: {
+    // Keep caption/quote ordering and per-part receipts in the payload owner.
+    sendText: (ctx) =>
+      lineOutboundAdapter.sendPayload!({
         ...ctx,
         payload: { text: ctx.text },
-        onDeliveryResult: async (deliveryResult) => {
-          await onDeliveryResult?.(toLineMessageSendResult(deliveryResult));
-        },
-      });
-      return toLineMessageSendResult(result);
-    },
-    media: async ({ onDeliveryResult, ...ctx }) => {
-      const result = await lineOutboundAdapter.sendPayload!({
+      }),
+    sendMedia: (ctx) =>
+      lineOutboundAdapter.sendPayload!({
         ...ctx,
         payload: { text: ctx.text, mediaUrl: ctx.mediaUrl },
-        onDeliveryResult: async (deliveryResult) => {
-          await onDeliveryResult?.(toLineMessageSendResult(deliveryResult));
-        },
-      });
-      return toLineMessageSendResult(result);
-    },
+      }),
   },
   receive: {
     defaultAckPolicy: "after_receive_record",

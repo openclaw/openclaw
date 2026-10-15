@@ -2,6 +2,10 @@ import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtim
 import { setHostToolFactoryForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import {
   codexTestTurnIds,
@@ -20,6 +24,17 @@ import {
   type CodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
 
+export function codexHookCommand(config: unknown, key: string) {
+  const entries = (config as Record<string, unknown> | undefined)?.[key];
+  if (!Array.isArray(entries)) {
+    return undefined;
+  }
+  return (
+    entries as Array<{ hooks?: Array<{ command?: string; timeout?: number; type?: string }> }>
+  )
+    .at(0)
+    ?.hooks?.at(0);
+}
 const readCodexAppServerBindingMock = vi.fn();
 const isCodexAppServerNativeAuthProfileMock = vi.fn();
 const getSharedCodexAppServerClientMock = vi.fn();
@@ -56,6 +71,10 @@ vi.mock("./shared-client.js", async (importOriginal) => ({
   getSharedCodexAppServerClient: (...args: unknown[]) => getSharedCodexAppServerClientMock(...args),
   getLeasedSharedCodexAppServerClient: (...args: unknown[]) =>
     getSharedCodexAppServerClientMock(...args),
+  retainSharedCodexAppServerClientByInstanceId: async () => ({
+    client: await getSharedCodexAppServerClientMock(),
+    release: vi.fn(),
+  }),
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
   releaseCodexAppServerClientLease: vi.fn((lease: { client?: unknown }) => {
     lease.client = undefined;
@@ -347,6 +366,7 @@ function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionPa
 export function useSideQuestionTestSetup() {
   beforeEach(async () => {
     await nativeHookRelayTesting.clearNativeHookRelaysForTests();
+    setRuntimeConfigSnapshot({});
     readCodexAppServerBindingMock.mockReset();
     isCodexAppServerNativeAuthProfileMock.mockReset();
     getSharedCodexAppServerClientMock.mockReset();
@@ -398,6 +418,7 @@ export function useSideQuestionTestSetup() {
 
   afterEach(async () => {
     await nativeHookRelayTesting.clearNativeHookRelaysForTests();
+    clearRuntimeConfigSnapshot();
     resetDiagnosticEventsForTest();
     resetGlobalHookRunner();
     vi.unstubAllGlobals();

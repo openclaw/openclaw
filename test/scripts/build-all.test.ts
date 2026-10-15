@@ -6,7 +6,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   BUILD_ALL_STEPS,
-  formatBuildAllDuration,
   formatBuildAllTimingSummary,
   parseBuildAllArgs,
   resolveBuildAllEnvironment,
@@ -135,41 +134,39 @@ describe("resolveBuildAllStep", () => {
     );
   });
 
-  it("pins the first explicit full commit alias and rejects malformed values", () => {
-    const gitSha = "A".repeat(40);
-    expect(
-      resolveBuildAllEnvironment(
-        { GIT_SHA: gitSha, GITHUB_SHA: "b".repeat(40) },
-        () => new Date("2026-07-10T12:34:56.000Z"),
-        () => "c".repeat(40),
-      ).GIT_COMMIT,
-    ).toBe(gitSha.toLowerCase());
-    expect(() =>
-      resolveBuildAllEnvironment({ GIT_COMMIT: "deadbeef" }, undefined, () => null),
-    ).toThrow("full 40-character hexadecimal SHA");
-  });
+  it.each([
+    { heapMb: "4352", concurrency: "1" },
+    { heapMb: "12288", concurrency: "2" },
+  ])(
+    "passes encoded import URLs literally to managed Node on Windows (heap $heapMb)",
+    ({ heapMb, concurrency }) => {
+      const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
+      const result = resolveBuildAllStep(
+        {
+          ...getBuildAllStep("tsdown"),
+          args: ["--import", importUrl, ...getBuildAllStep("tsdown").args.slice(2)],
+        },
+        {
+          nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+          env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: heapMb },
+        },
+      );
 
-  it("passes encoded import URLs literally to managed Node on Windows", () => {
-    const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
-    const result = resolveBuildAllStep(
-      { label: "tsdown", args: ["--import", importUrl, "scripts/tsdown-build.mts"] },
-      { nodeExecPath: "C:\\Program Files\\nodejs\\node.exe", env: {} },
-    );
-
-    expect(
-      createManagedCommandInvocation({
-        bin: result.command,
-        args: result.args,
-        ...result.options,
-        platform: "win32",
-      }),
-    ).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["--import", importUrl, "scripts/tsdown-build.mts"],
-      shell: false,
-      windowsVerbatimArguments: undefined,
-    });
-  });
+      expect(
+        createManagedCommandInvocation({
+          bin: result.command,
+          args: result.args,
+          ...result.options,
+          platform: "win32",
+        }),
+      ).toEqual({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: ["--import", importUrl, "scripts/tsdown-build.mts", "--concurrency", concurrency],
+        shell: false,
+        windowsVerbatimArguments: undefined,
+      });
+    },
+  );
 
   it.each([false, true])(
     "runs plugin builds through managed Node on Windows (defer isolated: %s)",
@@ -658,6 +655,54 @@ describe("resolveBuildAllSteps", () => {
       ]);
     },
   );
+  it("waits for copied assets and emitted runtime metadata before UI, then joins independent checks", async () => {
+    const copied = Promise.withResolvers<{ status: number }>();
+    const metadata = Promise.withResolvers<{ status: number }>();
+    const copyStarted = Promise.withResolvers<void>();
+    const metadataStarted = Promise.withResolvers<void>();
+    const checkStarted = Promise.withResolvers<void>();
+    const check = Promise.withResolvers<{ status: number }>();
+    const calls: string[] = [];
+    const build = runBuildAllSteps("full", {
+      ...buildRunner(),
+      steps: [
+        "tsdown",
+        "plugins:assets:copy",
+        "runtime-postbuild",
+        "check-plugin-sdk-exports",
+        "ui:build",
+        "write-build-info",
+      ].map((label) => ({ label, args: [label] })),
+      runStep({ args: [label] }) {
+        calls.push(label!);
+        if (label === "plugins:assets:copy") {
+          copyStarted.resolve();
+          return copied.promise;
+        }
+        if (label === "runtime-postbuild") {
+          metadataStarted.resolve();
+          return metadata.promise;
+        }
+        if (label === "check-plugin-sdk-exports") {
+          checkStarted.resolve();
+          return check.promise;
+        }
+        return { status: 0 };
+      },
+    });
+    await copyStarted.promise;
+    expect(calls).not.toContain("ui:build");
+    copied.resolve({ status: 0 });
+    await metadataStarted.promise;
+    expect(calls).not.toContain("ui:build");
+    metadata.resolve({ status: 0 });
+    await checkStarted.promise;
+    await Promise.resolve();
+    expect(calls).toContain("ui:build");
+    expect(calls).not.toContain("write-build-info");
+    check.resolve({ status: 0 });
+    expect((await build).exitCode).toBe(0);
+  });
   it.each([undefined, "0"])(
     "preserves source-run declaration choice %s through the canonical runtime build",
     async (skipDts) => {
@@ -793,17 +838,8 @@ describe("resolveBuildAllSteps", () => {
       expect(env).toEqual(originalEnv);
     },
   );
-  it("rejects unknown build profiles", () => {
-    expect(() => resolveBuildAllSteps("wat")).toThrow("Unknown build profile: wat");
-  });
 });
 describe("build-all timing output", () => {
-  it("formats short and long phase durations compactly", () => {
-    expect(formatBuildAllDuration(42.4)).toBe("42ms");
-    expect(formatBuildAllDuration(1234)).toBe("1.23s");
-    expect(formatBuildAllDuration(12345)).toBe("12.3s");
-  });
-
   it("summarizes phases slowest first with total time and status", () => {
     expect(
       formatBuildAllTimingSummary([

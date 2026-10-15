@@ -30,6 +30,7 @@ import {
   dropRepoOwnedCustomElements,
   trackCustomElementRegistry,
 } from "./jsdom-custom-elements.ts";
+import { type JsdomResourceTracking, trackJsdomResources } from "./jsdom-resources.ts";
 import { repositoryTestApiPublications } from "./repository-test-api-publications.ts";
 import {
   drainSqliteTestAgentOwner,
@@ -82,6 +83,7 @@ const RETAINED_MCP_MANAGERS = Symbol.for("openclaw.nonIsolatedRetainedMcpManager
 const SUBAGENT_REGISTRY_TEST_API = Symbol.for("openclaw.subagentRegistryTestApi");
 // Shared-worker scoped: the registry lives on the worker global, not in the module graph.
 const CUSTOM_ELEMENT_TRACKING = Symbol.for("openclaw.nonIsolatedCustomElementTracking");
+const DOM_RESOURCE_TRACKING = Symbol.for("openclaw.nonIsolatedDomResourceTracking");
 const nativeConsoleMethods = {
   log: console.log,
   info: console.info,
@@ -108,6 +110,18 @@ function getSharedTestHome(): string | undefined {
     [SHARED_TEST_SETUP]?: { tempHome?: string };
   };
   return globalState[SHARED_TEST_SETUP]?.tempHome ?? process.env.OPENCLAW_TEST_HOME;
+}
+
+function retirableModuleExecution(
+  node: EvaluatedModuleNode,
+  modules: EvaluatedModules,
+  executions: ModuleExecutionInfo,
+): ModuleExecution | undefined {
+  const id = node.id.startsWith("mock:") ? node.id.slice(5) : node.id;
+  const execution = executions.get(id);
+  return execution && !execution.external && !modules[RETIRED_TEST_API_EXECUTIONS]?.has(execution)
+    ? execution
+    : undefined;
 }
 
 function resetEvaluatedModules(
@@ -140,14 +154,8 @@ function resetEvaluatedModules(
     // using the unprefixed id for automocks. Module resets preserve those records.
     const key = repositoryTestApiPublications.get(node.file);
     const sqliteKey = sqliteTestSingletonPublications.get(node.file);
-    const executionId = node.id.startsWith("mock:") ? node.id.slice(5) : node.id;
-    const execution = executions.get(executionId);
-    if (
-      (key || (sqliteKey && !retainedSqlite)) &&
-      execution &&
-      !execution.external &&
-      !retiredExecutions.has(execution)
-    ) {
+    const execution = retirableModuleExecution(node, modules, executions);
+    if ((key || (sqliteKey && !retainedSqlite)) && execution) {
       retiredExecutions.add(execution);
       const publication =
         key === undefined ? undefined : Object.getOwnPropertyDescriptor(globalThis, key);
@@ -194,6 +202,7 @@ function restoreSharedTestHomeAfterEnvUnstub(testHomeRaw: string | undefined): v
 function customElementTrackingStore(): Record<PropertyKey, unknown> & {
   customElements?: CustomElementRegistry;
   [CUSTOM_ELEMENT_TRACKING]?: CustomElementTracking;
+  [DOM_RESOURCE_TRACKING]?: JsdomResourceTracking;
 } {
   return globalThis;
 }
@@ -207,6 +216,13 @@ function installCustomElementTracking(): void {
     return;
   }
   globalStore[CUSTOM_ELEMENT_TRACKING] = trackCustomElementRegistry(registry);
+}
+
+function installDomResourceTracking(): void {
+  const store = customElementTrackingStore();
+  if (typeof document !== "undefined" && store[DOM_RESOURCE_TRACKING]?.document !== document) {
+    store[DOM_RESOURCE_TRACKING] = trackJsdomResources();
+  }
 }
 
 function dropTrackedRepoOwnedCustomElements(): void {
@@ -480,6 +496,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     super.onCollectStart(file);
     if (!this.config.isolate) {
       installCustomElementTracking();
+      installDomResourceTracking();
     }
     restoreRealTimers();
     restoreNativeTimerGlobals();
@@ -535,6 +552,8 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
       .map((file) => path.relative(this.config.root, file.filepath))
       .join(", ");
     const internals = this as unknown as TestRunnerInternals;
+    const modules = internals.workerState.evaluatedModules as EvaluatedModules;
+    const executions = internals.workerState.moduleExecutionInfo;
     const failed = new Set<RunnerTestFile>();
     const recordFailure = (phase: string, error: unknown) => {
       const detail = inspect(error, { depth: null, customInspect: false, colors: false });
@@ -646,7 +665,19 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
         retainSqliteTestCustody();
       }
     }
-    if (!(await drain("singleton lifecycle", () => drainSqliteTestSingletons(recordFailure)))) {
+    const canRetireSource = this.config.isolate
+      ? undefined
+      : (key: symbol) =>
+          Array.from(modules.idToModuleMap.values()).some(
+            (node) =>
+              sqliteTestSingletonPublications.get(node.file) === key &&
+              retirableModuleExecution(node, modules, executions) !== undefined,
+          );
+    if (
+      !(await drain("singleton lifecycle", () =>
+        drainSqliteTestSingletons(recordFailure, canRetireSource),
+      ))
+    ) {
       retainSqliteTestCustody();
     }
     clean("secret redaction", resetOpenClawSecretRedactionState);
@@ -654,18 +685,11 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
       for (const [phase, run] of [
         ["plugin runtimes", clearNamedPluginRuntimeStoresForTest],
         ["custom elements", dropTrackedRepoOwnedCustomElements],
+        ["DOM resources", () => customElementTrackingStore()[DOM_RESOURCE_TRACKING]?.retire()],
         ["document body", resetSharedDocumentBody],
         ["Gateway admission", resetGatewayWorkAdmission],
         ["module mocks", () => internals.moduleRunner?.mocker?.reset?.()],
-        [
-          "evaluated modules",
-          () =>
-            resetEvaluatedModules(
-              internals.workerState.evaluatedModules as EvaluatedModules,
-              internals.workerState.moduleExecutionInfo,
-              testFiles,
-            ),
-        ],
+        ["evaluated modules", () => resetEvaluatedModules(modules, executions, testFiles)],
       ] as const) {
         clean(phase, run);
       }

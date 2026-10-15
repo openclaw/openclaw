@@ -1,5 +1,5 @@
 import type { AssistantMessage, Context, Model, ProviderReplayState } from "@openclaw/llm-core";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { convertResponsesMessages as convertProviderResponsesMessages } from "../providers/openai-responses-shared.js";
 import { createZeroUsage } from "../usage.test-support.js";
@@ -7,7 +7,10 @@ import {
   buildOpenAIResponsesReasoningReplayMetadata,
   suppressOpenAIResponsesCompaction,
 } from "./openai-responses-compaction-replay.js";
-import { stringifyRedactedEvent, summarizeResponsesPayload } from "./openai-responses-debug.js";
+import {
+  normalizeResponsesFailedEvent,
+  summarizeResponsesPayload,
+} from "./openai-responses-debug.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
 import {
   processResponsesStream,
@@ -586,8 +589,16 @@ describe("OpenAI Responses compaction replay", () => {
     try {
       const payload = summarizeResponsesPayload(value);
       expect(payload).not.toContain(secret);
-      expect(stringifyRedactedEvent(value)).not.toContain(secret);
       expect(payload).toContain("<opaque data omitted>");
+      const failure = normalizeResponsesFailedEvent({ response: { error_details: value } }, model);
+      assert(failure.observation);
+      for (const preview of [
+        failure.observation.failureFieldsPreview,
+        failure.observation.responsePreview,
+      ]) {
+        expect(preview).not.toContain(secret);
+        expect(preview).toContain("<opaque data omitted>");
+      }
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;

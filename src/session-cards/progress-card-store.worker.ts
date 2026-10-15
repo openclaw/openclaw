@@ -25,7 +25,7 @@ export type ProgressCardWorkerOperations = {
   };
 };
 
-/** Borrows the canonical agent writer connection; reset and incognito share its row kernel. */
+/** Borrows the canonical agent writer connection; reset shares its row kernel. */
 export function bindSqliteWorkerBackend(
   _input: undefined,
   context: SqliteWorkerDatabaseContext,

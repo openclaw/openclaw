@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
   prepareSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { pluginStatePublication } from "./plugin-state-publication.js";
 import {
@@ -23,7 +23,7 @@ import {
 import type { PluginStateOverflowPolicy } from "./plugin-state-store.types.js";
 
 type PluginStateCountParams = { pluginId: string; now: number };
-const pluginStateCountQuery = createSqliteQueryCache((db) =>
+const pluginStateCountQuery = createSqliteQueryCache((db: EngineConnection) =>
   prepareSqliteQuerySync<PluginStateCountParams, PluginStateCountRow>(db, (parameter) =>
     getPluginStateKysely(db)
       .selectFrom("plugin_state_entries")
@@ -47,7 +47,7 @@ const pluginStateCountQuery = createSqliteQueryCache((db) =>
 );
 
 export function countLivePluginStateEntries(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: PluginStateCountParams,
 ): number {
   const row = pluginStateCountQuery(db)(params).rows[0];
@@ -68,7 +68,7 @@ type PluginStateRetentionRow = {
   first_expiry: number | bigint | null;
 };
 
-const pluginStateRetentionQuery = createSqliteQueryCache((db) =>
+const pluginStateRetentionQuery = createSqliteQueryCache((db: EngineConnection) =>
   prepareSqliteQuerySync<PluginStateRetentionParams, PluginStateRetentionRow>(db, (parameter) => {
     const now = parameter((value) => value.now);
     // Expired rows trigger cleanup; only a live deadline invalidates the retained count.
@@ -106,7 +106,7 @@ const pluginStateRetentionQuery = createSqliteQueryCache((db) =>
 );
 
 export function readPluginStateRetention(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: PluginStateRetentionParams,
 ): PluginStateRetention {
   const row = pluginStateRetentionQuery(db)(params).rows[0];

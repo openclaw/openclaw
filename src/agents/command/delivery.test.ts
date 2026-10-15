@@ -578,6 +578,24 @@ describe("deliverAgentCommandResult payload normalization", () => {
     expect(deliverArgs.queuePolicy).toBe("best_effort");
   });
 
+  it.each(["isCommentary", "isStatusNotice"] as const)(
+    "retains %s in native settlement evidence without changing JSON output",
+    async (flag) => {
+      const onDeliveryResult = vi.fn();
+      const delivered = await deliverAgentCommandResultForTest({
+        opts: { deliver: false, json: true },
+        payloads: [{ text: "Still checking", [flag]: true }],
+        onDeliveryResult,
+      });
+      const nativePayloads = onDeliveryResult.mock.lastCall?.[1];
+      expect(nativePayloads).toEqual([expect.objectContaining({ [flag]: true })]);
+      expect(delivered.payloads).toEqual([{ text: "Still checking", mediaUrl: null }]);
+      expect(
+        buildRestartRecoveryTerminalDeliveryEvidence({ ...delivered, payloads: nativePayloads }),
+      ).toMatchObject({ payloads: [{ visible: false }] });
+    },
+  );
+
   it.each([
     {
       name: "deterministic approval prompt",
@@ -614,9 +632,10 @@ describe("deliverAgentCommandResult payload normalization", () => {
     expect(delivered.requesterContinuationSettled).toBe(true);
     expect(delivered).toHaveProperty(field, expected);
     expect(onDeliveryResult).toHaveBeenCalledOnce();
-    expect(onDeliveryResult).toHaveBeenCalledWith(delivered);
+    expect(onDeliveryResult).toHaveBeenCalledWith(delivered, expect.any(Array));
     expect(buildRestartRecoveryTerminalDeliveryEvidence(delivered)).toEqual({
       captured: true,
+      requesterContinuationSettled: true,
       restartUnsafeSideEffectsDetected: true,
     });
   });
@@ -953,6 +972,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
       expect.objectContaining({
         deliveryStatus: expect.objectContaining({ status: "failed" }),
       }),
+      expect.any(Array),
     );
   });
 

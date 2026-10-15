@@ -6,35 +6,18 @@ import type {
   CliToolUseStartDelta,
 } from "./cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
-
-function joinJsonlFrames(...frames: unknown[]) {
-  return frames
-    .map((frame) => (typeof frame === "string" ? frame : JSON.stringify(frame)))
-    .join("\n");
-}
-
-function claudeStreamEvent(event: Record<string, unknown>) {
-  return { type: "stream_event", event };
-}
+import {
+  createClaudeParser,
+  claudeBlockStart,
+  claudeBlockStop,
+  claudeInputJsonDelta,
+  claudeStreamEvent,
+  claudeTextDelta,
+  joinJsonlFrames,
+} from "./cli-output.test-helpers.js";
 
 function claudeMessageStop() {
   return claudeStreamEvent({ type: "message_stop" });
-}
-
-function claudeBlockStart(contentBlock: Record<string, unknown>, index?: number) {
-  return claudeStreamEvent({
-    type: "content_block_start",
-    ...(index === undefined ? {} : { index }),
-    content_block: contentBlock,
-  });
-}
-
-function claudeTextDelta(text: string, index?: number | string) {
-  return claudeStreamEvent({
-    type: "content_block_delta",
-    ...(index === undefined ? {} : { index }),
-    delta: { type: "text_delta", text },
-  });
 }
 
 describe("createCliJsonlStreamingParser events", () => {
@@ -50,15 +33,11 @@ describe("createCliJsonlStreamingParser events", () => {
       joinJsonlFrames(
         claudeStreamEvent({ type: "message_start", message: { id: "interrupted" } }),
         claudeBlockStart({ type: "tool_use", id: "abandoned", name: "Write", input: {} }, 0),
-        claudeStreamEvent({
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "input_json_delta", partial_json: '{"content":"unfinished\\n' },
-        }),
+        claudeInputJsonDelta('{"content":"unfinished\\n', 0),
         claudeStreamEvent({ type: "message_start", message: { id: "recovered" } }),
         claudeBlockStart({ type: "text", text: "" }, 0),
         claudeTextDelta("Recovered.", 0),
-        claudeStreamEvent({ type: "content_block_stop", index: 0 }),
+        claudeBlockStop(0),
         claudeMessageStop(),
         { type: "result", subtype: "success", result: "Recovered." },
         "",
@@ -88,9 +67,7 @@ describe("createCliJsonlStreamingParser events", () => {
       try {
         const progress: CliToolInputDelta[] = [];
         const starts: CliToolUseStartDelta[] = [];
-        const parser = createCliJsonlStreamingParser({
-          backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-          providerId: "claude-cli",
+        const parser = createClaudeParser({
           onAssistantDelta: vi.fn(),
           onToolInputDelta: (delta) => progress.push(delta),
           onToolUseStart: (delta) => starts.push(delta),
@@ -160,9 +137,7 @@ describe("createCliJsonlStreamingParser events", () => {
     try {
       const progress: CliToolInputDelta[] = [];
       const starts: CliToolUseStartDelta[] = [];
-      const parser = createCliJsonlStreamingParser({
-        backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-        providerId: "claude-cli",
+      const parser = createClaudeParser({
         onAssistantDelta: vi.fn(),
         onToolInputDelta: (delta) => progress.push(delta),
         onToolUseStart: (delta) => starts.push(delta),
@@ -245,9 +220,7 @@ describe("createCliJsonlStreamingParser events", () => {
   it("stops counting oversized streamed input without truncating complete execution arguments", () => {
     const progress: CliToolInputDelta[] = [];
     const starts: CliToolUseStartDelta[] = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-      providerId: "claude-cli",
+    const parser = createClaudeParser({
       onAssistantDelta: vi.fn(),
       onToolInputDelta: (delta) => progress.push(delta),
       onToolUseStart: (delta) => starts.push(delta),
@@ -257,13 +230,9 @@ describe("createCliJsonlStreamingParser events", () => {
     const events = [
       claudeBlockStart({ type: "tool_use", id: "large", name: "Write", input: {} }, 0),
       ...[input.slice(0, 512 * 1024), input.slice(512 * 1024)].map((partial_json) =>
-        claudeStreamEvent({
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "input_json_delta", partial_json },
-        }),
+        claudeInputJsonDelta(partial_json, 0),
       ),
-      claudeStreamEvent({ type: "content_block_stop", index: 0 }),
+      claudeBlockStop(0),
     ];
     parser.push(joinJsonlFrames(...events) + "\n");
     parser.finish();
@@ -361,6 +330,8 @@ describe("createCliJsonlStreamingParser events", () => {
     ]);
     expect(parser.getOutput()).toEqual({
       text: "Checking tools. Done.",
+      // Diagnostics record only the post-tool message as the final answer.
+      rawFinalText: "Done.",
       sessionId: "gemini-session-stream",
       usage: {
         input: 4,
@@ -480,6 +451,41 @@ describe("createCliJsonlStreamingParser events", () => {
       sessionId: "custom-successor",
       usage: { input: 3, output: 2, total: 5 },
     });
+  });
+
+  it("replaces an earlier final message when a later custom result supplies the answer", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "acme", output: "jsonl" },
+      providerId: "acme-cli",
+      parseJsonlEvent: (line) => {
+        const event = JSON.parse(line) as { type: string; text?: string };
+        if (event.type === "text") {
+          return { kind: "text", text: event.text ?? "" };
+        }
+        if (event.type === "tool-start") {
+          return { kind: "toolStart", toolCallId: "call-1", name: "search", args: {} };
+        }
+        return { kind: "result", text: event.text };
+      },
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      `${joinJsonlFrames(
+        { type: "text", text: "Checking. " },
+        { type: "tool-start" },
+        { type: "text", text: "Done." },
+        { type: "result" },
+      )}\n`,
+    );
+    expect(parser.getOutput()?.rawFinalText).toBe("Done.");
+
+    parser.push(`${joinJsonlFrames({ type: "result", text: "Replacement answer" })}\n`);
+    parser.finish();
+
+    const output = parser.getOutput();
+    expect(output?.text).toBe("Replacement answer");
+    expect(output?.rawFinalText).toBeUndefined();
   });
 
   it("lets plugin parsers own their frames before lazily parsing fallback JSON", () => {
@@ -675,28 +681,12 @@ describe("createCliJsonlStreamingParser events", () => {
     });
 
     parser.push(
-      [
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 0,
-            content_block: { type, id: "toolu_hosted", name: "web_search", input: {} },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_delta",
-            index: 0,
-            delta: { type: "input_json_delta", partial_json: '{"query":"openclaw"}' },
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: { type: "content_block_stop", index: 0 },
-        }),
-      ].join("\n") + "\n",
+      joinJsonlFrames(
+        claudeBlockStart({ type, id: "toolu_hosted", name: "web_search", input: {} }, 0),
+        claudeInputJsonDelta('{"query":"openclaw"}', 0),
+        claudeBlockStop(0),
+        "",
+      ),
     );
     parser.finish();
 
@@ -807,35 +797,19 @@ describe("createCliJsonlStreamingParser events", () => {
     });
 
     parser.push(
-      [
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 0,
-            content_block: { type: "server_tool_use", id: "srvtoolu_stream", name: "web_search" },
+      joinJsonlFrames(
+        claudeBlockStart({ type: "server_tool_use", id: "srvtoolu_stream", name: "web_search" }, 0),
+        claudeBlockStop(0),
+        claudeBlockStart(
+          {
+            type: "web_search_tool_result",
+            tool_use_id: "srvtoolu_stream",
+            content: { type: "web_search_tool_result_error", error_code: "unavailable" },
           },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_stop",
-            index: 0,
-          },
-        }),
-        JSON.stringify({
-          type: "stream_event",
-          event: {
-            type: "content_block_start",
-            index: 1,
-            content_block: {
-              type: "web_search_tool_result",
-              tool_use_id: "srvtoolu_stream",
-              content: { type: "web_search_tool_result_error", error_code: "unavailable" },
-            },
-          },
-        }),
-      ].join("\n") + "\n",
+          1,
+        ),
+        "",
+      ),
     );
     parser.finish();
 

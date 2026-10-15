@@ -11,6 +11,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -542,7 +543,7 @@ export function resolveSessionPendingInputAppend(
           const hadPrevious = staged?.has(owner) ?? false;
           const previous = staged?.get(owner);
           if (
-            !stageSqliteTransactionState(database.db, {
+            !stageSqliteTransactionState(sqlPublicationAnchor(database.db), {
               stage: () => {
                 staged ??= new Map();
                 owners.transactionRelocations.set(database.db, staged);
@@ -703,7 +704,7 @@ export function consumeSessionPendingInput(
   const newlyConsumed = consumedOwners.filter(
     (candidate) => !worker?.consumed.has(candidate.inputId),
   );
-  stageSqliteTransactionState(database.db, {
+  stageSqliteTransactionState(sqlPublicationAnchor(database.db), {
     stage: () => {
       for (const consumedOwner of newlyConsumed) {
         worker?.consumed.add(consumedOwner.inputId);

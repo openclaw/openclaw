@@ -6,6 +6,7 @@ import {
 } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { normalizeBoardWidgetPutParams } from "../boards/board-store.js";
 import {
   ensureBoardSchema,
@@ -18,6 +19,7 @@ import {
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -39,16 +41,80 @@ import * as listFilters from "./session-list-filters.js";
 import { withCurrentSessionListRows } from "./session-list-read-result.js";
 import { beginSessionPermissionChange } from "./session-permission-change.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { shareSidebarSessionRows } from "./session-row-presentation.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+it("packs equal fields by their recipient rows without changing the input or wire facts", () => {
+  const rows = [
+    {
+      key: "one",
+      kind: "direct" as const,
+      updatedAt: 1,
+      label: "Shared",
+      pinned: false,
+      origin: { provider: "fixture" },
+      lastMessagePreview: undefined,
+    },
+    {
+      key: "two",
+      kind: "direct" as const,
+      updatedAt: 2,
+      label: "Shared",
+      pinned: false,
+      origin: { provider: "fixture" },
+      lastMessagePreview: "Unique",
+    },
+    { key: "three", kind: "direct" as const, updatedAt: 3, label: "Other", pinned: false },
+  ];
+  const original = structuredClone(rows);
+  const { rowsRevision, ...packed } = shareSidebarSessionRows(rows);
+  expect(rowsRevision).toEqual(expect.any(String));
+  expect(shareSidebarSessionRows(rows).sessions).toBe(packed.sessions);
+  expect(shareSidebarSessionRows(rows, rowsRevision)).toEqual({
+    sessions: [],
+    rowsRevision,
+    rowsUnchanged: true,
+  });
+  expect(packed).toEqual({
+    sessions: [
+      {
+        key: "one",
+        kind: "direct",
+        updatedAt: 1,
+        lastMessagePreview: undefined,
+        sharedFacts: [0, 1],
+      },
+      {
+        key: "two",
+        kind: "direct",
+        updatedAt: 2,
+        lastMessagePreview: "Unique",
+        sharedFacts: [0, 1],
+      },
+      { key: "three", kind: "direct", updatedAt: 3, label: "Other", sharedFacts: [1] },
+    ],
+    sharedFacts: [{ label: "Shared", origin: { provider: "fixture" } }, { pinned: false }],
+  });
+  expect(rows).toEqual(original);
+  expect(expandSessionRowFacts(packed.sessions, packed.sharedFacts)).toEqual(original);
+  // A changed page must not reuse the previous page's recipient groups or fact indexes.
+  const changed = { ...rows[1]!, pinned: true, label: "Changed" };
+  for (const page of [[rows[0]!, changed, rows[2]!], [rows[2]!, rows[0]!], rows]) {
+    const next = shareSidebarSessionRows(page);
+    expect(expandSessionRowFacts(next.sessions, next.sharedFacts)).toEqual(page);
+  }
+  expect(packed.sessions[0]!.sharedFacts).toEqual([0, 1]);
+  expect(packed.sharedFacts).toEqual([
+    { label: "Shared", origin: { provider: "fixture" } },
+    { pinned: false },
+  ]);
+});
+
 it("keeps sidebar display facts while bounding the wire payload", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    ensureUserProfilesSchema({});
-    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    void profileCatalog;
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const benchmark = process.env.OPENCLAW_SIDEBAR_BENCH === "1";
     const count = benchmark ? 5_000 : 8;
     const context = requestContext(rolePolicyConfig());
@@ -127,6 +193,10 @@ it("keeps sidebar display facts while bounding the wire payload", async () => {
       }
       expect(result.sessions[0]).not.toHaveProperty("createdActor");
       expect(result.sharedFacts).toBeDefined();
+      const frame = JSON.parse(serializeGatewayFrame({ type: "res", payload: result }).toString());
+      expect(
+        JSON.stringify(expandSessionRowFacts(frame.payload.sessions, frame.payload.sharedFacts)),
+      ).toBe(JSON.stringify(rows));
       expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(
         Buffer.byteLength(JSON.stringify(compact)) * 0.5,
       );
@@ -180,11 +250,49 @@ it("keeps sidebar display facts while bounding the wire payload", async () => {
   });
 });
 
+it("keeps a sidebar page revision across off-page facts and replaces it for selected facts", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const context = requestContext(rolePolicyConfig());
+    const client = roleClient("view", "page-reader");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
+    const keys = ["agent:main:off-page", "agent:main:selected-page"];
+    for (const [index, sessionKey] of keys.entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        { sessionId: sessionKey, updatedAt: index + 1, visibility: "shared" },
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const read = (ifRowsRevision?: string) =>
+      listSessions({
+        context,
+        client,
+        acceptsSerializedJson: true,
+        request: { rowMode: "sidebar", limit: 1, ifRowsRevision },
+      });
+    try {
+      const first = await read();
+      expect(first.sessions.map((row) => row.key)).toEqual([keys[1]]);
+      sessionChanges.emit({ sessionKey: keys[0]!, scope: "runtime" });
+      const unchanged = await read(first.rowsRevision);
+      expect(unchanged.rowsRevision).toBe(first.rowsRevision);
+      expect(unchanged.rowsUnchanged).toBe(true);
+      expect(unchanged.sessions).toEqual([]);
+      sessionChanges.emit({ sessionKey: keys[1]!, scope: "runtime" });
+      const changed = await read(first.rowsRevision);
+      expect(changed.rowsRevision).not.toBe(first.rowsRevision);
+      expect(changed.rowsUnchanged).toBeUndefined();
+      expect(changed.sessions.map((row) => row.key)).toEqual([keys[1]]);
+    } finally {
+      getSessionRowProjection(context)?.dispose();
+      release();
+    }
+  });
+});
+
 it("projects dashboard cards without sending session execution details", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    ensureUserProfilesSchema({});
-    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    void profileCatalog;
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const benchmark = process.env.OPENCLAW_DASHBOARD_BENCH === "1";
     const count = benchmark ? 200 : 2;
     const context = requestContext(rolePolicyConfig());
@@ -312,10 +420,7 @@ it("projects dashboard cards without sending session execution details", async (
 });
 
 it("coalesces cold sidebar selection across row slices only for the same principal and filter", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    ensureUserProfilesSchema({});
-    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    void profileCatalog;
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg = rolePolicyConfig();
     const context = requestContext(cfg);
     const alice = roleClient("view", "cold-alice");
@@ -383,10 +488,7 @@ it("coalesces cold sidebar selection across row slices only for the same princip
 it("shares encoded socket lists by identity and refreshes compact, published, and clock facts", async () => {
   const start = 1_800_000_000_000;
   const clock = vi.spyOn(Date, "now").mockReturnValue(start);
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    ensureUserProfilesSchema({});
-    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    void profileCatalog;
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg = rolePolicyConfig();
     const context = requestContext(cfg);
     const client = roleClient("view", "first-list");
@@ -439,6 +541,7 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
     expect(first.owners).toBe(second.owners);
     const projection = getSessionRowProjection(context)!;
     const present = vi.spyOn(projection, "present");
+    const filter = vi.spyOn(listFilters, "filterSessionEntries");
     const clone = vi.spyOn(globalThis, "structuredClone");
     const unrelated = createSubagentRunRecord({
       runId: "unrelated-presentation",
@@ -451,9 +554,12 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
         if (publish) {
           subagentRuns.set(unrelated.runId, unrelated);
           subagentRuns.commitOwnership(unrelated);
+          publishSubagentRunChanges();
         }
         const unchanged = await read(0, false);
         expect(unchanged.sessions[0]).toBe(first.sessions[0]);
+        expect(unchanged.owners).toBe(first.owners);
+        expect(filter).not.toHaveBeenCalled();
         expect(present).not.toHaveBeenCalled();
         expect(
           clone.mock.calls.filter(
@@ -467,6 +573,7 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
       }
     } finally {
       present.mockRestore();
+      filter.mockRestore();
       clone.mockRestore();
       subagentRuns.delete(unrelated.runId);
     }
@@ -625,10 +732,7 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
 });
 
 it("refreshes shared socket selection when the same viewer changes roles", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    ensureUserProfilesSchema({});
-    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    void profileCatalog;
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg = rolePolicyConfig();
     const context = requestContext(cfg);
     const client = roleClient("view", "selection-viewer");
@@ -664,10 +768,7 @@ it("refreshes shared socket selection when the same viewer changes roles", async
 });
 
 it("retains each embedded reader's identity when their shared row presentation is identical", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    ensureUserProfilesSchema({});
-    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-    void profileCatalog;
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg = rolePolicyConfig();
     const context = requestContext(cfg);
     const clients = [roleClient("view", "reader-a"), roleClient("view", "reader-b")];
@@ -697,5 +798,91 @@ it("retains each embedded reader's identity when their shared row presentation i
       true,
       false,
     ]);
+  });
+});
+
+it("omits swarm detail reads from sidebar and dashboard pages while authorizing compact members", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    ensureUserProfilesSchema({});
+    using profileCatalog = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    void profileCatalog;
+    const context = requestContext(rolePolicyConfig());
+    const client = roleClient("view", "swarm-list-reader");
+    const creator = ensureProfileForEmail("swarm-list-owner@example.test");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    prepareGatewayRecipientProfile(client);
+    const parent = "agent:main:dashboard:swarm-parent";
+    const children = ["agent:main:subagent:visible", "agent:main:subagent:hidden"];
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: parent },
+      { sessionId: "swarm-parent", updatedAt: Date.now(), visibility: "shared" },
+    );
+    for (const [index, child] of children.entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: child },
+        {
+          sessionId: `swarm-child-${index}`,
+          updatedAt: Date.now(),
+          visibility: index === 0 ? "shared" : "draft",
+          createdActor: { type: "human", source: "profile", id: creator.id },
+        },
+      );
+      const runId = `swarm-list-${index}`;
+      subagentRuns.set(
+        runId,
+        createSubagentRunRecord({
+          runId,
+          childSessionKey: child,
+          requesterSessionKey: parent,
+          requesterAgentId: "main",
+          swarmRequesterSessionKey: parent,
+          collect: true,
+          groupId: "list-group",
+          execution: { status: "terminal", startedAt: 1, endedAt: 2 },
+          collectorCompletion: { status: "done" },
+        }),
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const read = (rowMode: "sidebar" | "dashboard" | "compact") =>
+      listSessions({
+        context,
+        client,
+        acceptsSerializedJson: true,
+        request: { rowMode, excludeSubagents: true },
+      });
+    try {
+      await initializeSessionReadContext(context);
+      const projection = getSessionRowProjection(context)!;
+      await projection.ensureMaterialized();
+      for (const rowMode of ["sidebar", "dashboard"] as const) {
+        await read(rowMode);
+        const selections = vi.spyOn(projection, "selectEntries");
+        try {
+          const page = await read(rowMode);
+          expect(page.sessions).toHaveLength(1);
+          expect(expandSessionRowFacts(page.sessions, page.sharedFacts)[0]).not.toHaveProperty(
+            "swarm",
+          );
+          // A warmed page must not read children solely for omitted swarm detail.
+          expect(selections).not.toHaveBeenCalled();
+        } finally {
+          selections.mockRestore();
+        }
+      }
+      const sidebar = await read("sidebar");
+      const compact = await read("compact");
+      expect(compact.sessions[0]?.swarm?.groups).toMatchObject([
+        { groupId: "list-group", done: 2, children: [{ sessionKey: children[0], status: "done" }] },
+      ]);
+      expect(compact.sessions[0]?.swarm?.groups[0]?.children).toHaveLength(1);
+      expect((await read("sidebar")).sessions).toBe(sidebar.sessions);
+    } finally {
+      getSessionRowProjection(context)?.dispose();
+      release();
+      for (let index = 0; index < children.length; index++) {
+        subagentRuns.delete(`swarm-list-${index}`);
+      }
+    }
   });
 });

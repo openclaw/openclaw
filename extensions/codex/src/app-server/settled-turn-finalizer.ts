@@ -2,7 +2,7 @@ import type {
   AgentHarnessV2,
   AgentHarnessSettledTurnFinalizationResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import { resolveCodexBoundedTurnIsolation } from "./bounded-turn-isolation.js";
@@ -35,7 +35,7 @@ export async function runCodexSettledTurnFinalization(
   options: CodexBoundedTurnOptions,
 ): Promise<AgentHarnessSettledTurnFinalizationResult> {
   const { attempt, settledAttempt } = operation;
-  const assertActive = createNativeSessionBindingAuthority([], () =>
+  const assertActive = createNativeSessionBindingScope(() =>
     attempt.abortSignal?.throwIfAborted(),
   ).assertLegacyCurrent;
   assertActive();

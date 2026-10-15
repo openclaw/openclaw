@@ -158,7 +158,6 @@ describe("checkInboundAccessControl pairing grace", () => {
     return await checkAccess({
       messageTimestampMs,
       connectedAtMs,
-      pairingGraceMs: 30_000,
     });
   }
 

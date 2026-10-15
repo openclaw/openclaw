@@ -1647,16 +1647,19 @@ export async function runChangedCheck(
       )
     : undefined;
   const timings: ChangedCheckTiming[] = [];
+  let failure = 0;
   for (const command of plan.commands) {
     const status = await runPlanCommand(command, timings, coreTestCheck);
-    if (status !== 0) {
-      printSummary(timings, options);
-      return status;
+    failure ||= status;
+    // Timeouts and cancellation deliberately stop admitting new work.
+    if (status === 124 || status >= 128) {
+      failure = status;
+      break;
     }
   }
 
   printSummary(timings, options);
-  return 0;
+  return failure;
 }
 
 function sameArgs(left: string[], right: string[]) {

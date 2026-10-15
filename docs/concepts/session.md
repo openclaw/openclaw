@@ -11,6 +11,12 @@ OpenClaw routes every inbound message to a **session** based on where it came
 from: DMs, group chats, cron jobs, etc. All session state is owned by the
 **gateway**; UI clients query the gateway for session data.
 
+Session lists reconcile invalidated metadata before returning rows. If a native
+session changes ownership during a list read, the Gateway retries its runtime
+metadata once. Continued changes temporarily use the configured model metadata
+for that row while other sessions remain available. The next list read retries
+its native metadata.
+
 To continue the same Gateway-owned session in the Control UI, terminal, or a
 coding harness, see [Session synchronization and attachment](/concepts/session-attachment).
 
@@ -364,19 +370,33 @@ Session store reads do not prune or cap entries during Gateway startup, so
 startup and isolated cron sessions do not pay for a full store cleanup.
 `openclaw sessions cleanup --enforce` applies the cap immediately.
 
-Ordinary entry writes also arm background maintenance at the next age boundary,
+Ordinary entry writes and reply initialization arm background maintenance at the next age boundary,
 with a periodic recheck every 30 minutes while the store remains open. This lets
-eligible sessions age out without further traffic. Writes that cannot change
+eligible sessions age out without further traffic. Reply preparation does not wait
+for unrelated retention cleanup. Writes that cannot change
 age or count maintenance outcomes skip candidate scans. Automatic planning reads
 only retention and protection metadata before entering the foreground write queue;
-cap selection retains only the required oldest eligible entries. The writer checks
-the prepared store revision before applying changes, so concurrent updates are
-reconsidered instead of overwritten.
+cap selection retains only the required oldest eligible entries. The writer rechecks the selected rows and their protection before applying
+changes, so concurrent updates are reconsidered instead of overwritten. Activity
+on unrelated sessions and protection that has ended do not invalidate the plan.
+When an over-cap pass finds only durably protected entries, ordinary activity does not
+repeat that futile plan. New eligible entries, restored identities, lost entry
+protection, and changed policy reconsider it. Delivery cleanup resumes idle maintenance
+when it releases the session's remaining recovery protection. Temporary protection from active
+sessions, runtime providers, or recent activity does not suppress planning on
+ordinary writes; age deadlines and the periodic recheck still resume idle cleanup.
+While entry pressure still requires cleanup, capacity maintenance revisits entries
+once temporary write protection ends, without requiring another entry write.
+Releasing acquired session work also wakes idle capacity maintenance; overlapping
+work keeps the session protected until its final admission releases.
 If writes invalidate an automatic maintenance plan, its replacement waits for
-a quiet window after the last write (one second, then two seconds). Three
+the scheduled retry delay (one second, then two seconds). Further writes coalesce
+into that retry without postponing it indefinitely. Three
 consecutive invalidations pause automatic retries and log the cause; a new
-entry write can schedule another attempt. `warn` mode captures the maintenance
-age fact without constructing or dispatching automatic reclamation.
+entry write can schedule another attempt. `warn` mode skips automatic reclamation.
+Certified transcript backfill and usage-cache writes retain a protected-only no-op result
+while entry-change publications and scoped write receipts remain current. Unknown writes
+still invalidate that result and wait for the existing quiet window before replanning.
 
 `maxEntries` defaults to 5000 unarchived session rows. Archived rows do not consume
 the cap. Existing explicit limits remain unchanged.
@@ -434,6 +454,11 @@ Delete and reset operations can request a check sooner, but repeated requests
 coalesce to at most one forced check per minute per store. If cleanup exhausts
 eligible history and the store remains over budget, automatic checks back off
 for 30 minutes and log one warning until the pressure clears or the budget changes.
+Per-agent legacy store locators and their canonical SQLite paths share this queue
+and backoff. Custom aggregate store locators retain their own maintenance scope.
+After a pass reclaims nothing, the next automatic check first inspects eligible
+data without reserving the foreground writer; protected-only pressure does not
+repeat archive pruning or checkpoints. Manual cleanup still runs immediately.
 The warning recommends raising `session.maintenance.maxDiskBytes` or exporting
 and deleting unneeded sessions. Checks resume on subsequent activity;
 `openclaw sessions cleanup --enforce` remains available immediately.
@@ -443,6 +468,14 @@ prevent truncation, a complete PASSIVE checkpoint is sufficient: frames relevant
 to cleanup must have reached the main database, even if the WAL file remains allocated.
 Retained WAL bytes still count toward the physical budget. Successful cleanup
 logs one outcome with the before/after bytes and removal counts.
+Archive pruning measures physical usage outside the foreground writer queue.
+Each deletion and page-reclamation unit retains its own admission, with a yield
+between reclamation units. Archive retention also selects candidates outside the
+writer queue, then rechecks and removes at most 16 rows per admission, yielding
+between batches while retaining the same 256-row selection limit per pass.
+Concurrent shrinkage can prune one additional oldest derived archive before the
+next measurement ends the sweep; canonical retention and deletion eligibility
+checks are unchanged.
 
 An incomplete SQLite WAL checkpoint is a separate deferral. Cleanup preserves
 archives and history instead of deleting more data behind the blocked checkpoint.

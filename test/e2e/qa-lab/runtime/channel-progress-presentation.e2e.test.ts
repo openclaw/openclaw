@@ -627,7 +627,7 @@ export default {
       Array.isArray(accounts) &&
       accounts.some((account) => {
         const state = asRecord(account);
-        return state.running === true && (channel !== "discord" || state.connected === true);
+        return state.running === true && state.connected === true;
       })
     );
   }, `${channel} ready`);
@@ -1780,7 +1780,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
           },
           body,
         });
-        expect(delivered.ok, await delivered.text()).toBe(true);
+        expect(delivered.ok, `HTTP ${delivered.status}: ${await delivered.text()}`).toBe(true);
       } else {
         await injected.arrayBuffer();
       }

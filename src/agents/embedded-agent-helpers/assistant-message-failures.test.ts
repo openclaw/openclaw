@@ -1,9 +1,33 @@
 import { describe, expect, it } from "vitest";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
-import { classifyAssistantFailoverReason } from "./assistant-message-failures.js";
+import {
+  buildAssistantFailoverSignal,
+  classifyAssistantFailoverReason,
+} from "./assistant-message-failures.js";
 
 describe("classifyAssistantFailoverReason", () => {
+  it("uses the recorded provider floor even when the display message was clipped", () => {
+    const message = makeAssistantMessageFixture({
+      errorMessage: "429: rate limited; Retry-After: 7 seconds",
+      errorCode: "rate_limit_exceeded",
+      retryAfterMs: 62_500,
+    });
+    expect(buildAssistantFailoverSignal(message).retryAfterMs).toBe(62_500);
+    expect(buildAssistantFailoverSignal({ ...message, retryAfterMs: null }).retryAfterMs).toBe(
+      Infinity,
+    );
+    expect(
+      classifyAssistantFailoverReason(
+        {
+          ...message,
+          errorMessage: "402: account balance exhausted",
+          errorCode: "insufficient_quota",
+        },
+        { providerOwner: null },
+      ),
+    ).toBe("billing");
+  });
   const opencodeGoStalledStreamError = {
     role: "assistant" as const,
     api: "openai-completions" as const,

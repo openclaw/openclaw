@@ -1,14 +1,7 @@
 import os from "node:os";
 import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { retainPreparedSessionSharingFacts } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
-import { projectSessionSharingEntry } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
-import type { SessionEntryCurrentFacts } from "../config/sessions/session-entry-current.types.js";
-import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import {
-  captureSessionEntryMetadataRead,
-  captureSessionEntrySourceAssertion,
-} from "../config/sessions/session-entry-source-authority.js";
+import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
 import {
   sessionEntryCommitGuardOptions,
   composeSessionSourceAssertion,
@@ -21,8 +14,6 @@ import {
   ProjectCloneError,
 } from "../projects/project-clone-runtime.js";
 import { materializeProjectClone } from "../projects/project-clone.js";
-import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
 import {
@@ -32,8 +23,8 @@ import {
 import { readRepositoryGitHubPublicationBranchAsync } from "./github-publication-store-async.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { prepareRepositoryPublicationRestore } from "./github-repository-publication-restore.js";
-import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import { retainGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
+import type { GatewaySessionEntryRead } from "./session-utils-store.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { prepareGitHubPublicationFact } from "./worker-environments/worker-github-binding.js";
@@ -48,97 +39,34 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   assertCurrent: SessionSourceAssertion;
   signal?: AbortSignal;
 }): Promise<void> {
-  return withGatewaySessionEntryReadOnly(
-    {
-      cfg: params.cfg,
-      key: params.sessionKey,
-      agentId: params.agentId,
-      assertActive: params.assertCurrent,
-    },
-    async (initial) => materializeCapturedRepositoryWorkspace(params, initial),
+  const initial = await retainGatewaySessionEntryReadOnly(
+    params.sessionKey,
+    params.agentId,
+    (previous, current) => previous.repositoryWorkspaceId === current.repositoryWorkspaceId,
+    params.cfg,
   );
+  try {
+    return await materializeCapturedRepositoryWorkspace(params, initial, () => {
+      if (!initial.isCurrentAtResponse()) {
+        throw new Error("Repository workspace changed during Gateway materialization; retry move");
+      }
+    });
+  } finally {
+    initial.release();
+  }
 }
 
 async function materializeCapturedRepositoryWorkspace(
   params: Parameters<typeof materializeSessionRepositoryWorkspaceOnGateway>[0],
-  initial: ReturnType<typeof loadGatewaySessionEntryReadOnly>,
+  initial: GatewaySessionEntryRead,
+  assertEntryCurrent: () => void,
 ): Promise<void> {
-  const metadata = captureSessionEntryMetadataRead({
-    agentId: params.agentId,
-    sessionKey: initial.canonicalKey,
-    storePath: initial.storePath,
-  });
   if (initial.entry?.sessionId !== params.sessionId) {
     throw new Error("Session changed before repository materialization");
   }
   const workspaceId = initial.entry.repositoryWorkspaceId;
   if (!workspaceId) {
     return;
-  }
-  let facts: ReturnType<typeof retainPreparedSessionSharingFacts> | undefined;
-  let active = true;
-  let unregister = () => {};
-  const release = () => {
-    active = false;
-    facts?.release();
-    unregister();
-  };
-  using retained = {
-    [Symbol.dispose]: release,
-    readCurrent() {
-      if (!active) {
-        throw new Error("Repository workspace changed during Gateway materialization; retry move");
-      }
-      return readCurrent();
-    },
-  };
-  let readCurrent: () => SessionEntryCurrentFacts | undefined = () => {
-    if (metadata) {
-      return metadata.readCurrent();
-    }
-    const current = loadGatewaySessionEntryReadOnly(params.sessionKey, {
-      agentId: params.agentId,
-    });
-    if (current.storePath !== initial.storePath || current.canonicalKey !== initial.canonicalKey) {
-      throw new Error("Repository workspace changed during Gateway materialization; retry move");
-    }
-    return current.entry;
-  };
-  if (!metadata && !isIncognitoSessionKey(initial.canonicalKey)) {
-    const scope = {
-      agentId: params.agentId,
-      sessionKey: initial.canonicalKey,
-      storePath: initial.storePath,
-    };
-    await withSessionEntryReadOnlyInWorker(
-      scope,
-      params.assertCurrent,
-      async (read) => {
-        if (!read.ok) {
-          throw read.error;
-        }
-        if (!facts) {
-          throw new Error("Repository materialization session source is unavailable");
-        }
-        facts.initialize({
-          entry: read.value && projectSessionSharingEntry(read.value),
-          membership: new Set(),
-        });
-        readCurrent = () => facts?.readCurrent()?.entry;
-      },
-      (database, identity) => {
-        facts = retainPreparedSessionSharingFacts({
-          databaseIdentity: identity.key,
-          sessionKey: initial.canonicalKey,
-          acquiring: true,
-        });
-        unregister = registerOpenClawAgentDatabaseAsyncResource({
-          ...database,
-          revoke: release,
-          close: async () => release(),
-        });
-      },
-    );
   }
   const repositories = getSessionRepositoryWorkspaceStore();
   const preparedRepository = await repositories.prepare(workspaceId);
@@ -176,7 +104,7 @@ async function materializeCapturedRepositoryWorkspace(
       throw new Error("Repository workspace changed during Gateway materialization; retry move");
     }
   };
-  const assertEntry = (current: SessionEntryCurrentFacts | undefined) => {
+  const assertEntry = (current: Partial<NonNullable<typeof initial.entry>> | undefined) => {
     if (
       current?.sessionId !== params.sessionId ||
       current.lifecycleRevision !== initial.entry?.lifecycleRevision ||
@@ -192,9 +120,9 @@ async function materializeCapturedRepositoryWorkspace(
       storePath: initial.storePath,
     },
     readSource: initial.capturedReadSource,
-    fields: ["sessionId", "lifecycleRevision"],
+    fields: ["sessionId", "lifecycleRevision", "repositoryWorkspaceId"],
     expected: initial.entry,
-    assertCurrent: () => assertEntry(retained.readCurrent()),
+    assertCurrent: assertEntryCurrent,
     refuse: () => {
       throw new Error("Repository workspace changed during Gateway materialization; retry move");
     },

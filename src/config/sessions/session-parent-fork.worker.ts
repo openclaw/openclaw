@@ -102,7 +102,7 @@ export function commitParentFork(input: ParentForkCommit, context: AgentWorkerOp
   );
 }
 
-export function commitParentForkInTransaction(
+function commitParentForkInTransaction(
   database: OpenClawAgentDatabase,
   input: ParentForkCommit,
   options: AgentWorkerOperationContext["options"],

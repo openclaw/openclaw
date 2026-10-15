@@ -1,8 +1,9 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createEffect, onCleanup, onSettled, untrack } from "solid-js";
+import { Show, createEffect, onSettled, untrack } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
 import { createOverlayAnchor, type OverlayPlacement } from "../overlay-anchor.ts";
 import { createOverlay, findOverlayParent, type Overlay } from "../overlay-lifecycle.ts";
+import { useOverlayControl } from "./overlay-control.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
 import overlayStyles from "./overlay.css?inline";
 import "./overlay.css";
@@ -22,6 +23,8 @@ export interface PopoverProps {
   class?: string;
   open?: boolean;
   placement?: OverlayPlacement;
+  dismissOutsidePointer?: boolean;
+  dismissOutsideFocus?: boolean;
   onBeforeShow?(event: Event): void;
   onBeforeHide?(event: Event): void;
   onOpenChange?(open: boolean): void;
@@ -32,32 +35,20 @@ export function Popover(props: PopoverProps): JSX.Element {
   let trigger!: HTMLButtonElement;
   let surface!: HTMLDivElement;
   let mounted = false;
-  let publications = 0;
   let anchorBinding: ReturnType<typeof createOverlayAnchor> | undefined;
   const id = untrack(() => props.id);
   const overlay = createOverlay(id, undefined, {
+    get dismissOutsidePointer() {
+      return props.dismissOutsidePointer;
+    },
+    get dismissOutsideFocus() {
+      return props.dismissOutsideFocus;
+    },
     acquireOcclusion: acquireNativeOverlaySurface,
     onRootChange: (root) =>
       root instanceof ShadowRoot ? retainShadowStyles(root, [overlayStyles]) : undefined,
   });
-  const syncOpen = (open: boolean) => {
-    if (open === overlay.open) {
-      return;
-    }
-    const before = publications;
-    if (!overlay.request(open) && publications === before) {
-      untrack(() => props.onOpenChange?.(overlay.open));
-    }
-  };
-  onCleanup(() => overlay.dispose());
-  createEffect(
-    () => props.open,
-    (open) => {
-      if (mounted && open !== undefined) {
-        syncOpen(open);
-      }
-    },
-  );
+  const connectControl = useOverlayControl(overlay, props);
   createEffect(
     () => [props.anchor, props.placement] as const,
     ([anchor, placement]) => {
@@ -78,32 +69,17 @@ export function Popover(props: PopoverProps): JSX.Element {
     overlay.setParent(findOverlayParent(target));
     anchorBinding = createOverlayAnchor(overlay.surface);
     anchorBinding.update(target, props.placement);
-    const stopOpen = overlay.subscribe((open) => {
-      publications += 1;
-      untrack(() => props.onOpenChange?.(open));
-    });
-    const show = (event: Event) => {
-      if (event.target === overlay.surface) {
-        props.onBeforeShow?.(event);
-      }
-    };
-    const hide = (event: Event) => {
-      if (event.target === overlay.surface) {
-        props.onBeforeHide?.(event);
-      }
-    };
-    overlay.surface.addEventListener("overlay-show", show);
-    overlay.surface.addEventListener("overlay-hide", hide);
-    props.ref?.({ overlay, show: () => overlay.request(true), hide: () => overlay.request(false) });
-    if (props.open) {
-      syncOpen(true);
-    }
+    const disconnectControl = connectControl(() =>
+      props.ref?.({
+        overlay,
+        show: () => overlay.request(true),
+        hide: () => overlay.request(false),
+      }),
+    );
     return () => {
       mounted = false;
       anchorBinding?.dispose();
-      stopOpen();
-      overlay.surface.removeEventListener("overlay-show", show);
-      overlay.surface.removeEventListener("overlay-hide", hide);
+      disconnectControl();
     };
   });
   return (

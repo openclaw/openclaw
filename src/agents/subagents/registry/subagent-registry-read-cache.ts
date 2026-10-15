@@ -28,7 +28,6 @@ import {
 } from "../../../state/openclaw-state-worker-error.js";
 import { freezeSubagentRunReadRecord, immutableSubagentRun } from "./subagent-registry-memory.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
-import { rememberSubagentRunVersion } from "./subagent-registry.store.codec.js";
 import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
@@ -332,11 +331,7 @@ export async function readFullSubagentRuns(
   if (!reply.ok || reply.type !== "subagents.runs" || reply.projection === "maintenance") {
     throw new Error("Unexpected subagent registry read result");
   }
-  for (const [runId, entry] of reply.runs) {
-    const version = reply.versions?.get(runId);
-    if (version) {
-      rememberSubagentRunVersion(entry, version);
-    }
+  for (const entry of reply.runs.values()) {
     immutableSubagentRun(entry);
   }
   return reply.runs;

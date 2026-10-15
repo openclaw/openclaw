@@ -1,5 +1,6 @@
 import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
-import { personActivityLink, renderPersonName } from "../../../components/person-activity-link.ts";
+import { PersonName } from "../../../components/person-activity-link-solid.tsx";
+import { personActivityLink } from "../../../components/person-activity-link.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
@@ -234,7 +235,7 @@ function SenderIdentity(props: { frame: MessageGroupFrame }) {
   return (
     <>
       <Show when={frame().showSenderName}>
-        <LitContent value={renderPersonName(frame().who, activityLink(), "chat-sender-name")} />
+        <PersonName label={frame().who} link={activityLink()} class="chat-sender-name" />
       </Show>
       <Show when={frame().visibleSources?.length}>
         <span class="chat-message-source">
@@ -305,6 +306,7 @@ function FramedMessage(props: {
         : undefined,
   }));
   const showActions = () =>
+    prepared().ownsActions &&
     hasMessageActionButtons(prepared().actions, frame().options) &&
     props.index < frame().lastMessageIndex &&
     !frame().isTurnBlock;

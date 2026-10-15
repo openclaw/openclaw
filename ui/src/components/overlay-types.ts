@@ -1,5 +1,10 @@
 export type OverlayPhase = "opening" | "open" | "closing" | "hidden";
 export type OverlayFocusIntent = "first" | "last" | "return" | "none";
+export type OverlayLifecycleEvent =
+  | "overlay-show"
+  | "overlay-after-show"
+  | "overlay-hide"
+  | "overlay-after-hide";
 
 export interface OverlayNativeAdapter {
   isOpen(surface: HTMLElement): boolean;
@@ -9,6 +14,8 @@ export interface OverlayNativeAdapter {
 
 export interface OverlayOptions {
   native?: OverlayNativeAdapter;
+  /** Own public-target dispatch; false vetoes a cancelable transition. */
+  dispatchLifecycleEvent?(type: OverlayLifecycleEvent, cancelable: boolean): boolean;
   /** Tooltips describe their invoker without exposing expandable-control semantics. */
   reflectTriggerExpanded?: boolean;
   /** Only members of the same group displace one another. Dialogs have no group. */

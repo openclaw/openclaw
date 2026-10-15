@@ -10,6 +10,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import type { SecretEgressSentinelBinding } from "./egress-proxy/proxy-server.js";
 import { resolveSecretSentinel } from "./sentinel.js";
+import { inspectSetupSecretMigration } from "./setup-secret-migration.js";
 import { writeSecretStoreEntries } from "./store/secret-store.js";
 
 const startProxy = vi.hoisted(() =>
@@ -50,6 +51,7 @@ beforeAll(async () => {
         allowedHosts: ["other.example.test"],
       },
       { name: "READABLE_TOKEN", kind: "env", value: "synthetic-readable-token" },
+      { name: "UNBOUND_TOKEN", kind: "secret", value: "synthetic-unbound-token" },
     ],
   });
 });
@@ -133,6 +135,34 @@ it.each(["MISSING_TOKEN", "READABLE_TOKEN"])(
   },
 );
 
+it("accepts lowercase remote POSIX names while store IDs remain canonical", async () => {
+  await withSetupSecretEgress(
+    {
+      ...options(),
+      secrets: { npm_token: { source: "store", provider: "default", id: "JOB_TOKEN" } },
+    },
+    async ({ remoteEnv }) => {
+      expect(Object.keys(remoteEnv)).toEqual(["npm_token"]);
+      expect(resolveSecretSentinel(remoteEnv.npm_token!)).toBe("synthetic-job-token");
+    },
+  );
+});
+
+it("rejects an unbound secret before launching any command", async () => {
+  const run = vi.fn();
+  await expect(
+    withSetupSecretEgress(
+      {
+        ...options(),
+        secrets: { TOKEN: { source: "store", provider: "default", id: "UNBOUND_TOKEN" } },
+      },
+      run,
+    ),
+  ).rejects.toThrow("--allow-host <host>");
+  expect(startProxy).not.toHaveBeenCalled();
+  expect(run).not.toHaveBeenCalled();
+});
+
 it("revokes cancellation before the job's termination listener and cleans up on failure", async () => {
   const controller = new AbortController();
   const entered = createDeferredCore();
@@ -177,4 +207,39 @@ it("does not publish a grant if cancelled while registration is awaiting acknowl
   expect(run).not.toHaveBeenCalled();
   expect(revoke).toHaveBeenCalledOnce();
   expect(stop).toHaveBeenCalledOnce();
+});
+
+it("inspects setup migration through protected-store ownership without returning secret material", async () => {
+  const env: NodeJS.ProcessEnv = { ...process.env, JOB_TOKEN: "synthetic-job-token" };
+  expect(
+    await inspectSetupSecretMigration({
+      names: ["JOB_TOKEN", "UNBOUND_TOKEN", "READABLE_TOKEN", "MISSING", "lowercase"],
+      env,
+    }),
+  ).toEqual([
+    { name: "JOB_TOKEN", status: "ready" },
+    { name: "UNBOUND_TOKEN", status: "missing-bindings" },
+    { name: "READABLE_TOKEN", status: "missing" },
+    { name: "MISSING", status: "missing" },
+    { name: "lowercase", status: "missing" },
+  ]);
+  expect(
+    await inspectSetupSecretMigration({
+      names: ["JOB_TOKEN"],
+      env: { ...env, JOB_TOKEN: "different-fixture" },
+    }),
+  ).toEqual([{ name: "JOB_TOKEN", status: "conflicting-value" }]);
+  expect(await inspectSetupSecretMigration({ names: ["JOB_TOKEN"], env })).toEqual([
+    { name: "JOB_TOKEN", status: "ready" },
+  ]);
+  delete env.JOB_TOKEN;
+  expect(await inspectSetupSecretMigration({ names: ["JOB_TOKEN"], env })).toEqual([
+    { name: "JOB_TOKEN", status: "ready" },
+  ]);
+  await expect(
+    inspectSetupSecretMigration({
+      names: Array.from({ length: 17 }, (_, index) => `TOKEN_${index}`),
+      env,
+    }),
+  ).rejects.toThrow("at most 16");
 });

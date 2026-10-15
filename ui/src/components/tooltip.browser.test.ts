@@ -9,10 +9,10 @@ afterEach(() => document.body.replaceChildren());
 
 type TooltipOperation = "show" | "hide";
 const tooltipEvents = {
-  opening: "wa-show",
-  closing: "wa-hide",
-  opened: "wa-after-show",
-  closed: "wa-after-hide",
+  opening: "overlay-show",
+  closing: "overlay-hide",
+  opened: "overlay-after-show",
+  closed: "overlay-after-hide",
 } as const;
 
 function requestPhase(operation: TooltipOperation) {
@@ -418,7 +418,7 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip public lifecycle", (
 
   it("disabling during an opening retires it even when a hide listener vetoes", async () => {
     const f = await fixture();
-    f.tooltip.addEventListener("wa-hide", (event) => event.preventDefault());
+    f.tooltip.addEventListener("overlay-hide", (event) => event.preventDefault());
     const hidden = afterPhase(f.tooltip, "closed");
     await duringTransition(f, "show", async () => {
       f.tooltip.disabled = true;

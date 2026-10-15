@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import {
   createAssistantMessage,
   createAttachmentBlock,

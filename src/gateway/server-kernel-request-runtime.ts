@@ -1,11 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { retireQuestionChannelGateway } from "../infra/question-channel-runtime.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { bindLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { closeGatewayDeviceRevocation } from "./device-revocation.js";
+import { shouldUseGatewayOwnerProfile } from "./gateway-owner-profile.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import { attachInitialGatewayLifetimeSidecars } from "./server-lifetime-sidecars.js";
@@ -33,7 +35,6 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     pluginGatewayContext,
     getAttachedGatewayMethodRegistry,
     gatewayInstanceRuntimeRef,
-    lifecycle,
     startupState,
     shutdownRuntime,
   } = runtime;
@@ -56,9 +57,25 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       logHealth,
     });
   });
-  let projectionReady:
-    | ReturnType<(typeof import("./session-row-projection.js"))["createSessionRowProjection"]>
-    | undefined;
+  const projectionReady = runtime.opts.updateCanary
+    ? undefined
+    : startupTrace.measure("sessions.projection", async () => {
+        const { createSessionRowProjection } = await import("./session-row-projection.js");
+        return createSessionRowProjection({
+          cfg: getRuntimeConfig(),
+          getConfig: getRuntimeConfig,
+          getPolicyConfig: gatewayRequestContext.getCommittedRuntimeConfig ?? getRuntimeConfig,
+          getModelCatalog: () =>
+            readPreparedServerMethodModelCatalogs(
+              gatewayRequestContext,
+              listAgentIds(getRuntimeConfig()),
+            ),
+          context: gatewayRequestContext,
+          placementFactsReader: runtime.workerEnvironmentStartup?.placementStore,
+        });
+      });
+  // Startup and teardown retain this work even if transport setup fails first.
+  void projectionReady?.catch(() => {});
   let requestRuntimeReady: Promise<void> | undefined;
   const projectionLifetime: { closing: boolean; detach?: () => void } = { closing: false };
   runtime.registerGatewayLifetimeSidecars({
@@ -80,29 +97,33 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   });
   // An early request may initialize this while other listeners bind; keep startup ownership.
   const initializeRequestRuntime = AsyncLocalStorage.bind(async () => {
-    projectionReady = runtime.opts.updateCanary
-      ? undefined
-      : startupTrace.measure("sessions.projection", async () => {
-          const { createSessionRowProjection } = await import("./session-row-projection.js");
-          return createSessionRowProjection({
-            cfg: getRuntimeConfig(),
-            getConfig: getRuntimeConfig,
-            getPolicyConfig: gatewayRequestContext.getCommittedRuntimeConfig ?? getRuntimeConfig,
-            getModelCatalog: () =>
-              readPreparedServerMethodModelCatalogs(
-                gatewayRequestContext,
-                listAgentIds(getRuntimeConfig()),
-              ),
-            context: gatewayRequestContext,
-            placementFactsReader: runtime.workerEnvironmentStartup?.placementStore,
-          });
-        });
     const projection = await projectionReady;
     if (projectionLifetime.closing) {
       throw new Error("Gateway closed during session projection startup");
     }
     if (projection) {
       projectionLifetime.detach = runtime.attachSessionRowProjection(projection);
+      if (
+        shouldUseGatewayOwnerProfile({
+          role: "operator",
+          authMethod: runtime.getResolvedAuth().mode,
+          rolesConfigured: Boolean(getRuntimeConfig().gateway?.roles),
+        })
+      ) {
+        try {
+          await startupTrace.measure("gateway.owner-profile", async () => {
+            const [{ ensureCanonicalGatewayOwnerProfile }, { resolveHostAccountName }] =
+              await Promise.all([
+                import("../state/user-profile-writes.js"),
+                import("../infra/host-account-name.js"),
+              ]);
+            // Projection owns the admitted catalog; first connect consumes its committed owner.
+            await ensureCanonicalGatewayOwnerProfile(resolveHostAccountName);
+          });
+        } catch (error) {
+          log.warn(`Gateway owner profile preparation failed: ${formatErrorMessage(error)}`);
+        }
+      }
       // The initial roster must be usable before reconnecting clients can issue lists.
       await startupTrace.measure("sessions.materialize", () => projection.ensureMaterialized());
       if (projectionLifetime.closing) {
@@ -144,7 +165,9 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   const gatewayInstanceRuntime = createGatewayInstanceRuntime({
     getContext: () => gatewayRequestContext,
     getMethodRegistry: () => getAttachedGatewayMethodRegistry(),
-    isDispatchAvailable: () => startupState.dispatchReady && !lifecycle.closePreludeStarted,
+    // Request entry fences new calls during the prelude. Retained principals
+    // stay current until run shutdown records recovery and cancels execution.
+    isDispatchAvailable: () => startupState.dispatchReady,
     logError: (message) => log.error(message),
     prepareRestartRecovery: runtime.channelManager.recoverAutostartSuppression,
   });
@@ -168,7 +191,12 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       getShutdownBudget: () => hostLifecycle.getShutdownBudget?.(),
       request: (action, assertCaller) =>
         hostLifecycle.request(action, () => {
-          if (!gatewayInstanceRuntime.isAvailable()) {
+          // Host control creates new effects; retained reply principals can remain
+          // current during recovery marking without admitting host start/stop.
+          if (
+            runtime.requestEntryLifetime.signal.aborted ||
+            !gatewayInstanceRuntime.isAvailable()
+          ) {
             throw new Error(
               "Gateway lifecycle is unavailable for this closed instance. Reconnect and retry.",
             );
