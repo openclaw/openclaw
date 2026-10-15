@@ -47,7 +47,8 @@ const authClientMocks = vi.hoisted(() => {
 });
 const matrixDoRequestMock = authClientMocks.matrixDoRequest;
 
-vi.mock("./sdk/http-client.js", () => ({
+vi.mock("./sdk/http-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./sdk/http-client.js")>()),
   MatrixAuthedHttpClient: authClientMocks.MatrixAuthedHttpClient,
 }));
 

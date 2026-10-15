@@ -331,7 +331,8 @@ vi.mock("../internal/gateway.js", () => ({
   GatewayCloseCodes: { DisallowedIntents: 4014 },
 }));
 
-vi.mock("../internal/voice.js", () => ({
+vi.mock("../internal/voice.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../internal/voice.js")>()),
   VoicePlugin: class {
     id = "voice";
     registerClient() {}

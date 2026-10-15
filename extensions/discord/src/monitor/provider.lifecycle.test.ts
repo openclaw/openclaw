@@ -28,7 +28,8 @@ const { stopLogging, unregisterGateway, waitForStop } = vi.hoisted(() => ({
   ),
 }));
 vi.mock("../gateway-logging.js", () => ({ attachDiscordGatewayLogging: () => stopLogging }));
-vi.mock("../monitor.gateway.js", () => ({
+vi.mock("../monitor.gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../monitor.gateway.js")>()),
   waitForDiscordGatewayStop: waitForStop,
 }));
 vi.mock("./gateway-registry.js", () => ({ registerGateway: vi.fn(), unregisterGateway }));

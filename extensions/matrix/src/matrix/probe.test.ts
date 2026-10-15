@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const httpMocks = vi.hoisted(() => ({ create: vi.fn(), requestJson: vi.fn() }));
 
-vi.mock("./sdk/http-client.js", () => ({
+vi.mock("./sdk/http-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./sdk/http-client.js")>()),
   MatrixAuthedHttpClient: class {
     constructor(params: unknown) {
       httpMocks.create(params);
