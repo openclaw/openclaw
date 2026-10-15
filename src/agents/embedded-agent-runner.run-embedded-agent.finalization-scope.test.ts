@@ -267,7 +267,9 @@ describe("nested settled-turn finalization ownership", () => {
         const expected =
           finalization === "answer"
             ? "The write completed."
-            : "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
+            : expect.stringContaining(
+                "The tool run finished, but no final summary was produced. I did not repeat any completed actions.",
+              );
         expect(result?.payloads).toEqual([expect.objectContaining({ text: expected })]);
         expect(toolRuns).toBe(1);
         expect(finalizerRuns).toBe(finalization === "empty" ? 2 : 1);

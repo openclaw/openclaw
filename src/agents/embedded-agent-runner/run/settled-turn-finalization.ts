@@ -62,6 +62,26 @@ type CreateAttemptControls = ReturnType<
 const MAX_EMPTY_SETTLED_FINALIZATION_ATTEMPTS = 2;
 const SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT =
   "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
+
+/**
+ * Appends a short, host-authored digest of the settled tool calls so the
+ * placeholder tells the user what ran last. Only tool names and outcomes are
+ * used; tool arguments and results are never echoed.
+ */
+export function buildSettledToolFallbackText(
+  toolMetas: EmbeddedRunAttemptWithReceiptEvidence["toolMetas"] | undefined,
+): string {
+  const last = toolMetas?.at(-1);
+  const toolName = last?.toolName.trim().slice(0, 64);
+  if (!toolMetas || !last || !toolName) {
+    return SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT;
+  }
+  // An absent isError is an unknown terminal outcome, not a success.
+  const outcome =
+    last.isError === false ? "succeeded" : last.isError === true ? "failed" : "outcome unknown";
+  return `${SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT} Tool calls: ${toolMetas.length}; last: ${toolName} (${outcome}).`;
+}
+
 type TerminalPreparationBase = Omit<
   TerminalPreparationInput,
   | "attempt"
@@ -273,7 +293,9 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   if (finalizationOutcome !== "answered" && terminalFallbackAllowed) {
     // Scheduled runs have no useful announcement when only a host placeholder remains.
     const fallbackText =
-      runParams.trigger === "cron" ? SILENT_REPLY_TOKEN : SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT;
+      runParams.trigger === "cron"
+        ? SILENT_REPLY_TOKEN
+        : buildSettledToolFallbackText(initial.attempt.toolMetas);
     attempt = buildSettledToolFallbackAttemptResult({
       text: fallbackText,
       error: terminalFailed

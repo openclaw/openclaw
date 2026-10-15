@@ -81,6 +81,11 @@ required, the host delivers its existing fallback:
 
 > The tool run finished, but no final summary was produced. I did not repeat any completed actions.
 
+When tools ran, the host appends a short digest of the last tool name and its
+outcome (for example, `Tool calls: 3; last: exec (succeeded).`). The outcome
+is `succeeded` or `failed` only when the tool reported one; otherwise it reads
+`outcome unknown`. Tool arguments and results are never included.
+
 The original completed outcome, native binding, and tool receipts remain intact.
 If the native turn failed and finalization cannot produce an answer, the reply
 instead explains the failure and the next step. For example, model capacity

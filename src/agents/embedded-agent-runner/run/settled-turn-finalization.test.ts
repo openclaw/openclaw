@@ -14,7 +14,10 @@ import {
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "./lane-runtime.js";
-import { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
+import {
+  buildSettledToolFallbackText,
+  prepareTerminalWithSettledTurnFinalization,
+} from "./settled-turn-finalization.js";
 import {
   createSettledFinalizationTestInput,
   createSettledProviderFailureAttempt,
@@ -49,6 +52,7 @@ const transcriptMocks = vi.hoisted(() => ({
 
 const SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT =
   "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
+const SETTLED_TOOL_FINALIZATION_FALLBACK_WITH_DIGEST_TEXT = `${SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT} Tool calls: 2; last: exec (succeeded).`;
 
 vi.mock("./backend.js", () => ({
   resolveRuntimeModelAttempt: backendMocks.resolveRuntimeModelAttempt,
@@ -464,7 +468,9 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     "persists and delivers a %s fallback after empty finalization",
     async (trigger) => {
       const expectedText =
-        trigger === "cron" ? SILENT_REPLY_TOKEN : SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT;
+        trigger === "cron"
+          ? SILENT_REPLY_TOKEN
+          : SETTLED_TOOL_FINALIZATION_FALLBACK_WITH_DIGEST_TEXT;
       const attempt = settledSuccessfulAttempt();
       const emptyAssistant = buildEmbeddedRunnerAssistant({
         content: [{ type: "text", text: "" }],
@@ -689,7 +695,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(result.finalizationOutcome).toBe("failed");
     expect(result.attempt).toBe(attempt);
     expect(result.prepared.payloadsWithToolMedia).not.toEqual([
-      expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT }),
+      expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_WITH_DIGEST_TEXT }),
     ]);
   });
 
@@ -703,7 +709,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     const result = await prepareTerminalWithSettledTurnFinalization(input);
 
     expect(result.prepared.payloadsWithToolMedia).toEqual([
-      expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT }),
+      expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_WITH_DIGEST_TEXT }),
     ]);
     expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).not.toHaveBeenCalled();
   });
@@ -787,5 +793,37 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
         expectedWriterRunId: "run-settled",
       }),
     );
+  });
+});
+
+describe("buildSettledToolFallbackText", () => {
+  it("keeps the plain placeholder when no tool ran", () => {
+    expect(buildSettledToolFallbackText(undefined)).toBe(SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT);
+    expect(buildSettledToolFallbackText([])).toBe(SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT);
+  });
+
+  it("names the last tool, its outcome, and the number of calls", () => {
+    expect(
+      buildSettledToolFallbackText([
+        { toolName: "read", isError: false },
+        { toolName: "exec", isError: true },
+      ]),
+    ).toBe(`${SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT} Tool calls: 2; last: exec (failed).`);
+  });
+
+  it("reports an unknown outcome when isError is absent instead of claiming success", () => {
+    expect(buildSettledToolFallbackText([{ toolName: "read" }])).toBe(
+      `${SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT} Tool calls: 1; last: read (outcome unknown).`,
+    );
+    expect(buildSettledToolFallbackText([{ toolName: "read", isError: undefined }])).toContain(
+      "(outcome unknown)",
+    );
+  });
+
+  it("never echoes tool metadata beyond the name", () => {
+    const text = buildSettledToolFallbackText([
+      { toolName: "exec", meta: "curl --header secret-value", isError: false },
+    ]);
+    expect(text).not.toContain("secret-value");
   });
 });
