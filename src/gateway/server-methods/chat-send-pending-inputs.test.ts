@@ -136,7 +136,7 @@ describe("ordinary chat input admission", () => {
       await expect(commit).resolves.toMatchObject({ ok: true });
       const transcript = loadTranscriptEventsSync(fixture.scope);
       expect(transcript).toHaveLength(fixture.activeTranscript.length + 2);
-      expect(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+      expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
       const results = transcript
         .filter(isRecord)
         .filter((event) => isRecord(event.message) && event.message.model === "automation-result");
