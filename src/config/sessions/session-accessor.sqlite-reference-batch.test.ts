@@ -1,5 +1,5 @@
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -112,6 +112,56 @@ describe("SQLite reference batches across a replaced connection", () => {
       // A fallback read would have listed "holder" here.
       expect(materializedKeys).toEqual([]);
     });
+  });
+
+  it("inspects the schema once for the batch, not once per reference read", async () => {
+    // Every validity token used to begin with its own `PRAGMA schema_version`,
+    // so candidate preparation, each in-transaction deletion check and every
+    // other reference lookup re-inspected a schema the admitted owner was
+    // already tracking. The schema marker now comes from the admitted facts, so
+    // the inspection count must not follow the number of reads. The
+    // `data_version` half is deliberately still read per token and is not what
+    // this measures.
+    const { options } = makeStore();
+    const primed = openOpenClawAgentDatabase(options);
+    insertEntry(
+      primed,
+      "holder",
+      "holder-current",
+      JSON.stringify({ sessionId: "holder-current", updatedAt: 1, previousSessionId: "held" }),
+    );
+
+    const countSchemaInspections = async (reads: number): Promise<number> => {
+      const prototype = StatementSync.prototype as unknown as {
+        sourceSQL?: string;
+        get: (...parameters: never[]) => unknown;
+      };
+      const originalGet = prototype.get;
+      let inspections = 0;
+      prototype.get = function get(this: { sourceSQL?: string }, ...parameters: never[]) {
+        if ((this.sourceSQL ?? "").includes("schema_version")) {
+          inspections += 1;
+        }
+        return originalGet.apply(this, parameters);
+      };
+      try {
+        await withBatchedSessionReferenceAnalysis(primed, ["held"], async () => {
+          for (let read = 0; read < reads; read += 1) {
+            expect(readReferencedSessionIds(primed, undefined, ["held"])).toEqual(
+              new Set(["held"]),
+            );
+          }
+        });
+      } finally {
+        prototype.get = originalGet;
+      }
+      return inspections;
+    };
+
+    const few = await countSchemaInspections(2);
+    const many = await countSchemaInspections(12);
+    // Six times the reads must not cost more schema inspections than two did.
+    expect(many).toBeLessThanOrEqual(few);
   });
 
   it("keeps batching the rest of the candidates after the handle is replaced", async () => {

@@ -1,5 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
-import { readSqliteDataVersion } from "../../infra/sqlite-schema-facts.js";
+import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import {
+  getAdmittedSqliteSchemaFacts,
+  installSqliteTempTrackingSchema,
+  readSqliteDataVersion,
+} from "../../infra/sqlite-schema-facts.js";
 
 /**
  * Connection-local memo for reference analysis over a bounded set of candidate
@@ -84,42 +89,62 @@ const MAX_TRACKED_OWNERS_PER_ID = 2;
 const activeBatches = new Map<string, SessionReferenceBatch>();
 const referenceTrackerSchemaVersions = new WeakMap<DatabaseSync, number>();
 
+/**
+ * Installs the connection-local generation counter, once per admitted schema.
+ *
+ * The schema marker comes from the admitted facts rather than from a
+ * `PRAGMA schema_version` read of its own. Reading the pragma here meant every
+ * token read — candidate preparation, each in-transaction deletion check, every
+ * other reference lookup — paid a schema inspection the schema owner had
+ * already done and was already tracking, which is the one thing runtime
+ * consumers of an admitted connection are not supposed to do. The owner
+ * replaces its facts on any schema change, so consuming `schema.schemaVersion`
+ * keeps exactly the reinstall trigger this had before while removing the
+ * repeated inspection. The `data_version` half of the validity token is
+ * untouched: it is still read fresh on every token, because an external commit
+ * does not change the schema.
+ *
+ * The TEMP shapes themselves go through `installSqliteTempTrackingSchema`,
+ * which is the owner's non-revoking install for fixed tracking schemas — a
+ * hand-rolled `CREATE TEMP` is ordinary TEMP DDL to the owner and revokes the
+ * facts it is being keyed on. Only INSERT and UPDATE are observed: a DELETE can
+ * remove a reference but never create one, so a memo taken before a delete
+ * stays conservative (see the module comment above).
+ */
 function ensureSessionReferenceTracker(database: DatabaseSync): void {
-  const schemaRow = /* sqlite-allow-raw: pragma read has no Kysely form. */ database
-    .prepare("PRAGMA schema_version")
-    // node:sqlite hands back an untyped row record for a PRAGMA read.
-    // SAFETY: the asserted shape types the column as `unknown`, so the assertion grants no value type; the `typeof` guard below is the only thing that admits it.
-    .get() as { schema_version?: unknown };
-  if (typeof schemaRow.schema_version !== "number") {
-    throw new Error("SQLite did not return a numeric PRAGMA schema_version");
+  const schema = getAdmittedSqliteSchemaFacts(database);
+  if (!schema) {
+    throw new Error("SQLite session reference tracking requires admitted schema facts");
   }
+  const { schemaVersion } = schema;
   const trackedSchemaVersion = referenceTrackerSchemaVersions.get(database);
-  if (trackedSchemaVersion === schemaRow.schema_version) {
+  if (trackedSchemaVersion === schemaVersion) {
     return;
   }
-  // sqlite-allow-raw -- TEMP triggers are the connection-local ownership boundary and see
-  // unpublished raw DML. A main-schema change bumps the generation before reinstalling them,
-  // so dropping and recreating either table cannot make an older memo look current.
-  database.exec(`
-    CREATE TEMP TABLE IF NOT EXISTS openclaw_session_reference_generation (id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1), generation INTEGER NOT NULL) STRICT;
-    INSERT OR IGNORE INTO openclaw_session_reference_generation (id, generation) VALUES (1, 0);
-    ${trackedSchemaVersion === undefined ? "" : "UPDATE openclaw_session_reference_generation SET generation = generation + 1 WHERE id = 1;"}
-    DROP TRIGGER IF EXISTS openclaw_session_reference_generation_node_insert;
-    DROP TRIGGER IF EXISTS openclaw_session_reference_generation_node_update;
-    DROP TRIGGER IF EXISTS openclaw_session_reference_generation_window_insert;
-    DROP TRIGGER IF EXISTS openclaw_session_reference_generation_window_update;
-    CREATE TEMP TRIGGER openclaw_session_reference_generation_node_insert
-      AFTER INSERT ON main.session_nodes BEGIN UPDATE openclaw_session_reference_generation SET generation = generation + 1 WHERE id = 1; END;
-    CREATE TEMP TRIGGER openclaw_session_reference_generation_node_update
-      AFTER UPDATE ON main.session_nodes BEGIN UPDATE openclaw_session_reference_generation SET generation = generation + 1 WHERE id = 1; END;
-    CREATE TEMP TRIGGER openclaw_session_reference_generation_window_insert
-      AFTER INSERT ON main.session_windows BEGIN UPDATE openclaw_session_reference_generation SET generation = generation + 1 WHERE id = 1; END;
-    CREATE TEMP TRIGGER openclaw_session_reference_generation_window_update
-      AFTER UPDATE ON main.session_windows BEGIN UPDATE openclaw_session_reference_generation SET generation = generation + 1 WHERE id = 1; END;
-  `);
+  // A main-schema change advances the generation before reinstalling its raw-DML
+  // observers, so dropping and recreating them cannot make an older memo look current.
+  installSqliteTempTrackingSchema(database, {
+    kind: "generation",
+    table: "openclaw_session_reference_generation",
+    triggers: ["node", "window"].flatMap((subject) =>
+      (["INSERT", "UPDATE"] as const).map((operation) => ({
+        name: `openclaw_session_reference_generation_${subject}_${operation.toLowerCase()}`,
+        table: subject === "node" ? "session_nodes" : "session_windows",
+        operation,
+        enabled: true,
+      })),
+    ),
+    advance: trackedSchemaVersion !== undefined,
+  });
   // A rolled-back schema change can reuse its version on retry after SQLite removes the triggers.
   if (!database.isTransaction) {
-    referenceTrackerSchemaVersions.set(database, schemaRow.schema_version);
+    referenceTrackerSchemaVersions.set(database, schemaVersion);
+  } else {
+    stageSqliteTransactionState(database, {
+      stage: () => referenceTrackerSchemaVersions.set(database, schemaVersion),
+      rollback: () => referenceTrackerSchemaVersions.delete(database),
+      commit: () => {},
+    });
   }
 }
 
