@@ -1,6 +1,6 @@
 import type { CliBackendParsedJsonlEvent } from "openclaw/plugin-sdk/cli-backend";
-import { describe, expect, it } from "vitest";
 
+// Lifecycle events must not widen the released parser-event union.
 function describeLegacyCliBackendEvent(event: CliBackendParsedJsonlEvent): string {
   switch (event.kind) {
     case "text":
@@ -19,8 +19,4 @@ function describeLegacyCliBackendEvent(event: CliBackendParsedJsonlEvent): strin
   return exhaustive;
 }
 
-describe("CLI backend Plugin SDK compatibility", () => {
-  it("keeps existing parser events exhaustively matchable when lifecycle events are added", () => {
-    expect(describeLegacyCliBackendEvent({ kind: "text", text: "ready" })).toBe("ready");
-  });
-});
+void describeLegacyCliBackendEvent;
