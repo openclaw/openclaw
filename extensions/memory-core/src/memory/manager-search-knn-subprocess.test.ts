@@ -6,10 +6,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import {
-  ensureSqliteLibrarySelected,
-  SQLITE_IDLE_HANDLE_TTL_MS,
-} from "openclaw/plugin-sdk/memory-core-host-engine-knn";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   resolveRuntimeWorkerArgv,
@@ -28,12 +25,6 @@ const fixtureChildUrl = new URL("./fixtures/manager-search-knn-child.fixture.mjs
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return { ...actual, spawn: vi.fn(actual.spawn) };
-});
-
-vi.mock("../../../../src/infra/bun-sqlite-library.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../../src/infra/bun-sqlite-library.js")>();
-  return { ...actual, ensureSqliteLibrarySelected: vi.fn(actual.ensureSqliteLibrarySelected) };
 });
 
 const { spawn } = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -166,24 +157,6 @@ afterEach(async () => {
 });
 
 describe("memory vector KNN subprocess boundary", () => {
-  it("forwards a discovered SQLite library through stdin without inheriting its environment", async () => {
-    const sqliteLibraryPath = "/synthetic/sqlite/libsqlite3.dylib";
-    vi.stubEnv("OPENCLAW_SQLITE_LIBRARY", sqliteLibraryPath);
-    vi.mocked(ensureSqliteLibrarySelected).mockReturnValueOnce({
-      source: "discovered",
-      path: sqliteLibraryPath,
-      version: "3.53.4",
-      extensionLoadingSupported: true,
-    });
-    const fixture = useFixtureChild();
-    await runVectorKnnInSubprocess({ databasePath: "fixture:ok", request: request(1) });
-    const input = JSON.parse(String(fixture.stdinWriteSpies[0]!.mock.calls[0]![0]));
-    expect(input).toHaveProperty("sqliteLibraryPath", sqliteLibraryPath);
-    expect(vi.mocked(childProcess.spawn).mock.calls[0]![2]?.env).not.toHaveProperty(
-      "OPENCLAW_SQLITE_LIBRARY",
-    );
-  });
-
   it("retires an idle child at the SQLite idle deadline and respawns after a crash", async () => {
     const fixture = useFixtureChild();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

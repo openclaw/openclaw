@@ -3,20 +3,19 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createQueryId, sql, SqliteQueryCompiler, type RootOperationNode } from "kysely";
 import { sqliteStringSetEntries } from "../kysely-sync.js";
 import { runVectorKnnInSubprocess } from "./sqlite-vector-subprocess.js";
-import {
-  matchesVectorRow,
-  type VectorCapability,
-  type VectorRowShape,
-  type VectorSearch,
-} from "./vector-contract.js";
+import type {
+  SqliteVectorPlan,
+  SqliteVectorStatement,
+  VectorKnnResponse,
+} from "./sqlite-vector-types.js";
+import { matchesVectorRow, type VectorCapability, type VectorSearch } from "./vector-contract.js";
 
 // sqlite-vec v0.1.9 rejects KNN queries with k above 4096.
 const MAX_VECTOR_KNN_K = 4096;
 const compiler = new SqliteQueryCompiler();
 const vectorToBlob = (embedding: readonly number[]) =>
   Buffer.from(new Float32Array(embedding).buffer);
-type Statement = { sql: string; parameters: SQLInputValue[] };
-function compileStatement(source: { toOperationNode(): RootOperationNode }): Statement {
+function compileStatement(source: { toOperationNode(): RootOperationNode }): SqliteVectorStatement {
   const { sql: statement, parameters } = compiler.compileQuery(
     source.toOperationNode(),
     createQueryId(),
@@ -24,17 +23,6 @@ function compileStatement(source: { toOperationNode(): RootOperationNode }): Sta
   // SAFETY: Kysely preserves native SQL bindings; the private candidate marker is replaced before use.
   return { sql: statement, parameters: parameters as SQLInputValue[] };
 }
-
-export type SqliteVectorPlan = {
-  query: Statement;
-  scopeCount: Statement;
-  vectorTable: string;
-  limit: number;
-  candidateParameter: number;
-  rowShape: VectorRowShape;
-  textPrefix?: VectorSearch<unknown>["textPrefix"];
-};
-export type VectorKnnResponse<Row = unknown> = { rows: Row[]; fallbackScanRequired: boolean };
 
 /** Native L2 candidates, cosine reranking, and the existing bounded underfill decision. */
 export function runSqliteVectorQuery(

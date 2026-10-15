@@ -49,7 +49,7 @@ describe("memory search generation", () => {
       expect(manager.status().chunks).toBe(publishedChunks);
       const lexical = await manager.search("zebra", { lexicalOnly: true, minScore: 0 });
       expect(lexical.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
-      const result = await syncMemoryFiles(params);
+      const result = await syncMemoryFiles(...params);
       shadowReady.resolve();
       await releaseReindex.promise;
       return result;

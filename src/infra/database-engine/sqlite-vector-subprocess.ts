@@ -5,8 +5,11 @@ import { ensureSqliteLibrarySelected } from "../bun-sqlite-library.js";
 import { runtimeProcessEntrypoints } from "../runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../sqlite-handle-lifecycle.js";
-import type { VectorKnnChildInput } from "./sqlite-vector.child.js";
-import type { SqliteVectorPlan, VectorKnnResponse } from "./sqlite-vector.js";
+import type {
+  SqliteVectorPlan,
+  VectorKnnChildInput,
+  VectorKnnResponse,
+} from "./sqlite-vector-types.js";
 
 const MAX_STDIN_BYTES = 1024 * 1024;
 const MAX_STDOUT_BYTES = 2 * 1024 * 1024;

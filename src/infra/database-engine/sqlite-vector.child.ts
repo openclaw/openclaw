@@ -3,17 +3,11 @@ import { deserialize } from "node:v8";
 import { ensureSqliteLibrarySelected } from "../bun-sqlite-library.js";
 import { openNodeSqliteDatabase, supportsNodeSqliteExtensionLoading } from "../node-sqlite.js";
 import { loadSqliteVecExtension } from "./sqlite-vec.js";
-import { runSqliteVectorQuery, type VectorKnnResponse } from "./sqlite-vector.js";
+import type { VectorKnnChildInput, VectorKnnResponse } from "./sqlite-vector-types.js";
+import { runSqliteVectorQuery } from "./sqlite-vector.js";
 
 const MAX_STDIN_BYTES = 1024 * 1024;
 const MAX_STDOUT_BYTES = 2 * 1024 * 1024;
-
-export type VectorKnnChildInput = {
-  databasePath: string;
-  extensionPath?: string;
-  sqliteLibraryPath?: string;
-  request: string;
-};
 
 type VectorKnnChildResult =
   | { status: "ok"; value: VectorKnnResponse }

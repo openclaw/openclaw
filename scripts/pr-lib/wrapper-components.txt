@@ -367,6 +367,7 @@ src/infra/database-engine/search.ts
 src/infra/database-engine/sqlite-full-text.ts
 src/infra/database-engine/sqlite-search-schema.ts
 src/infra/database-engine/sqlite-vector-subprocess.ts
+src/infra/database-engine/sqlite-vector-types.ts
 src/infra/database-engine/sqlite-vector.ts
 src/infra/database-engine/vector-contract.ts
 src/infra/postgres-sync/connection.ts

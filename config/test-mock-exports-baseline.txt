@@ -1740,7 +1740,6 @@
 ["packages/memory-host-sdk/src/host/batch-upload.test.ts","./remote-http.js","6abc326846f4c624c6c2f91449c82075610650375501a798f11e1fbe22fcb60a",1]
 ["packages/memory-host-sdk/src/host/embeddings-remote-provider.test.ts","./embeddings-remote-fetch.js","7d287a6c48e775f503172185b444c719ceaf990ab4c7552dac6c15cd3c6b8cc4",1]
 ["packages/memory-host-sdk/src/host/post-json.test.ts","./remote-http.js","6abc326846f4c624c6c2f91449c82075610650375501a798f11e1fbe22fcb60a",1]
-["packages/memory-host-sdk/src/host/sqlite-vec.test.ts","./sqlite-vec-platform-variant.js","3669bf77cbb28588792d989d0bb97f3f2dd3a590d77ccbebb861f71f19d7aaa5",1]
 ["packages/sdk/src/transport.test.ts","@openclaw/gateway-client","2be2bb47029a977c5ea45108b383c3dfe301bbc434de99b60fda8deae92f78b9",1]
 ["packages/terminal-core/src/health-style.test.ts","./theme.js","993b1923cb2fdb4c927755d48d706192ff1b888c2989f97bdd61a443c15192e4",1]
 ["packages/terminal-core/src/restore.test.ts","./progress-line.js","aed32dd97ad90d8baf3671f5b479c14e71e5dabd47b0fe9e22e61c0570f1e23b",1]

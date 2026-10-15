@@ -1,9 +1,8 @@
-import { isPostgresSqlConnection } from "../sql-connection.js";
-import type { DatabaseEngineInput } from "./config.js";
-import type { EngineConnection } from "./contract.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../sql-connection.js";
 import { bindSqliteFullText } from "./sqlite-full-text.js";
 import { bindSqliteVectorCapability } from "./sqlite-vector.js";
 import type { FullTextCapability, TextIndex, TextIndexDefinition } from "./text-contract.js";
+import type { DatabaseEngineInput } from "./types.js";
 import type { VectorCapability, VectorIndex } from "./vector-contract.js";
 
 const POSTGRES_SEARCH_UNAVAILABLE =
