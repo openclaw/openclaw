@@ -1171,6 +1171,16 @@ update to a release that contains it, regardless of the installed updater's
 version. Manual `openclaw doctor --fix` keeps failing immediately so the operator
 can decide.
 
+The same wait covers another OpenClaw process that has an agent database open
+without holding state ownership, such as a plugin command run while the Gateway is
+stopped. Doctor releases state ownership while it waits, because that process must
+write shared state to close its database. It prints the holder's PID and progress
+every 30 seconds, then rechecks under maintenance ownership before repairing. A
+lease held by Doctor's own process, or a check where the Gateway may still be
+running under an external supervisor, still refuses immediately. If the database
+is still open after 11 minutes, maintenance stops with the holder's PID and the
+usual deferred-maintenance warning (`agent-database-lease-active`).
+
 An active Gateway suspension keeps installation changes under its host operation’s
 control. The installation watcher does not independently restart the Gateway
 while suspension is preparing, draining, or prepared. After resume or lease
