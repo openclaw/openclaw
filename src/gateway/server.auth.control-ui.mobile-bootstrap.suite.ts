@@ -180,7 +180,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
         "openclaw-bootstrap-voice-node-",
       );
       const recordAccess = pairing.recordPairedDeviceAccess;
-      const metadataRecorded = createDeferred<void>();
+      const metadataRecorded = createDeferred();
       const recordMetadata = vi
         .spyOn(pairing, "recordPairedDeviceAccess")
         .mockImplementation((deviceId, patch, ...args) => {
