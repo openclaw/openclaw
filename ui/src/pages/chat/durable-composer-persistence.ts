@@ -104,11 +104,9 @@ export function captureDurableChatAttachments(
       ...(attachment.origin ? { origin: attachment.origin } : {}),
       ...(attachment.fileName ? { fileName: attachment.fileName } : {}),
       ...(typeof attachment.sizeBytes === "number" ? { sizeBytes: attachment.sizeBytes } : {}),
-      ...(attachment.browserAnnotation
-        ? { browserAnnotation: { ...attachment.browserAnnotation } }
-        : {}),
+      ...(attachment.browserAnnotation ? { browserAnnotation: attachment.browserAnnotation } : {}),
       ...(attachment.selectionAnnotation
-        ? { selectionAnnotation: { ...attachment.selectionAnnotation } }
+        ? { selectionAnnotation: attachment.selectionAnnotation }
         : {}),
     });
   }
@@ -127,9 +125,6 @@ export async function hydrateDurableComposerAttachments(
       return {
         ...metadata,
         id: generateAttachmentId(),
-        ...(metadata.browserAnnotation
-          ? { browserAnnotation: { ...metadata.browserAnnotation } }
-          : {}),
         ...(annotation ? { selectionAnnotation: annotation } : {}),
         dataUrl: await readBlobAsDataUrl(source),
       };

@@ -303,6 +303,13 @@ Progress sends and messages to another conversation do not finish the current
 source reply. Deliberate yields retain their existing accepted-work semantics.
 Tool media stays in the result alongside the timeout; artifacts alone do not finish the reply.
 
+Cancellation revokes the run's tool and approval authority immediately. Its
+accepted terminal bookkeeping still settles through the lifecycle owner, so
+Stop and restart cancellation can record the session outcome and any applicable
+failure notice. A replaced session, runtime candidate, or Gateway lifecycle
+cannot reuse that terminal writer.
+The lifecycle owner retires the terminal writer after its accepted writes settle.
+
 The model idle and provider HTTP rows describe the built-in OpenClaw model
 path. Codex owns its native stream deadlines and network retries. After exact
 native terminal receipt, OpenClaw allows two minutes for local settlement.
