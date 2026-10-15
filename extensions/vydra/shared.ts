@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime, type MediaKind } from "openclaw/plugin-sdk/media-mime";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import type { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
@@ -11,6 +11,7 @@ import {
   pollProviderOperationJson,
   postJsonResponse,
   readProviderBinaryResponse,
+  resolveProviderApiKeyHttpRequestConfig,
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
@@ -218,27 +219,15 @@ export async function runVydraGeneration(params: {
   resultUrl: string;
   status: string;
 }> {
-  const auth = await resolveApiKeyForProvider({
-    provider: "vydra",
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    store: params.authStore,
-  });
-  if (!auth.apiKey) {
-    throw new Error("Vydra API key missing");
-  }
   const fetchFn = fetch;
   const providerConfig = params.cfg.models?.providers?.vydra;
-  const { baseUrl, ...http } = resolveProviderHttpRequestConfig({
+  const { baseUrl, ...http } = await resolveProviderApiKeyHttpRequestConfig({
+    req: params,
+    missingApiKeyMessage: "Vydra API key missing",
     baseUrl: normalizeVydraBaseUrl(providerConfig?.baseUrl),
     defaultBaseUrl: DEFAULT_VYDRA_BASE_URL,
-    defaultHeaders: {
-      Authorization: `Bearer ${auth.apiKey}`,
-      "Content-Type": "application/json",
-    },
     provider: "vydra",
     capability: params.kind,
-    transport: "http",
     request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
   });
   const requestPolicy: VydraRequestPolicy = {

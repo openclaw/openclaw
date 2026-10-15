@@ -215,6 +215,14 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
     },
     postMultipartRequest: providerHttpMocks.postMultipartRequestMock,
     readProviderJsonResponse: providerHttpMocks.readProviderJsonResponseMock,
+    resolveProviderApiKeyHttpRequestConfig: (
+      params: Parameters<typeof actual.resolveProviderApiKeyHttpRequestConfig>[0],
+    ) => {
+      vi.spyOn(postTransport, "resolveProviderHttpRequestConfig").mockImplementation((request) =>
+        providerHttpMocks.resolveProviderHttpRequestConfigMock(request),
+      );
+      return actual.resolveProviderApiKeyHttpRequestConfig(params);
+    },
     resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,
     resolveProviderRequestHeaders: providerHttpMocks.resolveProviderRequestHeadersMock,
     [providerHttpMockKeys.sanitizeConfiguredModelProviderRequest]:

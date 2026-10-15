@@ -25,40 +25,32 @@ const {
   fetchWithTimeoutGuardedMock: vi.fn(),
   postJsonRequestMock: vi.fn(),
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "openrouter-key" })),
-  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => {
-    const request = params.request as
-      | {
-          allowPrivateNetwork?: boolean;
-          auth?:
-            | { mode: "provider-default" }
-            | { mode: "authorization-bearer"; token: string }
-            | {
-                mode: "header";
-                headerName: string;
-                value: string;
-                prefix?: string;
-              };
-          headers?: Record<string, string>;
-        }
-      | undefined;
-    const headers = new Headers(params.defaultHeaders as HeadersInit | undefined);
-    for (const [key, value] of Object.entries(request?.headers ?? {})) {
-      headers.set(key, value);
-    }
-    if (request?.auth?.mode === "authorization-bearer") {
-      headers.set("Authorization", `Bearer ${request.auth.token}`);
-    } else if (request?.auth?.mode === "header") {
-      headers.delete("Authorization");
-      headers.set(request.auth.headerName, `${request.auth.prefix ?? ""}${request.auth.value}`);
-    }
-    return {
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
-      allowPrivateNetwork: request?.allowPrivateNetwork === true,
-      headers,
-      dispatcherPolicy: undefined,
-      requestConfig: {},
-    };
-  }),
+  resolveProviderHttpRequestConfigMock: vi.fn(
+    (
+      params: Parameters<
+        typeof import("openclaw/plugin-sdk/provider-http").resolveProviderHttpRequestConfig
+      >[0],
+    ) => {
+      const request = params.request;
+      const headers = new Headers(params.defaultHeaders);
+      for (const [key, value] of Object.entries(request?.headers ?? {})) {
+        headers.set(key, value);
+      }
+      if (request?.auth?.mode === "authorization-bearer") {
+        headers.set("Authorization", `Bearer ${request.auth.token}`);
+      } else if (request?.auth?.mode === "header") {
+        headers.delete("Authorization");
+        headers.set(request.auth.headerName, `${request.auth.prefix ?? ""}${request.auth.value}`);
+      }
+      return {
+        baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
+        allowPrivateNetwork: request?.allowPrivateNetwork === true,
+        headers,
+        dispatcherPolicy: undefined,
+        requestConfig: {},
+      };
+    },
+  ),
   waitProviderOperationPollIntervalMock: vi.fn(async () => {}),
 }));
 
@@ -70,11 +62,22 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
     "openclaw/plugin-sdk/provider-http",
   );
+  const requestPolicyOwner = await vi.importActual<
+    typeof import("../../src/media-understanding/shared.js")
+  >("../../src/media-understanding/shared.js");
   return {
     ...actual,
     assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
     fetchWithTimeoutGuarded: fetchWithTimeoutGuardedMock,
     postJsonRequest: postJsonRequestMock,
+    resolveProviderApiKeyHttpRequestConfig: (
+      params: Parameters<typeof actual.resolveProviderApiKeyHttpRequestConfig>[0],
+    ) => {
+      vi.spyOn(requestPolicyOwner, "resolveProviderHttpRequestConfig").mockImplementation(
+        resolveProviderHttpRequestConfigMock,
+      );
+      return actual.resolveProviderApiKeyHttpRequestConfig(params);
+    },
     resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
     waitProviderOperationPollInterval: waitProviderOperationPollIntervalMock,
   };
