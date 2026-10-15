@@ -1523,6 +1523,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/auto-reply/reply/agent-runner-presentation.test.ts",
   "src/auto-reply/reply/agent-runner-required-maintenance.pending-input.test.ts",
   "src/auto-reply/reply/agent-runner-result-accounting.fallback.test.ts",
+  "src/auto-reply/reply/agent-runner-result-accounting.final-delivery.test.ts",
   "src/auto-reply/reply/agent-runner-result-accounting.persistence.test.ts",
   "src/auto-reply/reply/agent-runner-source-identity.test.ts",
   "src/auto-reply/reply/agent-runner.media-paths.test.ts",

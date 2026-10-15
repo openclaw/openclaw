@@ -6,16 +6,15 @@ import { renderSessionBackground } from "../../components/session-background-vie
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { LitContent, solidContent } from "../../lit/solid-content.tsx";
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
 import "../../styles/new-session.css";
 import "../../styles/new-session-attachment-panel.css";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { LitContent, solidContent } from "../../lit/solid-content.tsx";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
-import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import { CatalogBar } from "./catalog-target-view.tsx";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationStatus, NewSessionDictationView } from "./composer-dictation-view.tsx";
@@ -25,6 +24,7 @@ import { isWorktreeNameValid } from "./create-params.ts";
 import { CreationComposer } from "./creation-composer-render.tsx";
 import { DraftError, NewSessionBody } from "./draft-body.solid.tsx";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
+import { DraftWelcome } from "./draft-welcome.tsx";
 import {
   NewSessionIncognitoControl,
   NewSessionIncognitoNotice,
@@ -251,7 +251,13 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
   return (
     <>
       <div
-        class={`new-session-page ${page().submission.pendingMessage ? "chat" : ""} ${page().submission.visibility === "incognito" ? "new-session-page--incognito" : ""}`}
+        class={[
+          "new-session-page",
+          {
+            chat: Boolean(page().submission.pendingMessage),
+            "new-session-page--incognito": page().submission.visibility === "incognito",
+          },
+        ]}
       >
         <LitContent value={renderSessionBackground(page().context, "new-session")} />
         <Show when={!catalog.isTarget(page().data)}>
@@ -276,11 +282,12 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
             <Show
               when={Boolean(completed())}
               fallback={
-                <LitContent
-                  value={renderWelcomeState({
+                <DraftWelcome
+                  sessions={page().context?.sessions}
+                  options={{
                     ...page().welcomeOptions(),
                     composer: solidContent(DraftBlock, draftProps),
-                  })}
+                  }}
                 />
               }
             >
@@ -306,7 +313,8 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
               mediaKind={item().kind ?? "image"}
               gallery={item().gallery}
               connectVideo={item().connectVideo}
-              loadFullResolution={item().loadFullResolution}
+              loadDisplayImage={item().loadDisplayImage}
+              readOriginalBlob={item().readOriginalBlob}
               src={item().src}
               originalSrc={item().originalSrc ?? ""}
               imageTitle={item().title}

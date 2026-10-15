@@ -21,7 +21,7 @@ import {
   type ActiveSessionSqliteMigrationRun,
   type SessionSqliteMigrationTargetInput,
 } from "../infra/session-sqlite-migration-manifest.js";
-import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership-preflight.js";
 import { collectHistoricalArchiveSources } from "./doctor-session-sqlite-discovery.js";
 import { coalesceSessionSqliteArchiveReferences } from "./doctor-session-sqlite-migration-coalesce.js";
 import {

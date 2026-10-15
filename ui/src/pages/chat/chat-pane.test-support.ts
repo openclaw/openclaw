@@ -71,7 +71,7 @@ import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-ty
 import type {
   ChatTaskSuggestionTrayProps,
   TaskSuggestionStartMode,
-} from "./components/chat-task-suggestions.ts";
+} from "./components/chat-task-suggestions.tsx";
 import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";

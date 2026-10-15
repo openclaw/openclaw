@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   readSqliteDatabaseCleanClose,
   readSqliteDatabaseIntegrityVerification,
@@ -283,7 +284,8 @@ it.each(["newer header"] as const)(
         VALUES('primary', 'global', 1, 1, 1)`);
     }
     const callback = vi.fn(
-      (db: DatabaseSync) => db.prepare("SELECT COUNT(*) AS total FROM state_leases").get()?.total,
+      (db: EngineConnection) =>
+        db.prepare("SELECT COUNT(*) AS total FROM state_leases").get()?.total,
     );
     const read = () => withOpenClawStateStartupMigrationCheckpointDatabase(callback, options);
     expect(read()).toBe(0);

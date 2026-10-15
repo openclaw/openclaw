@@ -90,7 +90,6 @@ export function readContextEngineThreadBootstrapProjection(
 export function resolveContextEngineBootstrapProjectionDecision(params: {
   startupBinding: CodexAppServerThreadBinding | undefined;
   expectedBinding: ReturnType<typeof buildContextEngineBinding>;
-  projection: CodexContextEngineThreadBootstrapProjection;
   dynamicToolsFingerprint: string;
   legacyDynamicToolsFingerprint?: string;
 }): { project: boolean; reason: string } {
@@ -118,13 +117,7 @@ export function resolveContextEngineBootstrapProjectionDecision(params: {
   ) {
     return { project: true, reason: "dynamic-tools-mismatch" };
   }
-  const projectionChanged =
-    bindingProjection.mode !== "thread_bootstrap" ||
-    bindingProjection.epoch !== params.projection.epoch ||
-    bindingProjection.fingerprint !== params.projection.fingerprint;
-  return projectionChanged
-    ? { project: true, reason: "projection-mismatch" }
-    : { project: false, reason: "matching-thread-bootstrap-binding" };
+  return { project: false, reason: "matching-thread-bootstrap-binding" };
 }
 
 export function buildCodexSystemPromptReport(params: {

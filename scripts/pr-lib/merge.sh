@@ -891,7 +891,7 @@ merge_run() {
 
   local crabbox_final_main_sha="" crabbox_verified_main="" route=immediate
   local MERGE_ADMISSION_ACTIVE=true MERGE_OBSERVED_MAIN=""
-  local admission_attempt=0 previous_observation="" admission_start="" admission_deadline="" admission_delay=2
+  local admission_attempt=0 previous_observation="" admission_start="" admission_deadline="" admission_delay=2 admission_observed_at
   # Only fresh admission waits for calculation; retained intent reconciles immediately.
   # Pin PR/policy facts and each projection as soon as it becomes known.
   while true; do
@@ -901,9 +901,10 @@ merge_run() {
     fi
     admission_attempt=$((admission_attempt + 1))
     merge_outcome_observe "$pr" || return 1
+    admission_observed_at=$(pr_merge_now)
     if [ -z "$admission_start" ] && printf '%s\n' "$MERGE_OBSERVATION" | jq -e \
       '.pr.mergeable == "UNKNOWN" or .pr.mergeStateStatus == "UNKNOWN"' >/dev/null; then
-      admission_start=$(pr_merge_now); admission_deadline=$((admission_start + 60))
+      admission_start=$admission_observed_at; admission_deadline=$((admission_start + 60))
     fi
     if [ "$MERGE_TRANSPORT" = rest ] && [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = false ] &&
       { [ "$merge_method" != squash ] || [ "$auto_merge_requested" = true ] || [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = true ] || [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; }; then
@@ -946,7 +947,8 @@ merge_run() {
     verify_merge_main_advance \
       "$(printf '%s\n' "${previous_observation:-$MERGE_OBSERVATION}" | jq -r .main)" \
       "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" || return 1
-    if [ -n "$previous_observation" ] && [ "$(pr_merge_now)" -ge "$admission_deadline" ]; then
+    # A timely projection does not become late while its local main proof runs.
+    if [ -n "$previous_observation" ] && [ "$admission_observed_at" -ge "$admission_deadline" ]; then
       merge_outcome_stop "mergeability exceeded the 60s settle limit; stopped before intent/dispatch"
       return 1
     fi

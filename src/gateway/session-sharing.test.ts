@@ -17,12 +17,12 @@ import {
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
+import { authorizeSessionSharingTarget } from "./session-sharing-policy.js";
 import {
   allowedSessionVisibilities,
   canReceiveSessionEvent,
   authorizeIncognitoSessionTarget,
   authorizeResolvedSessionMutationAsync,
-  authorizeSessionSharingTarget,
   createSessionListEntryFilter,
   prepareProjectedSessionSharing,
   resolveSessionSharingRole,

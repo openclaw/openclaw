@@ -32,7 +32,7 @@
   animation: chatWorkingDotPulse 1.2s ease-in-out infinite;
 }
 
-.chat-reading-indicator--brand > openclaw-theme-brand-icon {
+.chat-reading-indicator--brand openclaw-theme-brand-icon {
   width: 18px;
   height: 18px;
 }

@@ -260,6 +260,18 @@ async function runAuthenticatedElevationRecovery(
   );
 }
 
+async function runElevationRecovery(
+  mac: MacScriptFixture,
+  harness: ReturnType<typeof createInstallRollbackHarness>,
+) {
+  return await runInstaller(
+    mac,
+    harness.installerPath,
+    ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
+    harness.env,
+  );
+}
+
 function writeAppInfoPlist(appPath: string, sourceCommit: string, peekabooCommit: string): void {
   mkdirSync(path.join(appPath, "Contents", "MacOS"), { recursive: true });
   writeFileSync(
@@ -1710,31 +1722,51 @@ describe("mac elevation host command contract", () => {
       expect(result.stdout).toContain("Elevation launch agent removed");
     }));
 
-  it.skipIf(process.platform !== "darwin").concurrent(
-    "plans an explicit app-backed node migration without mutating its plist",
-    async ({ mac }) =>
+  it
+    .skipIf(process.platform !== "darwin")
+    .concurrent.for(["app-launch-agent", "canonical-node", "running-app"] as const)(
+    "plans %s migration without mutating its source",
+    async (kind, { mac }) =>
       mac.lifetime.run(async () => {
-        const harness = createMigrationPlanHarness(mac);
+        const harness =
+          kind === "canonical-node"
+            ? createCanonicalNodeMigrationHarness(mac)
+            : createMigrationPlanHarness(mac);
         const before = readFileSync(harness.plistPath, "utf8");
+        if (kind === "running-app") {
+          addRunningAppFixture(harness);
+        }
+        const args =
+          kind === "running-app"
+            ? [
+                "--state-dir",
+                harness.stateDir,
+                "--config-path",
+                harness.configPath,
+                "--adopt-running-app",
+              ]
+            : ["--migrate-launch-agent", harness.plistPath];
         const result = await runInstaller(
           mac,
           scriptPath,
-          ["migration-plan", "--app", harness.appPath, "--migrate-launch-agent", harness.plistPath],
+          ["migration-plan", "--app", harness.appPath, ...args],
           harness.env,
         );
-
         expect(result.status, result.stderr).toBe(0);
         expect(JSON.parse(result.stdout)).toEqual({
-          kind: "app-launch-agent",
-          label: harness.label,
-          sourcePlist: harness.plistPath,
+          kind,
+          label: kind === "running-app" ? null : harness.label,
+          sourcePlist: kind === "running-app" ? null : harness.plistPath,
           stateDir: harness.stateDir,
           configPath: harness.configPath,
           expectedNodeId: "fixture-node",
-          loaded: false,
+          loaded: kind === "canonical-node",
           action: "replace-with-elevation-host",
         });
         expect(readFileSync(harness.plistPath, "utf8")).toBe(before);
+        if (kind === "canonical-node") {
+          expect(result.stdout).not.toContain("ignored-secret-shape");
+        }
       }),
   );
 
@@ -1921,54 +1953,34 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
-    "plans canonical node conversion without reading or copying its token",
-    async ({ mac }) =>
-      mac.lifetime.run(async () => {
-        const harness = createCanonicalNodeMigrationHarness(mac);
-        const result = await runInstaller(
-          mac,
-          scriptPath,
-          ["migration-plan", "--app", harness.appPath, "--migrate-launch-agent", harness.plistPath],
-          harness.env,
-        );
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(result.stdout)).toMatchObject({
-          kind: "canonical-node",
-          label: harness.label,
-          stateDir: harness.stateDir,
-          configPath: harness.configPath,
-          expectedNodeId: "fixture-node",
-          loaded: true,
-        });
-        expect(result.stdout).not.toContain("ignored-secret-shape");
-      }),
-  );
-
-  it.skipIf(process.platform !== "darwin").concurrent(
-    "requires a reusable PATH CLI before converting a canonical node owner",
-    async ({ mac }) =>
+  it.skipIf(process.platform !== "darwin").concurrent.for(["missing", "relative"] as const)(
+    "requires a reusable absolute CLI for canonical node conversion: %s",
+    async (kind, { mac }) =>
       mac.lifetime.run(async () => {
         const harness = createCanonicalNodeMigrationHarness(mac);
         const binDir = path.join(harness.env.HOME, "bin");
-        rmSync(path.join(binDir, "openclaw"));
-        const jqPath = (
-          await mac.run("bash", ["-lc", "command -v jq"], {
-            encoding: "utf8",
-          })
-        ).stdout.trim();
-        symlinkSync(jqPath, path.join(binDir, "jq"));
+        let cliPath: string;
+        if (kind === "missing") {
+          rmSync(path.join(binDir, "openclaw"));
+          const jqPath = (
+            await mac.run("bash", ["-lc", "command -v jq"], {
+              encoding: "utf8",
+            })
+          ).stdout.trim();
+          symlinkSync(jqPath, path.join(binDir, "jq"));
+          cliPath = binDir + ":/usr/bin:/bin:/usr/sbin:/sbin";
+        } else {
+          const relativeBin = path.join(harness.env.HOME, "relative-cli");
+          mkdirSync(relativeBin);
+          writeExecutable(path.join(relativeBin, "openclaw"), "#!/bin/sh\nexit 0\n");
+          cliPath = path.relative(process.cwd(), relativeBin) + ":" + harness.env.PATH;
+        }
         const result = await runInstaller(
           mac,
           scriptPath,
           ["migration-plan", "--app", harness.appPath, "--migrate-launch-agent", harness.plistPath],
-          {
-            ...harness.env,
-            PATH: `${binDir}:/usr/bin:/bin:/usr/sbin:/sbin`,
-          },
+          { ...harness.env, PATH: cliPath },
         );
-
         expect(result.status).toBe(1);
         expect(result.stderr).toContain("openclaw CLI is required for gateway node attestation");
       }),
@@ -2069,30 +2081,6 @@ describe("mac elevation host command contract", () => {
   );
 
   it.skipIf(process.platform !== "darwin").concurrent(
-    "rejects a relative CLI resolution before converting a canonical node owner",
-    async ({ mac }) =>
-      mac.lifetime.run(async () => {
-        const harness = createCanonicalNodeMigrationHarness(mac);
-        const relativeBin = path.join(harness.env.HOME, "relative-cli");
-        mkdirSync(relativeBin);
-        writeExecutable(path.join(relativeBin, "openclaw"), "#!/bin/sh\nexit 0\n");
-        const relativePathEntry = path.relative(process.cwd(), relativeBin);
-        const result = await runInstaller(
-          mac,
-          scriptPath,
-          ["migration-plan", "--app", harness.appPath, "--migrate-launch-agent", harness.plistPath],
-          {
-            ...harness.env,
-            PATH: `${relativePathEntry}:${harness.env.PATH}`,
-          },
-        );
-
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain("openclaw CLI is required for gateway node attestation");
-      }),
-  );
-
-  it.skipIf(process.platform !== "darwin").concurrent(
     "rejects a canonical node override that differs from the selected paired app identity",
     async ({ mac }) =>
       mac.lifetime.run(async () => {
@@ -2141,41 +2129,6 @@ describe("mac elevation host command contract", () => {
         );
         expect(result.status).toBe(1);
         expect(result.stderr).toContain(diagnostic);
-      }),
-  );
-
-  it.skipIf(process.platform !== "darwin").concurrent(
-    "plans explicit adoption of one unsupervised background app",
-    async ({ mac }) =>
-      mac.lifetime.run(async () => {
-        const harness = createMigrationPlanHarness(mac);
-        addRunningAppFixture(harness);
-        const result = await runInstaller(
-          mac,
-          scriptPath,
-          [
-            "migration-plan",
-            "--app",
-            harness.appPath,
-            "--state-dir",
-            harness.stateDir,
-            "--config-path",
-            harness.configPath,
-            "--adopt-running-app",
-          ],
-          harness.env,
-        );
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(result.stdout)).toMatchObject({
-          kind: "running-app",
-          label: null,
-          sourcePlist: null,
-          stateDir: harness.stateDir,
-          configPath: harness.configPath,
-          expectedNodeId: "fixture-node",
-          loaded: false,
-        });
       }),
   );
 
@@ -2688,53 +2641,36 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
-    "never overwrites a raced migration custody destination",
-    async ({ mac }) =>
+  it
+    .skipIf(process.platform !== "darwin")
+    .concurrent.for(["destination", "same-content-source"] as const)(
+    "preserves a raced migration custody %s",
+    async (kind, { mac }) =>
       mac.lifetime.run(async () => {
         const harness = createInstallRollbackHarness(mac, {
-          raceMigrationCustodyDestination: true,
+          raceMigrationCustodyDestination: kind === "destination",
+          replaceMigrationSourceSameContentBeforeInitialCustody: kind === "same-content-source",
         });
         const oldBinary = readFileSync(harness.appBinary);
         const result = await runAuthenticatedMigrationInstall(mac, harness);
-
         expect(result.status).toBe(1);
         expect(result.stderr).toContain("could not take exact custody");
         expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
-        expect(readFileSync(harness.appBinary)).toEqual(oldBinary);
         const custodyName = readdirSync(path.dirname(harness.sourcePlist)).find((name) =>
-          name.startsWith(`${path.basename(harness.sourcePlist)}.custody.`),
+          name.startsWith(path.basename(harness.sourcePlist) + ".custody."),
         );
         expect(custodyName).toBeDefined();
         expect(
           readFileSync(path.join(path.dirname(harness.sourcePlist), custodyName!), "utf8"),
-        ).toBe("raced-custody-owner\n");
-        expect(existsSync(harness.installReceiptPath)).toBe(false);
-        expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
-      }),
-  );
-
-  it.skipIf(process.platform !== "darwin").concurrent(
-    "restores the authenticated source while preserving a same-content custody replacement",
-    async ({ mac }) =>
-      mac.lifetime.run(async () => {
-        const harness = createInstallRollbackHarness(mac, {
-          replaceMigrationSourceSameContentBeforeInitialCustody: true,
-        });
-        const result = await runAuthenticatedMigrationInstall(mac, harness);
-
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain("could not take exact custody");
-        expect(result.stderr).toContain("automatic elevation-host rollback was incomplete");
-        expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
-        const custodyName = readdirSync(path.dirname(harness.sourcePlist)).find((name) =>
-          name.startsWith(`${path.basename(harness.sourcePlist)}.custody.`),
-        );
-        expect(custodyName).toBeDefined();
-        expect(
-          readFileSync(path.join(path.dirname(harness.sourcePlist), custodyName!), "utf8"),
-        ).toBe(harness.sourceContents);
-        expect(existsSync(harness.pendingReceiptPath)).toBe(true);
+        ).toBe(kind === "destination" ? "raced-custody-owner\n" : harness.sourceContents);
+        if (kind === "destination") {
+          expect(readFileSync(harness.appBinary)).toEqual(oldBinary);
+          expect(existsSync(harness.installReceiptPath)).toBe(false);
+          expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
+        } else {
+          expect(result.stderr).toContain("automatic elevation-host rollback was incomplete");
+          expect(existsSync(harness.pendingReceiptPath)).toBe(true);
+        }
       }),
   );
 
@@ -2941,32 +2877,6 @@ describe("mac elevation host command contract", () => {
   );
 
   it.skipIf(process.platform !== "darwin").concurrent(
-    "commits only after the exact macOS computer-use node reconnects through the new app",
-    async ({ mac }) =>
-      mac.lifetime.run(async () => {
-        const harness = createInstallRollbackHarness(mac, { launchdBootstrapFails: false });
-        const result = await runAuthenticatedMigrationInstall(mac, harness);
-
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout).toContain("Elevation host installed: pid=555555");
-        expect(existsSync(harness.sourcePlist)).toBe(false);
-        expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("elevation-loaded");
-        const installReceipt = JSON.parse(
-          readFileSync(harness.installReceiptPath, "utf8"),
-        ) as Record<string, unknown>;
-        expect(installReceipt).toMatchObject({
-          kind: "openclaw-elevation-install",
-          nodeId: "fixture-node",
-          nodeProfile: "primary",
-        });
-        expect(installReceipt.migration).toMatchObject({
-          label: harness.label,
-          wasLoaded: true,
-        });
-      }),
-  );
-
-  it.skipIf(process.platform !== "darwin").concurrent(
     "reserves generation-unique rollback custody across repeated same-artifact installs",
     async ({ mac }) =>
       mac.lifetime.run(async () => {
@@ -3093,191 +3003,120 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
-    "explicitly recovers the prior app and source job from the verified install receipt",
-    async ({ mac }) =>
+  it
+    .skipIf(process.platform !== "darwin")
+    .concurrent.for(["present", "missing", "damaged"] as const)(
+    "recovers the prior app and source job with a %s current app",
+    async (kind, { mac }) =>
       mac.lifetime.run(async () => {
         const harness = createInstallRollbackHarness(mac, { launchdBootstrapFails: false });
         const oldBinary = readFileSync(harness.appBinary);
         const installed = await runAuthenticatedMigrationInstall(mac, harness);
         expect(installed.status, installed.stderr).toBe(0);
+        expect(installed.stdout).toContain("Elevation host installed: pid=555555");
+        expect(existsSync(harness.sourcePlist)).toBe(false);
+        expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("elevation-loaded");
+        const installReceipt = JSON.parse(
+          readFileSync(harness.installReceiptPath, "utf8"),
+        ) as Record<string, unknown>;
+        expect(installReceipt).toMatchObject({
+          kind: "openclaw-elevation-install",
+          nodeId: "fixture-node",
+          nodeProfile: "primary",
+        });
+        expect(installReceipt.migration).toMatchObject({ label: harness.label, wasLoaded: true });
 
-        const recovered = await runInstaller(
-          mac,
-          harness.installerPath,
-          ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
-          harness.env,
-        );
+        if (kind === "missing") {
+          rmSync(harness.appPath, { recursive: true });
+          const unauthenticated = await runElevationRecovery(mac, harness);
+          expect(unauthenticated.status).toBe(1);
+          expect(unauthenticated.stderr).toContain(
+            "recovery requires the authenticated elevation archive",
+          );
+          expect(existsSync(harness.installReceiptPath)).toBe(true);
+        } else if (kind === "damaged") {
+          rmSync(path.join(harness.appPath, "Contents", "Info.plist"));
+        }
+        const recovered =
+          kind === "present"
+            ? await runElevationRecovery(mac, harness)
+            : await runAuthenticatedElevationRecovery(mac, harness);
         expect(recovered.status, recovered.stderr).toBe(0);
         expect(readFileSync(harness.appBinary)).toEqual(oldBinary);
         expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
         expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
         expect(existsSync(harness.installReceiptPath)).toBe(false);
-        expect(
-          readdirSync(harness.stateDir).some((name) =>
-            name.startsWith("elevation-host.recovered-receipt."),
-          ),
-        ).toBe(true);
+        if (kind === "present") {
+          expect(
+            readdirSync(harness.stateDir).some((name) =>
+              name.startsWith("elevation-host.recovered-receipt."),
+            ),
+          ).toBe(true);
+        } else if (kind === "damaged") {
+          expect(
+            readdirSync(harness.env.HOME).some((name) =>
+              name.startsWith("InstalledOpenClaw.app.failed-elevation-host-"),
+            ),
+          ).toBe(true);
+        }
       }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
-    "restores a verified backup when the current app is missing",
-    async ({ mac }) =>
-      mac.lifetime.run(async () => {
-        const harness = createInstallRollbackHarness(mac, { launchdBootstrapFails: false });
-        const oldBinary = readFileSync(harness.appBinary);
-        const installed = await runAuthenticatedMigrationInstall(mac, harness);
-        expect(installed.status, installed.stderr).toBe(0);
-        const installReceiptPath = harness.installReceiptPath;
-        rmSync(harness.appPath, { recursive: true });
-
-        const unauthenticated = await runInstaller(
-          mac,
-          harness.installerPath,
-          ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
-          harness.env,
-        );
-        expect(unauthenticated.status).toBe(1);
-        expect(unauthenticated.stderr).toContain(
-          "recovery requires the authenticated elevation archive",
-        );
-        expect(existsSync(installReceiptPath)).toBe(true);
-
-        const recovered = await runAuthenticatedElevationRecovery(mac, harness);
-        expect(recovered.status, recovered.stderr).toBe(0);
-        expect(readFileSync(harness.appBinary)).toEqual(oldBinary);
-        expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
-        expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
-        expect(existsSync(installReceiptPath)).toBe(false);
-      }),
-  );
-
-  it.skipIf(process.platform !== "darwin").concurrent(
-    "resumes exact app and migration custody after process death",
-    async ({ mac }) =>
+  it
+    .skipIf(process.platform !== "darwin")
+    .concurrent.for(["during-bootstrap", "after-bootstrap", "missing-app"] as const)(
+    "resumes recovery after process death: %s",
+    async (kind, { mac }) =>
       mac.lifetime.run(async () => {
         const harness = createInstallRollbackHarness(mac, {
-          killDuringMigrationRestoreBootstrapOnce: true,
+          killDuringMigrationRestoreBootstrapOnce: kind !== "after-bootstrap",
+          killAfterMigrationRestoreBootstrapOnce: kind === "after-bootstrap",
           launchdBootstrapFails: false,
         });
         const oldBinary = readFileSync(harness.appBinary);
         const installed = await runAuthenticatedMigrationInstall(mac, harness);
         expect(installed.status, installed.stderr).toBe(0);
-        const installReceiptPath = harness.installReceiptPath;
-
-        const interrupted = await runInstaller(
-          mac,
-          harness.installerPath,
-          ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
-          harness.env,
-        );
+        if (kind === "missing-app") {
+          rmSync(harness.appPath, { recursive: true });
+        }
+        const recover = () =>
+          kind === "missing-app"
+            ? runAuthenticatedElevationRecovery(mac, harness)
+            : runElevationRecovery(mac, harness);
+        const interrupted = await recover();
         expect(interrupted.status).toBeNull();
         expect(interrupted.signal).toBe("SIGKILL");
-        expect(existsSync(installReceiptPath)).toBe(true);
-        expect(existsSync(harness.sourcePlist)).toBe(true);
-        expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("elevation-absent");
-
-        const resumed = await runInstaller(
-          mac,
-          harness.installerPath,
-          ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
-          harness.env,
-        );
+        expect(existsSync(harness.installReceiptPath)).toBe(true);
+        if (kind === "missing-app") {
+          expect(existsSync(harness.appPath)).toBe(true);
+        } else {
+          expect(existsSync(harness.sourcePlist)).toBe(true);
+          expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe(
+            kind === "after-bootstrap" ? "source-loaded" : "elevation-absent",
+          );
+        }
+        if (kind === "after-bootstrap") {
+          const recordedIdentity = (
+            await mac.run(
+              "/usr/bin/xattr",
+              [
+                "-p",
+                "com.openclaw.elevation.recovery-migration-identity",
+                harness.installReceiptPath,
+              ],
+              { encoding: "utf8" },
+            )
+          ).stdout.trim();
+          expect(recordedIdentity).toBe(
+            await durableFileIdentity(mac, harness.sourcePlist, harness.env),
+          );
+        }
+        const resumed = await recover();
         expect(resumed.status, resumed.stderr).toBe(0);
         expect(readFileSync(harness.appBinary)).toEqual(oldBinary);
         expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
         expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
-        expect(existsSync(installReceiptPath)).toBe(false);
-      }),
-  );
-
-  it.skipIf(process.platform !== "darwin").concurrent(
-    "resumes after the restored prior owner restarted before process death",
-    async ({ mac }) =>
-      mac.lifetime.run(async () => {
-        const harness = createInstallRollbackHarness(mac, {
-          killAfterMigrationRestoreBootstrapOnce: true,
-          launchdBootstrapFails: false,
-        });
-        const installed = await runAuthenticatedMigrationInstall(mac, harness);
-        expect(installed.status, installed.stderr).toBe(0);
-
-        const interrupted = await runInstaller(
-          mac,
-          harness.installerPath,
-          ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
-          harness.env,
-        );
-        expect(interrupted.signal).toBe("SIGKILL");
-        expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
-        const receiptPath = harness.installReceiptPath;
-        const recordedIdentity = (
-          await mac.run(
-            "/usr/bin/xattr",
-            ["-p", "com.openclaw.elevation.recovery-migration-identity", receiptPath],
-            { encoding: "utf8" },
-          )
-        ).stdout.trim();
-        expect(recordedIdentity).toBe(
-          await durableFileIdentity(mac, harness.sourcePlist, harness.env),
-        );
-
-        const resumed = await runInstaller(
-          mac,
-          harness.installerPath,
-          ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
-          harness.env,
-        );
-        expect(resumed.status, resumed.stderr).toBe(0);
-        expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
-        expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
-      }),
-  );
-
-  it.skipIf(process.platform !== "darwin").concurrent(
-    "resumes an initially absent app after process death",
-    async ({ mac }) =>
-      mac.lifetime.run(async () => {
-        const harness = createInstallRollbackHarness(mac, {
-          killDuringMigrationRestoreBootstrapOnce: true,
-          launchdBootstrapFails: false,
-        });
-        const oldBinary = readFileSync(harness.appBinary);
-        const installed = await runAuthenticatedMigrationInstall(mac, harness);
-        expect(installed.status, installed.stderr).toBe(0);
-        const installReceiptPath = harness.installReceiptPath;
-        rmSync(harness.appPath, { recursive: true });
-        const recoveryArgs = [
-          "recover",
-          "--archive",
-          harness.archivePath,
-          "--receipt",
-          harness.receiptPath,
-          ...receiptDigestArgs(harness.receiptPath),
-          "--app",
-          harness.appPath,
-          "--state-dir",
-          harness.stateDir,
-        ];
-
-        const interrupted = await runInstaller(
-          mac,
-          harness.installerPath,
-          recoveryArgs,
-          harness.env,
-        );
-        expect(interrupted.status).toBeNull();
-        expect(interrupted.signal).toBe("SIGKILL");
-        expect(existsSync(installReceiptPath)).toBe(true);
-        expect(existsSync(harness.appPath)).toBe(true);
-
-        const resumed = await runInstaller(mac, harness.installerPath, recoveryArgs, harness.env);
-        expect(resumed.status, resumed.stderr).toBe(0);
-        expect(readFileSync(harness.appBinary)).toEqual(oldBinary);
-        expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
-        expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
-        expect(existsSync(installReceiptPath)).toBe(false);
+        expect(existsSync(harness.installReceiptPath)).toBe(false);
       }),
   );
 
@@ -3335,28 +3174,6 @@ describe("mac elevation host command contract", () => {
         expect(recovered.stderr).toContain("current OpenClaw app has an unsupported entry type");
         expect(readFileSync(installReceiptPath, "utf8")).toBe(receiptContents);
         expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("elevation-loaded");
-      }),
-  );
-
-  it.skipIf(process.platform !== "darwin").concurrent(
-    "places a damaged current app into evidence custody before restoring its backup",
-    async ({ mac }) =>
-      mac.lifetime.run(async () => {
-        const harness = createInstallRollbackHarness(mac, { launchdBootstrapFails: false });
-        const oldBinary = readFileSync(harness.appBinary);
-        const installed = await runAuthenticatedMigrationInstall(mac, harness);
-        expect(installed.status, installed.stderr).toBe(0);
-        rmSync(path.join(harness.appPath, "Contents", "Info.plist"));
-
-        const recovered = await runAuthenticatedElevationRecovery(mac, harness);
-        expect(recovered.status, recovered.stderr).toBe(0);
-        expect(readFileSync(harness.appBinary)).toEqual(oldBinary);
-        expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
-        expect(
-          readdirSync(harness.env.HOME).some((name) =>
-            name.startsWith("InstalledOpenClaw.app.failed-elevation-host-"),
-          ),
-        ).toBe(true);
       }),
   );
 
@@ -3455,12 +3272,7 @@ describe("mac elevation host command contract", () => {
         expect(installed.status, installed.stderr).toBe(0);
         const receiptContents = readFileSync(harness.installReceiptPath, "utf8");
         const currentBinary = readFileSync(harness.appBinary);
-        const recovered = await runInstaller(
-          mac,
-          harness.installerPath,
-          ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
-          harness.env,
-        );
+        const recovered = await runElevationRecovery(mac, harness);
         expect(recovered.status).toBe(1);
         expect(readFileSync(harness.installReceiptPath, "utf8")).toBe(receiptContents);
         if (failure === "symlinkMigrationSourceDuringReversalCustody") {
@@ -3539,12 +3351,7 @@ describe("mac elevation host command contract", () => {
         expect(uninstalled.stdout).toContain("recovery receipt preserved");
         expect(existsSync(installReceiptPath)).toBe(true);
 
-        const recovered = await runInstaller(
-          mac,
-          harness.installerPath,
-          ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
-          harness.env,
-        );
+        const recovered = await runElevationRecovery(mac, harness);
         expect(recovered.status, recovered.stderr).toBe(0);
         expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
         expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
@@ -3604,12 +3411,7 @@ describe("mac elevation host command contract", () => {
         const installed = await runAuthenticatedMigrationInstall(mac, harness);
         expect(installed.status, installed.stderr).toBe(0);
 
-        const recovered = await runInstaller(
-          mac,
-          harness.installerPath,
-          ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
-          harness.env,
-        );
+        const recovered = await runElevationRecovery(mac, harness);
 
         expect(recovered.signal).toBe("SIGTERM");
         expect(readFileSync(harness.appBinary)).toEqual(oldBinary);
@@ -3636,12 +3438,7 @@ describe("mac elevation host command contract", () => {
         receipt.backupCDHashes = { arm64: "", x86_64: "" };
         writeFileSync(installReceiptPath, JSON.stringify(receipt), "utf8");
 
-        const recovered = await runInstaller(
-          mac,
-          harness.installerPath,
-          ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
-          harness.env,
-        );
+        const recovered = await runElevationRecovery(mac, harness);
 
         expect(recovered.status, recovered.stderr).toBe(0);
         expect(existsSync(harness.appPath)).toBe(false);
@@ -3652,67 +3449,37 @@ describe("mac elevation host command contract", () => {
       }),
   );
 
-  it.skipIf(process.platform !== "darwin").concurrent(
-    "restores the current generation when explicit recovery cannot restart the prior owner",
-    async ({ mac }) =>
+  it.skipIf(process.platform !== "darwin").concurrent.for([false, true])(
+    "preserves the current generation after failed recovery (receipt copy failure: %s)",
+    async (failCurrentReceiptRestoreCopy, { mac }) =>
       mac.lifetime.run(async () => {
         const harness = createInstallRollbackHarness(mac, {
+          failCurrentReceiptRestoreCopy,
           launchdBootstrapFails: false,
           migrationRestoreBootstrapFails: true,
         });
         const installed = await runAuthenticatedMigrationInstall(mac, harness);
         expect(installed.status, installed.stderr).toBe(0);
-        const installReceiptPath = harness.installReceiptPath;
-        const currentReceipt = readFileSync(installReceiptPath, "utf8");
+        const currentReceipt = readFileSync(harness.installReceiptPath, "utf8");
         const currentBinary = readFileSync(harness.appBinary);
         const rollbackPath = (JSON.parse(currentReceipt) as { backupPath: string }).backupPath;
-
-        const recovered = await runInstaller(
-          mac,
-          harness.installerPath,
-          ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
-          harness.env,
-        );
-
+        const recovered = await runElevationRecovery(mac, harness);
         expect(recovered.status).toBe(1);
-        expect(recovered.stderr).toContain(
-          "could not restore the previous OpenClaw installation completely",
-        );
-        expect(readFileSync(installReceiptPath, "utf8")).toBe(currentReceipt);
-        expect(readFileSync(harness.appBinary)).toEqual(currentBinary);
-        expect(existsSync(rollbackPath)).toBe(true);
-        expect(existsSync(harness.sourcePlist)).toBe(false);
-        expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("elevation-loaded");
-      }),
-  );
-
-  it.skipIf(process.platform !== "darwin").concurrent(
-    "never replaces the live receipt with a failed reversal staging copy",
-    async ({ mac }) =>
-      mac.lifetime.run(async () => {
-        const harness = createInstallRollbackHarness(mac, {
-          failCurrentReceiptRestoreCopy: true,
-          launchdBootstrapFails: false,
-          migrationRestoreBootstrapFails: true,
-        });
-        const installed = await runAuthenticatedMigrationInstall(mac, harness);
-        expect(installed.status, installed.stderr).toBe(0);
-        const installReceiptPath = harness.installReceiptPath;
-        const currentReceipt = readFileSync(installReceiptPath, "utf8");
-
-        const recovered = await runInstaller(
-          mac,
-          harness.installerPath,
-          ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
-          harness.env,
-        );
-
-        expect(recovered.status).toBe(1);
-        expect(recovered.stderr).toContain(
-          "current OpenClaw installation could not be restored completely",
-        );
-        expect(readFileSync(installReceiptPath, "utf8")).toBe(currentReceipt);
-        expect(readFileSync(installReceiptPath, "utf8")).not.toContain("partial");
+        expect(readFileSync(harness.installReceiptPath, "utf8")).toBe(currentReceipt);
+        if (failCurrentReceiptRestoreCopy) {
+          expect(recovered.stderr).toContain(
+            "current OpenClaw installation could not be restored completely",
+          );
+          expect(readFileSync(harness.installReceiptPath, "utf8")).not.toContain("partial");
+        } else {
+          expect(recovered.stderr).toContain(
+            "could not restore the previous OpenClaw installation completely",
+          );
+          expect(readFileSync(harness.appBinary)).toEqual(currentBinary);
+          expect(existsSync(rollbackPath)).toBe(true);
+          expect(existsSync(harness.sourcePlist)).toBe(false);
+          expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("elevation-loaded");
+        }
       }),
   );
 
@@ -3747,12 +3514,7 @@ describe("mac elevation host command contract", () => {
         } else {
           writeFileSync(receipt.migration.backupPlist, "corrupt\n", "utf8");
         }
-        const recovered = await runInstaller(
-          mac,
-          harness.installerPath,
-          ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
-          harness.env,
-        );
+        const recovered = await runElevationRecovery(mac, harness);
         expect(recovered.status).toBe(1);
         expect(recovered.stderr).toContain(diagnostic);
         expect(readFileSync(harness.installReceiptPath, "utf8")).toBe(currentReceipt);
@@ -3825,12 +3587,7 @@ describe("mac elevation host command contract", () => {
         expect(upgradeReceipt.previousReceipt).toContain("elevation-host.previous-receipt.");
         expect(upgradeReceipt.previousReceiptSha256).toBe(sha256(firstReceipt));
 
-        const recovered = await runInstaller(
-          mac,
-          harness.installerPath,
-          ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
-          harness.env,
-        );
+        const recovered = await runElevationRecovery(mac, harness);
         expect(recovered.status, recovered.stderr).toBe(0);
         expect(readFileSync(installReceiptPath, "utf8")).toBe(firstReceipt);
         expect(recovered.stdout).toContain("replaced app preserved at");
@@ -3845,12 +3602,7 @@ describe("mac elevation host command contract", () => {
         expect(legacyStatus.stdout).toContain("Elevation host ready");
         writeExecutable(harness.appBinary, "#!/bin/sh\nexit 0\n");
 
-        const unauthenticatedRecovery = await runInstaller(
-          mac,
-          harness.installerPath,
-          ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
-          harness.env,
-        );
+        const unauthenticatedRecovery = await runElevationRecovery(mac, harness);
         expect(unauthenticatedRecovery.status).toBe(1);
         expect(unauthenticatedRecovery.stderr).toContain(
           "recovery requires the authenticated elevation archive",
@@ -3953,12 +3705,7 @@ describe("mac elevation host command contract", () => {
         } else {
           symlinkSync(path.join(harness.env.HOME, "missing-owner.plist"), harness.sourcePlist);
         }
-        const recovered = await runInstaller(
-          mac,
-          harness.installerPath,
-          ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
-          harness.env,
-        );
+        const recovered = await runElevationRecovery(mac, harness);
         expect(recovered.status).toBe(1);
         expect(recovered.stderr).toContain("could not restore the previous OpenClaw installation");
         expect(readFileSync(harness.appBinary)).toEqual(installedBinary);
@@ -3997,12 +3744,7 @@ describe("mac elevation host command contract", () => {
         installReceipt.migration.backupSha256 = sha256(readFileSync(outsideBackup));
         writeFileSync(installReceiptPath, JSON.stringify(installReceipt), "utf8");
 
-        const recovered = await runInstaller(
-          mac,
-          harness.installerPath,
-          ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
-          harness.env,
-        );
+        const recovered = await runElevationRecovery(mac, harness);
         expect(recovered.status).toBe(1);
         expect(recovered.stderr).toContain("receipt migration plist backup path is not canonical");
         expect(readFileSync(outsideBackup, "utf8")).toBe("attacker-selected\n");

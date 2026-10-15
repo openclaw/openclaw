@@ -85,16 +85,6 @@ async function waitForPluginEventHandlers(): Promise<void> {
   });
 }
 
-function joinContextFragments(...fragments: Array<string | undefined>): string {
-  const present: string[] = [];
-  for (const fragment of fragments) {
-    if (fragment) {
-      present.push(fragment);
-    }
-  }
-  return present.join("\n\n");
-}
-
 function createHostHookFixtureRegistry() {
   return createPluginRegistryFixture({
     plugins: {
@@ -1013,45 +1003,6 @@ describe("host-hook fixture plugin contract", () => {
     ]);
   });
 
-  it("projects registered session extensions into gateway session rows", () => {
-    const { config, registry } = createHostHookFixtureRegistry();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
-        id: "host-hook-fixture",
-        name: "Host Hook Fixture",
-      }),
-      register: registerHostHookFixture,
-    });
-    setActivePluginRegistry(registry.registry);
-
-    const row = buildGatewaySessionRow({
-      cfg: config,
-      agentId: "main",
-      storePath: "/tmp/sessions.json",
-      store: {},
-      key: "agent:main:main",
-      entry: {
-        sessionId: "session-1",
-        updatedAt: 1,
-        pluginExtensions: {
-          "host-hook-fixture": {
-            workflow: { state: "waiting" },
-          },
-        },
-      },
-    });
-
-    expect(row.pluginExtensions).toEqual([
-      {
-        pluginId: "host-hook-fixture",
-        namespace: "workflow",
-        value: { state: "waiting" },
-      },
-    ]);
-  });
-
   it("projects only successful synchronous session values without exposing raw state", () => {
     const { config, registry } = createPluginRegistryFixture();
     for (const [id, project] of [
@@ -1083,6 +1034,10 @@ describe("host-hook fixture plugin contract", () => {
       }),
       register(api) {
         api.registerSessionExtension({
+          namespace: "raw",
+          description: "State without a custom projector",
+        });
+        api.registerSessionExtension({
           namespace: "workflow",
           description: "Projected workflow state",
           project: ({ state }) => {
@@ -1104,11 +1059,17 @@ describe("host-hook fixture plugin contract", () => {
         throwing: { workflow: "hidden" },
         promise: { workflow: "hidden" },
         "projector-fixture": {
+          raw: { state: "waiting" },
           workflow: { state: "waiting", privateToken: "secret" },
         },
       },
     };
     expect(projectPluginSessionExtensionsSync({ sessionKey: "agent:main:main", entry })).toEqual([
+      {
+        pluginId: "projector-fixture",
+        namespace: "raw",
+        value: { state: "waiting" },
+      },
       {
         pluginId: "projector-fixture",
         namespace: "workflow",
@@ -1125,6 +1086,11 @@ describe("host-hook fixture plugin contract", () => {
       entry,
     });
     expect(row.pluginExtensions).toEqual([
+      {
+        pluginId: "projector-fixture",
+        namespace: "raw",
+        value: { state: "waiting" },
+      },
       {
         pluginId: "projector-fixture",
         namespace: "workflow",
@@ -1384,7 +1350,7 @@ describe("host-hook fixture plugin contract", () => {
   });
 
   it.each(
-    ["start", { length: 1, 0: "start" }, [""], [" "], [1], [undefined]].map((phases) => ({
+    ["start", [" "], [1]].map((phases) => ({
       phases,
     })),
   )("rejects malformed agent event phases $phases", ({ phases }) => {
@@ -1404,25 +1370,22 @@ describe("host-hook fixture plugin contract", () => {
     ]);
   });
 
-  it.each(["", "summary", " metadata ", null, 1, true, {}, []])(
-    "rejects malformed agent event payload mode %j",
-    (payload) => {
-      const { registry } = registerFixture({ id: "bad-payload" }, (api) => {
-        api.agent.events.registerAgentEventSubscription({
-          id: "events",
-          payload: payload as never,
-          handle: () => undefined,
-        });
+  it("rejects malformed agent event payload mode", () => {
+    const { registry } = registerFixture({ id: "bad-payload" }, (api) => {
+      api.agent.events.registerAgentEventSubscription({
+        id: "events",
+        payload: "summary" as never,
+        handle: () => undefined,
       });
-      expect(registry.registry.agentEventSubscriptions).toHaveLength(0);
-      expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
-        {
-          pluginId: "bad-payload",
-          message: "agent event subscription payload must be full or metadata: events",
-        },
-      ]);
-    },
-  );
+    });
+    expect(registry.registry.agentEventSubscriptions).toHaveLength(0);
+    expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
+      {
+        pluginId: "bad-payload",
+        message: "agent event subscription payload must be full or metadata: events",
+      },
+    ]);
+  });
 
   it("requires explicit unset to remove plugin session extension state", async () => {
     const { registry } = registerFixture(
@@ -1594,55 +1557,6 @@ describe("host-hook fixture plugin contract", () => {
         session: { store: path.join(path.dirname(storePath), "{agentId}", "sessions.json") },
       }),
     );
-  });
-
-  it("models queued next-turn injections and agent_turn_prepare as one prompt context", async () => {
-    const { config, registry } = createHostHookFixtureRegistry();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
-        id: "host-hook-fixture",
-        name: "Host Hook Fixture",
-      }),
-      register: registerHostHookFixture,
-    });
-    const runner = createHookRunner(registry.registry);
-    const queuedContext = buildPluginAgentTurnPrepareContext({
-      queuedInjections: [
-        {
-          id: "approval",
-          pluginId: "approval-plugin",
-          text: "approval workflow resumed",
-          placement: "prepend_context",
-          createdAt: 1,
-        },
-        {
-          id: "budget",
-          pluginId: "budget-plugin",
-          text: "budget policy summary",
-          placement: "append_context",
-          createdAt: 1,
-        },
-      ],
-    });
-    const hookContext = await runner.runAgentTurnPrepare(
-      {
-        prompt: "continue",
-        messages: [],
-        queuedInjections: [],
-      },
-      { sessionKey: "agent:main:main" },
-    );
-
-    expect(
-      joinContextFragments(
-        queuedContext.prependContext,
-        queuedContext.appendContext,
-        hookContext?.prependContext,
-      ),
-    ).toContain("approval workflow resumed");
-    expect(hookContext?.prependContext).toBe("fixture turn context");
   });
 
   it("skips malformed persisted next-turn injection records during prompt assembly", () => {

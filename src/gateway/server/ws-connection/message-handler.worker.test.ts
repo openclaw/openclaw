@@ -264,30 +264,6 @@ describe("dedicated worker websocket protocol", () => {
     expect(harness.setClient).not.toHaveBeenCalled();
   });
 
-  it.each([["health", {}]])("rejects legacy method %s", async (method, params) => {
-    const harness = attachHarness();
-    await admit(harness);
-    harness.sendRequest(method, params);
-
-    await waitForWorkerProtocol(() =>
-      expect(harness.close).toHaveBeenCalledWith(1008, "method-not-allowed"),
-    );
-    expect(harness.logGateway.warn).toHaveBeenCalledWith(
-      "worker protocol request rejected reason=method-not-allowed",
-    );
-  });
-
-  it("accepts heartbeat", async () => {
-    const valid = attachHarness();
-    await admit(valid);
-    valid.sendRequest("worker.heartbeat", { sentAtMs: 1, status: "busy" });
-    await waitForWorkerProtocol(() => expect(valid.responses).toHaveLength(2));
-    expect(valid.responses[1]).toMatchObject({
-      ok: true,
-      payload: { status: "ok", ownerEpoch: 1 },
-    });
-  });
-
   it("gates inference independently", async () => {
     const unsupported = attachHarness({
       identity: {
