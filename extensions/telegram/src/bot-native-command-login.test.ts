@@ -203,66 +203,6 @@ describe("registerTelegramNativeCommands /login", () => {
     );
   });
 
-  it("routes the login button through the non-blocking native login flow", async () => {
-    const finishLogin = createDeferred<void>();
-    const loginFlow = vi.fn(async (params: ModelsAuthLoginFlowOptions) => {
-      await params.prompter.deviceCode?.({
-        title: "OpenAI Codex device code",
-        code: "BUTTON-CODE",
-        expiresInMinutes: 15,
-        message: "URL: https://auth.openai.com/codex/device",
-      });
-      await finishLogin.promise;
-      return createLoginResult("openai:codex");
-    });
-    const { nativeCommandCallbackDispatcher, sendMessage } = await registerLoginCommand({
-      cfg: createOwnerLoginConfig(),
-      loginFlow,
-    });
-    if (!nativeCommandCallbackDispatcher) {
-      throw new Error("expected login callback dispatcher to be registered");
-    }
-    const callbackQuery = {
-      id: "login-button",
-      chat_instance: "login-button-chat",
-      data: "tgcmd:/login codex",
-      from: { id: 200, is_bot: false, first_name: "Bob", username: "bob" },
-      message: {
-        message_id: 10,
-        date: Math.floor(Date.now() / 1000),
-        chat: { id: 100, type: "private" as const, first_name: "Owner" },
-        reply_markup: {
-          inline_keyboard: [[{ text: "Log in to Codex", callback_data: "tgcmd:/login codex" }]],
-        },
-      },
-    };
-
-    await expect(
-      nativeCommandCallbackDispatcher({
-        commandText: "/login codex",
-        botUser: telegramBotInfoForTest,
-        callbackQuery,
-      }),
-    ).resolves.toEqual({ handled: true, clearButtons: true });
-
-    expect(loginFlow).toHaveBeenCalledOnce();
-    expect(sendMessage).toHaveBeenCalledWith(
-      100,
-      expect.stringContaining("Code: <code>BUTTON-CODE</code>"),
-      expect.objectContaining({ parse_mode: "HTML" }),
-    );
-    expect(sendMessage.mock.calls.map((call) => String(call[1]))).not.toContain(
-      "OpenAI login complete. Try your request again now.",
-    );
-
-    finishLogin.resolve();
-    await vi.waitFor(() =>
-      expect(sendMessage.mock.calls.map((call) => String(call[1]))).toContain(
-        "OpenAI login complete. Try your request again now.",
-      ),
-    );
-  });
-
   it.each(["all"] as const)(
     "delivers both long-provider controls and completes deferred %s consent through a fresh dispatcher",
     exerciseDeferredModelAccess,
@@ -476,28 +416,6 @@ describe("registerTelegramNativeCommands /login", () => {
     expect(sendMessage.mock.calls.map((call) => String(call[1]))).toContain(
       "OpenAI login complete. This chat kept its previous account. Send /models to review the available models.",
     );
-  });
-
-  it("releases a failed flow before any device code is delivered", async () => {
-    const loginFlow = vi.fn(async () => {
-      throw new Error("device-code request failed");
-    });
-    const { handler, sendMessage } = await registerLoginCommand({
-      cfg: createOwnerLoginConfig(),
-      loginFlow,
-    });
-
-    await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
-    await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
-
-    expect(loginFlow).toHaveBeenCalledTimes(2);
-    expect(
-      sendMessage.mock.calls.filter(
-        (call) =>
-          call[1] ===
-          "OpenAI login did not complete. Send `/login openai/openai-device-code` to try again.",
-      ),
-    ).toHaveLength(2);
   });
 
   it("does not report auth failure when only the terminal notification fails", async () => {

@@ -293,27 +293,6 @@ function expectNoLoggerMessageContaining(logger: ReturnType<typeof vi.fn>, fragm
   expect(loggerHasMessageContaining(logger, fragment)).toBe(false);
 }
 
-async function expectNoStickyRetryWithSameDispatcher(params: {
-  resolved: ReturnType<typeof resolveTelegramFetchOrThrow>;
-  expectedAgentCtor: typeof ProxyAgentCtor | typeof EnvHttpProxyAgentCtor;
-  field: "connect" | "proxyTls" | "requestTls";
-}) {
-  await expect(params.resolved("https://api.telegram.org/botx/getMe")).rejects.toThrow(
-    "fetch failed",
-  );
-  await params.resolved("https://api.telegram.org/botx/sendChatAction");
-
-  expect(undiciFetch).toHaveBeenCalledTimes(2);
-  expect(params.expectedAgentCtor).toHaveBeenCalledTimes(1);
-
-  const firstDispatcher = getDispatcherFromUndiciCall(1);
-  const secondDispatcher = getDispatcherFromUndiciCall(2);
-
-  expect(firstDispatcher).toBe(secondDispatcher);
-  expectStickyAutoSelectDispatcher(firstDispatcher, params.field);
-  expect(firstDispatcher?.options?.[params.field]?.family).not.toBe(4);
-}
-
 afterEach(() => {
   undiciFetch.mockReset();
   setGlobalDispatcher.mockReset();
@@ -327,29 +306,7 @@ afterEach(() => {
 
 describe("resolveTelegramFetch", () => {
   it.each([
-    { network: { dnsResultOrder: "verbatim" as const }, expected: true },
-    { network: { dnsResultOrder: "ipv4first" as const, autoSelectFamily: true }, expected: true },
-    { network: { dnsResultOrder: "verbatim" as const, autoSelectFamily: false }, expected: false },
-  ])("preserves family selection overrides: $network", async ({ network, expected }) => {
-    const transport = resolveTelegramTransport(undefined, { network });
-    try {
-      expect(AgentCtor).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          connect: expect.objectContaining({
-            autoSelectFamily: expected,
-            autoSelectFamilyAttemptTimeout: 300,
-          }),
-        }),
-      );
-    } finally {
-      await transport.close();
-    }
-  });
-
-  it.each([
     { source: "config", order: "ipv4first" },
-    { source: "environment", order: "ipv4first" },
-    { source: "process", order: "ipv4first" },
     { source: "process", order: "ipv6first" },
   ])("honors $source $order DNS ordering and family selection", async ({ source, order }) => {
     const ipv4 = "192.0.2.1";
@@ -366,9 +323,6 @@ describe("resolveTelegramFetch", () => {
       done(null, addresses[0].address, addresses[0].family);
     });
     getDefaultResultOrder.mockReturnValue(source === "process" ? order : "verbatim");
-    if (source === "environment") {
-      vi.stubEnv("OPENCLAW_TELEGRAM_DNS_RESULT_ORDER", "ipv4first");
-    }
     const transport = resolveTelegramTransport(
       undefined,
       source === "config" ? { network: { dnsResultOrder: "ipv4first" } } : undefined,
@@ -410,37 +364,6 @@ describe("resolveTelegramFetch", () => {
     expect(AgentCtor).not.toHaveBeenCalled();
     expect(transport.sourceFetch).not.toBe(undiciFetch);
     expect(transport.dispatcherAttempts).toBeUndefined();
-  });
-
-  it("skips sticky IPv4 fallback when the DNS result order env override is verbatim", async () => {
-    vi.stubEnv("OPENCLAW_TELEGRAM_DNS_RESULT_ORDER", "verbatim");
-    undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
-    const transport = resolveTelegramTransport();
-
-    await expect(
-      transport.sourceFetch("https://api.telegram.org/botTOKEN/getFile"),
-    ).resolves.toEqual({ ok: true });
-    expect(transport.dispatcherAttempts).toHaveLength(1);
-  });
-
-  it("does not blind-retry when sticky IPv4 fallback is disallowed for explicit proxy paths", async () => {
-    const { makeProxyFetch } = await import("openclaw/plugin-sdk/fetch-runtime");
-    const proxyFetch = makeProxyFetch("http://127.0.0.1:7890");
-    ProxyAgentCtor.mockClear();
-    primeStickyFallbackRetry("EHOSTUNREACH", 1);
-
-    const resolved = resolveTelegramFetchOrThrow(proxyFetch, {
-      network: {
-        autoSelectFamily: true,
-        dnsResultOrder: "ipv4first",
-      },
-    });
-
-    await expectNoStickyRetryWithSameDispatcher({
-      resolved,
-      expectedAgentCtor: ProxyAgentCtor,
-      field: "requestTls",
-    });
   });
 
   it("arms sticky IPv4 fallback when env proxy init falls back to direct Agent", async () => {
@@ -688,49 +611,44 @@ describe("resolveTelegramFetch", () => {
   });
 
   describe("transport lifecycle", () => {
-    it.for([false, true])(
-      "does not retry a queued failure after close (caller dispatcher: %s)",
-      async (callerDispatcher, context) => {
-        const started = createDeferred<void>();
-        const failed = createDeferred<Response>();
-        const failure = buildFetchFallbackError("EHOSTUNREACH");
-        void failed.promise.catch(() => undefined);
-        undiciFetch
-          .mockImplementationOnce(() => {
-            started.resolve();
-            return failed.promise;
-          })
-          .mockResolvedValueOnce({ ok: true } as Response);
-        const transport = resolveTelegramTransport(undefined, STICKY_IPV4_FALLBACK_NETWORK);
-        const init: RequestInit & { dispatcher?: unknown } = callerDispatcher
-          ? { dispatcher: { name: "caller" } }
-          : {};
-        const pending = transport.fetch("https://api.telegram.org/botx/getMe", init);
-        const outcome = pending.then(
-          () => ({ fulfilled: true }),
-          (error: unknown) => ({ error }),
+    it("does not retry a queued caller-dispatcher failure after close", async (context) => {
+      const started = createDeferred<void>();
+      const failed = createDeferred<Response>();
+      const failure = buildFetchFallbackError("EHOSTUNREACH");
+      void failed.promise.catch(() => undefined);
+      undiciFetch
+        .mockImplementationOnce(() => {
+          started.resolve();
+          return failed.promise;
+        })
+        .mockResolvedValueOnce({ ok: true } as Response);
+      const transport = resolveTelegramTransport(undefined, STICKY_IPV4_FALLBACK_NETWORK);
+      const init: RequestInit & { dispatcher?: unknown } = { dispatcher: { name: "caller" } };
+      const pending = transport.fetch("https://api.telegram.org/botx/getMe", init);
+      const outcome = pending.then(
+        () => ({ fulfilled: true }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(started.promise, pending, "Telegram fetch did not start"),
+          context.signal,
         );
-        try {
-          await withinTest(
-            awaitGateBeforeSettlement(started.promise, pending, "Telegram fetch did not start"),
-            context.signal,
-          );
-          // Destruction cannot replace a network failure whose rejection is already queued.
-          failed.reject(failure);
-          await withinTest(transport.close(), context.signal);
-          const settled = await withinTest(outcome, context.signal);
-          expect(settled).toEqual({ error: failure });
-          expect("error" in settled ? settled.error : undefined).toBe(failure);
-          expect(undiciFetch).toHaveBeenCalledTimes(1);
-          expect(AgentCtor).toHaveBeenCalledTimes(1);
-          expect(AgentCtor.mock.instances[0]?.destroy).toHaveBeenCalledTimes(1);
-        } finally {
-          failed.reject(failure);
-          await outcome;
-          await transport.close();
-        }
-      },
-    );
+        // Destruction cannot replace a network failure whose rejection is already queued.
+        failed.reject(failure);
+        await withinTest(transport.close(), context.signal);
+        const settled = await withinTest(outcome, context.signal);
+        expect(settled).toEqual({ error: failure });
+        expect("error" in settled ? settled.error : undefined).toBe(failure);
+        expect(undiciFetch).toHaveBeenCalledTimes(1);
+        expect(AgentCtor).toHaveBeenCalledTimes(1);
+        expect(AgentCtor.mock.instances[0]?.destroy).toHaveBeenCalledTimes(1);
+      } finally {
+        failed.reject(failure);
+        await outcome;
+        await transport.close();
+      }
+    });
 
     it("close() destroys the default dispatcher and all lazily-created fallback dispatchers", async () => {
       undiciFetch

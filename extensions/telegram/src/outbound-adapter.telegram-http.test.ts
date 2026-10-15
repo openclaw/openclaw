@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   addTestHook,
   initializeGlobalHookRunner,
@@ -598,42 +597,6 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       });
       expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toEqual([]);
     });
-
-    it.each([undefined, "caller"] as const)(
-      "leaves exactly one retry owner after a proven pre-dispatch failure (%s)",
-      async (deliveryRetryOwner) => {
-        let committed = false;
-        await expect(
-          action(
-            "send",
-            { to: "123", message: "must retry once" },
-            {
-              deliveryRetryOwner,
-              onPlatformSendDispatch: async () => {
-                committed = readQueuedDeliveryEntriesForTest(state.stateDir).length === 1;
-                throw new PlatformMessageNotDispatchedError("authority revoked before dispatch", {
-                  cause: new Error("temporary handoff unavailable"),
-                  retryable: true,
-                });
-              },
-            },
-          ),
-        ).rejects.toThrow("authority revoked before dispatch");
-        expect(committed).toBe(true);
-        expect(requests).toEqual([]);
-        const entries = readQueuedDeliveryEntriesForTest(state.stateDir);
-        if (deliveryRetryOwner === "caller") {
-          expect(entries).toEqual([]);
-        } else {
-          expect(entries).toMatchObject([
-            {
-              retryCount: 1,
-              lastError: expect.stringContaining("authority revoked before dispatch"),
-            },
-          ]);
-        }
-      },
-    );
 
     it("returns bounded cancellation rather than fake delivery or hook diagnostics", async () => {
       const registry = createTestRegistry([

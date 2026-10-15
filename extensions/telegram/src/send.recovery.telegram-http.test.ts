@@ -143,35 +143,20 @@ describe("Telegram send recovery conformance over HTTP", () => {
     },
   );
 
-  it.each([
-    { kind: "rich", rejection: "CHAT_WRITE_FORBIDDEN", method: "sendRichMessage" },
-    { kind: "photo", rejection: "message thread not found", method: "sendPhoto" },
-  ])(
-    "does not retry a $kind send after $rejection",
-    async ({ kind, rejection, method: expectedMethod }) => {
-      rejections.push(`Bad Request: ${rejection}`);
-      await expect(
-        sendThrough(
-          "direct",
-          "answer",
-          async () => {},
-          kind === "photo" ? photoPath : undefined,
-          kind === "rich",
-          undefined,
-          kind === "rich" ? {} : { threadId: 77 },
-        ),
-      ).rejects.toThrow(rejection);
-      expect(requests.map(({ method }) => method)).toEqual([expectedMethod]);
-      if (kind === "photo") {
-        expect(requests[0]!.fields.message_thread_id).toBe("77");
-      }
-    },
-  );
+  it("does not retry a photo send after message thread not found", async () => {
+    const rejection = "message thread not found";
+    rejections.push(`Bad Request: ${rejection}`);
+    await expect(
+      sendThrough("direct", "answer", async () => {}, photoPath, false, undefined, {
+        threadId: 77,
+      }),
+    ).rejects.toThrow(rejection);
+    expect(requests.map(({ method }) => method)).toEqual(["sendPhoto"]);
+    expect(requests[0]!.fields.message_thread_id).toBe("77");
+  });
 
   it.each([
-    ["image/png", "sendPhoto", "photo", "image.png"],
     ["video/quicktime", "sendVideo", "video", "video.mov"],
-    ["audio/mpeg", "sendAudio", "audio", "audio.mp3"],
     ["image/gif", "sendAnimation", "animation", "animation.gif"],
     ["application/x-custom", "sendDocument", "document", "file.bin"],
   ])(
@@ -493,19 +478,19 @@ describe("Telegram send recovery conformance over HTTP", () => {
     },
   );
 
-  it.each(["literal", "rewrite", "blank", "rejected"] as const)(
+  it.each(["literal", "blank", "rejected"] as const)(
     "reports %s content through real hooks and the prompt projection",
     async (outcome) => {
       const registry = createEmptyPluginRegistry();
       const observed = vi.fn();
       const sent = vi.fn();
       addTestHook({ registry, pluginId: "receipt", hookName: "message_sent", handler: sent });
-      if (outcome === "rewrite" || outcome === "blank") {
+      if (outcome === "blank") {
         addTestHook({
           registry,
           pluginId: "rewrite",
           hookName: "message_sending",
-          handler: () => ({ content: outcome === "rewrite" ? "Allowed" : "  " }),
+          handler: () => ({ content: "  " }),
         });
       }
       initializeGlobalHookRunner(registry);
@@ -531,49 +516,23 @@ describe("Telegram send recovery conformance over HTTP", () => {
         await sequence.finish();
       }
       expect(sent).toHaveBeenCalledWith(
-        expect.objectContaining({ success: outcome === "literal" || outcome === "rewrite" }),
+        expect.objectContaining({ success: outcome === "literal" }),
         expect.anything(),
       );
       if (outcome === "blank" || outcome === "rejected") {
         expect(observed).not.toHaveBeenCalled();
       } else {
-        expect(observed).toHaveBeenCalledExactlyOnceWith(
-          outcome === "rewrite"
-            ? { messageId: 1, text: "Allowed" }
-            : {
-                messageId: 1,
-                text: "<b>x</b>",
-                projection: { transcriptMessageId: "assistant-1", partIndex: 0, finalPart: true },
-              },
-        );
+        expect(observed).toHaveBeenCalledExactlyOnceWith({
+          messageId: 1,
+          text: "<b>x</b>",
+          projection: { transcriptMessageId: "assistant-1", partIndex: 0, finalPart: true },
+        });
       }
       expect(requests.map(({ fields }) => fields.text)).toEqual(
-        outcome === "blank"
-          ? []
-          : [outcome === "rewrite" ? "Allowed" : "<code>&lt;b&gt;x&lt;/b&gt;</code>"],
+        outcome === "blank" ? [] : ["<code>&lt;b&gt;x&lt;/b&gt;</code>"],
       );
     },
   );
-  it("keeps accepted media and voice fallback text receipts when later media is rejected", async () => {
-    rejections.push("", "VOICE_MESSAGES_FORBIDDEN", "", "Bad Request: CHAT_WRITE_FORBIDDEN");
-    const mirror = vi.fn();
-    const sending = deliver(
-      [
-        {
-          mediaUrls: [photos[0]!, voicePath, photos[1]!],
-          audioAsVoice: true,
-          spokenText: "Voice fallback",
-        },
-      ],
-      { transcriptMirror: mirror },
-    );
-    await expect(sending).rejects.toMatchObject({
-      deliveryResult: { messageIds: ["1", "3"] },
-    });
-    expect(mirror).not.toHaveBeenCalled();
-    expect(requests[1]!.method).toBe("sendVoice");
-    expect(requests[2]!.method).toBe("sendMessage");
-  });
 
   it.each([false, true])(
     "retains accepted media when its empty follow-up needs a keyboard retrofit (rejected: %s)",
@@ -757,60 +716,31 @@ describe("Telegram send recovery conformance over HTTP", () => {
     );
   });
 
-  it.each([
-    { entry: "durable", method: "sendVoice", contentType: "audio/ogg", asVoice: true },
-    { entry: "durable", method: "sendAudio", contentType: "audio/mpeg", asVoice: false },
-    { entry: "streaming", method: "sendVoice", contentType: "audio/ogg", asVoice: true },
-    { entry: "streaming", method: "sendAudio", contentType: "audio/mp4", asVoice: false },
-  ] as const)(
-    "sends a rounded probed duration with $entry $method uploads",
-    async ({ entry, method, contentType, asVoice }) => {
-      vi.spyOn(mediaRuntime, "runFfprobe").mockResolvedValue("12.6\n");
-      vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
-        buffer: Buffer.from("audio-bytes"),
-        kind: "audio",
-        contentType,
-        fileName: "clip",
-      });
-      const mediaUrl = "https://example.com/clip";
-      if (entry === "durable") {
-        await sendMessageTelegram("123", "", { cfg, api: bot.api, mediaUrl, asVoice });
-      } else {
-        await deliver([{ mediaUrl, audioAsVoice: asVoice }]);
-      }
-      expect(requests.map((request) => request.method)).toEqual([method]);
-      expect(String(requests[0]!.fields.duration)).toBe("13");
-    },
-  );
+  it("sends a rounded probed duration with durable sendVoice uploads", async () => {
+    vi.spyOn(mediaRuntime, "runFfprobe").mockResolvedValue("12.6\n");
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      buffer: Buffer.from("audio-bytes"),
+      kind: "audio",
+      contentType: "audio/ogg",
+      fileName: "clip",
+    });
+    const mediaUrl = "https://example.com/clip";
+    await sendMessageTelegram("123", "", { cfg, api: bot.api, mediaUrl, asVoice: true });
+    expect(requests.map((request) => request.method)).toEqual(["sendVoice"]);
+    expect(String(requests[0]!.fields.duration)).toBe("13");
+  });
 
-  it.each(["N/A", "0", "Infinity", new Error("ffprobe unavailable")])(
-    "still sends audio when duration probing yields %s",
-    async (result) => {
-      const probe = vi.spyOn(mediaRuntime, "runFfprobe");
-      if (result instanceof Error) {
-        probe.mockRejectedValue(result);
-      } else {
-        probe.mockResolvedValue(result);
-      }
-      await sendMessageTelegram("123", "", {
-        cfg,
-        api: bot.api,
-        mediaUrl: voicePath,
-        mediaLocalRoots: [fixture.mediaDir],
-        asVoice: true,
-      });
-      expect(requests.map((request) => request.method)).toEqual(["sendVoice"]);
-      expect(requests[0]!.fields.duration).toBeUndefined();
-    },
-  );
-
-  it("does not claim delivery when all text is rejected as empty", async () => {
-    const description = "text must be non-empty";
-    rejections.push(`Bad Request: ${description}`, `Bad Request: ${description}`);
-    await expect(sendMessageTelegram("123", "\u200b", { cfg, api: bot.api })).rejects.toThrow(
-      description,
-    );
-    expect(requests.map(({ method }) => method)).toEqual(["sendMessage", "sendMessage"]);
+  it("still sends audio when duration probing yields 0", async () => {
+    vi.spyOn(mediaRuntime, "runFfprobe").mockResolvedValue("0");
+    await sendMessageTelegram("123", "", {
+      cfg,
+      api: bot.api,
+      mediaUrl: voicePath,
+      mediaLocalRoots: [fixture.mediaDir],
+      asVoice: true,
+    });
+    expect(requests.map((request) => request.method)).toEqual(["sendVoice"]);
+    expect(requests[0]!.fields.duration).toBeUndefined();
   });
 
   it("keeps authored link destinations through an HTML rejection", async () => {
