@@ -251,31 +251,69 @@ it.each(["reset", "replaced", "archive", "permission", "consumed", "abort"] as c
     ) {
       const notice = io.report.mock.calls[0]![1].selectReport(undefined);
       expect(notice.content).toContain(
-        change === "permission"
-          ? "current session permissions do not allow automatic delivery"
-          : "the source or destination session was reset, archived, or replaced",
+        change === "permission" ? "permission-denied" : "endpoint-replaced",
       );
-      expect(notice.content).toContain("Reader capacity exhausted");
+      expect(notice.content).not.toContain("Reader capacity exhausted");
     }
   },
 );
 
-it.each([true, false])(
-  "records the cause when delivery remains unavailable (transient=%s)",
-  async (transient) => {
-    dispatch.mockRejectedValue(
-      transient
-        ? new WorkerTaskError("Reader capacity exhausted", "overloaded")
-        : new Error("Invalid saved delivery"),
-    );
+const privateDatabasePath = "/synthetic/private/agents/main/openclaw-agent.sqlite";
+const quarantineCommand = `mv ${privateDatabasePath} /synthetic/private/quarantine/`;
+const privateDiagnostic = `Inspection failed at ${privateDatabasePath}; ${quarantineCommand}`;
+
+it.each([
+  {
+    name: "capacity",
+    error: new WorkerTaskError(privateDiagnostic, "overloaded"),
+    reason: "transient-admission",
+    attempts: 3,
+  },
+  {
+    name: "pending inspection",
+    error: new AgentDatabaseAdmissionError({
+      agentId: "main",
+      paths: [privateDatabasePath],
+      code: "agent-database-inspection-pending",
+      reason: privateDiagnostic,
+      repairHint: quarantineCommand,
+    }),
+    reason: "transient-admission",
+    attempts: 3,
+  },
+  {
+    name: "failed inspection",
+    error: new AgentDatabaseAdmissionError({
+      agentId: "main",
+      paths: [privateDatabasePath],
+      code: "agent-database-inspection-failed",
+      reason: privateDiagnostic,
+      repairHint: quarantineCommand,
+    }),
+    reason: "store-unavailable",
+    attempts: 1,
+  },
+  { name: "unknown", error: new Error(privateDiagnostic), reason: "unknown", attempts: 1 },
+])(
+  "keeps path-bearing $name diagnostics out of saved recovery notices",
+  async ({ error, reason, attempts }) => {
+    io.load.mockRejectedValue(error);
     const recovery = recoverSessionSendDeliveries(context, controller().signal);
     await Promise.all([recovery, vi.runAllTimersAsync()]);
-    expect(dispatch).toHaveBeenCalledTimes(transient ? 3 : 1);
+    expect(dispatch).not.toHaveBeenCalled();
     const report = io.report.mock.calls[0]![1].selectReport(undefined);
-    expect(report.content).toContain(
-      transient ? "Reader capacity exhausted" : "Invalid saved delivery",
-    );
-    expect(report.details.inputs[0]).toMatchObject({ attempts: transient ? 3 : 1 });
+    expect(report.details.inputs[0]).toEqual({
+      inputId: input.id,
+      sourceSessionKey: delivery.source.sessionKey,
+      reason,
+      attempts,
+    });
+    expect(report.content).toContain(reason);
+    expect(JSON.stringify(report)).not.toContain(privateDatabasePath);
+    expect(JSON.stringify(report)).not.toContain(quarantineCommand);
+    const logs = warn.mock.calls.map(([line]) => line).join("\n");
+    expect(logs).toContain(privateDatabasePath);
+    expect(logs).toContain(quarantineCommand);
   },
 );
 

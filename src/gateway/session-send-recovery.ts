@@ -19,6 +19,7 @@ import { getRetryAttemptErrors } from "../infra/retry-attempt-errors.js";
 import { retryAsync } from "../infra/retry.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import type { CommunicationEndpoint } from "../sessions/communication-admission.js";
+import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
@@ -109,9 +110,13 @@ export async function recoverSessionSendDeliveries(
       const blocked: {
         inputId: string;
         sourceSessionKey: string;
-        reason: string;
+        reason:
+          | "endpoint-replaced"
+          | "permission-denied"
+          | "transient-admission"
+          | "store-unavailable"
+          | "unknown";
         attempts: number;
-        causes: string[];
       }[] = [];
       for (const input of pending) {
         assertCurrent();
@@ -233,23 +238,25 @@ export async function recoverSessionSendDeliveries(
             return;
           }
           blockedCount++;
-          const causes = [
-            ...new Set((getRetryAttemptErrors(error) ?? [error]).map(formatErrorMessageWithCode)),
-          ];
           blocked.push({
             inputId: input.id,
             sourceSessionKey: delivery.source.sessionKey,
             reason:
               error instanceof SessionSendEndpointChangedError
-                ? "the source or destination session was reset, archived, or replaced"
+                ? "endpoint-replaced"
                 : error instanceof SessionCommunicationDeniedError
-                  ? "current session permissions do not allow automatic delivery"
+                  ? "permission-denied"
                   : isTransient(error)
-                    ? "temporary delivery failure persisted after bounded retries"
-                    : "delivery failed",
+                    ? "transient-admission"
+                    : error instanceof SessionStoreUnavailableError ||
+                        error instanceof AgentDatabaseAdmissionError
+                      ? "store-unavailable"
+                      : "unknown",
             attempts,
-            causes,
           });
+          const causes = [
+            ...new Set((getRetryAttemptErrors(error) ?? [error]).map(formatErrorMessageWithCode)),
+          ];
           context.logGateway.warn(
             `Session delivery recovery blocked after ${attempts} attempts: ${formatErrorMessageForDisplay(error, causes.join("; "))}`,
           );
@@ -263,8 +270,8 @@ export async function recoverSessionSendDeliveries(
           "Agent updates not delivered after restart:\n" +
           displayed
             .map(
-              ({ sourceSessionKey, reason, attempts, causes }) =>
-                `- From ${sourceSessionKey}: ${reason} (${attempts} recovery attempt${attempts === 1 ? "" : "s"}): ${causes.join("; ")}.`,
+              ({ sourceSessionKey, reason, attempts }) =>
+                `- From ${sourceSessionKey}: ${reason} (${attempts} recovery attempt${attempts === 1 ? "" : "s"}).`,
             )
             .join("\n") +
           (blocked.length > displayed.length

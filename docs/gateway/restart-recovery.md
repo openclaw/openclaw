@@ -82,8 +82,9 @@ get up to three attempts, waiting 5 seconds and then 10 seconds between attempts
 Each attempt checks the original source and destination sessions and current
 communication permission again. Reset, replaced, archived, or permission-denied
 sessions stop automatic delivery. Unknown failures and exhausted retries leave the
-input saved, with the failure cause and attempt count recorded in the recovery
-notice and logs. Recovery never reruns the sender task or restores old approvals.
+input saved, with a fixed failure-reason code and attempt count recorded in the
+recovery notice. Detailed diagnostics stay in operator logs. Recovery never
+reruns the sender task or restores old approvals.
 
 When an update replaces the bundled Control UI, an open tab reloads after the
 Gateway reports the new build. Automatic recovery for that reported build and
