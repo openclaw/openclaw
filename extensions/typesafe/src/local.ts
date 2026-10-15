@@ -20,6 +20,27 @@ export function localInput(input: EvaluationInput): EvaluationInput {
   return { ...input, questions };
 }
 
+/**
+ * Local Kev/llama-swap servers report their own telemetry alongside the decision
+ * (top-level metrics/scoring, extra usage keys). The hosted path stays strict, but a
+ * local response only has to satisfy the contract fields (#173039).
+ */
+function contractFields(value: object): Record<string, unknown> {
+  const record = value as Record<string, unknown>;
+  const usage = record.usage;
+  const usageFields =
+    usage && typeof usage === "object" && !Array.isArray(usage)
+      ? (() => {
+          const usageRecord = usage as Record<string, unknown>;
+          return {
+            input_tokens: usageRecord.input_tokens,
+            output_tokens: usageRecord.output_tokens,
+          };
+        })()
+      : usage;
+  return { model: record.model, answers: record.answers, usage: usageFields };
+}
+
 export function parseLocalResult(
   value: unknown,
   wireInput: EvaluationInput,
@@ -36,7 +57,7 @@ export function parseLocalResult(
     }
     result = payload;
   }
-  const evaluation = parseResult(result, wireInput);
+  const evaluation = parseResult(contractFields(result), wireInput);
   for (const [id, question] of Object.entries(originalInput.questions)) {
     const answer = evaluation.answers[id];
     if (question.type === "score" && answer?.type === "score") {

@@ -133,6 +133,30 @@ it.each([
   await expect(evaluate(input, runtimeConfig({ baseUrl }))).rejects.toThrow("invalid response");
 });
 
+it("accepts additive backend metadata on the local path while validating the contract", async () => {
+  const additive = {
+    ...localAnswer,
+    usage: { ...localAnswer.usage, total_tokens: 42 },
+    metrics: { latency_ms: 15.7 },
+    scoring: { version: 2 },
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify(additive))),
+  );
+
+  const result = await evaluate(input, runtimeConfig({ baseUrl }));
+  expect(result.evaluation.model).toBe("kev-latest");
+  expect(result.evaluation.answers.c).toEqual(localAnswer.answers.c);
+
+  // Contract fields still validate on the local path.
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify({ ...additive, answers: {} }))),
+  );
+  await expect(evaluate(input, runtimeConfig({ baseUrl }))).rejects.toThrow("invalid response");
+});
+
 it("keeps hosted response validation strict and ignores stale keys even on direct local calls", async () => {
   const fetch = vi.fn(
     async (_url: RequestInfo | URL, _init?: RequestInit) =>
