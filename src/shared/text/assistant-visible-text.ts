@@ -299,6 +299,7 @@ export const plainToolCallTextFilter: TextFilter = {
   transform: (text) =>
     stripPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions }),
   activationTokens: ["{", "<parameter=", "<function=", "to="],
+  ignoreBlockCode: true,
 };
 
 export function sanitizeAssistantVisibleTextWithProfile(

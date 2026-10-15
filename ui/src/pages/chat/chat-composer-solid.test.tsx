@@ -48,10 +48,12 @@ it("updates composer text on a live locale change without disturbing an IME draf
     onDraftChange,
   });
   const view = mountComposer(props);
-  view.container
-    .querySelector(".chat-controls__permission-picker")!
-    .dispatchEvent(new Event("wa-show"));
-  flush();
+  view.container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!.click();
+  await waitForSolid(() =>
+    expect(
+      view.container.querySelector(".chat-controls__permission-menu")?.matches(":popover-open"),
+    ).toBe(true),
+  );
   const textarea = view.container.querySelector("textarea")!;
   const heading = view.container.querySelector(".chat-controls__permission-heading")!;
   expect(heading.textContent).toBe("Execution permissions");
@@ -220,13 +222,14 @@ it("ends the old IME scope without writing into a newly selected session", () =>
   expect(onNewDraftChange).toHaveBeenCalledWith("second draft edited", undefined);
 });
 
-it("keeps the open permission picker through parent updates", () => {
+it("keeps the open permission picker through parent updates", async () => {
   const permissionPicker = { canSelectFull: true, onSelect: vi.fn() };
   const view = mountComposer(createComposerProps({ permissionPicker }));
-  const picker = view.container.querySelector<HTMLElement & { open: boolean }>(
-    ".chat-controls__permission-picker",
-  )!;
-  picker.open = true;
+  const picker = view.container.querySelector(".chat-controls__permission-picker")!;
+  const trigger = picker.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
+  trigger.click();
+  const surface = picker.querySelector<HTMLElement>('[role="menu"]')!;
+  await waitForSolid(() => expect(surface.matches(":popover-open")).toBe(true));
   view.update((previous) => ({
     ...previous,
     stream: "More response",
@@ -234,7 +237,9 @@ it("keeps the open permission picker through parent updates", () => {
   }));
   flush();
   expect(view.container.querySelector(".chat-controls__permission-picker")).toBe(picker);
-  expect(picker.open).toBe(true);
+  expect(picker.querySelector('[role="menu"]')).toBe(surface);
+  expect(surface.matches(":popover-open")).toBe(true);
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
 });
 
 it("keeps a pending dictation send bound to the action that started it", async () => {
