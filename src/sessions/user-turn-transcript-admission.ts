@@ -1,5 +1,8 @@
 import type { SessionPendingInputReceipt } from "../config/sessions/session-pending-input-receipt.types.js";
 import type { SessionReactionWrite } from "../config/sessions/session-reaction-store.types.js";
+import { copyTranscriptEntryProvenance } from "../config/sessions/transcript-entry-provenance.js";
+import type { DatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptAdmissionReceipt,
@@ -30,6 +33,7 @@ type AdmissionOwner = {
   message: () => PersistedUserTurnMessage | undefined;
   blocked: () => boolean;
   sentToProvider: () => boolean;
+  restrictSourceDatabase: (identity: DatabaseFileIdentity) => void;
   refresh: (
     admission: UserTurnTranscriptAdmissionReceipt,
     message: PersistedUserTurnMessage,
@@ -37,7 +41,21 @@ type AdmissionOwner = {
 };
 
 // Only the recorder factory registers an owner; copied SDK values cannot bind one.
-const admissionOwners = new WeakMap<UserTurnTranscriptRecorder, AdmissionOwner>();
+const admissionOwners = resolveGlobalSingleton(
+  Symbol.for("openclaw.userTurnTranscriptAdmissionOwners"),
+  () => new WeakMap<UserTurnTranscriptRecorder, AdmissionOwner>(),
+);
+
+export function restrictUserTurnTranscriptSourceDatabase(
+  recorder: UserTurnTranscriptRecorder,
+  identity: DatabaseFileIdentity,
+): void {
+  const owner = admissionOwners.get(recorder);
+  if (!owner) {
+    throw new Error("ACP source input requires its original transcript persistence owner.");
+  }
+  owner.restrictSourceDatabase(identity);
+}
 
 export function registerUserTurnTranscriptAdmissionOwner(
   recorder: UserTurnTranscriptRecorder,
@@ -118,5 +136,10 @@ export function readPendingUserTurnTranscriptAdmission(
     return undefined;
   }
   const receipt = owner.receipt();
-  return receipt ? { ...receipt } : undefined;
+  if (!receipt) {
+    return undefined;
+  }
+  const snapshot = { ...receipt };
+  copyTranscriptEntryProvenance(receipt, snapshot);
+  return snapshot;
 }

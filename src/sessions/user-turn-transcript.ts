@@ -15,6 +15,7 @@ import {
   composeSessionSourceAssertion,
   createDynamicSessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
+import { copyTranscriptEntryProvenance } from "../config/sessions/transcript-entry-provenance.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   getUserTurnTranscriptAdmissionOwner,
@@ -23,6 +24,7 @@ import {
 } from "./user-turn-transcript-admission.js";
 import { persistUserTurnInput, stageUserTurnPendingInput } from "./user-turn-transcript-media.js";
 import { createUserTurnProcessingCompletion } from "./user-turn-transcript-processing.js";
+import { createUserTurnPersistenceRestrictions } from "./user-turn-transcript-restrictions.js";
 import {
   capturePersistedModelPromptProjection,
   confirmPersistedSteerTargetRunId,
@@ -118,6 +120,9 @@ export function createUserTurnTranscriptRecorder(
     params.pendingInputSources,
   );
   let staging: Promise<boolean> | undefined;
+  const persistenceRestrictions = createUserTurnPersistenceRestrictions(
+    params.expectedLifecycleRevision,
+  );
 
   const applyReplacementText = (
     candidate: PersistedUserTurnMessage | undefined,
@@ -263,6 +268,7 @@ export function createUserTurnTranscriptRecorder(
     }
     const admission: UserTurnTranscriptAdmissionReceipt =
       "logicalTurnId" in receipt ? receipt : { ...receipt, logicalTurnId, role: "user" };
+    copyTranscriptEntryProvenance(receipt, admission);
     admissionReceipt = admission;
     admittedMessage = persistedMessage;
     const run = async () => {
@@ -279,6 +285,9 @@ export function createUserTurnTranscriptRecorder(
     admission: UserTurnTranscriptAdmissionReceipt,
     persistedMessage: PersistedUserTurnMessage,
   ) => {
+    if (admissionReceipt) {
+      copyTranscriptEntryProvenance(admissionReceipt, admission);
+    }
     admissionReceipt = admission;
     admittedMessage = persistedMessage;
     runtimePersistedMessage = persistedMessage;
@@ -314,6 +323,7 @@ export function createUserTurnTranscriptRecorder(
     if (!options.message && !message && !params.resolveInput) {
       return undefined;
     }
+    persistenceRestrictions.restrict(options);
     if (options.waitForRuntime) {
       await waitForRuntimePersistence();
     }
@@ -375,8 +385,12 @@ export function createUserTurnTranscriptRecorder(
         candidate: PersistedUserTurnMessage,
         candidateUpdateMode: UserTurnTranscriptUpdateMode,
       ) => {
+        const restriction = persistenceRestrictions.capture(
+          resolvedTarget.expectedSessionId,
+          resolvedTarget.sessionId,
+        );
         const assertOriginalInput =
-          candidate.idempotencyKey === message?.idempotencyKey
+          candidate === resolvedMessage || candidate.idempotencyKey === message?.idempotencyKey
             ? recorder.assertOriginalInputCommit
             : undefined;
         const persist = () =>
@@ -385,7 +399,7 @@ export function createUserTurnTranscriptRecorder(
             logicalTurnId,
             message: candidate,
             sessionTurnMutation: params.sessionTurnMutation,
-            expectedSessionId: options.expectedSessionId || resolvedTarget.expectedSessionId,
+            ...restriction,
             sessionLifecyclePatch: options.sessionLifecyclePatch ?? params.sessionLifecyclePatch,
             expectedSessionState: options.expectedSessionState ?? params.expectedSessionState,
             updateMode: candidateUpdateMode,
@@ -656,6 +670,7 @@ export function createUserTurnTranscriptRecorder(
         updateMode: options?.updateMode,
         cwd: options?.cwd,
         expectedSessionId: options?.expectedSessionId,
+        expectedLifecycleRevision: options?.expectedLifecycleRevision,
         expectedSessionState: options?.expectedSessionState,
         sessionLifecyclePatch: options?.sessionLifecyclePatch,
         beforeFreshMessageCommit: options?.beforeFreshMessageCommit,
@@ -699,6 +714,7 @@ export function createUserTurnTranscriptRecorder(
     message: () => admittedMessage,
     blocked: () => blocked || confirmedSteerTargetRunId !== undefined,
     sentToProvider: () => sentToProvider,
+    restrictSourceDatabase: persistenceRestrictions.restrictSourceDatabase,
     refresh: refreshAdmission,
   });
   inheritUserTurnPromptReactionSource(recorder, params.pendingInputSources);

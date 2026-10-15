@@ -1,4 +1,5 @@
 import { MAIN_SESSION_RECOVERY_CLEAR_PATCH } from "../../agents/main-session-recovery/main-session-recovery-clear.js";
+import { hasCurrentAcpSourceTurn } from "./acp-source-turn-state.js";
 import { SESSION_ENTRY_PRIVATE_CLEAR_PATCH } from "./session-entry-projection.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
@@ -24,6 +25,9 @@ function generationValidPrivateFieldsForSameSession(
     ...(existingEntry.lifecycleRunId !== undefined
       ? { lifecycleRunId: existingEntry.lifecycleRunId }
       : {}),
+    ...(existingEntry.acpSourceTurn ? { acpSourceTurn: existingEntry.acpSourceTurn } : {}),
+    // The ACP owner settles this turn; a stale public snapshot cannot hide it from recovery.
+    ...(hasCurrentAcpSourceTurn(existingEntry) ? { status: existingEntry.status } : {}),
     ...(existingEntry.pendingProjectGitUrl !== undefined
       ? { pendingProjectGitUrl: existingEntry.pendingProjectGitUrl }
       : {}),

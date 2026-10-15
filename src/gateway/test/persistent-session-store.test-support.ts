@@ -3,6 +3,7 @@ import {
   deleteSessionEntryLifecycle,
   listSessionEntriesCore,
 } from "../../config/sessions/session-accessor.js";
+import { getCompetingSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { disposeSessionReadContexts } from "../session-read-contexts.test-support.js";
 
 /** Callers settle their readers and writers before clearing an admitted fixture store. */
@@ -13,7 +14,14 @@ export async function deletePersistentSessionStoreRows({
   agentId: string;
   storePath: string;
 }): Promise<void> {
-  for (const { sessionKey } of listSessionEntriesCore({ agentId, storePath })) {
+  for (const { sessionKey, entry } of listSessionEntriesCore({ agentId, storePath })) {
+    const pending = getCompetingSessionWorkAdmissionRelease({
+      scope: storePath,
+      identities: [sessionKey, entry.sessionId],
+    });
+    if (pending) {
+      await pending;
+    }
     await deleteSessionEntryLifecycle({
       agentId,
       storePath,

@@ -619,17 +619,22 @@ describe("sessionsTailCommand", () => {
     const runtime = createTestRuntime();
     const sigintListeners = process.listenerCount("SIGINT");
     const sigtermListeners = process.listenerCount("SIGTERM");
-    await writeSessionEntry();
+    replaceSessionEntrySync(
+      { sessionKey, storePath },
+      { sessionId: "session-one", updatedAt: 2, status: "done" },
+    );
     await appendEvents([makeEvent({ type: "session.started", ts: "2026-05-18T12:04:17.000Z" })]);
 
     const run = sessionsTailCommand(
       { agent: "main", store: storePath, sessionKey, tail: "0", follow: true },
       runtime,
     );
-    await vi.advanceTimersByTimeAsync(0);
-    await closeOpenClawAgentDatabasesAsync();
-    fs.writeFileSync(storePath, "not a SQLite database");
+    await vi.waitFor(() => {
+      expect(process.listenerCount("SIGTERM")).toBe(sigtermListeners + 1);
+    });
     try {
+      await closeOpenClawAgentDatabasesAsync(tmpDir);
+      fs.writeFileSync(storePath, "not a SQLite database");
       await vi.advanceTimersByTimeAsync(1_000);
     } finally {
       process.emit("SIGTERM", "SIGTERM");

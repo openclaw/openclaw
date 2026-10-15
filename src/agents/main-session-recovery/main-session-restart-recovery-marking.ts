@@ -5,6 +5,7 @@ import type {
   InternalSessionEntry as SessionEntry,
   RestartRecoveryRun,
 } from "../../config/sessions.js";
+import { hasCurrentAcpSourceTurn } from "../../config/sessions/acp-source-turn-state.js";
 import {
   hasMainSessionRecoveryClaim,
   hasRestartRecoveryTerminalRun,
@@ -357,7 +358,8 @@ function hasOrphanedMainSessionWork(entry: SessionEntry, sessionKey: string): bo
   return (
     entry.archivedAt === undefined &&
     isMainRestartRecoveryCandidate(entry, sessionKey) &&
-    (hasMainSessionRecoveryClaim(entry) ||
+    (hasCurrentAcpSourceTurn(entry) ||
+      hasMainSessionRecoveryClaim(entry) ||
       entry.abortedLastRun === true ||
       entry.status === "interrupted")
   );
@@ -485,7 +487,8 @@ async function markOrphanedMainSessionStore(
         hasClaim &&
         !completed &&
         (entry.abortedLastRun === true ||
-          (!entry.pendingFinalDelivery &&
+          (!hasCurrentAcpSourceTurn(entry) &&
+            !entry.pendingFinalDelivery &&
             entry.status !== undefined &&
             entry.status !== "failed" &&
             entry.status !== "interrupted"))

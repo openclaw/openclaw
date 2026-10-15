@@ -8,8 +8,8 @@ title: "Restart recovery"
 ---
 
 Conversations, transcripts, scheduled jobs, native subagent records, and queued
-outbound messages live on disk. Main chat sessions that were working when the
-Gateway restarted always enter automatic main-session recovery, including after
+outbound messages live on disk. Eligible native main chat sessions that were working when the
+Gateway restarted enter automatic main-session recovery, including after
 a crash, forced kill, or missed shutdown marker. No operator action is needed to
 resume them. Recovery is always on. Exhausted infrastructure retries, or a
 missing durable message-action authority claim, may tombstone one session
@@ -81,6 +81,24 @@ execution or question consumption. If the conversation routes to a bound ACP
 session, the source keeps the original request and the bound session owns the ACP
 transcript and reply. An output-persistence failure does not make consumed input
 eligible for automatic resubmission.
+
+For newly admitted ACP requests, the source also records which turn belongs to ACP.
+Successful ACP completion settles that source turn. If the Gateway restarts while
+the recorded turn is unfinished, recovery writes an interruption notice instead
+of sending the request to a native agent. Check any work the external agent may
+already have performed, then explicitly resend the request to continue. The
+Gateway does not automatically reattach to the external run or undo its effects.
+
+This private ownership record belongs to the original source session generation;
+closing or rebinding the ACP target does not authorize native replay. Historical
+source rows without the record retain their existing recovery behavior. A current
+binding alone cannot establish who executed an older request. No database schema
+version change or historical ownership backfill is introduced.
+
+Older builds do not understand this ownership record. Finish active ACP work before
+downgrading; do not use an older binary to recover a recorded in-flight turn. When
+rollback is needed, follow the existing
+[matching-release and verified-backup recovery procedure](/install/updating/rollback-and-recovery).
 
 If the browser no longer has the matching outbox payload, the saved interrupted
 input remains available for explicit resend. Cancelled input is not replayed.

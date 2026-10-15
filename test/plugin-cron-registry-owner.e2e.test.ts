@@ -29,7 +29,6 @@ const OWNER_FIRE = "CRON_OWNER_SURVIVAL_FIRE";
 const PINNED_FIRE = "CRON_PINNED_LATE_FIRE";
 const E2E_TIMEOUT_MS = 180_000;
 const WAIT_OPTIONS = { timeout: 45_000, interval: 50 } as const;
-const TEST_API_KEY = "test-token-placeholder";
 
 type MockModelRequest = {
   body: Record<string, unknown>;
@@ -95,10 +94,23 @@ async function readJsonRequest(req: IncomingMessage): Promise<Record<string, unk
   return body ? (JSON.parse(body) as Record<string, unknown>) : {};
 }
 
-function writeModelResponse(res: ServerResponse, sequence: number): void {
+function writeModelResponse(res: ServerResponse, sequence: number, completionModel?: string): void {
   const messageId = `msg_cron_owner_${sequence}`;
   const responseId = `resp_cron_owner_${sequence}`;
   const text = `CRON_OWNER_RESPONSE_${sequence}`;
+  if (completionModel) {
+    writeOpenAiResponsesSse(res, [
+      {
+        id: `chatcmpl_cron_owner_${sequence}`,
+        object: "chat.completion.chunk",
+        created: 1,
+        model: completionModel,
+        choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    ]);
+    return;
+  }
   const message = {
     type: "message",
     id: messageId,
@@ -150,7 +162,8 @@ async function startMockModelServer(rejectModel?: string): Promise<MockModelServ
         res.end(JSON.stringify({ data: [{ id: "cron-owner", object: "model" }] }));
         return;
       }
-      if (req.method !== "POST" || url.pathname !== "/v1/responses") {
+      const chatCompletions = url.pathname === "/v1/chat/completions";
+      if (req.method !== "POST" || (!chatCompletions && url.pathname !== "/v1/responses")) {
         res.writeHead(404).end();
         return;
       }
@@ -162,7 +175,7 @@ async function startMockModelServer(rejectModel?: string): Promise<MockModelServ
         res.end(JSON.stringify({ error: { code: "model_not_found", message: "Model not found" } }));
         return;
       }
-      writeModelResponse(res, requests.length);
+      writeModelResponse(res, requests.length, chatCompletions ? String(body.model) : undefined);
     })();
   });
   await new Promise<void>((resolve, reject) => {
@@ -295,6 +308,9 @@ describe("plugin cron registry ownership e2e", () => {
           JSON.stringify({
             id: pluginId,
             providers: [pluginId],
+            syntheticAuthRefs: [pluginId],
+            // The loopback fixture has no account; its resolver returns a public marker.
+            nonSecretAuthMarkers: ["cron-fixture"],
             activation: { onStartup: false, onProviders: [pluginId] },
             configSchema: { type: "object", additionalProperties: false },
           }),
@@ -315,6 +331,11 @@ describe("plugin cron registry ownership e2e", () => {
       }
       const server = await startMockModelServer("unavailable");
       modelServers.push(server);
+      // Cross-provider cron fallback uses the supported credentialless local transport.
+      const selectedTransport =
+        route === "cron"
+          ? { api: "openai-completions" as const, apiKey: "cron-fixture" }
+          : { api: "openai-responses" as const };
       const model = (id: string) => ({
         id,
         name: id,
@@ -354,19 +375,18 @@ describe("plugin cron registry ownership e2e", () => {
             "cron-owner": {
               baseUrl: `${server.baseUrl}/v1`,
               api: "openai-responses",
-              apiKey: TEST_API_KEY,
               request: { allowPrivateNetwork: true },
               models: [model("default"), model("agent-default")],
             },
             [provider]: {
               baseUrl: `${server.baseUrl}/v1`,
-              api: "openai-responses",
+              ...selectedTransport,
               request: { allowPrivateNetwork: true },
               models: [model("unavailable")],
             },
             [fallbackProvider]: {
               baseUrl: `${server.baseUrl}/v1`,
-              api: "openai-responses",
+              ...selectedTransport,
               request: { allowPrivateNetwork: true },
               models: [model("available")],
             },
@@ -539,7 +559,6 @@ describe("plugin cron registry ownership e2e", () => {
           providers: {
             "cron-owner": {
               baseUrl: `${modelServer.baseUrl}/v1`,
-              apiKey: TEST_API_KEY,
               api: "openai-responses",
               request: { allowPrivateNetwork: true },
               models: [

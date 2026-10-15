@@ -15,6 +15,7 @@ import {
   recordSessionParticipant,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import * as sessionAccessors from "../config/sessions/session-accessor.js";
 import { listSessionsNeedingTranscriptIndexReconcile } from "../config/sessions/session-transcript-index.js";
 import {
   startSessionTranscriptIndexReconcile,
@@ -62,6 +63,7 @@ import {
   writeSessionStore,
 } from "./test-helpers.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
+import { deletePersistentSessionStoreRows } from "./test/persistent-session-store.test-support.js";
 import {
   releaseGatewaySessionStoreFixture,
   settleGatewaySessionStoreFixture,
@@ -283,6 +285,50 @@ describe("Gateway RPC fixture session writes", () => {
       ).toBe(false);
     },
   );
+
+  test("persistent row cleanup joins pending admission before deleting its accepted write", async () => {
+    const dir = tempDirs.make("openclaw-gw-pending-cleanup-");
+    const storePath = path.join(dir, "openclaw-agent.sqlite");
+    testState.sessionStorePath = storePath;
+    const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
+    const sessionId = "pending-cleanup";
+    await writeSessionStore({ entries: { main: { sessionId, updatedAt: 1 } } });
+    const entered = createDeferred();
+    const allowAcquire = createDeferred();
+    const pending = beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [scope.sessionKey, sessionId],
+      assertAllowed: async () => {
+        entered.resolve();
+        await allowAcquire.promise;
+      },
+    });
+    void pending.catch(() => {});
+    await entered.promise;
+    const deletion = vi.spyOn(sessionAccessors, "deleteSessionEntryLifecycle");
+    const clearing = deletePersistentSessionStoreRows({ agentId: "main", storePath });
+    const cleared = Promise.allSettled([clearing]);
+    try {
+      expect(deletion).not.toHaveBeenCalled();
+      allowAcquire.resolve();
+      const admission = await pending;
+      await admission.run(() => updateSessionEntry(scope, () => ({ label: "accepted write" })));
+      expect(loadSessionEntry(scope)?.label).toBe("accepted write");
+      expect(deletion).not.toHaveBeenCalled();
+      expect(testState.sessionStorePath).toBe(storePath);
+      admission.release();
+      await clearing;
+      expect(deletion).toHaveBeenCalledOnce();
+      expect(loadSessionEntry(scope)).toBeUndefined();
+      expect(testState.sessionStorePath).toBe(storePath);
+    } finally {
+      allowAcquire.resolve();
+      (await pending.catch(() => undefined))?.release();
+      await cleared;
+      deletion.mockRestore();
+      await releaseGatewaySessionStoreFixture(dir);
+    }
+  });
 
   test("fixture release joins queued participant persistence before deselecting its store", async () => {
     const dir = tempDirs.make("openclaw-gw-participant-join-");

@@ -6,6 +6,11 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { readActiveTranscriptEntryAnchorAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
+import {
+  copyTranscriptEntryProvenance,
+  copyTranscriptMessageProvenance,
+  copyTranscriptMessageProvenanceToAnchor,
+} from "../config/sessions/transcript-entry-provenance.js";
 import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { isUserMessage, resolvePersistedUserTurnMessage } from "./user-turn-transcript.message.js";
 import { preparePersistedUserTurnMessageForTranscriptWrite } from "./user-turn-transcript.metadata.js";
@@ -26,9 +31,16 @@ export function admittedUserTurnResult(
   if (!committed.anchor) {
     return undefined;
   }
+  copyTranscriptMessageProvenanceToAnchor(committed, committed.anchor);
+  const admission: UserTurnTranscriptPersistResult["admission"] = {
+    ...committed.anchor,
+    logicalTurnId,
+    role: "user",
+  };
+  copyTranscriptEntryProvenance(committed.anchor, admission);
   return {
     ...committed,
-    admission: { ...committed.anchor, logicalTurnId, role: "user" },
+    admission,
     sessionFile: sessionKey,
   };
 }
@@ -39,7 +51,10 @@ export async function resolveCommittedUserTurnTranscript(
 ): Promise<UserTurnTranscriptPersistResult | undefined> {
   let committed = originalCommit;
   if (!committed.anchor) {
-    const assertCurrent = captureOwnedTranscriptWriteAssertion(params);
+    const assertCurrent = captureOwnedTranscriptWriteAssertion({
+      ...params,
+      expectedLifecycleRevision: params.expectedLifecycleRevision ?? undefined,
+    });
     await waitForSessionTranscriptProjection(params);
     const anchor = await readActiveTranscriptEntryAnchorAsync({
       ...params,
@@ -47,6 +62,7 @@ export async function resolveCommittedUserTurnTranscript(
     });
     assertCurrent();
     if (anchor) {
+      copyTranscriptMessageProvenanceToAnchor(originalCommit, anchor);
       committed = { ...committed, anchor };
     }
   }
@@ -84,6 +100,8 @@ export async function persistUserTurnTranscript(
       // SAFETY: Recorder targets carry the host's loaded config; their public contract keeps it opaque.
       config: params.config as SessionTranscriptTurnPersistOptions["config"],
       expectedSessionId: params.expectedSessionId,
+      expectedLifecycleRevision: params.expectedLifecycleRevision,
+      assertCurrent: params.assertCurrent,
       initialSessionEntry: params.initialSessionEntry,
       expectedSessionState: params.expectedSessionState,
       sessionLifecyclePatch: params.sessionLifecyclePatch,
@@ -94,10 +112,9 @@ export async function persistUserTurnTranscript(
           return;
         }
         if (committedTurn) {
-          params.onCommitted?.(
-            { ...result, message: result.message, ...committedTurn },
-            acceptCompletion,
-          );
+          const committed = { ...result, message: result.message, ...committedTurn };
+          copyTranscriptMessageProvenance(result, committed);
+          params.onCommitted?.(committed, acceptCompletion);
         }
         if (!result.appended) {
           return;
@@ -129,15 +146,14 @@ export async function persistUserTurnTranscript(
   if (!result || !isUserMessage(result.message)) {
     return undefined;
   }
-  const appended = await resolveCommittedUserTurnTranscript(
-    {
-      ...result,
-      message: result.message,
-      sessionEntry: turn.sessionEntry,
-      sessionTurnMutationResult: turn.sessionTurnMutationResult,
-    },
-    params,
-  );
+  const committed = {
+    ...result,
+    message: result.message,
+    sessionEntry: turn.sessionEntry,
+    sessionTurnMutationResult: turn.sessionTurnMutationResult,
+  };
+  copyTranscriptMessageProvenance(result, committed);
+  const appended = await resolveCommittedUserTurnTranscript(committed, params);
   if (!appended) {
     return undefined;
   }

@@ -64,7 +64,12 @@ import type {
   SqliteExpectedSessionTranscriptTurnResult,
   SqliteSessionTurnOptions,
 } from "./session-turn.types.js";
+import {
+  captureTranscriptEntryProvenance,
+  rememberTranscriptMessageProvenance,
+} from "./transcript-entry-provenance.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
+import { assertTranscriptSourceCommitNativeDatabase } from "./transcript-source-commit-restrictions.js";
 import { captureOwnedTranscriptWriteAssertion } from "./transcript-write-context.js";
 
 /** Appends a guarded transcript turn and touches its session row in one queued write. */
@@ -377,6 +382,7 @@ async function appendPreparedSessionTranscriptTurn(
       let completion: Promise<void> | undefined;
       const publish = runOpenClawAgentWriteTransaction(
         (transactionDb) => {
+          assertTranscriptSourceCommitNativeDatabase(assertRequestedCurrent, transactionDb);
           const currentIdentity = identity
             ? readOpenClawAgentDatabaseIdentity(transactionDb)
             : undefined;
@@ -406,11 +412,20 @@ async function appendPreparedSessionTranscriptTurn(
           }
           const committed = commit(transactionDb, messages);
           result = committed.result;
+          const committedProvenance = captureTranscriptEntryProvenance(
+            transactionDb,
+            committed.identity?.current.get(resolved.sessionKey) ?? result.sessionEntry,
+          );
           if (
             !stageSqliteTransactionState(transactionDb.db, {
               stage: () => undefined,
               commit: () => {
                 try {
+                  rememberTranscriptMessageProvenance(
+                    result.appendedMessages,
+                    committedProvenance,
+                    resolved,
+                  );
                   completion = completeSessionTranscriptCommit(
                     result.appendedMessages,
                     options.onMessageCommitted,

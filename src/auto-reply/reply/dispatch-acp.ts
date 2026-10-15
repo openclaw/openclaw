@@ -15,8 +15,8 @@ import {
   toAcpRuntimeError,
 } from "../../acp/runtime/errors.js";
 import {
-  closeAdmittedRunDelegatedAuthority,
   getAdmittedRunDelegatedAuthority,
+  resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agents/agent-run-terminal-outcome.js";
@@ -47,10 +47,10 @@ import {
 } from "../../media-understanding/extracted-file-images.js";
 import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { finishAcpSourceTurn } from "../../sessions/acp-source-turn.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
-import { bindUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { shouldDeferFinalTtsText } from "../../tts/captioned-final.js";
 import { prepareTtsPreferences, type PreparedTtsPreferences } from "../../tts/tts-preferences.js";
@@ -74,6 +74,7 @@ import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js
 import type { AcpDispatchDeliveryParams } from "./dispatch-acp-delivery.types.js";
 import { finalizeAcpTurnOutput } from "./dispatch-acp-finalize.js";
 import { resolveAcpTurnText } from "./dispatch-acp-prompt.js";
+import { createAcpSourceTurnInputOwner, resolveAcpRequestId } from "./dispatch-acp-source-input.js";
 import type { InboundMessageAuditTerminalRecorder } from "./dispatch-from-config.audit.js";
 import { appendRecentHistoryImageContext } from "./history-media.js";
 import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
@@ -90,14 +91,6 @@ const loadDispatchAcpAuditRuntime = createLazyPromise(
 const loadDispatchAcpTranscriptRuntime = createLazyPromise(
   () => import("./dispatch-acp-transcript.runtime.js"),
 );
-
-function resolveAcpRequestId(ctx: FinalizedRuntimeMsgContext): string {
-  const id = ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-  return (
-    normalizeOptionalString(id) ??
-    (typeof id === "number" || typeof id === "bigint" ? String(id) : generateSecureUuid())
-  );
-}
 
 export type AcpDispatchAttemptResult = {
   queuedFinal: boolean;
@@ -132,8 +125,7 @@ export async function tryDispatchAcpReplyCore(
     return null;
   }
   prepareChannelParticipantObservation(params.ctx);
-  const inputRecorder = params.userTurnTranscriptRecorder;
-  const input = bindUserTurnInput(inputRecorder, () => params.abortSignal?.throwIfAborted());
+  const input = createAcpSourceTurnInputOwner(params);
 
   const { getAcpSessionManager, maybeUnbindStaleBoundConversations, prepareAcpDispatchStart } =
     await loadDispatchAcpManagerRuntime();
@@ -241,16 +233,6 @@ export async function tryDispatchAcpReplyCore(
     suppressBlockUserDelivery: shouldDeferVisibleTextForTts,
   });
   const pendingAnswerText = params.ctx.agentText.trim();
-  const persistInput = inputRecorder
-    ? async () => {
-        await input.withCurrent(() => {});
-        await inputRecorder.persistApproved();
-        await input.withCurrent(() => {});
-        if (!inputRecorder.hasPersisted()) {
-          throw new Error("ACP input must be durably committed before dispatch.");
-        }
-      }
-    : undefined;
   try {
     if (
       pendingAnswerText &&
@@ -261,7 +243,7 @@ export async function tryDispatchAcpReplyCore(
         {
           sessionKey: acpResolution.sessionKey,
           text: pendingAnswerText,
-          sourceRecorder: inputRecorder,
+          sourceRecorder: input.recorder,
           // The released question dispatcher retains its opaque synchronous source guard.
           authority: { kind: "run", assertCurrent: input.assertNativeCurrent },
         },
@@ -436,7 +418,7 @@ export async function tryDispatchAcpReplyCore(
       terminalOutcome,
       meta: acpResolution.kind === "ready" ? acpResolution.meta : undefined,
       threadId: params.ctx.MessageThreadId,
-      userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+      userTurnTranscriptRecorder: input.recorder,
       prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
       assistantIdempotencyKey: existingRunId,
     });
@@ -598,6 +580,14 @@ export async function tryDispatchAcpReplyCore(
     }).admit("acp");
     recordAcceptedSessionParticipantInput(params.ctx, participantTarget);
     const turnAdmission = admittedRunContext;
+    const assertTurnAuthority = resolveAdmittedRunActiveAssertion(turnAdmission);
+    if (!assertTurnAuthority) {
+      throw new Error("ACP turn admission ended before input dispatch.");
+    }
+    const assertSourceCurrent = () => {
+      input.assertCurrent();
+      assertTurnAuthority();
+    };
     const elicitationParams = {
       sourceSessionKey: sessionKey,
       targetSessionKey: canonicalSessionKey,
@@ -610,10 +600,15 @@ export async function tryDispatchAcpReplyCore(
         admittedRunContext === turnAdmission &&
         getAdmittedRunDelegatedAuthority(turnAdmission) !== undefined,
     };
-    const onElicitation = createLazyAcpElicitationHandler(elicitationParams);
     // ACP can act before its terminal transcript arrives. Consume accepted input
     // before submission while leaving final assistant/outcome persistence below.
-    await persistInput?.();
+    await input.prepare(
+      acpResolution,
+      auditRunId,
+      assertSourceCurrent,
+      () => assertPreparedConversationBindingRouteCurrent(params.ctx),
+      assertTurnAuthority,
+    );
     // Start publications clear prior lifecycle facts; settle input before they can race its guard.
     emitAuditStart();
     try {
@@ -649,7 +644,7 @@ export async function tryDispatchAcpReplyCore(
           }
         });
       },
-      onElicitation,
+      onElicitation: createLazyAcpElicitationHandler(elicitationParams),
       onLifecycle: recordUnsupportedNativeActionEvidence,
       onEvent: async (event) => {
         auditRuntime.emitAcpRuntimeEvent({
@@ -747,9 +742,13 @@ export async function tryDispatchAcpReplyCore(
     queuedFinal = queuedFinal || delivered;
     return finishAttempt(queuedFinal, acpError);
   } finally {
-    if (admittedRunContext) {
-      closeAdmittedRunDelegatedAuthority(admittedRunContext);
-    }
+    await finishAcpSourceTurn(
+      input.recorder,
+      auditRunId,
+      terminalOutcome,
+      admittedRunContext,
+      input.assertSourceDatabaseCurrent,
+    );
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

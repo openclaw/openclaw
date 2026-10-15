@@ -1,4 +1,5 @@
 import { publishCommittedSessionIdentity } from "../../config/sessions/session-accessor.sqlite-identity.js";
+import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import {
   prepareTranscriptMessageAppendForWorker,
   type PreparedTranscriptMessageAppend,
@@ -13,6 +14,7 @@ import {
   resolveSessionTranscriptReadFence,
 } from "../../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
+import { createTranscriptEntryProvenance } from "../../config/sessions/transcript-entry-provenance.js";
 import {
   captureSessionTranscriptTargetBinding,
   sameSessionTranscriptTargetBinding,
@@ -35,7 +37,7 @@ import {
 } from "./session-manager-append-admission.js";
 import { SessionManagerNativePersistence } from "./session-manager-native-persistence.js";
 import {
-  adoptCommittedMessagePayload,
+  adoptCommittedWorkerMessagePayload,
   canonicalizeSessionEntry,
   transcriptAppendNeedsReload,
   type PersistRecordOptions,
@@ -200,11 +202,33 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
         if (!("messageId" in receipt) || !message) {
           throw new Error(`Session transcript parent entry was not persisted: ${entry.id}`);
         }
-        adoptCommittedMessagePayload(
-          entry,
-          { ...receipt, message: receipt.message ?? message.prepared.persistedMessage },
-          message.idempotencyLookup,
-        );
+        const ownerIdentity =
+          "actor" in writeAdmission
+            ? writeAdmission.actor.target.database
+            : "withMetadata" in writeAdmission.database
+              ? undefined
+              : writeAdmission.database.fileIdentity;
+        // Retain the acknowledged owner, never a later observation of the pathname.
+        adoptCommittedWorkerMessagePayload(entry, receipt, message.prepared.persistedMessage, {
+          idempotencyLookup: message.idempotencyLookup,
+          provenance: createTranscriptEntryProvenance(
+            { sessionId, lifecycleRevision: committed.lifecycleRevision },
+            ownerIdentity?.kind === "file"
+              ? {
+                  path: captured.storePath,
+                  identity: {
+                    key: `file:${ownerIdentity.physicalIdentity}`,
+                    birthtime: ownerIdentity.birthtime,
+                  },
+                }
+              : undefined,
+          ),
+          source: {
+            agentId: captured.agentId,
+            sessionKey: resolveSqliteSessionKey(captured.sessionKey, captured.agentId),
+            sessionId: captured.sessionId,
+          },
+        });
       }
       return {
         result: {

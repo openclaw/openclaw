@@ -554,7 +554,7 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
     {
       kind: "fields",
       expected: { sessionId: expectedSessionId, lifecycleRevision: expectedLifecycleRevision },
-      patch: { activeWriterRunId: params.runId },
+      patch: { activeWriterRunId: params.runId, acpSourceTurn: undefined },
     },
     {
       skipMaintenance: true,

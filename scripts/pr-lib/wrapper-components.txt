@@ -704,6 +704,7 @@ src/config/sessions/targets-discovery.native.ts
 src/config/sessions/targets-path-validation.ts
 src/config/sessions/targets-read-availability.worker.ts
 src/config/sessions/targets.ts
+src/config/sessions/transcript-entry-provenance.ts
 src/config/sessions/transcript-payload.ts
 src/config/sessions/transcript-predicate-fields.ts
 src/config/sessions/transcript-target-binding.ts
@@ -2347,6 +2348,7 @@ src/config/sessions/session-actor-phase.ts
 src/config/sessions/session-actor-receipt.ts
 src/config/sessions/session-actor-read-error.ts
 src/config/sessions/session-actor-reducers.ts
+src/config/sessions/acp-source-turn-state.ts
 src/config/sessions/session-actor-storage-binding.ts
 src/config/sessions/session-bounded-context-selection.ts
 src/config/sessions/session-cache-ttl-prefix-values.ts

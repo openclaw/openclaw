@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { canonicalizePersistedUserMessageMedia } from "../../media/media-facts.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
@@ -36,6 +37,10 @@ import {
   readTranscriptAppendPostimage,
   retainTranscriptAppendPostimage,
 } from "./session-transcript-append-postimage.js";
+import {
+  captureTranscriptEntryProvenance,
+  rememberTranscriptMessageProvenance,
+} from "./transcript-entry-provenance.js";
 import { normalizeTranscriptJsonValue } from "./transcript-json.js";
 import { messagesMatchForIdempotentReplay } from "./transcript-message-equality.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
@@ -120,6 +125,21 @@ export function appendTranscriptMessageInTransaction<TMessage>(
       entryId: params.messageId,
       message: params.message,
     });
+  const retainOriginalSource = (result: TranscriptMessageAppendResult<TMessage>) => {
+    if (result.appended && isRecord(result.message) && result.message.role === "user") {
+      const provenance = captureTranscriptEntryProvenance(
+        database,
+        readSessionEntryRow(database, resolved.sessionKey)?.entry,
+      );
+      // A tentative native result cannot issue facts before its outer commit succeeds.
+      stageSqliteTransactionState(database.db, {
+        stage: () => undefined,
+        commit: () => rememberTranscriptMessageProvenance([result], provenance, resolved),
+        rollback: () => undefined,
+      });
+    }
+    return result;
+  };
   const existingAppendResult = (found: { message: unknown; messageId: string }) => {
     const anchor = readAnchor(found);
     if (pending) {
@@ -281,13 +301,13 @@ export function appendTranscriptMessageInTransaction<TMessage>(
   }
   return retainTranscriptAppendPostimage(
     {
-      result: {
+      result: retainOriginalSource({
         appended: true,
         ...(anchor ? { anchor } : {}),
         effectiveParentId: parentId ?? null,
         message: persistedMessage,
         messageId,
-      },
+      }),
       ...(metadata.visibleTailEntryId !== undefined
         ? { visibleTailEntryId: metadata.visibleTailEntryId }
         : {}),

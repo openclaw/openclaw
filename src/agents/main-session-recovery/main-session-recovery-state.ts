@@ -6,6 +6,7 @@ import type {
   InternalSessionEntry as SessionEntry,
   MainRestartRecoveryState,
 } from "../../config/sessions.js";
+import { hasCurrentAcpSourceTurn } from "../../config/sessions/acp-source-turn-state.js";
 import {
   hasMainSessionRecoveryClaim,
   isMainRestartRecoveryCandidate,
@@ -111,8 +112,9 @@ function validateRecoveryAdmission(
   if (entry.sessionId !== command.sessionId) {
     return "session_replaced";
   }
-  if (entry.abortedLastRun !== true || !state) {
-    return "not_interrupted";
+  const acpSourceTurn = hasCurrentAcpSourceTurn(entry);
+  if (acpSourceTurn || entry.abortedLastRun !== true || !state) {
+    return acpSourceTurn ? "acp_source_turn" : "not_interrupted";
   }
   if (
     state.reservation?.runId !== command.runId ||
@@ -349,7 +351,7 @@ export function transitionMainSessionRecovery(
     }
     case "observe": {
       if (
-        hasMainSessionRecoveryClaim(entry) &&
+        (hasCurrentAcpSourceTurn(entry) || hasMainSessionRecoveryClaim(entry)) &&
         entry.abortedLastRun === true &&
         isMainRestartRecoveryCandidate(entry, command.sessionKey) &&
         !entry.mainRestartRecovery
@@ -402,6 +404,9 @@ export function transitionMainSessionRecovery(
       };
     }
     case "prepare_attempt": {
+      if (hasCurrentAcpSourceTurn(entry)) {
+        return { kind: "rejected", reason: "acp_source_turn" };
+      }
       const conflict = matchesObservation(entry, command.observation);
       if (conflict) {
         return { kind: "rejected", reason: conflict };

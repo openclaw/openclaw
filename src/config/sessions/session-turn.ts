@@ -55,6 +55,12 @@ import type {
   SqliteSessionTurnOptions,
   SqliteExpectedSessionTranscriptTurnResult,
 } from "./session-turn.types.js";
+import {
+  createTranscriptEntryProvenance,
+  rememberTranscriptMessageProvenance,
+  type TranscriptEntryProvenance,
+} from "./transcript-entry-provenance.js";
+import { assertTranscriptSourceCommitDatabase } from "./transcript-source-commit-restrictions.js";
 
 type TurnResult = SqliteExpectedSessionTranscriptTurnResult | { kind: "restore-cold-transcript" };
 
@@ -78,6 +84,7 @@ export async function appendSessionTurnInWorker(
   const custody = captureSessionPendingInputWorkerCustody();
   const cliWriter = getCliHistoryWriter({ ...scope, storePath: scope.path });
   let custodyRequired = false;
+  let committedDatabase: TranscriptEntryProvenance["database"];
   const freshCommitGuards = new Set<() => void>();
   const sources: (PreparedSessionSourceAuthority | undefined)[] = [];
   const committedCompletions: Promise<void>[] = [];
@@ -86,6 +93,9 @@ export async function appendSessionTurnInWorker(
     inputActor?.storageAuthority?.assertCurrent();
     (ownerSource?.assertPreparedCurrent ?? ownerSource?.assertCurrent)?.();
     options.assertCurrent?.();
+    if (committedDatabase) {
+      assertTranscriptSourceCommitDatabase(options.assertCurrent, committedDatabase.identity);
+    }
     options.sessionTurnMutation?.assertCurrent?.();
     if (options.sessionTurnMutation) {
       assertSessionGoalOperationTime(options.sessionTurnMutation.operation, Date.now());
@@ -242,6 +252,31 @@ export async function appendSessionTurnInWorker(
         }
       },
       async run(prepareTurn, commit) {
+        const identity = execution?.fileIdentity;
+        const originalSource = inputActor?.target.readSource;
+        committedDatabase =
+          originalSource && typeof originalSource.databaseIdentity === "string"
+            ? {
+                path: originalSource.path,
+                identity: {
+                  key: `file:${originalSource.databaseIdentity}`,
+                  birthtime: originalSource.databaseBirthtime,
+                },
+              }
+            : identity
+              ? {
+                  path: database.path,
+                  identity: {
+                    key: `file:${identity.physicalIdentity}`,
+                    birthtime: identity.birthtime,
+                  },
+                }
+              : undefined;
+        if (!memory && !committedDatabase) {
+          throw new Error("Transcript append has no admitted physical database.");
+        }
+        assertTranscriptSourceCommitDatabase(options.assertCurrent, committedDatabase?.identity);
+        assertCurrent();
         if (fixedVoiceTranscript) {
           // Fixed voice events keep transaction-local validation without a planning read.
           plan.options.messages = messages.map(({ config: _messageConfig, ...message }) => ({
@@ -380,6 +415,11 @@ export async function appendSessionTurnInWorker(
         return commit();
       },
       onAcknowledged(candidate) {
+        rememberTranscriptMessageProvenance(
+          candidate.result.appendedMessages,
+          createTranscriptEntryProvenance(candidate.result.sessionEntry, committedDatabase),
+          scope,
+        );
         publishCommittedSessionTurn(candidate, {
           scope,
           database,

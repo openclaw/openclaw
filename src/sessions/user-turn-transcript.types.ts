@@ -10,6 +10,7 @@ import type {
 } from "../config/sessions/goals-operations.types.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type {
+  SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "../config/sessions/session-transcript-turn-lifecycle.types.js";
@@ -157,6 +158,8 @@ export type UserTurnTranscriptTargetResolver =
   | (() => UserTurnTranscriptTarget | undefined | Promise<UserTurnTranscriptTarget | undefined>);
 
 export type PersistUserTurnTranscriptParams = UserTurnTranscriptTarget & {
+  expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
+  assertCurrent?: () => void;
   beforeFreshMessageCommit?: SessionSourceAssertion;
   sessionTurnMutation?: SessionTranscriptTurnMutation;
   input?: UserTurnInput;
@@ -171,6 +174,8 @@ export type PersistUserTurnTranscriptParams = UserTurnTranscriptTarget & {
 type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnInput | undefined>;
 
 export type CreateUserTurnTranscriptRecorderParams = {
+  /** Restricts the original append to the source generation captured by its owner. */
+  expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
   /** Authenticated input identity independent of prepared media paths. */
   pendingInputRequestFingerprint?: string;
   trackInputCompletion?: boolean;
@@ -263,6 +268,8 @@ export type UserTurnTranscriptRecorder = {
   persistApproved: (
     params?: UserTurnPersistenceOptions & {
       expectedSessionId?: string;
+      /** Adds a source-generation restriction without replacing the producer's fence. */
+      expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
       expectedSessionState?: SessionTranscriptTurnExpectedState;
       sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
       beforeFreshMessageCommit?: SessionSourceAssertion;

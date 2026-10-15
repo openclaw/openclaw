@@ -19,6 +19,7 @@ export function buildRestartRecoveryExpectedState(
 ): SessionTranscriptTurnExpectedState {
   const expectedMainRestartRecovery = mainRestartRecovery ?? entry.mainRestartRecovery;
   return {
+    acpSourceTurn: entry.acpSourceTurn,
     abortedLastRun: entry.abortedLastRun,
     mainRestartRecoveryCycleId: expectedMainRestartRecovery?.cycleId,
     mainRestartRecoveryRevision: expectedMainRestartRecovery?.revision,
@@ -61,7 +62,12 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
       (selected.entry.lifecycleRevision === expected.expectedOwner.lifecycleRevision &&
         selected.entry.activeWriterRunId === expected.expectedOwner.activeWriterRunId)) &&
     (expectedState === undefined ||
-      (selected.entry.abortedLastRun === expectedState.abortedLastRun &&
+      (isDeepStrictEqual(selected.entry.acpSourceTurn, expectedState.acpSourceTurn) &&
+        (!("activeWriterRunId" in expectedState) ||
+          selected.entry.activeWriterRunId === expectedState.activeWriterRunId) &&
+        (!("lifecycleRunId" in expectedState) ||
+          selected.entry.lifecycleRunId === expectedState.lifecycleRunId) &&
+        selected.entry.abortedLastRun === expectedState.abortedLastRun &&
         selected.entry.mainRestartRecovery?.cycleId === expectedState.mainRestartRecoveryCycleId &&
         selected.entry.mainRestartRecovery?.revision ===
           expectedState.mainRestartRecoveryRevision &&
@@ -112,6 +118,14 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
     (params.expectedSessionState !== undefined &&
       params.appendedMessages.some((message) => !message.appended));
   const touchUpdatedAt = params.touchSessionEntry === true && hasAppendedMessage ? Date.now() : 0;
+  const interruptedAcpRunId = params.currentEntry.acpSourceTurn?.runId;
+  const clearsInterruptedAcpWriter =
+    acceptedMessage &&
+    interruptedAcpRunId !== undefined &&
+    params.currentEntry.activeWriterRunId === interruptedAcpRunId &&
+    params.sessionLifecyclePatch?.status === "killed" &&
+    Object.hasOwn(params.sessionLifecyclePatch, "acpSourceTurn") &&
+    params.sessionLifecyclePatch.acpSourceTurn === undefined;
   const restartRecoveryTerminalRunIds = params.sessionLifecyclePatch?.restartRecoveryTerminalRunIds
     ? mergeRestartRecoveryTerminalRunIds(
         params.currentEntry.restartRecoveryTerminalRunIds,
@@ -120,6 +134,8 @@ export function buildExpectedTranscriptTurnSessionPatch(params: {
     : undefined;
   return {
     ...(acceptedMessage ? params.sessionLifecyclePatch : undefined),
+    // Retire only the ACP writer whose interruption is committed by this same transcript turn.
+    ...(clearsInterruptedAcpWriter ? { activeWriterRunId: undefined } : {}),
     ...(acceptedMessage && restartRecoveryTerminalRunIds ? { restartRecoveryTerminalRunIds } : {}),
     ...(touchUpdatedAt > 0
       ? {

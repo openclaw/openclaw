@@ -10,7 +10,10 @@ import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-s
 import { drainSessionStoreWriterQueuesForTest } from "../config/sessions/store-writer-state.test-support.js";
 import { drainFileLockStateForTest } from "../infra/file-lock.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db-lifecycle.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "./database-cleanup.js";
@@ -69,6 +72,8 @@ export function useSessionStoreTempDirs(
     const currentRoot = root;
     root = undefined;
     await closeOpenClawAgentDatabasesAsync(currentRoot);
+    // Validation observers outlive ordinary close; retire them before deleting their paths.
+    closeOpenClawAgentDatabasesForTest(currentRoot);
     // Releasing agent leases can reopen shared state, which cases may keep under the root.
     await closeStateDatabaseForTest();
     await fs.rm(currentRoot, { recursive: true, force: true });

@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { hasCurrentAcpSourceTurn } from "../../config/sessions/acp-source-turn-state.js";
 import {
   hasMainSessionRecoveryClaim,
   isMainRestartRecoveryCandidate,
 } from "../../config/sessions/restart-recovery-state.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { readSessionEntrySummariesInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { resolveSessionWorkStartBlock } from "../../config/sessions/session-work-start.js";
@@ -23,18 +23,15 @@ import {
 } from "../agent-harness-completion-recovery.js";
 import { resolveExecDefaultsAsync } from "../exec-defaults.js";
 import type { MainSessionRecoveryAdmission } from "./main-session-recovery-admission.js";
-import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import { createCurrentProcessOwnerLookup } from "./main-session-recovery-live-owners.js";
 import {
   getMainSessionRecoveryRetryCount,
   isMainRestartRecoveryTerminalOnly,
 } from "./main-session-recovery-state.js";
-import {
-  commitMainSessionRecovery,
-  type MainSessionRecoveryStoreTarget,
-} from "./main-session-recovery-store.js";
+import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import { resumeMainSession } from "./main-session-restart-dispatch.js";
 import {
+  completePendingFinalRecoveryWithNotice,
   markSessionCompletedAfterRecoveryCheckpoint,
   readMainSessionRecoveryCheckpoint,
   reconcileInvalidHarnessCompletion,
@@ -49,7 +46,10 @@ import {
   type MainSessionRecoverySkipReason,
 } from "./main-session-restart-recovery-diagnostics.js";
 import { loadExpectedRestartRecoveryTarget } from "./main-session-restart-recovery-exact-target.js";
-import { tombstoneMainRestartRecoveryWithNotice } from "./main-session-restart-recovery-failure.js";
+import {
+  interruptAcpSourceTurnWithNotice,
+  tombstoneMainRestartRecoveryWithNotice,
+} from "./main-session-restart-recovery-failure.js";
 import {
   hasReplaySafeCodeModeCheckpointInCurrentTurn,
   resolveMainSessionResumePolicy,
@@ -59,7 +59,6 @@ import {
   type ExpectedRestartRecoveryTarget,
   mainSessionRecoveryLog,
   MAX_RECOVERY_RETRIES,
-  resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
 import { resolveRestartRecoveryDispatchTarget } from "./main-session-restart-recovery-target.js";
 
@@ -119,62 +118,6 @@ async function pendingFinalRecoveryAction(
   return pending.context && pending.intentId ? "notice" : "fail";
 }
 
-async function completePendingFinalRecoveryWithNotice(
-  entry: SessionEntry,
-  target: MainSessionRecoveryStoreTarget,
-): Promise<boolean> {
-  const completedOutcome = isTerminalSessionStatus(entry.status) && entry.status !== "interrupted";
-  const endedAt = completedOutcome ? (entry.endedAt ?? Date.now()) : Date.now();
-  let completed = false;
-  await updateSessionEntry(
-    target,
-    (current) => {
-      if (
-        current.sessionId !== entry.sessionId ||
-        current.pendingFinalDelivery?.intentId !== entry.pendingFinalDelivery?.intentId
-      ) {
-        return null;
-      }
-      const pending = current.pendingFinalDelivery;
-      completed = true;
-      return {
-        ...buildMainSessionRecoverySettlementPatch({
-          entry: current,
-          recordTerminalSource: true,
-        }),
-        endedAt,
-        lifecycleRunId: undefined,
-        lastRunId: completedOutcome
-          ? current.lastRunId
-          : resolveRestartRecoveryTerminalClientRunId(current),
-        pendingFinalDelivery: undefined,
-        ...(pending?.context &&
-        pending.intentId &&
-        current.pendingDeliveryNotice?.intentId !== pending.intentId &&
-        (!current.pendingDeliveryNotice ||
-          current.pendingDeliveryNotice.createdAt <= pending.createdAt)
-          ? {
-              pendingDeliveryNotice: {
-                createdAt: pending.createdAt,
-                context: pending.context,
-                intentId: pending.intentId,
-                state: "owed" as const,
-              },
-            }
-          : {}),
-        runtimeMs:
-          typeof current.startedAt === "number"
-            ? Math.max(0, endedAt - current.startedAt)
-            : undefined,
-        status: completedOutcome ? current.status : ("done" as const),
-        updatedAt: endedAt,
-      };
-    },
-    { skipMaintenance: true, takeCacheOwnership: true },
-  );
-  return completed;
-}
-
 export async function recoverStore(params: {
   storeAgentId?: string;
   cfg?: OpenClawConfig;
@@ -226,7 +169,7 @@ export async function recoverStore(params: {
     let completionSource: SessionSourceAssertion | undefined;
     const isRecoveryCandidate =
       !loadedEntry.mainRestartRecovery?.tombstone &&
-      hasMainSessionRecoveryClaim(loadedEntry) &&
+      (hasCurrentAcpSourceTurn(loadedEntry) || hasMainSessionRecoveryClaim(loadedEntry)) &&
       (loadedEntry.abortedLastRun === true ||
         isMainRestartRecoveryTerminalOnly(loadedEntry) ||
         (isTerminalSessionStatus(loadedEntry.status) && loadedEntry.status !== "interrupted"));
@@ -336,6 +279,31 @@ export async function recoverStore(params: {
         skip(recoveryView.status);
         if (recoveryView.status === "inactive" && isMainRestartRecoveryTerminalOnly(loadedEntry)) {
           decision = { decision: "settled", reason: "terminal-residue", nextOwner: "none" };
+        }
+        continue;
+      }
+      if (hasCurrentAcpSourceTurn(entry)) {
+        if (params.observationOnly) {
+          skip("observation_only");
+          continue;
+        }
+        if (stopped()) {
+          return result;
+        }
+        const outcome = await interruptAcpSourceTurnWithNotice({
+          ...target,
+          cfg: params.cfg,
+          entry,
+          gatewayRuntime: params.gatewayRuntime,
+        });
+        decision = {
+          decision: outcome === "settled" ? "settled" : "deferred",
+          reason: `acp_source_${outcome}`,
+          nextOwner: outcome === "settled" ? "none" : "main-session-recovery",
+        };
+        result[outcome]++;
+        if (outcome === "settled") {
+          params.handledSessionKeys.add(resumeDedupeKey);
         }
         continue;
       }
