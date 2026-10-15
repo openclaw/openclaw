@@ -583,16 +583,27 @@ and eviction return to the canonical readers.
 
 ## Session and ancillary worker operations
 
-Bounded transcript hydration retains its result in the existing session actor
-replica. Complete active paths advance from committed append receipts, including
-the stored payload byte lengths; repeated bounded-context reads can then use that
-replica without another history-worker request. Durable append receipts omit full
-transcript indexes and per-event byte tables; selected anchors and retry history
-stay with their canonical readers. Incomplete windows,
-capacity overflow, content rewrites, rewinds, compaction, archive changes, and deletion
-return to the canonical reader. The projection shares the actor's eviction and
-write-receipt invalidation lifecycle and does not change schemas, stored formats,
-retention, or update behavior.
+Bounded transcript hydration seeds the existing session actor replica from a
+canonical worker snapshot. Complete active paths and supported linear windows
+advance from committed append deltas, including stored payload byte lengths.
+Durable append receipts remain proportional to appended events; they omit full
+transcript indexes, per-event byte tables, and retry history. The Gateway retains
+selected positive anchors from hydration and append receipts. A missing anchor
+is unknown, so requests for it use the canonical reader.
+
+A context window retains its header and at most the requested event limit plus
+128 rows, with a stored-byte limit of the requested byte limit plus 512 KiB,
+including the header. Reads still honor the caller's original limits. The separate
+committed tail retains at most 128 events and 512 KiB; selected anchors retain at
+most 128 entries and 128 KiB of estimated memory. These bounded facts share the
+actor's eviction and write-receipt invalidation lifecycle.
+
+Covered prompt-metadata rewrites that preserve admission and navigation can
+update retained windows from their receipt rows. Cold or evicted facts,
+unsupported paths or boundary projections, admissions outside retained coverage,
+and uncovered rewrites use the canonical reader. Content edits, resets, rewinds,
+compaction, archive changes, and deletion invalidate retained context. Schemas,
+stored formats, retention, and update behavior are unchanged.
 
 Metadata-only lifecycle commits publish the resident actor's updated entry while
 retaining its transcript. Participant changes keep transcript payloads private
@@ -608,7 +619,7 @@ transaction; the main-thread replica installs those rows without another worker
 read. This includes an identical model-prompt capture after hydration. Rollback
 leaves stored messages unchanged and retains the database owner's failed-write
 cache invalidation. Cold actors, content or topology changes, unknown writes,
-and byte-limit overflow retain the canonical reader. No extra receipt,
+and insufficient retained coverage use the canonical reader. No extra receipt,
 freshness query, permission grant, or stored format is introduced.
 
 Trajectory append and retention writers publish the session and trajectory

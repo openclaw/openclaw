@@ -242,7 +242,7 @@ function boundedAnchors(anchors: readonly TranscriptEntryAnchor[]): TranscriptEn
   const retained: TranscriptEntryAnchor[] = [];
   let bytes = 0;
   for (const anchor of [...selected.values()].toReversed()) {
-    bytes += Object.values(anchor).reduce(
+    bytes += Object.values(anchor).reduce<number>(
       (size, value) => size + (typeof value === "string" ? value.length * 2 : 8),
       128,
     );

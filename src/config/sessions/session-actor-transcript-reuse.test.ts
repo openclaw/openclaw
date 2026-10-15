@@ -575,7 +575,7 @@ it("slides durable context within its bounds and reloads only when an admission 
           const second = await admit("second-input", "Second input");
           await capturePersistedModelPromptProjection({
             admission: second,
-            message: { role: "user", content: "Second input" },
+            message: { role: "user", content: "Second input", timestamp: 10 },
             text: "Second input",
             assertCurrent() {},
             assertWritable() {},
