@@ -225,16 +225,35 @@ describe("Feishu Card Action Handler", () => {
     const log = vi.fn();
     getChat.mockResolvedValueOnce({ code: 99, msg: `${"x".repeat(499)}😀tail` });
     await dispatch(cardEvent({ text: "/help" }), { runtime: { ...runtime, log } });
-    expect(message()?.chat_type).toBe("p2p");
+    expect(handleFeishuMessage).not.toHaveBeenCalled();
+    expect(notice()?.text).toContain("Could not verify");
     expect(log).toHaveBeenCalledWith(
-      `feishu[mock-account]: failed to resolve chat type: ${"x".repeat(499)}; defaulting to p2p`,
+      `feishu[mock-account]: card action chat type unavailable: ${"x".repeat(499)}; action refused`,
     );
   });
 
-  it("falls back to p2p when Feishu chat API throws", async () => {
+  it("does not run a card action when Feishu chat lookup fails", async () => {
     getChat.mockRejectedValueOnce(new Error("network failure"));
     await dispatch(cardEvent({ text: "/help" }));
-    expect(message()?.chat_type).toBe("p2p");
+    expect(handleFeishuMessage).not.toHaveBeenCalled();
+    expect(notice()).toMatchObject({
+      to: "chat:chat1",
+      text: expect.stringContaining("Could not verify"),
+    });
+  });
+
+  it("does not open an approval card when the chat type is missing", async () => {
+    getChat.mockResolvedValueOnce({ code: 0, data: {} });
+    await dispatch(cardEvent(approvalAction()));
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(notice()?.text).toContain("Could not verify");
+  });
+
+  it("keeps an explicit group card action when chat lookup fails", async () => {
+    getChat.mockRejectedValueOnce(new Error("network failure"));
+    await dispatch(cardEvent(quickAction()));
+    expect(message()?.chat_type).toBe("group");
+    expect(notice()).toBeUndefined();
   });
 
   it("does not log raw duplicate callback tokens", async () => {
