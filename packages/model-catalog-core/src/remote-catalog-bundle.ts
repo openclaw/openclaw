@@ -367,7 +367,8 @@ export function validateAndSanitizeRemoteModelCatalogBundle(
       return models.length > 0 ? [[id, { ...provider, models }]] : [];
     }),
   );
-  if (Object.keys(providers).length === 0) {
+  // v1 permits standalone pricing without declaring model providers.
+  if (Object.keys(bundle.providers).length > 0 && Object.keys(providers).length === 0) {
     throw new Error("remote model catalog contains no valid models");
   }
   return sanitizeRemoteModelCatalogBundle({ ...bundle, providers });

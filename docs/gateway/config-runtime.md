@@ -92,7 +92,7 @@ Unknown input modalities are dropped from individual remote model rows with a
 warning naming the row. Malformed model rows are skipped without rejecting the
 other models; required bundle and provider fields remain strictly validated.
 If no valid model rows remain, the download is rejected and the previous catalog
-stays active.
+stays active. Pricing-only v1 catalogs without model providers remain supported.
 Both hosted catalog formats keep the `text`, `image`, and `document` input
 modalities accepted by released clients. Bundled model metadata can include
 newer modalities.
