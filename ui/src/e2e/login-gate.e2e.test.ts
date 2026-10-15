@@ -747,7 +747,7 @@ suite.define(() => {
         details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
       });
       await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
-      await chatModule.request;
+      const chatModuleUrl = await chatModule.request;
       const priorConnects = await gateway.deferNext("connect");
       // Retry clears the owner error and pins the gate while the handshake is held.
       await page.getByRole("button", { name: "Connect", exact: true }).click();
@@ -759,11 +759,8 @@ suite.define(() => {
       expect(await page.locator(".login-gate__failure").count()).toBe(0);
       expect(await help.getAttribute("open")).toBeNull();
       expect(await page.locator(".login-gate__steps").isVisible()).toBe(false);
-      const chatResponse = page.waitForResponse(
-        controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
-      );
       chatModule.release();
-      expect(await (await chatResponse).finished()).toBeNull();
+      await page.evaluate(`import(${JSON.stringify(chatModuleUrl)}).then(() => undefined)`);
       await page.waitForFunction(() => window.openclawControlUi?.snapshot().booted === true);
       await help.locator("summary").click();
       expect(await page.locator(".login-gate__steps").isVisible()).toBe(true);
