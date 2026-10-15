@@ -230,7 +230,7 @@ export async function repairDreamingArtifacts(params: {
         await pruneArchivedShortTermRecallEntries(workspaceDir, targetPath);
       } catch (err) {
         warnings.push(
-          `Archive completed but recall cleanup failed; the next dreaming repair will retry: ${
+          `Archive completed but recall cleanup failed; run openclaw memory status --fix or wait for the next nightly recall repair: ${
             err instanceof Error ? err.message : String(err)
           }`,
         );
