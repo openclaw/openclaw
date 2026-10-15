@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -21,6 +22,7 @@ import * as integrity from "../../infra/package-update-integrity.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
@@ -49,7 +51,6 @@ type Fixture = {
     nativeInstall: Mock;
     restart: Mock;
     health: Mock;
-    inspect: Mock;
     readiness: Mock;
   };
 };
@@ -390,22 +391,18 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
     });
   });
 
-  it.each(["healthy", "not-ready", "generation-change"] as const)(
-    "retained readiness observes current bounded owner: %s",
+  it.each(["slow", "not-ready", "generation-change"] as const)(
+    "retained readiness uses current bounded owner: %s",
     async (scenario) => {
       const { rootB, before, mocks } = fixture();
       await admitted(async (run) => {
-        const initial = mocks.inspect.getMockImplementation()!;
-        let inspections = 0;
-        mocks.inspect.mockImplementation(async (params) => {
+        const initial = mocks.health.getMockImplementation()!;
+        mocks.health.mockImplementation(async (params) => {
           expect(params.timeoutMs).toBeGreaterThan(3_000);
           const result = await initial(params);
           return {
             ...result,
-            gatewayBootId:
-              scenario === "generation-change" && inspections++ === 0
-                ? "prior-boot"
-                : "current-boot",
+            gatewayBootId: scenario === "generation-change" ? "prior-boot" : undefined,
           };
         });
         if (scenario === "not-ready") {
@@ -415,17 +412,20 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
           { root: rootB, opts: { run }, updateStepTimeoutMs: 40_000 },
           before,
         );
-        if (scenario === "healthy") {
+        if (scenario === "slow") {
           expect(await observation).toMatchObject({ verified: true });
         } else {
           await expect(observation).rejects.toThrow();
         }
         expect(mocks.readiness).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ attempts: 1, probeTimeoutMs: expect.any(Number) }),
+          expect.objectContaining({
+            attempts: expect.any(Number),
+            probeTimeoutMs: expect.any(Number),
+          }),
         );
+        expect(mocks.readiness.mock.calls[0]?.[0].attempts).toBeGreaterThan(1);
         expect(mocks.readiness.mock.calls[0]?.[0].probeTimeoutMs).toBeGreaterThan(3_000);
-        expect(mocks.inspect).toHaveBeenCalledTimes(3);
-        expect(mocks.health).not.toHaveBeenCalled();
+        expect(mocks.health).toHaveBeenCalledOnce();
         expect(before.stopped).toBe(false);
         expect(mocks.nativeRestart).not.toHaveBeenCalled();
       });
@@ -446,6 +446,50 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
         expect(mocks.restart).not.toHaveBeenCalled();
       } finally {
         platform.mockRestore();
+      }
+    });
+  });
+
+  it("waits for HTTP readiness after restoring the retained service", async () => {
+    const { rootB, before, mocks } = fixture();
+    await admitted(async (run) => {
+      const original = await observeOriginalManagedServiceRuntime(
+        { root: rootB, opts: { run } },
+        before,
+      );
+      expect(original?.verified).toBe(true);
+      const actual = await vi.importActual<typeof import("../daemon-cli/restart-health.js")>(
+        "../daemon-cli/restart-health.js",
+      );
+      let readinessRequests = 0;
+      const listener = await reserveTestPortListener({
+        offsets: [0],
+        createListener: () =>
+          createServer((request, response) => {
+            const ready = request.url !== "/readyz" || ++readinessRequests > 1;
+            response.writeHead(ready ? 200 : 503).end();
+          }),
+      });
+      // Route the mocked service's HTTP transport to a real loopback listener.
+      mocks.readiness.mockImplementation((params) =>
+        actual.waitForGatewayHttpReadiness({ ...params, port: listener.claim.port }),
+      );
+      try {
+        await expect(
+          maybeRestartServiceAfterFailedMutableUpdate({
+            updateRun: run,
+            preManagedServiceStop: { ...before, stopped: true },
+            originalManagedServiceRuntime: original,
+            jsonMode: true,
+            timeoutMs: 30_000,
+          }),
+        ).resolves.toBe("healthy");
+        expect(mocks.nativeRestart).toHaveBeenCalledOnce();
+        expect(readinessRequests).toBe(2);
+      } finally {
+        listener.listener.closeAllConnections();
+        await listener.releaseListener();
+        await listener.claim.release();
       }
     });
   });

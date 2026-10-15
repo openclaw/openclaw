@@ -311,7 +311,7 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
             JSON.stringify({ name: "openclaw", version: "2.0.0" }),
           );
         }
-        const readyAtMs = allowance === "already ready" || installationDrift ? 0 : 400_000;
+        const readyAtMs = allowance === "already ready" ? 0 : 400_000;
         let elapsedMs = 0;
         const epochMs = Date.now();
         vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
@@ -518,8 +518,8 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
               verified: true,
             });
           }
-          expect(readyObservedAtMs).toBe(verified ? 0 : undefined);
-          expect(stoppedAtMs).toBe(0);
+          expect(readyObservedAtMs).toBe(verified ? readyAtMs : undefined);
+          expect(stoppedAtMs).toBe(installationDrift ? readyAtMs : 0);
         } finally {
           http.globalAgent = globalAgent;
           agent.destroy();

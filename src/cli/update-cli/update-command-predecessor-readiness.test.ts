@@ -4,7 +4,6 @@ import * as gatewayService from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import { defaultRuntime } from "../../runtime.js";
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
-import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { createGatewayRestartDeadline } from "../daemon-cli/restart-health-deadline.js";
 import {
   callGateway,
@@ -14,8 +13,8 @@ import {
   restoreRestartHealthMocks,
   sleep,
 } from "../daemon-cli/restart-health.test-helpers.js";
-import { verifyPreviousGatewayForUpdate } from "./update-command-readiness.js";
 import * as servicePlan from "./update-command-service-plan.js";
+import { verifyPreviousManagedGatewayForUpdate } from "./update-command-verification.js";
 
 vi.mock("../../infra/package-json.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/package-json.js")>()),
@@ -32,7 +31,6 @@ vi.mock("../../infra/update-run-ledger.js", async (importOriginal) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   resetRestartHealthMocks();
-  mockProcessPlatform("linux");
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
 });
@@ -50,7 +48,10 @@ describe("previous Gateway readiness before update activation", () => {
   ])(
     "observes the incumbent once without spending activation's budget (HTTP $readyz, owned=$owned, replacement=$replacement)",
     async ({ readyz, owned, replacement, verified }) => {
-      const service = makeGatewayService({ status: "running", pid: 8000 });
+      const service = {
+        ...makeGatewayService({ status: "running", pid: 8000 }),
+        isLoaded: vi.fn(async () => false),
+      };
       vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
       vi.spyOn(servicePlan, "gatewayServiceCommandUsesRoot").mockResolvedValue(owned);
       inspectPortUsage.mockImplementation(async (port) => ({
@@ -79,17 +80,24 @@ describe("previous Gateway readiness before update activation", () => {
           }),
       });
       const deadline = createGatewayRestartDeadline({ timeoutMs: 60_000 });
+      const onVerification = vi.fn();
       try {
-        await expect(
-          verifyPreviousGatewayForUpdate({
-            root: "/synthetic-installation",
-            config: {},
-            env: { HOME: "/synthetic-home" },
-            opts: { json: true, run: { runId: "previous-observation", env: {}, deadline } },
-            timeoutMs: 60_000,
-            gatewayPort: listener.claim.port,
-          }),
-        ).resolves.toBe(verified);
+        await verifyPreviousManagedGatewayForUpdate({
+          root: "/synthetic-installation",
+          config: {},
+          env: { HOME: "/synthetic-home" },
+          opts: { json: true, run: { runId: "previous-observation", env: {}, deadline } },
+          timeoutMs: 60_000,
+          service: {
+            stopped: false,
+            inspected: true,
+            runtimeInspected: true,
+            running: true,
+            servicePort: listener.claim.port,
+          },
+          onVerification,
+        });
+        expect(onVerification).toHaveBeenLastCalledWith(verified);
         expect(requests.toSorted()).toEqual(["/healthz", "/readyz"]);
         expect(sleep).not.toHaveBeenCalled();
         expect(deadline.remainingMs()).toBe(60_000);

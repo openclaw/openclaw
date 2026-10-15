@@ -51,6 +51,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
   requirePluginHealth?: boolean;
   expectedVersion?: string;
   gatewayPort?: number;
+  waitForStartup?: boolean;
 }): Promise<boolean> {
   const { config, env } = params;
   const { assertCurrent, proofOptions } = captureUpdateGatewayReadinessOwner(params);
@@ -117,9 +118,8 @@ export async function verifyPreviousGatewayForUpdate(params: {
         probeTimeoutMs: 5_000,
         deadline,
         requireRunningService: true,
-        // The incumbent is rollback evidence, not a process this update started.
-        // Waiting for its recovery can consume the replacement's activation budget.
-        waitForStartup: false,
+        waitForStartup: params.waitForStartup,
+        settle: { probes: 1 },
         signal: deadline.signal,
         requirePluginHealth: params.requirePluginHealth,
         assertCurrent,

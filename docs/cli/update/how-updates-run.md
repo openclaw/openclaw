@@ -39,10 +39,12 @@ consumes the shared deadline, so it cannot extend the update's overall budget.
 These checks belong to the installed updater; a candidate cannot change an
 older updater's already-running readiness wait.
 
-Before activation, the updater observes the incumbent Gateway once. Failed
+Before replacing the same installation, the updater observes the incumbent Gateway once. Failed
 readiness produces a warning and prevents automatic rollback from restarting it;
 the updater does not wait for the incumbent to recover before replacing it.
 The replacement still receives the full startup and readiness verification.
+Certifying a service rooted in a different installation, or verifying a restored
+service after restart, still waits within the existing readiness budget.
 
 On Windows, candidate commands verify their recorded handoff lease and their own
 PID/start identity even when the launcher process tree changes. A different

@@ -140,7 +140,14 @@ function fixture() {
   return {
     read,
     wait,
-    params: { root: "C:\\openclaw", config: {}, env, opts: { run }, gatewayPort: 18789 },
+    params: {
+      root: "C:\\openclaw",
+      config: {},
+      env,
+      opts: { run },
+      gatewayPort: 18789,
+      waitForStartup: false,
+    },
   };
 }
 
