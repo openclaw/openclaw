@@ -221,8 +221,7 @@ export function createWorkerSessionPlacementStore(
       sessionIds: readonly string[],
       readOptions: { current?: boolean } = {},
     ): Promise<WorkerSessionPlacementProjection> {
-      const requestedIds = new Map(sessionIds.map((id) => [id, required(id, "session id")]));
-      const ids = [...new Set(requestedIds.values())];
+      const ids = [...new Set(sessionIds.map((id) => required(id, "session id")))];
       const conflicts = new Map(
         ids.flatMap((id) => {
           const conflict = workspaceResultConflicts.get(id);
@@ -259,42 +258,17 @@ export function createWorkerSessionPlacementStore(
         singleSessionId !== undefined && conflicts.size === 0
           ? await readPlacementProjection(path, singleSessionId, loadProjection)
           : await loadProjection();
-      const placements = new Map(projection.placements);
+      let placements: Map<string, WorkerSessionPlacementRecord> | undefined;
       for (const [id, captured] of conflicts) {
-        const record = placements.get(id);
+        const record = projection.placements.get(id);
         if (record && conflictSessionIds.has(id) && workspaceResultConflicts.get(id) === captured) {
-          placements.set(id, { ...record, workspaceResultConflict: captured.conflict });
+          (placements ??= new Map(projection.placements)).set(id, {
+            ...record,
+            workspaceResultConflict: captured.conflict,
+          });
         }
       }
-      const byRequestedId = <T>(records: ReadonlyMap<string, T>) => {
-        const requested = new Map<string, T>();
-        for (const [original, normalized] of requestedIds) {
-          const value = records.get(normalized);
-          if (value !== undefined) {
-            requested.set(original, value);
-          }
-        }
-        return requested;
-      };
-      const byRequestedSet = (normalizedSessionIds: ReadonlySet<string>) =>
-        new Set(
-          [...requestedIds].flatMap(([original, normalized]) =>
-            normalizedSessionIds.has(normalized) ? [original] : [],
-          ),
-        );
-      return {
-        ...projection,
-        placements: byRequestedId(placements),
-        moves: byRequestedId(projection.moves),
-        pendingResults: byRequestedId(projection.pendingResults),
-        workspaceJournalOwnerSessionIds: byRequestedSet(projection.workspaceJournalOwnerSessionIds),
-        workspaceResultReconcilingSessionIds: byRequestedSet(
-          projection.workspaceResultReconcilingSessionIds,
-        ),
-        workspaceRecoveryPendingSessionIds: byRequestedSet(
-          projection.workspaceRecoveryPendingSessionIds,
-        ),
-      };
+      return placements ? { ...projection, placements } : projection;
     },
 
     readPublishedProjection(change: SessionRowChange) {

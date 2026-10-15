@@ -56,6 +56,11 @@ reader instead of capturing and rechecking every candidate file independently.
 Committed writes still invalidate retained entries; config routing, native-open
 replacement detection, and live disclosure authority remain with their owners.
 
+Project listings reuse a frozen durable session store while the resident session
+projection's metadata revision is unchanged. Session and topology publications
+retire that snapshot. Private memory sessions keep request-scoped snapshots, and
+each response still checks current disclosure authority for the sessions it uses.
+
 Complete single-statement effects can use SQLite autocommit through
 `runSqliteSingleStatementSync`. Prepare the result, admission, and commit receipt
 before the statement, then install committed facts before notifying observers.
