@@ -9,8 +9,8 @@ import {
 } from "./workspace-bootstrap-policy.js";
 import { publishBootstrapFile } from "./workspace-bootstrap-publish.js";
 import {
-  MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   readWorkspaceBootstrapFile,
+  workspaceBootstrapFileReadLimit,
 } from "./workspace-bootstrap-read.js";
 
 const log = createSubsystemLogger("sandbox-workspace");
@@ -48,12 +48,12 @@ export async function copyWorkspaceBootstrapFiles(
       let content: string;
       try {
         assertCurrent();
-        content = await readWorkspaceBootstrapFile(opened.fd);
+        content = await readWorkspaceBootstrapFile(opened.fd, name);
       } catch (err) {
         assertCurrent();
         if (err instanceof RangeError) {
           log.warn(
-            `Ignoring oversized sandbox seed file ${src}: file exceeds the ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES}-byte limit`,
+            `Ignoring oversized sandbox seed file ${src}: file exceeds the ${workspaceBootstrapFileReadLimit(name)}-byte limit`,
           );
           continue;
         }

@@ -117,6 +117,8 @@ If a required bootstrap file is missing, OpenClaw injects a "missing file" marke
 
 The workspace document editor and `agents.files.set` accept up to 2 MiB of UTF-8 text per file. Larger saves are rejected before replacing the existing document. This byte limit is separate from prompt truncation settings and the identity form's avatar support.
 
+Inline avatar data in `IDENTITY.md` remains available for display and backups, but the model prompt replaces the avatar line with an omission marker. The identity form supports its existing 2 MiB image limit within a bounded 4 MiB identity file; the remaining prompt text stays limited to 2 MiB.
+
 ## What is NOT in the workspace
 
 These live under `~/.openclaw/` and should NOT be committed to the workspace repo:

@@ -61,6 +61,62 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
     });
   }
   describe("identity", () => {
+    it("round-trips supported inline avatars through managed identity publication", async () => {
+      const workspace = `/remote-avatar-${randomUUID()}`;
+      const avatar = `data:image/png;base64,${Buffer.alloc(2 * 1024 * 1024).toString("base64")}`;
+      let content = `- Name: Current Agent\n- Avatar: ${avatar}\nUnrelated notes after the image.\n`;
+      mocks.loadConfigReturn = {
+        agents: {
+          entries: { "test-agent": { workspace, identity: { name: "Current Agent", avatar } } },
+        },
+      };
+      const readFile = vi.fn(async ({ maxBytes }: { maxBytes?: number }) => {
+        if (Buffer.byteLength(content) > (maxBytes ?? Infinity)) {
+          throw new RangeError("Remote identity exceeds its read bound");
+        }
+        return Buffer.from(content);
+      });
+      const writeFile = vi.fn(async ({ data }: { data: string | Buffer }) => {
+        content = data.toString();
+      });
+      const release = registerAgentWorkspaceAccess(workspace, {
+        bridge: { readFile, writeFile, stat: vi.fn() },
+      });
+      try {
+        const { respond, promise } = makeCall("agents.update", {
+          agentId: "test-agent",
+          name: "Renamed Agent",
+        });
+        await promise;
+        expectRespondOk(respond, { ok: true, agentId: "test-agent" });
+        expect(content).toContain("- Name: Renamed Agent");
+        expect(content).toContain(`- Avatar: ${avatar}`);
+        expect(content).toContain("Unrelated notes after the image.");
+        expect(mocks.writeConfigFile).toHaveBeenCalled();
+        expect(mocks.rootWrite).not.toHaveBeenCalled();
+      } finally {
+        release();
+      }
+    });
+
+    it("refuses unreadable identity prose before replacing the previous local file", async () => {
+      const original = "- Name: Current Agent\n" + "x".repeat(2 * 1024 * 1024);
+      mocks.rootRead.mockResolvedValue({
+        buffer: Buffer.from(original),
+        containment: "best-effort",
+        realPath: "/workspace/test-agent/IDENTITY.md",
+        stat: makeFileStat(),
+        exactIdentity: { dev: 1n, ino: 1n },
+      });
+      const { promise } = makeCall("agents.update", {
+        agentId: "test-agent",
+        name: "Updated Name",
+      });
+      await expect(promise).rejects.toThrow("2097152");
+      expect(mocks.rootWrite).not.toHaveBeenCalled();
+      expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    });
+
     it.each(["revoked", "replaced during fallback"] as const)(
       "does not write identity or config after workspace access is %s",
       async (state) => {

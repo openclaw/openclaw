@@ -15,7 +15,11 @@ import {
   loadAgentIdentityFromWorkspaceAsync,
 } from "../../agents/identity-file.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
-import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
+import {
+  MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+  projectWorkspaceBootstrapFileForPrompt,
+  workspaceBootstrapFileReadLimit,
+} from "../../agents/workspace-bootstrap-read.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
@@ -104,11 +108,14 @@ export async function writeWorkspaceFileOrRespond(params: {
   content: string;
   assertCurrent?: () => void;
 }): Promise<boolean> {
+  const maxBytes = workspaceBootstrapFileReadLimit(params.name);
+  if (Buffer.byteLength(params.content) > maxBytes) {
+    throw new RangeError(`Workspace document exceeds ${maxBytes} bytes`);
+  }
+  // Validate the model-facing text, but publish the original display/avatar bytes.
+  projectWorkspaceBootstrapFileForPrompt(params.content, params.name);
   const access = getAgentWorkspaceAccess(params.workspaceDir);
   if (access) {
-    if (Buffer.byteLength(params.content) > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
-      throw new Error("Workspace document exceeds its write bound");
-    }
     params.assertCurrent?.();
     await access.bridge.writeFile({ filePath: params.name, data: params.content, mkdir: false });
     if (getAgentWorkspaceAccess(params.workspaceDir) !== access) {
@@ -138,27 +145,32 @@ async function readWorkspaceFileContent(
   workspaceDir: string,
   name: string,
 ): Promise<string | undefined> {
+  const maxBytes = workspaceBootstrapFileReadLimit(name);
   try {
     const access = getAgentWorkspaceAccess(workspaceDir);
     if (access) {
       const data = await access.bridge.readFile({
         filePath: name,
-        maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+        maxBytes,
       });
       if (getAgentWorkspaceAccess(workspaceDir) !== access) {
         throw new Error("Workspace access changed while reading Agent identity");
       }
-      if (data.length > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
-        throw new Error("Workspace document exceeds its read bound");
+      if (data.length > maxBytes) {
+        throw new RangeError(`Workspace document exceeds ${maxBytes} bytes`);
       }
       return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(data);
     }
     const workspaceRoot = await root(workspaceDir);
     const safeRead = await workspaceRoot.read(name, {
       hardlinks: "reject",
+      maxBytes,
     });
     return safeRead.buffer.toString("utf-8");
   } catch (err) {
+    if (err instanceof FsSafeError && err.code === "too-large") {
+      throw new RangeError(`Workspace document exceeds ${maxBytes} bytes`, { cause: err });
+    }
     if (isMissingPathError(err)) {
       return undefined;
     }
