@@ -119,7 +119,10 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       const trigger = fixture.container.querySelector<HTMLButtonElement>(
         ".chat-pane__layout-trigger",
       )!;
-      const menu = fixture.container.querySelector(".chat-pane__layout-menu")!;
+      const menu =
+        fixture.container.querySelector<HTMLElementTagNameMap["wa-dropdown"]>(
+          ".chat-pane__layout-menu",
+        )!;
       const shown = vi.fn();
       menu.addEventListener("wa-after-show", shown, { once: true });
       await openChatLayoutMenu({
@@ -140,19 +143,42 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         );
         expect(document.activeElement).toBe(trigger);
       }
-      for (const expectedCount of [3, 4]) {
-        trigger.click();
-        menu.querySelector<HTMLElement>('[value="side-panel"]')!.click();
-        await expect.poll(() => observations.length).toBe(expectedCount);
-        expect(menu.hasAttribute("open")).toBe(false);
-        expect(document.activeElement).toBe(trigger);
+      const transitions: Array<{ type: string; open: boolean; callbacks: number }> = [];
+      const events = ["wa-show", "wa-after-show", "wa-select", "wa-hide", "wa-after-hide"];
+      const recordTransition = (event: Event) => {
+        transitions.push({ type: event.type, open: menu.open, callbacks: observations.length });
+      };
+      for (const event of events) {
+        menu.addEventListener(event, recordTransition);
       }
-      expect(observations).toEqual([
-        { open: false, focused: true },
-        { open: false, focused: true },
-        { open: false, focused: true },
-        { open: false, focused: true },
-      ]);
+      try {
+        for (const expectedCount of [3, 4]) {
+          trigger.click();
+          menu.querySelector<HTMLElement>('[value="side-panel"]')!.click();
+          await expect.poll(() => observations.length).toBe(expectedCount);
+          expect(menu.hasAttribute("open")).toBe(false);
+          expect(document.activeElement).toBe(trigger);
+        }
+        expect(observations).toEqual([
+          { open: false, focused: true },
+          { open: false, focused: true },
+          { open: false, focused: true },
+          { open: false, focused: true },
+        ]);
+      } catch (error) {
+        console.error("Layout selection lifecycle", {
+          transitions,
+          open: menu.open,
+          popupActive: menu.shadowRoot?.querySelector("wa-popup")?.active,
+          focused: document.activeElement === trigger,
+          callbacks: observations.length,
+        });
+        throw error;
+      } finally {
+        for (const event of events) {
+          menu.removeEventListener(event, recordTransition);
+        }
+      }
     });
 
     it.each([320, 693])(

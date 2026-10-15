@@ -722,9 +722,9 @@ export function buildChatItems(
   const projectYields = (source: ChatItem[], complete?: ChatItem[]) =>
     projectSessionsYieldItems(source, props.showToolCalls, complete);
   const complete = hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined;
-  return groupMessages(projectYields(coalesceToolActivityMessages(items, hidden), complete), {
-    items: complete,
-    people: props.replyPeople,
-    localPerson: props.replyLocalPerson,
-  });
+  return groupMessages(
+    projectYields(coalesceToolActivityMessages(items, hidden), complete),
+    { items: complete, people: props.replyPeople, localPerson: props.replyLocalPerson },
+    props.showReasoning ? props.reasoning : undefined,
+  );
 }

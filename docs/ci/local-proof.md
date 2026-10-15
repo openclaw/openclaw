@@ -134,9 +134,9 @@ pnpm perf:kova:summary --report .artifacts/kova/reports/mock-provider/report.jso
 
 Native locale checks remain strict locally. With `CI=true` or `CI=1`, the native
 check warns about obsolete translation IDs, Android generated rows, and Apple catalog
-rows awaiting the serialized locale refresh. Android warnings require canonical, unreferenced,
+rows awaiting the serialized locale refresh. Android warnings require standard, unreferenced,
 noninterpolated obsolete rows whose removal leaves every other byte unchanged.
-Apple warnings require canonical plain generator rows absent from the active
+Apple warnings require standard plain generator rows absent from the active
 inventory; removing those rows must leave the exact generated catalog, including
 metadata. Obsolete rows still need valid dictionary and string-unit structure for
 Xcode, but do not need active locales or translated/nonempty copy. Unsupported
@@ -329,7 +329,7 @@ expressions, steps, and scripts through YAML anchors and aliases.
 
 ### Assertion inventory reports
 
-`pnpm check:assertion-safety --report <commit-or-ref>` writes a deterministic JSON
+`pnpm check:assertion-safety --report <commit-or-ref>` writes a consistently ordered JSON
 inventory to stdout without changing the assertion baseline. The ref selects the
 committed source and baseline, including files omitted by a sparse checkout.
 Ordinary ratchet checks still inspect worktree or staged content; their `--base`
@@ -397,9 +397,9 @@ For its remote exceptions, `.crabbox.yaml` defaults to `blacksmith-testbox`.
 That workflow hydrates credentials: untrusted contributor/fork code requires
 secretless fork CI or sanitized direct AWS, never local execution or Testbox.
 The wrapper uses the bundled Crabbox plugin's binary manager. All providers and
-cloud-worker profiles require Crabbox 0.73.0 or newer. This includes task-owned
+cloud-worker profiles require Crabbox 0.77.0 or newer. This includes task-owned
 Testbox SSH teardown, which prevents persistent SSH masters from keeping idle
-Testboxes alive. Missing or older binaries use a verified managed 0.73.0 release
+Testboxes alive. Missing or older binaries use a verified managed 0.77.0 release
 before provider discovery or lease work. The original binary stays untouched.
 Provider readiness and broker authentication still determine
 which configured backend can run the proof.
@@ -421,7 +421,7 @@ The outer GitHub deadline can terminate active SSH commands. Both profiles have
 a separate 15-minute idle limit; active SSH prevents idle expiry, not the outer
 job deadline. Individual test deadlines also remain separate limits. The standard
 workflow accepts an explicit `timeout_minutes` input up to 240 minutes, but
-managed Crabbox 0.73.0 does not forward arbitrary workflow inputs, including
+managed Crabbox 0.77.0 does not forward arbitrary workflow inputs, including
 `timeout_minutes`, and `--ttl` does not extend a Testbox job. Plan routine proof
 within its total-job budget rather than treating TTL or a larger runner as a
 deadline override.
@@ -432,7 +432,7 @@ They use a newly warmed lease dedicated to that untrusted source, never a
 trusted or previously hydrated lease. Launch an installed trusted Crabbox
 binary from a clean trusted `main` checkout and fetch only the remote PR with
 `--fresh-pr`; never execute the untrusted checkout's wrapper or config locally.
-Unset `CRABBOX_AWS_INSTANCE_PROFILE` and fail closed unless resolved
+Unset `CRABBOX_AWS_INSTANCE_PROFILE` and stop unless resolved
 `aws.instanceProfile` is empty. Before any install/test, use trusted
 absolute-path tools to require an IMDSv2 token, prove the IAM credentials
 endpoint returns 404, and compare remote `git rev-parse HEAD` to the full
@@ -458,7 +458,7 @@ without downloading pnpm again. These archives do not replace the frozen-lockfil
 dependency install.
 
 With `install-bun: "true"`, `setup-node-env` can also reuse the original pinned
-Bun 1.4.2 ZIPs from `/opt/crabbox/toolchain-archives` on Linux glibc x64.
+Bun 1.4.3 ZIPs from `/opt/crabbox/toolchain-archives` on Linux glibc x64.
 It authenticates a private copy before extracting a fresh job-private `bun`
 and `bunx`, then publishes their directory after the Node PATH entry.
 The baseline archive is the default; the optimized x64 archive requires AVX
@@ -479,25 +479,25 @@ For an explicitly authorized admin-only PR landing fallback, set
 `OPENCLAW_PR_GATES_REMOTE=crabbox-aws` before `scripts/pr prepare-gates`.
 The mode does not replace the default hosted aggregate gate. After the exact
 prep head is pushed, the wrapper synchronously dispatches the protected-main
-publisher. That trusted workflow checksum-installs Crabbox v0.46, resolves its
+publisher. That trusted workflow checksum-installs Crabbox v0.77.0, resolves its
 service principal through `/v1/whoami`, then runs sanitized brokered AWS with
-`umask 022`, the canonical untrusted bootstrap, `pnpm build`, `pnpm check`, and
-a fail-closed PR-derived test plan. The existing changed-test owner evaluates
+`umask 022`, the standard untrusted bootstrap, `pnpm build`, `pnpm check`, and
+a PR-derived test plan that rejects incomplete selection. The existing changed-test owner evaluates
 every executable changed path independently and must resolve each one to
 concrete matched test files; broad fallback, skipped paths, config targets,
 deleted executable paths, and partial plans are refused. Explicit docs and
 `AGENTS.md`/`CLAUDE.md` instruction surfaces may produce a zero-test plan.
-The exact PR base SHA, head SHA, bootstrap hash, and deterministic plan digest
-are bound into the canonical command. The publisher streams a launcher through
+The exact PR base SHA, head SHA, bootstrap hash, and stable plan digest
+are bound into the prepared command. The publisher streams a launcher through
 Crabbox's `--script-stdin`. Short broker arguments bind the head SHA and the
-bootstrap, canonical command, and launcher hashes. The AWS lease uses a 90-minute idle timeout
+bootstrap, prepared command, and launcher hashes. The AWS lease uses a 90-minute idle timeout
 and 240-minute TTL. The `pr-crabbox-gate-publisher.yml` workflow accepts an open draft
 because proof runs during prepare-push, then rereads the live same-repository
 PR and the exact active organization-admin membership object using the repo-native
 GitHub App token with `Members(read)` (the repository-scoped workflow token is
 not treated as org authority), validates its newly created authenticated broker
 run under the same service token, ordered complete events, independently rebuilt
-canonical command and launcher upload hash, and
+prepared command and launcher upload hash, and
 publishes the distinct `openclaw/crabbox-gate` only for the exact proven
 base/head/plan binding. The publisher also proves that the PR base is the merge
 base of its immutable protected-main workflow SHA and adds that workflow SHA to
@@ -505,10 +505,10 @@ the strict check summary. Before and after the remote run, it proves that a
 candidate live `main` is identical to or descended from that workflow SHA, then
 rereads the ref and requires the candidate to remain unchanged. A descendant
 advance during the long remote run is allowed; movement inside either
-comparison-and-reread window fails closed.
+comparison-and-reread window stops publication.
 Retained broker logs are validated when non-empty but are optional because
-released Crabbox v0.46 can report zero retained log bytes after a successful
-run. Only after the publisher and exact-head check succeed does the local
+Crabbox can report zero retained log bytes after a successful
+run. The publisher accepts `released` or `cleanup` as historical run phases only after validating workload identity, result, and ordered events. It separately runs blocking `crabbox stop --provider aws --id <exact-lease> --wait` from the same temporary Crabbox home and requires confirmed cleanup before publication. Pending cleanup never passes the gate; an uncertain stop retains that recovery home and reports the exact lease and next command. Only after the publisher and exact-head check succeed does the local
 wrapper derive `.local/gates.env` provider/run/lease/URL recovery metadata from
 the trusted summary; those fields are not publication authority.
 
@@ -684,6 +684,10 @@ For explicitly selected AWS capacity, use the
 Under AWS pressure, avoid `class=beast` unless the task really needs 48xlarge-class CPU. A `beast` request starts at 192 vCPUs and is the easiest way to trip regional EC2 Spot or On-Demand Standard quota. The repo-owned `.crabbox.yaml` defaults to `class: standard`, on-demand market, and `capacity.hints: true` so brokered AWS leases print selected region/market, quota pressure, Spot fallback, and high-pressure class warnings. Use `fast` for heavier broad checks, `large` only after standard/fast are not enough, and `beast` only for exceptional CPU-bound lanes such as full-suite or all-plugin Docker matrices, explicit release/blocker validation, or high-core performance profiling. Do not use `beast` for `pnpm check:changed`, focused tests, docs-only work, ordinary lint/typecheck, small E2E repros, or Blacksmith outage triage. Use `--market on-demand` for capacity diagnosis so Spot market churn is not mixed into the signal.
 
 `.crabbox.yaml` owns provider, sync, and GitHub Actions hydration defaults. Crabbox sync never transfers `.git`, so the hydrated Actions checkout keeps its own remote Git metadata instead of syncing maintainer-local remotes and object stores, and the repo config additionally excludes local runtime/build artifacts (such as `.artifacts` and test reports) that should never be transferred. `.github/workflows/crabbox-hydrate.yml` owns checkout, Node/pnpm setup, `origin/main` fetch, and the non-secret environment handoff for owned-cloud `crabbox run --id <cbx_id>` commands.
+
+Direct leases require Crabbox 0.77.0 or newer. TTL counts from creation, including hydration; idle timeout counts inactivity. The earlier deadline wins. Defaults are 30 minutes each, with a four-hour maximum unless an owner or organization override allows more. Effective policy may clamp requests and live leases; inspect the lease and read policy notices. The Azure `prewarm` and `changed` jobs request four hours total and 90 minutes idle explicitly. The hydration workflow's keepalive holds its Actions job open; it does not renew a Crabbox lease. `keep` and `stop: never` do not prevent expiry.
+
+Plain heartbeats, setup, synchronization, and desktop activity do not extend total lifetime. `run` may extend only while a command executes, subject to provider support, budget, and policy. Creation-fixed providers need sufficient TTL at allocation. `directLeases: deny` requires the configured coordinator route. Do not change providers to avoid that policy. `crabbox list --retained` adds kept terminal resources with unconfirmed cleanup to the default live listing; use exact-ID inspection and a waiting stop to prove cleanup.
 
 Linux hydration keeps physical workspace `node_modules` directories and pnpm's
 default `.pnpm` virtual store. Only the package-content store uses the persistent

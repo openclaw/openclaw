@@ -328,6 +328,12 @@
     );
 }
 
+.md-preview-dialog__footer {
+  flex-shrink: 0;
+  padding: 16px 22px;
+  border-top: 1px solid var(--border);
+}
+
 .md-preview-dialog__meta {
   display: flex;
   flex-shrink: 0;
@@ -578,6 +584,10 @@
 
   .md-preview-dialog__meta {
     padding: 0 var(--space-3) var(--space-2);
+  }
+
+  .md-preview-dialog__footer {
+    padding: var(--space-3);
   }
 
   .agent-file-preview .md-preview-dialog__body {

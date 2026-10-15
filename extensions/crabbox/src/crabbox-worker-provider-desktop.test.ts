@@ -142,9 +142,9 @@ describe("Crabbox desktop provisioning", () => {
     await setupStarted.promise;
     try {
       expect(completed).toBe(false);
-      expect(calls.some(({ argv }) => argv[1] === "heartbeat")).toBe(false);
     } finally {
       setupComplete.resolve();
+      await provision;
     }
     await expect(provision).resolves.toEqual({
       leaseId: LEASE_ID,

@@ -75,6 +75,14 @@ the latter already owns its run replacement after dispatch and must not trigger
 paused-run adoption at admission. Provenance classifies the handoff; live
 Gateway admission and registry ownership still authorize it.
 
+The completion owner also selects whether the successor owes another reply.
+Gateway admission carries that choice into execution without deriving it again
+from the internal channel or private-delivery mode. Optional result processing
+can finish silently when there is no more work or new answer; an outstanding
+required final still cannot. A peer’s returned `sessions_send` result likewise
+need not generate an acknowledgment. These internal choices are not public RPC
+options, and an unrelated earlier answer never discharges a new request.
+
 An explicit yield batch must be eligible at any requester depth. The ordinary
 nested-wave exclusion remains: nested runs without a yielded batch use the
 existing descendant-settle path. The top-level cron exclusion also remains;

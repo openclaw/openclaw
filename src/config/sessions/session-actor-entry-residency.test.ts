@@ -255,6 +255,23 @@ it("keeps transcript residency across entry patches without losing either owner'
         },
       ]),
     );
+    runSqliteImmediateTransactionSync(f.database.db, () =>
+      writeSessionEntry(f.database, f.target.sessionKey, {
+        ...f.nativeEntry()!,
+        activitySummary: {
+          version: 1,
+          text: "Retained input",
+          updatedAt: 10,
+          sessionId: f.scope.sessionId,
+          generation: null,
+          maxSeq: null,
+          leafEntryId: null,
+          coveredMessages: 1,
+          totalMessages: 1,
+          omittedContent: false,
+        },
+      }),
+    );
     const before = f.read();
     const predicate: SessionEntryPatchGuard["shouldCommitIf"] = {
       kind: "transcript",
@@ -340,6 +357,13 @@ it("keeps transcript residency across entry patches without losing either owner'
       };
       await f.prepare(append);
       expect(f.mutate(append).kind).toBe("committed");
+      expect(
+        readSessionEntryPatchSnapshot(f.database, {
+          kind: "entry",
+          sessionKey: f.target.sessionKey,
+          exact: true,
+        })[0]?.row?.transcriptWatermark,
+      ).toEqual({ sessionId: f.scope.sessionId, generation: expect.any(String), maxSeq: 2 });
       expect(reads.counts.select).toBe(0);
       entryPatch({ label: "wrong generation" }, { ...predicate, generation: "superseded" });
       entryPatch({ label: "wrong branch" }, { ...predicate, leafEntryId: "off-path" });

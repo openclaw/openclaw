@@ -8,7 +8,6 @@ import {
   type ProviderContext,
   type ProviderModel,
   type SimpleStreamOptions,
-  type ThinkingLevel,
   type VideoContent,
 } from "openclaw/plugin-sdk/llm";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -23,6 +22,8 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import {
   buildAssistantMessage,
+  buildGoogleGenerationConfig,
+  buildGoogleSimpleThinking,
   buildGuardedModelFetch,
   consumeGoogleGenerateContentStream,
   projectGoogleMessages,
@@ -49,13 +50,10 @@ import { stripGoogleProviderPrefix } from "./model-id.js";
 import { isGoogleNativeVideoModelId } from "./provider-models.js";
 import { isOfficialGoogleAiStudioBaseUrl, normalizeGoogleApiBaseUrl } from "./provider-policy.js";
 import {
-  isGoogleGemini25ThinkingBudgetModel,
   isGoogleGemini3FlashModel,
   isGoogleGemini3ProModel,
   isGoogleGemini3ThinkingLevelModel,
   resolveGoogleGemini3ThinkingLevel,
-  stripInvalidGoogleThinkingBudget,
-  type GoogleThinkingInputLevel,
   type GoogleThinkingLevel,
 } from "./thinking-api.js";
 import { isGoogleVertexCredentialsMarker } from "./vertex-adc-config.js";
@@ -278,121 +276,6 @@ function buildGoogleVertexRequestUrl(
   return `${origin}/${GOOGLE_VERTEX_DEFAULT_API_VERSION}/projects/${project}/locations/${location}/publishers/google/models/${modelId}:streamGenerateContent?alt=sse`;
 }
 
-function resolveThinkingLevel(level: ThinkingLevel, modelId: string): GoogleThinkingLevel {
-  const resolved = resolveGoogleGemini3ThinkingLevel({ modelId, thinkingLevel: level });
-  if (resolved) {
-    return resolved;
-  }
-  throw new Error("Unsupported thinking level");
-}
-
-function resolveExplicitThinkingLevel(
-  level: GoogleThinkingLevel,
-  modelId: string,
-): GoogleThinkingLevel {
-  return (
-    resolveGoogleGemini3ThinkingLevel({
-      modelId,
-      thinkingLevel: level.toLowerCase() as GoogleThinkingInputLevel,
-    }) ?? level
-  );
-}
-
-function getDisabledThinkingConfig(modelId: string): Record<string, unknown> | undefined {
-  const thinkingLevel = resolveGoogleGemini3ThinkingLevel({ modelId, thinkingLevel: "off" });
-  if (thinkingLevel) {
-    return { thinkingLevel };
-  }
-  return normalizeGoogleThinkingConfig(modelId, { thinkingBudget: 0 });
-}
-
-function getGoogleThinkingBudget(
-  modelId: string,
-  effort: ThinkingLevel,
-  customBudgets?: GoogleTransportOptions["thinkingBudgets"],
-): number | undefined {
-  const normalizedEffort = effort === "xhigh" || effort === "max" ? "high" : effort;
-  if (customBudgets?.[normalizedEffort] !== undefined) {
-    return customBudgets[normalizedEffort];
-  }
-  if (modelId.includes("2.5-pro")) {
-    return { minimal: 128, low: 2048, medium: 8192, high: 32768 }[normalizedEffort];
-  }
-  if (modelId.includes("2.5-flash-lite")) {
-    return { minimal: 512, low: 2048, medium: 8192, high: 24576 }[normalizedEffort];
-  }
-  if (modelId.includes("2.5-flash")) {
-    return { minimal: 128, low: 2048, medium: 8192, high: 24576 }[normalizedEffort];
-  }
-  return undefined;
-}
-
-function isAdaptiveReasoningLevel(value: unknown): value is "adaptive" {
-  return value === "adaptive";
-}
-
-function resolveGoogleThinkingConfig(
-  model: GoogleTransportModel,
-  options: GoogleTransportOptions | undefined,
-): Record<string, unknown> | undefined {
-  if (!model.reasoning) {
-    return undefined;
-  }
-  if (options?.thinking) {
-    if (!options.thinking.enabled) {
-      return getDisabledThinkingConfig(model.id);
-    }
-    const config: Record<string, unknown> = { includeThoughts: true };
-    if (options.thinking.level) {
-      config.thinkingLevel = resolveExplicitThinkingLevel(options.thinking.level, model.id);
-    } else if (typeof options.thinking.budgetTokens === "number") {
-      const thinkingLevel = resolveGoogleGemini3ThinkingLevel({
-        modelId: model.id,
-        thinkingBudget: options.thinking.budgetTokens,
-      });
-      if (thinkingLevel) {
-        config.thinkingLevel = thinkingLevel;
-      } else {
-        config.thinkingBudget = options.thinking.budgetTokens;
-      }
-    }
-    return normalizeGoogleThinkingConfig(model.id, config);
-  }
-  if (!options?.reasoning || options.reasoning === "off") {
-    return getDisabledThinkingConfig(model.id);
-  }
-  if (isAdaptiveReasoningLevel(options.reasoning)) {
-    if (isGoogleGemini3ThinkingLevelModel(model.id)) {
-      return { includeThoughts: true };
-    }
-    if (isGoogleGemini25ThinkingBudgetModel(model.id)) {
-      return normalizeGoogleThinkingConfig(model.id, {
-        includeThoughts: true,
-        thinkingBudget: -1,
-      });
-    }
-  }
-  if (isGoogleGemini3ThinkingLevelModel(model.id)) {
-    return {
-      includeThoughts: true,
-      thinkingLevel: resolveThinkingLevel(options.reasoning, model.id),
-    };
-  }
-  const budget = getGoogleThinkingBudget(model.id, options.reasoning, options.thinkingBudgets);
-  return normalizeGoogleThinkingConfig(model.id, {
-    includeThoughts: true,
-    ...(typeof budget === "number" ? { thinkingBudget: budget } : {}),
-  });
-}
-
-function normalizeGoogleThinkingConfig(
-  modelId: string,
-  thinkingConfig: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  stripInvalidGoogleThinkingBudget({ thinkingConfig, modelId });
-  return Object.keys(thinkingConfig).length > 0 ? thinkingConfig : undefined;
-}
-
 function convertGoogleMessages(
   model: GoogleTransportModel,
   context: Context | ProviderContext,
@@ -423,19 +306,18 @@ export function buildGoogleGenerativeAiParams(
   options?: GoogleTransportOptions,
   videoSlots?: GoogleVideoSlots,
 ): GoogleGenerateContentRequest {
-  const generationConfig: Record<string, unknown> = {};
+  const generationConfig: Record<string, unknown> = {
+    ...buildGoogleGenerationConfig(
+      model,
+      options?.thinking ?? buildGoogleSimpleThinking(canonicalGoogleModel(model), options),
+      options?.maxTokens,
+    ),
+  };
   if (typeof options?.temperature === "number") {
     generationConfig.temperature = options.temperature;
   }
-  if (typeof options?.maxTokens === "number") {
-    generationConfig.maxOutputTokens = options.maxTokens;
-  }
   if (options?.stop !== undefined && options.stop.length > 0) {
     generationConfig.stopSequences = options.stop;
-  }
-  const thinkingConfig = resolveGoogleThinkingConfig(model, options);
-  if (thinkingConfig) {
-    generationConfig.thinkingConfig = thinkingConfig;
   }
 
   const params: GoogleGenerateContentRequest = {

@@ -2,6 +2,7 @@
 import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { sql } from "kysely";
 import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -72,6 +73,7 @@ function isWindowBoundary(eventType: unknown, scope: BoundaryWindowScope): boole
 }
 
 const resetMessageWindowCache = new Map<string, ResetMessageWindowCacheEntry>();
+const resetMessageWindowOwners = new WeakSet<ResetMessageWindowCacheEntry["database"]>();
 const MAX_RESET_MESSAGE_WINDOW_CACHE = 64;
 const MAX_CACHED_UNINDEXED_CONTROLS = 4096;
 
@@ -80,6 +82,18 @@ type VisibleMessageRange = MessageRangeSelection & {
 };
 
 function cacheResetMessageWindow(key: string, entry: ResetMessageWindowCacheEntry): void {
+  const { database } = entry;
+  if (!resetMessageWindowOwners.has(database)) {
+    registerNodeSqliteDisposeCallback(database, () => {
+      // Path-keyed windows must not retain closed handles or replaced database contents.
+      for (const [cachedKey, cached] of resetMessageWindowCache) {
+        if (cached.database === database) {
+          resetMessageWindowCache.delete(cachedKey);
+        }
+      }
+    });
+    resetMessageWindowOwners.add(database);
+  }
   resetMessageWindowCache.delete(key);
   resetMessageWindowCache.set(key, entry);
   pruneMapToMaxSize(resetMessageWindowCache, MAX_RESET_MESSAGE_WINDOW_CACHE);

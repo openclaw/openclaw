@@ -1,5 +1,5 @@
 import { render as renderSolid } from "@solidjs/web";
-import { html, nothing, render as renderLit } from "lit";
+import { html, nothing } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
 import {
   createComponent,
@@ -139,10 +139,6 @@ export function solidTemplate<P extends object>(component: Component<P>, props: 
     return renderSolid(() => createComponent(component, createProjectedProps(readProps)), element);
   };
   return html`${solidDirective(component, props, mountContent)}`;
-}
-
-export function renderComposerContent(value: unknown, container: HTMLElement): void {
-  renderLit(value ?? nothing, container);
 }
 
 export function hasComposerContent(value: unknown): boolean {

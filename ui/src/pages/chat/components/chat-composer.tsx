@@ -1,6 +1,7 @@
-import { createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
 import { createChatComposerContext } from "./chat-composer-frame.ts";
-import { getChatComposerState } from "./chat-composer-state.ts";
+import { ComposerPredictionController } from "./chat-composer-prediction.ts";
+import { getChatComposerState, isChatRunWorking } from "./chat-composer-state.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { renderChatComposerView } from "./chat-composer-view.tsx";
 
@@ -44,18 +45,60 @@ export function ChatComposer(props: ChatComposerInput) {
   const currentProps = new Proxy(props, {
     get: (target, key) => (key === "onRequestUpdate" ? requestUpdate : Reflect.get(target, key)),
   });
+  const prediction = new ComposerPredictionController(() => {
+    const options = currentProps.composerPredictions;
+    const client = currentProps.gatewayClient;
+    if (!options || !client) {
+      return null;
+    }
+    return {
+      gateway: options.gateway,
+      client,
+      sessionKey: currentProps.sessionKey,
+      sessionId: currentProps.currentSessionId ?? null,
+      enabled: options.enabled,
+      eligible:
+        options.active &&
+        currentProps.connected &&
+        currentProps.canSend &&
+        !currentProps.submitDisabledReason &&
+        !currentProps.suggestionComposer &&
+        !currentProps.realtimeTalkActive &&
+        !state.composerComposing &&
+        !state.dictation?.active &&
+        !currentProps.goalDraftMode &&
+        !currentProps.replyTarget &&
+        !(currentProps.getDraft?.() ?? currentProps.draft) &&
+        !state.composerTextarea?.value &&
+        !(currentProps.getAttachments?.() ?? currentProps.attachments)?.length &&
+        !(currentProps.getPendingAttachmentReads?.() ?? currentProps.pendingAttachmentReads) &&
+        document.visibilityState !== "hidden",
+      idle: !isChatRunWorking(currentProps) && !currentProps.sending && !currentProps.queue.length,
+    };
+  }, requestUpdate);
   const context = createMemo(() => {
     revision();
     // Lit owners can change local state without changing a prop's identity.
     void props.renderRevision;
     computingFrame = true;
     try {
-      return createChatComposerContext(currentProps);
+      return createChatComposerContext(currentProps, prediction);
     } finally {
       computingFrame = false;
     }
   });
+  createEffect(
+    () => {
+      context();
+      return currentProps.composerPredictions;
+    },
+    () => untrack(() => prediction.sync()),
+  );
+  const visibilityChanged = () => prediction.sync();
+  document.addEventListener("visibilitychange", visibilityChanged);
   onCleanup(() => {
+    document.removeEventListener("visibilitychange", visibilityChanged);
+    prediction.dispose();
     disposed = true;
     state.textareaRef?.();
     state.composerInputRef?.();
