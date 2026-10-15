@@ -617,7 +617,7 @@ export async function runTestProjects(
     throw error;
   } finally {
     try {
-      await workers?.dispose().catch((error: unknown) => {
+      await workers?.dispose({ interrupted: Boolean(termination.signal) }).catch((error: unknown) => {
         reportFailure ??= String(error);
         process.exitCode ||= 1;
         console.error(error);

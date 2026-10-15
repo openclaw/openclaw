@@ -97,7 +97,7 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
     }
   } finally {
     try {
-      await workers?.dispose();
+      await workers?.dispose({ interrupted: Boolean(interrupted) });
     } finally {
       process.off("SIGINT", onSignal);
       process.off("SIGTERM", onSignal);

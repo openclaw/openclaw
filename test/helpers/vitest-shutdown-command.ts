@@ -12,7 +12,7 @@ export async function runVitestShutdownCommand({
   ...options
 }: Pick<
   Parameters<typeof runManagedCommand>[0],
-  "args" | "cwd" | "env" | "timeoutMs" | "onReady" | "signal"
+  "args" | "cwd" | "env" | "timeoutMs" | "onReady" | "onSignal" | "signal"
 > & {
   bin?: string;
   maxBytes?: number;

@@ -110,6 +110,7 @@ async function runCliShimInner(moduleUrl, options, nodeArgs) {
   const forceKillDelayMs = options.forceKillDelayMs ?? DEFAULT_FORCE_KILL_DELAY_MS;
   let child = null;
   let forceKillTimer = null;
+  let interrupted = false;
   const signalHandlers = new Map();
   const cleanup = () => {
     if (forceKillTimer) {
@@ -125,6 +126,7 @@ async function runCliShimInner(moduleUrl, options, nodeArgs) {
 
   for (const signal of FORWARDED_SIGNALS) {
     const handler = () => {
+      interrupted = true;
       signalChild(child, signal, detached);
       // A lifecycle-owning implementation must finish killing its own child groups.
       // A competing shim deadline can kill that owner and orphan those children.
@@ -179,26 +181,29 @@ async function runCliShimInner(moduleUrl, options, nodeArgs) {
     if (result.signal) {
       writeFailureTrailer(options.failureTool, signalExitCode(result.signal));
       process.kill(process.pid, result.signal);
-      return;
+      return { interrupted };
     }
     const exitCode = result.code ?? 1;
     writeFailureTrailer(options.failureTool, exitCode);
     process.exitCode = exitCode;
+    return { interrupted };
   } catch (error) {
     cleanup();
     console.error(error);
     writeFailureTrailer(options.failureTool, 1);
     process.exitCode = 1;
+    return { interrupted };
   }
 }
 
 async function runCliShim(moduleUrl, options, nodeArgs) {
   try {
-    await runCliShimInner(moduleUrl, options, nodeArgs);
+    return await runCliShimInner(moduleUrl, options, nodeArgs);
   } catch (error) {
     console.error(error);
     writeFailureTrailer(options.failureTool, 1);
     process.exitCode = 1;
+    return { interrupted: false };
   }
 }
 
@@ -223,7 +228,7 @@ export async function runTsxCliShim(moduleUrl, options = {}) {
       console.error(error);
       writeFailureTrailer(options.failureTool, 1);
       process.exitCode = 1;
-      return;
+      return { interrupted: false };
     }
   }
   return runCliShim(moduleUrl, options, ["--import", new URL("../tsx.mjs", import.meta.url).href]);
