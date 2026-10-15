@@ -1,4 +1,4 @@
-import { createMemo, Show, type Accessor } from "solid-js";
+import { createMemo, type Accessor } from "solid-js";
 import type { ChatAccountSelection } from "../../../../../packages/gateway-protocol/src/index.ts";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import type {
@@ -545,10 +545,10 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     const effortDisabled =
       commonDisabled ||
       effortMutationDisabled ||
+      !hasResolvableModel ||
       (thinking.options.length === 0 && fastMode.disabled);
     // CSS keeps the empty effort slot beside an open picker until its catalog resolves.
     const reserveEffortPicker = !hasResolvableModel;
-    const showEffortPicker = hasResolvableModel || reserveEffortPicker;
     return {
       model: {
         providerAuth: props.modelAuthStatusResult ? providerAuth : undefined,
@@ -599,25 +599,23 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         onTargetSelect: props.onModelPickerTargetSelect,
         onRequestUpdate: props.onRequestUpdate,
       },
-      effort: showEffortPicker
-        ? {
-            disabled: effortDisabled,
-            disabledReason: props.effortMutationDisabledReason,
-            fastMode: {
-              ...fastMode,
-              disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
-            },
-            sessionKey: props.sessionKey,
-            thinkingDisabled,
-            thinking,
-            onFastModeSelect: async (next, targetSessionKey) =>
-              props.onFastModeSelect?.(next, targetSessionKey),
-            onRequestUpdate: props.onRequestUpdate,
-            onThinkingSelect: async (next, targetSessionKey) =>
-              props.onThinkingSelect?.(next, targetSessionKey),
-            reserved: reserveEffortPicker,
-          }
-        : undefined,
+      effort: {
+        disabled: effortDisabled,
+        disabledReason: props.effortMutationDisabledReason,
+        fastMode: {
+          ...fastMode,
+          disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
+        },
+        sessionKey: props.sessionKey,
+        thinkingDisabled,
+        thinking,
+        onFastModeSelect: async (next, targetSessionKey) =>
+          props.onFastModeSelect?.(next, targetSessionKey),
+        onRequestUpdate: props.onRequestUpdate,
+        onThinkingSelect: async (next, targetSessionKey) =>
+          props.onThinkingSelect?.(next, targetSessionKey),
+        reserved: reserveEffortPicker,
+      },
     };
   });
 }
@@ -627,7 +625,7 @@ export function ChatModelControls(props: ChatModelControlsProps) {
   return (
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       <ChatModelPicker {...controls().model} />
-      <Show when={controls().effort}>{(effort) => <ChatEffortPicker {...effort()} />}</Show>
+      <ChatEffortPicker {...controls().effort} />
     </div>
   );
 }
