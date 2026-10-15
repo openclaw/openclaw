@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { WizardStepControls } from "../pages/model-setup/wizard-step-controls.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { LinkReaderHovercardProvider as LinkHovercardProvider } from "./link-reader-hovercard.ts";
@@ -12,6 +11,7 @@ import {
   LINK_READER_HOVERCARD_PROVIDER_TAG as LINK_HOVERCARD_TAG,
   resolveHoverPreviewTarget,
 } from "./link-reader-target.ts";
+import { WizardStepControls } from "./wizard-step-controls.tsx";
 
 function linkHovercardUrl(anchor: HTMLAnchorElement) {
   const owner = anchor.closest<LinkHovercardProvider>(LINK_HOVERCARD_TAG)!;

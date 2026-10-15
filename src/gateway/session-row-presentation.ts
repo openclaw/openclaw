@@ -21,7 +21,7 @@ import {
   projectSessionParticipant,
   projectSessionProfileInvolvements,
 } from "./session-identity-projection.js";
-import type { SessionEntrySelection } from "./session-list-filters.js";
+import type { SessionEntrySelection, SessionListFilteredEntries } from "./session-list-filters.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import type * as records from "./session-row-projection-record.js";
@@ -79,6 +79,8 @@ type Publication = {
       previousRows?: GatewaySessionRow[];
       selection?: SessionEntrySelection;
       selectedAt?: number;
+      activityExpiresAt?: number;
+      partitions?: WeakMap<object, SessionListFilteredEntries>;
     }
   >;
 };
@@ -88,6 +90,8 @@ const publications = new WeakMap<
   SessionRowProjection,
   {
     revision: object | undefined;
+    cfg: SessionRowProjection["state"]["cfg"];
+    identityRevision: object | undefined;
   } & Publication
 >();
 const encodings = new WeakMap<GatewaySessionRow, string>();
@@ -221,11 +225,14 @@ export function prepareSessionRowPublication(
   read: SessionRowReadView = projection,
 ) {
   const view: PublicationView = () => {
-    const revision = projection.state.revision;
+    const { revision, cfg, rowContext } = projection.state;
+    const identityRevision = rowContext.identityProjection?.revision;
     let publication = publications.get(projection);
     if (!publication) {
       publication = {
         revision,
+        cfg,
+        identityRevision,
         factsRevision: 0,
         rows: new WeakMap(),
         lists: new Map(),
@@ -255,11 +262,18 @@ export function prepareSessionRowPublication(
           }
         }
       });
-    } else if (publication.revision !== revision) {
-      if (publication.revision !== undefined) {
+    } else {
+      // Exact row publications cannot mask a preceding profile/configuration invalidation.
+      if (
+        (publication.revision !== undefined && publication.revision !== revision) ||
+        publication.cfg !== cfg ||
+        publication.identityRevision !== identityRevision
+      ) {
         publication.lists.clear();
       }
       publication.revision = revision;
+      publication.cfg = cfg;
+      publication.identityRevision = identityRevision;
     }
     return publication;
   };
@@ -322,8 +336,14 @@ export function prepareProjectedSessionPresentation(
   const profileId = profile
     ? projectSessionParticipant({ type: "profile", id: profile.id }, profiles).identity.id
     : undefined;
-  const listView = (opts: SessionsListParams) => {
+  const listView = (opts: SessionsListParams, selection = false) => {
     const { source: _source, ifRowsRevision: _ifRowsRevision, ...query } = opts;
+    if (selection) {
+      delete query.rowMode;
+      delete query.includeDerivedTitles;
+      delete query.includeLastMessage;
+      delete query.includeActivitySummary;
+    }
     const key = JSON.stringify([
       client === undefined,
       sharing.cacheKey,
@@ -632,21 +652,27 @@ export function prepareProjectedSessionPresentation(
       );
       return record ? present(record, options) : null;
     },
-    select(opts: SessionsListParams, select: () => SessionEntrySelection) {
+    select(
+      opts: SessionsListParams,
+      select: (retained?: WeakMap<object, SessionListFilteredEntries>) => SessionEntrySelection,
+    ) {
       // These queries consume clock or transient run facts independently of row publications.
       if (opts.search || opts.spawnedBy || opts.activeOnly || opts.activityPulseBoundaries) {
         return select();
       }
-      const view = listView(opts);
+      const view = listView(opts, true);
       if (
-        view.selection &&
+        view.selectedAt !== undefined &&
         opts.activeMinutes !== undefined &&
-        (now < view.selectedAt! || now > (view.selection.activityExpiresAt ?? Infinity))
+        (now < view.selectedAt || now > (view.activityExpiresAt ?? Infinity))
       ) {
         view.selection = undefined;
+        view.partitions = undefined;
       }
       if (!view.selection) {
-        const { entries, ownerSessionProfiles, ...facets } = select();
+        const { entries, ownerSessionProfiles, ...facets } = select(
+          (view.partitions ??= new WeakMap()),
+        );
         Object.freeze(entries);
         view.selection = Object.freeze({
           ...freezeJsonSnapshot(facets),
@@ -654,6 +680,7 @@ export function prepareProjectedSessionPresentation(
           entries,
         });
         view.selectedAt = now;
+        view.activityExpiresAt = view.selection.activityExpiresAt;
       }
       return view.selection;
     },

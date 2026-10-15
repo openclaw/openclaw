@@ -1,11 +1,11 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type { AgentCapability } from "../../lib/agents/index.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
+import type { SolidController, SolidControllerHost } from "../../lit/solid-controller-host.ts";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
@@ -400,9 +400,9 @@ class SessionPrefetcher {
   }
 }
 
-type SessionPrefetchHost = ReactiveControllerHost & HTMLElement;
+type SessionPrefetchHost = SolidControllerHost & HTMLElement;
 
-export class SessionPrefetchController implements ReactiveController {
+export class SessionPrefetchController implements SolidController {
   private readonly prefetcher: SessionPrefetcher;
   private context: SessionPrefetchContext | undefined;
   private subscriptions: Array<() => void> = [];

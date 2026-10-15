@@ -146,6 +146,10 @@ test("measures connect delivery and closed admission without payloads", async ()
           if (outcome !== "unavailable") {
             expect(responseLog).toBeDefined();
             if (rejected) {
+              expect(responseLog).toMatchObject({
+                failurePhase: "auth",
+                failureCause: "unauthorized",
+              });
               expect(responseLog).not.toHaveProperty("identityMs");
               expect(responseLog).not.toHaveProperty("deviceAuthorizationMs");
             } else {

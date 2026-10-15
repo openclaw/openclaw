@@ -1,12 +1,23 @@
-import { createMemo } from "solid-js";
+import { createEffect, createMemo, createSignal } from "solid-js";
+import { pathForClawCatalogEntry } from "../../app-route-paths.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
+import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectAgents, projectRosterActivity } from "../../lib/reactive/domain-capabilities.ts";
+import {
+  projectAgents,
+  projectRosterActivity,
+  projectRuntimeConfig,
+} from "../../lib/reactive/domain-capabilities.ts";
 import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
+import { LAB_FEATURES, resolveLabFeatureState } from "../labs/labs-registry.ts";
+import type { ClawCatalogEntry } from "./claws-catalog-client.ts";
+import { ClawsCatalogDialog } from "./claws-catalog-dialog.tsx";
 import { AgentsHomeView } from "./view.tsx";
+
+const clawsLab = LAB_FEATURES.find((feature) => feature.id === "claws");
 
 export function AgentsHomePage(props: { active?: boolean }) {
   const context = useApplication();
@@ -14,6 +25,17 @@ export function AgentsHomePage(props: { active?: boolean }) {
   const roster = projectRosterActivity(store);
   const gateway = projectGateway(context.gateway);
   const agents = projectAgents(context.agents);
+  const runtimeConfig = projectRuntimeConfig(context.runtimeConfig);
+  const [catalogOpen, setCatalogOpen] = createSignal(false);
+  createEffect(
+    () => props.active ?? true,
+    (active) => {
+      if (!active) {
+        return;
+      }
+      void context.runtimeConfig.ensureLoaded();
+    },
+  );
   const snapshot = createParkedProjection(
     () => {
       const currentGateway = gateway.read().snapshot;
@@ -22,6 +44,10 @@ export function AgentsHomePage(props: { active?: boolean }) {
         defaultId: agents.read().agentsList?.defaultId,
         connected: currentGateway.phase === "connected",
         canCreate: canCallGatewayMethod(currentGateway, "openclaw.chat", "operator.admin"),
+        showExplore: Boolean(
+          clawsLab &&
+          resolveLabFeatureState(currentConfigObject(runtimeConfig.read().state), clawsLab).enabled,
+        ),
       };
     },
     () => props.active ?? true,
@@ -47,17 +73,33 @@ export function AgentsHomePage(props: { active?: boolean }) {
           a.id.localeCompare(b.id),
       );
   });
+  const selectClaw = (entry: ClawCatalogEntry) => {
+    setCatalogOpen(false);
+    context.navigate("claws", {
+      pathname: pathForClawCatalogEntry(entry.packageName, context.basePath),
+    });
+  };
   return (
     <openclaw-agents-home-page>
       <AgentsHomeView
         cards={cards()}
-        canCreate={snapshot().canCreate}
         context={context}
         connected={snapshot().connected}
         loading={snapshot().roster.loading}
         error={snapshot().roster.error ?? snapshot().roster.subscriptionError}
         onRetry={() => void store.refresh()}
+        canCreate={snapshot().canCreate}
+        showExplore={snapshot().showExplore}
+        onOpenCatalog={() => setCatalogOpen(true)}
+        onSelectClaw={selectClaw}
       />
+      {snapshot().showExplore && catalogOpen() ? (
+        <ClawsCatalogDialog
+          onSelectEntry={selectClaw}
+          onClose={() => setCatalogOpen(false)}
+          onAdded={() => void store.refresh()}
+        />
+      ) : undefined}
     </openclaw-agents-home-page>
   );
 }

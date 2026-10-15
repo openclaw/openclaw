@@ -301,10 +301,18 @@ openclaw-sidebar-agent-roster {
 
 @media (hover: none), (pointer: coarse) {
   .sidebar-recent-session.sidebar-recent-session--team {
-    grid-template-columns: 20px minmax(0, 1fr) auto var(--session-row-actions-reserve);
+    grid-template-columns: 20px minmax(0, 1fr) var(--session-row-actions-reserve);
+
+    &:has(> .sidebar-child-session-toggle) {
+      grid-template-columns: 20px minmax(0, 1fr) auto var(--session-row-actions-reserve);
+
+      > .sidebar-recent-session__aside {
+        grid-column: 4;
+      }
+    }
   }
   .sidebar-recent-session.sidebar-recent-session--team > .sidebar-recent-session__aside {
-    grid-column: 4;
+    grid-column: 3;
   }
   .sidebar-recent-session--team:is(:hover, :focus-within) > .sidebar-recent-session__link {
     padding-right: 0;

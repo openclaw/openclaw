@@ -283,7 +283,8 @@ scopes, and session attachment), `helloMs` (hello payload preparation), and
 `sendMs` (serialization and transport write callback). Unreached phases are absent.
 Bootstrap redemption or admission work between payload preparation and writing
 can make total response time exceed the sum of these fields. No payload fields
-or credentials are included.
+or credentials are included. Failed connects also record `failurePhase` and the
+existing admission `failureCause` so a rejection before attachment remains attributable.
 
 The attach interval also includes these sub-phase wall times on connect response
 logs: `deviceAuthorizationMs` (pairing policy, lookup, metadata and token issuance),

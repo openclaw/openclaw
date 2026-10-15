@@ -242,6 +242,7 @@ async function runStateLeaseOwnerInScope<T>(
   const cleanup = createOpenClawStateLeaseCleanup({
     maintenanceScope: maintenance,
     context: invocation.kind === "worker" ? invocation.context : undefined,
+    nativeIdentity: () => nativeLeaseSource?.identity,
     workerOwner: () => workerOperations,
     revoke() {
       closed = true;
