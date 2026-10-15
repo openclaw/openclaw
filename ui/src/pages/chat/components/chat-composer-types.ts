@@ -163,7 +163,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onTypingChange?: (typing: boolean, preview?: string, cursor?: number) => void;
   composerControls?: LegacyTemplateResult | LegacyDirectiveResult | typeof emptyLegacyContent;
   footerContent?: JSX.Element;
-  composerRecovery?: LegacyTemplateResult | typeof emptyLegacyContent;
+  composerRecovery?: LegacyTemplateResult | LegacyDirectiveResult | typeof emptyLegacyContent;
   notices?: JSX.Element;
   permissionPicker?: ChatPermissionPickerProps;
   onDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;
