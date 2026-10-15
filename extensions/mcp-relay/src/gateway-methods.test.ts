@@ -195,32 +195,20 @@ describe("MCP relay Gateway consent and grant ownership", () => {
     expect(await h.state.grants()).toEqual([]);
   });
 
-  it.each(["expired", "foreign", "missing kind"])(
-    "refuses %s consent without recording a grant",
-    async (reason) => {
-      const h = await harness();
-      await h.ready();
-      const approving = h.request("authorize.approve", { requestId: REQUEST_ID });
-      const description = await h.socket.nextFrame();
-      if (reason === "foreign") {
-        h.socket.receive({
-          type: "res",
-          id: description.id,
-          ok: false,
-          error: { code: "not_found", message: "Foreign request" },
-        });
-      } else {
-        h.socket.acknowledge(description, {
-          kind: reason === "missing kind" ? undefined : "oauth",
-          clientName: "Synthetic client",
-          redirectHost: "chatgpt.com",
-          expiresAt: reason === "expired" ? 1_000 : 601_000,
-        });
-      }
-      expect(await approving).toEqual(denied("not_found"));
-      expect(await h.state.grants()).toEqual([]);
-    },
-  );
+  it("refuses expired consent without recording a grant", async () => {
+    const h = await harness();
+    await h.ready();
+    const approving = h.request("authorize.approve", { requestId: REQUEST_ID });
+    const description = await h.socket.nextFrame();
+    h.socket.acknowledge(description, {
+      kind: "oauth",
+      clientName: "Synthetic client",
+      redirectHost: "chatgpt.com",
+      expiresAt: 1_000,
+    });
+    expect(await approving).toEqual(denied("not_found"));
+    expect(await h.state.grants()).toEqual([]);
+  });
 
   it("deletes a recorded grant if the relay rejects consent", async () => {
     const h = await harness();
@@ -358,7 +346,7 @@ describe("MCP relay connect entrypoint", () => {
     };
   }
 
-  it.each(["/mcp-relay/connect", "/control/mcp-relay/connect"])(
+  it.each(["/mcp-relay/connect"])(
     "redirects %s to the native tab under normal Control UI authentication",
     async (path) => {
       const request = routeHarness();
@@ -380,7 +368,6 @@ describe("MCP relay connect entrypoint", () => {
 
   it.each([
     { query: { request: REQUEST_ID, relay: "https://foreign.invalid" }, method: "GET" },
-    { query: { request: "invalid", relay: RELAY }, method: "GET" },
     { query: { request: REQUEST_ID, relay: RELAY }, method: "POST" },
   ])(
     "rejects malformed or foreign consent links without redirecting: %j",

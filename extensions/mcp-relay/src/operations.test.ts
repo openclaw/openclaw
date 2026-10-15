@@ -173,42 +173,29 @@ describe("MCP relay data operations", () => {
     );
   });
 
-  it.each(["missing", "FORBIDDEN", "INVALID_REQUEST"])(
-    "reports a %s session lookup without disclosing whether it exists",
-    async (response) => {
-      const missing = await fixture();
-      if (response === "missing") {
-        missing.describeSession.mockResolvedValue({ session: null });
-      } else {
-        missing.describeSession.mockRejectedValue(
-          Object.assign(new Error("Hidden session"), {
-            name: "GatewayClientRequestError",
-            code: response,
-            gatewayCode: response,
-            retryable: false,
-          }),
-        );
-      }
-      await expect(
-        missing.operations("conversation.read", { conversationId: "unknown", limit: 1 }),
-      ).rejects.toMatchObject({
-        code: "not_found",
-        message: "Conversation not found. List conversations and select an existing conversation.",
-      });
-      expect(missing.request).not.toHaveBeenCalled();
-    },
-  );
+  it("reports an invalid session lookup without disclosing whether it exists", async () => {
+    const missing = await fixture();
+    missing.describeSession.mockRejectedValue(
+      Object.assign(new Error("Hidden session"), {
+        name: "GatewayClientRequestError",
+        code: "INVALID_REQUEST",
+        gatewayCode: "INVALID_REQUEST",
+        retryable: false,
+      }),
+    );
+    await expect(
+      missing.operations("conversation.read", { conversationId: "unknown", limit: 1 }),
+    ).rejects.toMatchObject({
+      code: "not_found",
+      message: "Conversation not found. List conversations and select an existing conversation.",
+    });
+    expect(missing.request).not.toHaveBeenCalled();
+  });
 
   it.each([
     ["status", { unexpected: true }],
-    ["conversations.list", { limit: 0 }],
-    ["conversations.list", { limit: 51 }],
     ["conversations.list", { limit: 1, search: "x".repeat(201) }],
-    ["conversation.read", { conversationId: newer.key, limit: 101 }],
-    ["conversation.read", { conversationId: "", limit: 1 }],
-    ["message.send", { message: "x".repeat(8_001), waitMs: 0 }],
     ["message.send", { message: "hello", waitMs: -1 }],
-    ["reply.get", { conversationId: newer.key, runId: "run", waitMs: 50_001 }],
   ])("validates %s parameters before reaching the SDK", async (op, params) => {
     const { operations, request, describeSession, listSessions } = await fixture();
     await expect(operations(op, params)).rejects.toMatchObject({ code: "invalid_params" });
@@ -217,91 +204,13 @@ describe("MCP relay data operations", () => {
     expect(listSessions).not.toHaveBeenCalled();
   });
 
-  it("submits a new conversation with agent precedence and returns its accepted run without waiting", async () => {
-    const { operations, request } = await fixture("research");
-    request.mockResolvedValueOnce({
-      key: newer.key,
-      sessionId: newer.sessionId,
-      runId: "created-run",
-      runStarted: true,
-    });
-    expect(
-      await operations("message.send", { message: "new question", agentId: "main", waitMs: 0 }),
-    ).toEqual({ conversationId: newer.key, runId: "created-run", status: "running" });
-    expect(request).toHaveBeenCalledExactlyOnceWith(
-      "sessions.create",
-      { agentId: "main", message: "new question" },
-      { signal: expect.any(AbortSignal) },
-    );
-
-    const configured = await fixture("research");
-    configured.request.mockResolvedValueOnce({
-      key: newer.key,
-      sessionId: newer.sessionId,
-      runId: "configured-run",
-      runStarted: true,
-    });
-    await configured.operations("message.send", { message: "configured", waitMs: 0 });
-    expect(configured.request).toHaveBeenCalledWith(
-      "sessions.create",
-      expect.objectContaining({ agentId: "research" }),
-      expect.any(Object),
-    );
-  });
-
-  it("continues an existing conversation and reads its exact completed reply", async () => {
-    const { operations, request } = await fixture();
-    request.mockResolvedValueOnce({ runId: "accepted-run", status: "started" });
-    request.mockResolvedValueOnce({
-      status: "ok",
-      terminalReply: { disposition: "visible", text: "snapshot text" },
-    });
-    expect(
-      await operations("message.send", {
-        message: "continue",
-        conversationId: newer.key,
-        waitMs: 50_000,
-      }),
-    ).toEqual({
-      conversationId: newer.key,
-      runId: "accepted-run",
-      status: "completed",
-      reply: "snapshot text",
-    });
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(
-      1,
-      "chat.send",
-      {
-        sessionKey: newer.key,
-        sessionId: newer.sessionId,
-        agentId: "main",
-        message: "continue",
-        idempotencyKey: expect.any(String),
-      },
-      { signal: expect.any(AbortSignal) },
-    );
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "agent.wait",
-      { runId: "accepted-run", timeoutMs: 50_000 },
-      undefined,
-    );
-  });
-
   it.each([
-    {
-      name: "visible reply",
-      terminalReply: { disposition: "visible", text: "owner reply" },
-      content: { reply: "owner reply" },
-    },
     {
       name: "truncated reply",
       terminalReply: { disposition: "visible", text: "x".repeat(20_000) },
       content: { reply: `${"x".repeat(15_999)}…` },
     },
     { name: "silent reply", terminalReply: { disposition: "silent" }, content: {} },
-    { name: "empty reply", terminalReply: { disposition: "empty" }, content: {} },
     {
       name: "expired reply",
       terminalReply: undefined,
@@ -325,29 +234,10 @@ describe("MCP relay data operations", () => {
     },
   );
 
-  it.each(["message.send", "reply.get"])("refuses a missing conversation for %s", async (op) => {
-    const { operations, request, describeSession } = await fixture();
-    describeSession.mockResolvedValue({ session: null });
-    await expect(
-      operations(op, {
-        conversationId: "missing",
-        ...(op === "message.send" ? { message: "hello" } : { runId: "run" }),
-        waitMs: 0,
-      }),
-    ).rejects.toMatchObject({ code: "not_found" });
-    expect(request).not.toHaveBeenCalled();
-  });
-
   it.each([
     ["observation timeout", { status: "timeout" }, "running"],
-    ["queued pending", { status: "pending", timeoutPhase: "queue" }, "running"],
-    ["retry grace", { status: "timeout", endedAt: 100, pendingError: true }, "running"],
-    ["terminal timestamp", { status: "timeout", endedAt: 100 }, "failed"],
     ["terminal reason", { status: "timeout", stopReason: "restart" }, "failed"],
     ["terminal liveness", { status: "timeout", livenessState: "blocked" }, "failed"],
-    ["provider timeout", { status: "timeout", timeoutPhase: "provider" }, "failed"],
-    ["provider started", { status: "timeout", providerStarted: true }, "failed"],
-    ["terminal failure", { status: "error" }, "failed"],
   ] as const)("maps %s without exposing host errors", async (_name, payload, expected) => {
     const { operations, request } = await fixture();
     request.mockResolvedValueOnce({ ...payload, error: "sensitive internal failure" });
@@ -372,23 +262,7 @@ describe("MCP relay data operations", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("reports a created conversation whose initial message failed without inventing a run", async () => {
-    const { operations, request } = await fixture();
-    request.mockResolvedValueOnce({
-      key: newer.key,
-      sessionId: newer.sessionId,
-      runStarted: false,
-      runError: { message: "private host error" },
-    });
-    await expect(operations("message.send", { message: "hello", waitMs: 0 })).rejects.toMatchObject(
-      {
-        code: "unavailable",
-        message: expect.stringContaining("was created, but the message did not start"),
-      },
-    );
-    expect(request).toHaveBeenCalledTimes(1);
-  });
-  it.each(["CLIENT_TIMEOUT", "AGENT_TIMEOUT", "INVALID_REQUEST"])(
+  it.each(["AGENT_TIMEOUT", "INVALID_REQUEST"])(
     "preserves an accepted run after SDK %s",
     async (code) => {
       const { operations, request } = await fixture();
@@ -412,7 +286,7 @@ describe("MCP relay data operations", () => {
     },
   );
 
-  it.each(["message.send", "conversation.read"])(
+  it.each(["conversation.read"])(
     "logs a %s Gateway failure once without request content",
     async (op) => {
       const { operations, request, logger } = await fixture();

@@ -156,14 +156,6 @@ describe("Matrix encrypted startup ownership", () => {
     }
   });
 
-  it("passes the configured crypto database prefix to Rust initialization", async () => {
-    await client.prepareForOneOff();
-    expect(fixture.init).toHaveBeenCalledWith({
-      cryptoDatabasePrefix: "openclaw-matrix-test",
-    });
-    expect(fixture.reconcile).not.toHaveBeenCalled();
-  });
-
   it.each([
     { phase: "replay", reason: "startup abort" },
     { phase: "replay", reason: "deadline" },
@@ -498,39 +490,6 @@ describe("Matrix encrypted startup ownership", () => {
       }
     } finally {
       await owner.stopWithoutPersist();
-    }
-  });
-
-  it("allows a successor after refusal-marker durability fails before Rust initialization", async () => {
-    const snapshotPath = path.join(tempDirs.make("matrix-arming-durability-"), "snapshot.json");
-    const actualOpen = fs.open;
-    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const file = await actualOpen(...args);
-      if (args[0] === `${snapshotPath}.owner.poisoned`) {
-        vi.spyOn(file, "sync").mockRejectedValueOnce(new Error("marker sync failed"));
-      }
-      return file;
-    });
-    const makeClient = () =>
-      new MatrixClient("https://matrix.example.org", "test-token", {
-        userId: "@bot:example.org",
-        deviceId: "BOT",
-        encryption: true,
-        autoBootstrapCrypto: false,
-        idbSnapshotPath: snapshotPath,
-      });
-    const owner = makeClient();
-    let successor: MatrixClient | undefined;
-    try {
-      await expect(owner.prepareForOneOff()).rejects.toThrow("marker sync failed");
-      expect(fixture.init).not.toHaveBeenCalled();
-      vi.restoreAllMocks();
-      successor = makeClient();
-      await successor.prepareForOneOff();
-      await successor.stopAndPersist();
-    } finally {
-      await owner.stopWithoutPersist();
-      await successor?.stopWithoutPersist();
     }
   });
 

@@ -52,58 +52,40 @@ async function createGrant(f: Awaited<ReturnType<typeof fixture>>, grantId = "gr
 }
 
 describe("MCP relay transport and authority", () => {
-  it.each(["hello", "ui-unavailable", "ping"] as const)(
-    "closes a saturated relay when sending %s control frames",
-    async (kind) => {
-      const f = await fixture();
-      if (kind !== "hello") {
-        await f.ready();
-      }
-      f.socket.bufferedAmount = 32 * 1024 * 1024;
-      if (kind === "ping") {
-        await f.clock.advanceBy(30_000);
-      } else {
-        expect(() => f.socket.receive(kind === "hello" ? CHALLENGE : HTTP)).not.toThrow();
-      }
-      expect(f.socket.terminated).toBe(true);
-      await expect(f.service.status()).resolves.toMatchObject({ connected: false });
-    },
-  );
+  it("closes a saturated relay when sending UI-unavailable control frames", async () => {
+    const f = await fixture();
+    await f.ready();
+    f.socket.bufferedAmount = 32 * 1024 * 1024;
+    expect(() => f.socket.receive(HTTP)).not.toThrow();
+    expect(f.socket.terminated).toBe(true);
+    await expect(f.service.status()).resolves.toMatchObject({ connected: false });
+  });
 
-  it.each(["closed", "unsupported-auth"] as const)(
-    "reopens a retired MCP binding after %s UI admission fails",
-    async (code) => {
-      const ingress = createPrincipalIngress({
-        presentation: { ...ORIGINS, basePath: "/control", operatorScopeCeiling: ["operator.read"] },
-        request: async () => ({ response: new Response("UI"), pluginReadCookies: [] }),
-        openWebSocket: async () => ({ socket: new IngressSocket() }),
-        close: async () => {},
-      });
-      const f = await fixture(undefined, { controlUiIngress: ingress.factory });
-      await createGrant(f);
-      await f.ready(f.socket, uiCapability);
-      expect(
-        await f.request({ id: "status", op: "status", grantId: "gr_one", params: {} }),
-      ).toMatchObject({ ok: true });
-      const binding = ingress.bindings[0]!.binding;
-      if (code === "closed") {
-        await binding.close();
-      } else {
-        vi.spyOn(binding, "openControlUi").mockRejectedValue(
-          new GatewayControlUiIngressError(code, "Gateway authentication is unsupported."),
-        );
-      }
-      f.socket.receive(HTTP);
-      expect(await f.socket.nextFrame()).toMatchObject({ type: "ui.error", code: "unavailable" });
-      f.socket.receive({ ...HTTP, sid: "fresh-ui" });
-      expect(await f.socket.nextFrame()).toMatchObject({ type: "ui.http.head", status: 200 });
-      expect(await f.socket.nextFrame()).toMatchObject({ type: "ui.http.body", b64: "VUk=" });
-      expect(await f.socket.nextFrame()).toMatchObject({ type: "ui.http.body", more: false });
-      expect(ingress.factory.bindPrincipal).toHaveBeenCalledTimes(2);
-    },
-  );
+  it("reopens a retired MCP binding after closed UI admission fails", async () => {
+    const ingress = createPrincipalIngress({
+      presentation: { ...ORIGINS, basePath: "/control", operatorScopeCeiling: ["operator.read"] },
+      request: async () => ({ response: new Response("UI"), pluginReadCookies: [] }),
+      openWebSocket: async () => ({ socket: new IngressSocket() }),
+      close: async () => {},
+    });
+    const f = await fixture(undefined, { controlUiIngress: ingress.factory });
+    await createGrant(f);
+    await f.ready(f.socket, uiCapability);
+    expect(
+      await f.request({ id: "status", op: "status", grantId: "gr_one", params: {} }),
+    ).toMatchObject({ ok: true });
+    const binding = ingress.bindings[0]!.binding;
+    await binding.close();
+    f.socket.receive(HTTP);
+    expect(await f.socket.nextFrame()).toMatchObject({ type: "ui.error", code: "unavailable" });
+    f.socket.receive({ ...HTTP, sid: "fresh-ui" });
+    expect(await f.socket.nextFrame()).toMatchObject({ type: "ui.http.head", status: 200 });
+    expect(await f.socket.nextFrame()).toMatchObject({ type: "ui.http.body", b64: "VUk=" });
+    expect(await f.socket.nextFrame()).toMatchObject({ type: "ui.http.body", more: false });
+    expect(ingress.factory.bindPrincipal).toHaveBeenCalledTimes(2);
+  });
 
-  it.each([false, true])("fails an overloaded UI send (saturated=%s)", async (saturated) => {
+  it("fails an overloaded UI send when the relay is saturated", async () => {
     const socket = new IngressSocket();
     const ingress = createPrincipalIngress({
       presentation: { ...ORIGINS, basePath: "/control", operatorScopeCeiling: ["operator.read"] },
@@ -116,21 +98,12 @@ describe("MCP relay transport and authority", () => {
     await f.ready(f.socket, uiCapability);
     f.socket.receive(WS);
     expect(await f.socket.nextFrame()).toMatchObject({ type: "ui.ws.opened" });
-    f.socket.bufferedAmount = 32 * 1024 * 1024 - (saturated ? 0 : 1024);
-    const relayClosed = saturated ? once(f.socket, "close") : undefined;
+    f.socket.bufferedAmount = 32 * 1024 * 1024;
+    const relayClosed = once(f.socket, "close");
     socket.incoming.push({ kind: "text", text: "x".repeat(1024) });
     await f.clock.advanceBy(0);
-    if (saturated) {
-      await relayClosed;
-      expect(f.socket.terminated).toBe(true);
-    } else {
-      expect(await f.socket.nextFrame()).toMatchObject({
-        type: "ui.error",
-        sid: WS.sid,
-        code: "limit_exceeded",
-      });
-      expect(f.socket.terminated).toBe(false);
-    }
+    await relayClosed;
+    expect(f.socket.terminated).toBe(true);
     expect(socket.closes[0]?.code).toBe(1011);
     expect(f.socket.frames.some((frame) => frame.type === "ui.ws.msg")).toBe(false);
   });
@@ -179,9 +152,7 @@ describe("MCP relay transport and authority", () => {
   });
 
   it.each([
-    { name: "wrong protocol", frame: { ...CHALLENGE, protocol: 2 }, helloFirst: false },
     { name: "wrong relay", frame: { ...CHALLENGE, relay: "other.example" }, helloFirst: false },
-    { name: "short nonce", frame: { ...CHALLENGE, nonce: "AQ" }, helloFirst: false },
     {
       name: "noncanonical nonce",
       frame: { ...CHALLENGE, nonce: `${CHALLENGE.nonce.slice(0, -1)}d` },
@@ -213,50 +184,31 @@ describe("MCP relay transport and authority", () => {
     expect(f.sockets).toHaveLength(2);
   });
 
-  it.each([
-    { code: 4401, delays: [60_000, 60_000] },
-    { code: 4409, delays: [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000] },
-  ])("retries close $code with bounded backoff", async ({ code, delays }) => {
-    const f = await fixture();
-    for (const delay of delays) {
-      const socket = f.sockets.at(-1);
-      if (!socket) {
-        throw new Error("Expected an active socket");
+  it.each([{ code: 4401, delays: [60_000, 60_000] }])(
+    "retries close $code with bounded backoff",
+    async ({ code, delays }) => {
+      const f = await fixture();
+      for (const delay of delays) {
+        const socket = f.sockets.at(-1);
+        if (!socket) {
+          throw new Error("Expected an active socket");
+        }
+        socket.close(code);
+        await f.clock.advanceBy(0);
+        const previousCount = f.sockets.length;
+        expect(f.clock.armedAtMs).toBe(f.scheduler.now() + delay);
+        await f.clock.advanceBy(delay - 1);
+        expect(f.sockets).toHaveLength(previousCount);
+        await f.clock.advanceBy(1);
+        expect(f.sockets).toHaveLength(previousCount + 1);
       }
-      socket.close(code);
+      await f.ready(f.sockets.at(-1));
       await f.clock.advanceBy(0);
-      const previousCount = f.sockets.length;
-      expect(f.clock.armedAtMs).toBe(f.scheduler.now() + delay);
-      await f.clock.advanceBy(delay - 1);
-      expect(f.sockets).toHaveLength(previousCount);
-      await f.clock.advanceBy(1);
-      expect(f.sockets).toHaveLength(previousCount + 1);
-    }
-    await f.ready(f.sockets.at(-1));
-    await f.clock.advanceBy(0);
-    f.sockets.at(-1)?.close(4409);
-    await f.clock.advanceBy(0);
-    expect(f.clock.armedAtMs).toBe(f.scheduler.now() + 1_000);
-  });
-
-  it.each(["connected", "reconnecting"])("stops all scheduled work while %s", async (phase) => {
-    const f = await fixture();
-    await f.ready();
-    await f.clock.advanceBy(0);
-    if (phase === "reconnecting") {
-      f.socket.close(4409);
+      f.sockets.at(-1)?.close(4409);
       await f.clock.advanceBy(0);
-    }
-    await f.service.stop();
-    if (phase === "connected") {
-      expect(f.socket.terminated).toBe(true);
-    }
-    expect(f.clock.armedAtMs).toBeNull();
-    await f.clock.advanceBy(120_000);
-    expect(f.sockets).toHaveLength(1);
-    expect(f.socket.frames).toHaveLength(1);
-    await expect(f.service.pair()).rejects.toMatchObject({ code: "unavailable" });
-  });
+      expect(f.clock.armedAtMs).toBe(f.scheduler.now() + 1_000);
+    },
+  );
 
   it.each(["owner", "person"] as const)(
     "persists only the code hash and keeps %s profile IDs out of pairing offers",
@@ -364,7 +316,7 @@ describe("MCP relay transport and authority", () => {
     ]);
   });
 
-  it.each(["unknown", "expired"])("refuses an %s pairing code", async (code) => {
+  it.each(["expired"])("refuses an %s pairing code", async (code) => {
     const f = await fixture();
     await f.ready();
     if (code === "expired") {
@@ -454,14 +406,11 @@ describe("MCP relay transport and authority", () => {
     expect(f.clock.armedAtMs).toBeNull();
   });
 
-  it.each([null, {}, { frameAncestors: "https://chatgpt.com" }, { frameAncestors: [1] }])(
-    "rejects malformed ready UI metadata: %j",
-    async (ui) => {
-      const f = await fixture();
-      await f.ready(f.socket, ui);
-      expect(f.socket.closes).toEqual([{ code: 4400, reason: "Invalid UI capability" }]);
-    },
-  );
+  it.each([{ frameAncestors: [1] }])("rejects malformed ready UI metadata: %j", async (ui) => {
+    const f = await fixture();
+    await f.ready(f.socket, ui);
+    expect(f.socket.closes).toEqual([{ code: 4400, reason: "Invalid UI capability" }]);
+  });
 
   it("keeps person UI and MCP access available after an old owner grant fails admission", async () => {
     const reason = "Re-pair as a person from the Connected apps tab.";

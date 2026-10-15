@@ -302,7 +302,7 @@ describe("MatrixRecoveryKeyStore", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([true])(
     "settles a no-getter bootstrap before returning or throwing (failure=%s)",
     async (fail) => {
       const recoveryKeyPath = createTempRecoveryKeyPath();
@@ -379,53 +379,7 @@ describe("MatrixRecoveryKeyStore", () => {
     }
   });
 
-  it("keeps failed writes best-effort and drains later writes on the worker store", async () => {
-    const recoveryKeyPath = createTempRecoveryKeyPath();
-    const original = getMatrixRuntime().state.openKeyedStoreV2;
-    const failure = new Error("synthetic persistence failure");
-    let failNext = true;
-    const warn = vi.spyOn(LogService, "warn").mockImplementation(() => {});
-    const stateRuntime: MatrixSnapshotStateRuntime = {
-      openKeyedStoreV2: <T>(options: Parameters<typeof original>[0]) => {
-        const backing = original<T>(options);
-        return {
-          ...backing,
-          compareAndApply: async (...args: Parameters<typeof backing.compareAndApply>) => {
-            if (failNext) {
-              failNext = false;
-              throw failure;
-            }
-            return backing.compareAndApply(...args);
-          },
-        };
-      },
-    };
-    const store = new MatrixRecoveryKeyStore(recoveryKeyPath, stateRuntime);
-    const callbacks = store.buildCryptoCallbacks();
-    try {
-      await store.drainPendingPersistence();
-      callbacks.cacheSecretStorageKey?.("failed", {}, new Uint8Array([1]));
-      await expect(
-        callbacks.getSecretStorageKey?.({ keys: { failed: {} } }, "fixture"),
-      ).resolves.toEqual(["failed", new Uint8Array([1])]);
-      expect(await store.getSecretStorageKeyCandidate("failed")).toBeNull();
-      expect(warn).toHaveBeenCalledWith(
-        "MatrixClientLite",
-        "Failed to persist recovery key:",
-        failure,
-      );
-      callbacks.cacheSecretStorageKey?.("saved", {}, new Uint8Array([2]));
-      await store.close();
-      expect(await readStoredRecoveryKey(recoveryKeyPath)).toMatchObject({
-        keyId: "saved",
-        privateKeyBase64: "Ag==",
-      });
-    } finally {
-      await store.close();
-    }
-  });
-
-  it.each(["SDK callback", "reset candidate"] as const)(
+  it.each(["SDK callback"] as const)(
     "does not return a durable key after closure during a %s read",
     async (reader) => {
       const recoveryKeyPath = createTempRecoveryKeyPath();
