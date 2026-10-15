@@ -4,6 +4,7 @@ import { ContextPreparationTimeoutError } from "../../agents/failover/local-prep
 import { readSessionTranscriptModelContextInWorker } from "./session-transcript-read-worker-runtime.js";
 
 const { run } = vi.hoisted(() => ({ run: vi.fn() }));
+// mock-isolation: Keep native worker creation and database resource registration outside this fixture.
 vi.mock("./session-transcript-read-pools.js", () => ({
   createSessionTranscriptReadPool: () => ({ run }),
 }));
