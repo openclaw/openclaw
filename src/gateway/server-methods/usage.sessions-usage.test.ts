@@ -517,41 +517,46 @@ describe("sessions.usage", () => {
   });
 
   it("applies the usage size budget to the selected creator", async () => {
-    const unrelated = Array.from({ length: 20_001 }, (_, index) => ({
-      sessionId: `other-creator-${index}`,
-      sessionFile: `/tmp/other-creator-${index}.jsonl`,
-      mtime: index + 1,
-    }));
-    const selected = {
-      sessionId: "selected-creator",
-      sessionFile: "/tmp/selected-creator.jsonl",
-      mtime: 1,
-    };
-    const store = Object.fromEntries(
-      unrelated.map(({ sessionId, mtime }) => [
-        `agent:main:${sessionId}`,
-        { sessionId, updatedAt: mtime, createdActor: { type: "system" as const } },
-      ]),
-    );
-    projectionFixture = createUsageSessionStoreFixture(
-      store,
-      Object.keys(store).map((key) => [key, "main"] as const),
-    );
-    vi.mocked(discoverAllSessions).mockResolvedValueOnce([...unrelated, selected]);
-    vi.mocked(loadSessionCostSummariesFromCache).mockImplementationOnce(async ({ sessions }) => ({
-      summaries: sessions.map(() => ({ ...createEmptyCostUsageTotals(), totalTokens: 7 })),
-      cacheStatus: {
-        status: "fresh",
-        cachedFiles: sessions.length,
-        pendingFiles: 0,
-        staleFiles: 0,
-      },
-    }));
-    const result = readResult(
-      await runSessionsUsage({ ...BASE_USAGE_RANGE, creatorKey: '["unknown"]', limit: 1 }),
-    );
-    expect(result.sessions).toMatchObject([{ key: "agent:main:selected-creator" }]);
-    expect(result.totals.totalTokens).toBe(7);
+    await withOpenClawTestState({ label: "usage-creator-budget" }, async (state) => {
+      const unrelated = Array.from({ length: 20_001 }, (_, index) => ({
+        sessionId: `other-creator-${index}`,
+        sessionFile: `/tmp/other-creator-${index}.jsonl`,
+        mtime: index + 1,
+      }));
+      const selected = {
+        sessionId: "selected-creator",
+        sessionFile: "/tmp/selected-creator.jsonl",
+        mtime: 1,
+      };
+      const key = "agent:main:selected-creator";
+      const entry: SessionEntry = {
+        sessionId: selected.sessionId,
+        updatedAt: selected.mtime,
+        createdActor: { type: "system" },
+      };
+      const storePath = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
+      replaceSessionEntrySync({ agentId: "main", sessionKey: key, storePath }, entry);
+      projectionFixture = createUsageSessionStoreFixture(
+        { [key]: entry },
+        [[key, "main"]],
+        () => storePath,
+      );
+      vi.mocked(discoverAllSessions).mockResolvedValueOnce([...unrelated, selected]);
+      vi.mocked(loadSessionCostSummariesFromCache).mockImplementationOnce(async ({ sessions }) => ({
+        summaries: sessions.map(() => ({ ...createEmptyCostUsageTotals(), totalTokens: 7 })),
+        cacheStatus: {
+          status: "fresh",
+          cachedFiles: sessions.length,
+          pendingFiles: 0,
+          staleFiles: 0,
+        },
+      }));
+      const result = readResult(
+        await runSessionsUsage({ ...BASE_USAGE_RANGE, creatorKey: '["system",null]', limit: 1 }),
+      );
+      expect(result.sessions).toMatchObject([{ key }]);
+      expect(result.totals.totalTokens).toBe(7);
+    });
   });
 
   it.each(["available", "time budget"])(
