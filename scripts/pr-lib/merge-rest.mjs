@@ -182,7 +182,7 @@ function* mergePolicySteps(repo) {
     const parsed = parseGithubResponse(response);
     requireEvidence(
       !(parsed.status === "404" && parsed.body?.message === "Not Found"),
-      "classic branch-protection policy is unavailable to this writer; a generic 404 or hidden GraphQL rule cannot prove absence",
+      "classic branch-protection policy is unavailable to this writer; a generic 404 or hidden GraphQL rule cannot prove absence. The CI exception requires an authoritative policy read. Repair failed CI and use ordinary green-CI landing when its normal admission succeeds; do not change credentials or supply a policy snapshot. This refusal does not establish environment approval or production deployment authority",
     );
     if (parsed.status !== "404" || parsed.body?.message !== "Branch not protected") {
       throw error;
