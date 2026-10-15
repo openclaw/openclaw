@@ -494,7 +494,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
     },
   );
 
-  it.each(["split-base", "worktree-config"])(
+  it.each(["split-base", "worktree-config", "metadata-mode"])(
     "preserves a newer retained %s before native deletion",
     async (kind) => {
       await fs.writeFile(path.join(record.path, ".git"), `gitdir: ${admin}\n`);

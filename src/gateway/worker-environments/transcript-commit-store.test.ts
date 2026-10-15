@@ -55,6 +55,20 @@ describe("worker transcript commit store", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
+  it("recovers pending work and replays a terminal result across reopen", async () => {
+    expect(await store.begin(input)).toEqual({ kind: "claimed" });
+    expect(await store.begin(input)).toEqual({ kind: "recover" });
+
+    nowMs = 1_010;
+    expect(await store.complete({ ...input, outcome: SUCCESS_OUTCOME })).toEqual(SUCCESS_OUTCOME);
+    expect(await store.begin(input)).toEqual({ kind: "replay", outcome: SUCCESS_OUTCOME });
+
+    await closeStateDatabaseForTest();
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    store = createWorkerTranscriptCommitStore({ database, now: () => nowMs });
+    expect(await store.begin(input)).toEqual({ kind: "replay", outcome: SUCCESS_OUTCOME });
+  });
+
   it("rejects a tuple replayed with a different payload or environment", async () => {
     expect(await store.begin(input)).toEqual({ kind: "claimed" });
     expect(await store.begin({ ...input, requestHash: "b".repeat(64) })).toEqual({
@@ -125,6 +139,21 @@ describe("worker transcript commit store", () => {
     await store.discardUncommitted(replacement);
     expect(await store.begin(replacement)).toEqual({ kind: "replay", outcome: SUCCESS_OUTCOME });
     expect(await store.begin({ ...input, seq: 2 })).toEqual({ kind: "claimed" });
+  });
+
+  it("starts an independent sequence for a later owner epoch", async () => {
+    expect(await store.begin(input)).toEqual({ kind: "claimed" });
+    await store.complete({ ...input, outcome: SUCCESS_OUTCOME });
+    const replacement = {
+      ...input,
+      environmentId: "worker-b",
+      runEpoch: input.runEpoch + 1,
+    };
+
+    expect(await store.begin(replacement)).toEqual({ kind: "claimed" });
+    expect(await store.complete({ ...replacement, outcome: SUCCESS_OUTCOME })).toEqual(
+      SUCCESS_OUTCOME,
+    );
   });
 
   it("preserves submission order and captures inputs before yielding", async () => {

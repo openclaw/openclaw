@@ -240,6 +240,35 @@ describe("ManagedWorktreeService canonical paths", () => {
     });
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it.skipIf(process.platform === "win32")(
+    "canonicalizes managed paths minted below a symlinked state directory",
+    async () => {
+      const realStateDir = await fs.mkdtemp(path.join(root, "real-state-"));
+      const linkedStateDir = path.join(root, "linked-state");
+      await fs.symlink(realStateDir, linkedStateDir, "dir");
+      const linkedStateService = new ManagedWorktreeService({
+        env: { ...process.env, OPENCLAW_STATE_DIR: linkedStateDir },
+      });
+
+      const created = await linkedStateService.create({
+        repoRoot: repo,
+        name: "canonical-state",
+        baseRef: "HEAD",
+      });
+      const expectedPath = path.join(
+        await fs.realpath(realStateDir),
+        "worktrees",
+        created.repoFingerprint,
+        "canonical-state",
+      );
+      expect(created.path).toBe(expectedPath);
+
+      await linkedStateService.acquire(created.id);
+      await expect(linkedStateService.removeIfLossless(created.id)).resolves.toBe(true);
+      await expect(fs.stat(expectedPath)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 });
 
 describe("configured managed worktree root", () => {
@@ -339,7 +368,7 @@ describe("configured managed worktree root", () => {
     expect((await service.restore({ id: original.id })).path).toBe(original.path);
   });
 
-  it.each(["deep"])(
+  it.each(["deep", "symlink"])(
     "preserves %s custom-root contents during GC, including after a root change",
     async (kind) => {
       const nestedRoot = path.join(
@@ -430,6 +459,20 @@ describe("ManagedWorktreeService allocation and orphan preservation", () => {
     expect(second.name).toBe("release-planning-2");
   });
 
+  it("numbers inferred names around unmanaged Git and filesystem collisions", async () => {
+    const anchor = await service.create({ repoRoot: repo, name: "anchor", baseRef: "HEAD" });
+    await git(repo, "branch", "openclaw/release-planning");
+    await fs.mkdir(path.join(path.dirname(anchor.path), "release-planning-2"));
+
+    const created = await service.create({
+      repoRoot: repo,
+      suggestedName: "release-planning",
+      baseRef: "HEAD",
+    });
+
+    expect(created.name).toBe("release-planning-3");
+  });
+
   it("reuses concurrent inferred names for the same owner", async () => {
     const owner = {
       repoRoot: repo,
@@ -450,7 +493,10 @@ describe("ManagedWorktreeService allocation and orphan preservation", () => {
   });
 
   it.each([
+    { ownerKind: "workboard", state: "clean", rejectsChangedBase: true },
     { ownerKind: "workboard", state: "dirty", rejectsChangedBase: true },
+    { ownerKind: "session", state: "dirty", rejectsChangedBase: false },
+    { ownerKind: "manual", state: "dirty", rejectsChangedBase: false },
     { ownerKind: undefined, state: "dirty", rejectsChangedBase: false },
   ] as const)(
     "preserves a $state checkout when ownerKind=$ownerKind requests another base",
@@ -590,4 +636,20 @@ describe("ManagedWorktreeService allocation and orphan preservation", () => {
       false,
     );
   });
+
+  it.skipIf(process.platform === "win32")(
+    "canonicalizes a symlinked state root before matching registered paths",
+    async () => {
+      const realStateDir = path.join(root, "real-state");
+      const linkedStateDir = path.join(root, "linked-state");
+      await fs.mkdir(realStateDir);
+      await fs.symlink(realStateDir, linkedStateDir, "dir");
+      env = { ...process.env, OPENCLAW_STATE_DIR: linkedStateDir };
+      service = new ManagedWorktreeService({ env });
+      const target = path.join(realStateDir, "worktrees", "fingerprint", "nested-via-symlink");
+      await addRegisteredWorktree(target, "committed");
+
+      await expectRegisteredWorktreePreserved(target, "committed");
+    },
+  );
 });

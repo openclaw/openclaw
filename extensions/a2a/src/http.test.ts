@@ -274,15 +274,13 @@ describe("A2A HTTP authentication and request limits", () => {
     });
   });
 
-  it("counts invalid requests, limits peers independently, and admits them after the window expires", async () => {
+  it("limits each peer independently and admits requests when the sliding window expires", async () => {
     let now = 10_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const harness = await startHttpHarness({ a2aConfig: { rateLimitPerMinute: 2 } });
     const request = { jsonrpc: "2.0", id: "task", method: "GetTask", params: { id: "missing" } };
 
-    await expect(
-      (await harness.post({ jsonrpc: "2.0", id: "invalid" })).json(),
-    ).resolves.toMatchObject({ error: { code: -32600 } });
+    await harness.post(request);
     await harness.post(request);
     const limited = await harness.post(request);
     expect(limited.status).toBe(200);
@@ -389,6 +387,24 @@ describe("A2A HTTP authentication and request limits", () => {
     expect(Buffer.byteLength(await response.text())).toBeLessThan(1_024);
   });
 
+  it("charges schema-invalid requests to the peer rate limit", async () => {
+    const harness = await startHttpHarness({ a2aConfig: { rateLimitPerMinute: 1 } });
+
+    const invalid = await harness.post({ jsonrpc: "2.0", id: "invalid" });
+    await expect(invalid.json()).resolves.toMatchObject({ error: { code: -32600 } });
+
+    const limited = await harness.post({
+      jsonrpc: "2.0",
+      id: "limited",
+      method: "GetTask",
+      params: { id: "missing" },
+    });
+    await expect(limited.json()).resolves.toMatchObject({
+      id: "limited",
+      error: { code: -32000, message: expect.stringContaining("rate limited") },
+    });
+  });
+
   it("keeps the overflow fallback bounded when its request ID cannot fit", async () => {
     const harness = await startHttpHarness();
     const requestBody = JSON.stringify({
@@ -458,6 +474,11 @@ describe("A2A JSON-RPC protocol boundary", () => {
   it.each([
     ["unknown method", { jsonrpc: "2.0", id: "bad", method: "tasks/send" }, -32601],
     [
+      "missing message parts",
+      { jsonrpc: "2.0", id: "bad", method: "SendMessage", params: { message: { role: "user" } } },
+      -32602,
+    ],
+    [
       "invalid context id",
       {
         jsonrpc: "2.0",
@@ -486,21 +507,28 @@ describe("A2A JSON-RPC protocol boundary", () => {
     await expect(response.json()).resolves.toMatchObject({ id: "bad", error: { code: errorCode } });
   });
 
-  it("rejects push configuration with a capability-specific error before creating work", async () => {
+  it.each([
+    ["CreateTaskPushNotificationConfig", -32003],
+    ["SetTaskPushNotificationConfig", -32003],
+    ["GetTaskPushNotificationConfig", -32003],
+    ["ListTaskPushNotificationConfig", -32003],
+    ["ListTaskPushNotificationConfigs", -32003],
+    ["DeleteTaskPushNotificationConfig", -32003],
+    ["SendStreamingMessage", -32004],
+    ["SubscribeToTask", -32004],
+    ["GetExtendedAgentCard", -32004],
+    ["UnknownTaskPushNotificationConfig", -32601],
+  ])("rejects %s with capability-specific error %s", async (method, code) => {
     const onDispatch = vi.fn(async () => {});
     const harness = await startHttpHarness({ onDispatch });
     const createTask = vi.spyOn(harness.taskStore, "create");
-    const response = await harness.post({
-      jsonrpc: "2.0",
-      id: "capability",
-      method: "CreateTaskPushNotificationConfig",
-    });
+    const response = await harness.post({ jsonrpc: "2.0", id: "capability", method });
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       jsonrpc: "2.0",
       id: "capability",
-      error: { code: -32003, message: expect.any(String) },
+      error: { code, message: expect.any(String) },
     });
     expect(onDispatch).not.toHaveBeenCalled();
     expect(createTask).not.toHaveBeenCalled();
@@ -602,22 +630,23 @@ describe("A2A JSON-RPC protocol boundary", () => {
 
 describe("A2A SendMessage task references", () => {
   it.each([
+    ["unknown", -32001],
     ["foreign", -32001],
     ["owned", -32004],
     ["conflicting context", -32602],
   ])("rejects %s task references without new work", async (kind, code) => {
     const onDispatch = vi.fn(async () => {});
     const harness = await startHttpHarness({ onDispatch });
-    const referenced = harness.taskStore.create(
-      "existing-context",
-      kind === "foreign" ? "beta" : "alpha",
-    );
-    const before = structuredClone(referenced);
+    const referenced =
+      kind === "unknown"
+        ? undefined
+        : harness.taskStore.create("existing-context", kind === "foreign" ? "beta" : "alpha");
+    const before = referenced && structuredClone(referenced);
     const create = vi.spyOn(harness.taskStore, "create");
 
     const response = await harness.post(
       sendRequest({
-        taskId: referenced.id,
+        taskId: referenced?.id ?? "missing",
         contextId: kind === "conflicting context" ? "other-context" : undefined,
         returnImmediately: true,
       }),
@@ -627,7 +656,9 @@ describe("A2A SendMessage task references", () => {
     await expect(response.json()).resolves.toMatchObject({ error: { code } });
     expect(create).not.toHaveBeenCalled();
     expect(onDispatch).not.toHaveBeenCalled();
-    expect(harness.taskStore.get(referenced.id)).toEqual(before);
+    if (referenced) {
+      expect(harness.taskStore.get(referenced.id)).toEqual(before);
+    }
   });
 
   it("accepts a context-only follow-up as a new task", async () => {
