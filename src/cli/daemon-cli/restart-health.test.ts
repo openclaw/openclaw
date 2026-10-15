@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayService } from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import {
+  classifyPortListener,
   inspectAmbiguousOwnershipWithProbe,
   inspectGatewayRestartWithSnapshot,
   inspectPortUsage,
