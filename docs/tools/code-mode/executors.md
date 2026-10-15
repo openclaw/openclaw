@@ -123,6 +123,12 @@ by the host execution deadline. Paginate or narrow large tool results and avoid
 retaining large arrays; inspect completed actions before retrying. Captured Node
 output retains only a bounded prefix, including when a cell emits many entries
 without yielding. Fresh cells get fresh globals even when a worker is reused.
+Settled input and guest errors release their cell context and keep healthy workers
+available for reuse. Native failures, interrupted execution, and cancellation
+still retire the worker.
+Node Code Mode leaves garbage collection to V8 instead of requesting inspector
+full collections between cells or while a cell is suspended. Its heap limit,
+execution deadline, GC-pressure detection, and worker retirement still apply.
 Neither executor's setting caps total Gateway RSS. Worker overhead and host-side tool results also
 consume memory. A retained Node context can use more total host memory than a
 size-limited QuickJS snapshot. The shared limit of 64 suspended cells and

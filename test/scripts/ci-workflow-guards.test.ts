@@ -2602,6 +2602,33 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     },
   );
 
+  it.each([
+    ["current shard 1", {}, 24],
+    ["current shard 2", { matrix: { shard: 2 } }, 25],
+    ["frozen shard 1", { frozenTarget: true }, 20],
+    ["frozen shard 2", { frozenTarget: true, matrix: { shard: 2 } }, 20],
+    ["unclassified shard 1", { preflightOutputs: { frozen_target: "" } }, 20],
+    ["unclassified shard 2", { preflightOutputs: { frozen_target: "" }, matrix: { shard: 2 } }, 20],
+    ["hosted override", { runnerBackend: "github" }, 40],
+    ["hybrid retry", { runnerBackend: "hybrid", runAttempt: 2 }, 40],
+    ["manual fallback", { eventName: "workflow_dispatch" }, 40],
+    ["PR retry", { eventName: "pull_request", runAttempt: 2 }, 40],
+    ["noncanonical fallback", { repository: "example/openclaw" }, 40],
+  ] as const)("bounds real-Gateway job time for %s", (_label, overrides, minutes) => {
+    const job = readCiWorkflow().jobs["checks-ui-e2e-real-gateway"];
+    expect(
+      evaluateWorkflowExpression(job["timeout-minutes"], {
+        eventName: "schedule",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        runnerBackend: "blacksmith",
+        frozenTarget: false,
+        matrix: { shard: 1 },
+        ...overrides,
+      }),
+    ).toBe(minutes);
+  });
+
   it("gives breaker-routed hosted jobs their hosted timeout budgets", () => {
     const workflow = readCiWorkflow();
     const context = {
@@ -6466,9 +6493,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       },
       run: "node scripts/pr-crabbox-gate-publisher.mjs --publish",
     });
-    expect(job.steps[2].run).toContain("crabbox_0.46.0_linux_amd64.tar.gz");
+    expect(job.steps[2].run).toContain("crabbox_0.77.0_linux_amd64.tar.gz");
     expect(job.steps[2].run).toContain(
-      "6a9341e810307356361dbed4c4b84be28a036b5cc291af1566d2ccd376570d90",
+      "cbf6cb74251a454c65d13d7a92b070cf8c37ee81c300c97123063b9d21206d5f",
     );
     expect(job.steps.slice(3, 5)).toMatchObject([
       {

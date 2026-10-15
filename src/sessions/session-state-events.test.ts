@@ -92,16 +92,34 @@ afterEach(async () => {
 describe("session state events", () => {
   it("publishes the inserted head and notice once, leaving replay state unchanged", () => {
     const database = createDatabaseOptions();
-    const input = eventInput({ dedupeKey: "replayed-event" });
+    const input = eventInput({
+      dedupeKey: "replayed-event",
+      summary: "event \ud800",
+      payload: { reason: "requested" },
+    });
+    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(database).db);
     const record = (now: number) =>
       runOpenClawStateWriteTransaction(
-        ({ db }) => recordSessionStateEventInDatabase(db, input, now),
+        ({ db: writer }) => recordSessionStateEventInDatabase(writer, input, now),
         database,
       );
-    const first = record(1000);
+    const reads = trackSqliteStatementExecutions(db, ["events"], (sql) =>
+      /^select\b/i.test(sql) && /\bfrom\s+"session_state_events"/i.test(sql) ? "events" : null,
+    );
+    let first: ReturnType<typeof record>;
+    try {
+      first = record(1000);
+    } finally {
+      reads.restore();
+    }
+    expect(reads.counts.events).toBe(0);
     expect(first.row?.sequence).toBeGreaterThan(0);
+    expect(first.row).toMatchObject({
+      summary: "event \ufffd",
+      payload_json: '{"reason":"requested"}',
+      occurred_at: 1000,
+    });
     expect(first.notices).toHaveLength(1);
-    const db = openOpenClawStateDatabase(database).db;
     const readHead = () =>
       db.prepare("SELECT last_sequence, updated_at FROM session_state_heads").get();
     const head = readHead();

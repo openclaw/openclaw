@@ -7,6 +7,7 @@ export const databaseWorkerExtensionTestRoots = [
 
 export const databaseWorkerExtensionTestFiles = [
   "extensions/alibaba/video-generation-provider.test.ts",
+  "extensions/mcp-events/src/service.test.ts",
   "extensions/codex/src/conversation-binding.test.ts",
   "extensions/codex/src/conversation-control.test.ts",
   "extensions/codex/src/app-server/native-execution-policy.incognito.test.ts",
@@ -302,6 +303,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/crabbox/src/crabbox-gateway-methods.test.ts",
   "extensions/crabbox/src/crabbox-worker-capture-nonblocking.test.ts",
   "extensions/crabbox/src/crabbox-worker-enrollment-overlap.test.ts",
+  "extensions/crabbox/src/crabbox-worker-heartbeat.test.ts",
   "extensions/crabbox/src/crabbox-worker-node-enrollment.test.ts",
   "extensions/crabbox/src/crabbox-worker-prepared-image.test.ts",
   "extensions/crabbox/src/crabbox-worker-project.test.ts",

@@ -25,8 +25,10 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { startCatalogRecoveryMcpServer } from "./agent-bundle-mcp-catalog-recovery.test-support.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
+import { createConnectionInvalidationMcpFixture } from "./agent-bundle-mcp-invalidation.test-support.js";
 import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-manager-cleanup.js";
 import {
   bindSessionMcpRuntimeTestScheduler,
@@ -562,6 +564,56 @@ describe("session MCP runtime", () => {
       await runtime.dispose();
       await catalogResult;
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports initialize authentication refusal with the server name without response secrets", async () => {
+    const server = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        http.createServer((_req, res) => {
+          res.writeHead(401, {
+            "content-type": "application/json",
+            "www-authenticate": 'Bearer realm="test-header-secret"',
+          });
+          res.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: null,
+              error: { code: -32001, message: "expired token: test-body-secret" },
+            }),
+          );
+        }),
+    });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-auth-refusal",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            lab: {
+              transport: "streamable-http",
+              url: `http://127.0.0.1:${server.claim.port}/mcp`,
+              headers: { Authorization: "Bearer test-request-secret" },
+            },
+          },
+        },
+      },
+    });
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.diagnostics).toEqual([
+        expect.objectContaining({
+          serverName: "lab",
+          message: expect.stringContaining("authentication refused (401)"),
+        }),
+      ]);
+      expect(catalog.tools).toEqual([]);
+      expect(JSON.stringify(catalog)).not.toMatch(/test-(?:body|header|request)-secret/);
+    } finally {
+      await runtime.dispose();
+      await server.releaseListener();
+      await server.claim.release();
     }
   });
 
@@ -3308,53 +3360,34 @@ describe("disposeSession timeout", () => {
     { timeout: LIST_TOOLS_TEST_DEADLINE_MS },
     async ({ signal }) => {
       const tempDir = makeTempDir(tempDirs, "bundle-mcp-inflight-connect-");
-      const invalidatingServer = {
-        serverName: "invalidatingServer",
-        serverPath: path.join(tempDir, "invalidating-server.mjs"),
-        logPath: path.join(tempDir, "invalidating-server.log"),
-      };
-      const slowConnectServer = {
-        serverName: "slowConnectServer",
-        serverPath: path.join(tempDir, "slow-connect-server.mjs"),
-        logPath: path.join(tempDir, "slow-connect-server.log"),
-      };
-
-      await writeListToolsMcpServer({
-        filePath: invalidatingServer.serverPath,
-        logPath: invalidatingServer.logPath,
-        capabilities: { tools: { listChanged: true } },
-        notifyListChangedOnInitialized: true,
-      });
-      await writeListToolsMcpServer({
-        filePath: slowConnectServer.serverPath,
-        logPath: slowConnectServer.logPath,
-        initializeDelayMs: 200,
-      });
-
       testing.setBundleMcpCatalogListTimeoutMsForTest(4_000);
-
-      const runtime = await getOrCreateSessionMcpRuntime({
-        sessionId: "session-inflight-connect-test",
-        sessionKey: "agent:test:session-inflight-connect-test",
-        workspaceDir: "/workspace",
-        cfg: {
-          mcp: {
-            servers: Object.fromEntries(
-              [invalidatingServer, slowConnectServer].map(({ serverName, serverPath }) => [
-                serverName,
-                {
-                  command: process.execPath,
-                  args: [serverPath],
-                  connectionTimeoutMs: 2_000,
-                },
-              ]),
-            ),
-          },
-        },
-      });
+      const { invalidatingServer, slowConnectServer, invalidatingRuntime, runtime } =
+        await createConnectionInvalidationMcpFixture(tempDir, receipts.endpoint);
 
       try {
         const firstCatalog = runtime.getCatalog();
+        // Hold the sibling handshake, not a startup-dependent delay, across invalidation.
+        await withinTest(
+          Promise.all([
+            fixtureEventBeforeSettlement(
+              invalidatingServer.logPath,
+              "recv notifications/initialized",
+              firstCatalog,
+            ),
+            fixtureEventBeforeSettlement(
+              slowConnectServer.logPath,
+              "recv initialize",
+              firstCatalog,
+            ),
+          ]),
+          signal,
+        );
+        await waitForRuntimeState(
+          () => invalidatingRuntime.peekCatalog() !== null,
+          "invalidating server's initial catalog published",
+          signal,
+        );
+        receipts.release(invalidatingServer.logPath, "invalidate-while-connecting");
         await withinTest(
           fixtureEventBeforeSettlement(
             invalidatingServer.logPath,
@@ -3363,8 +3396,15 @@ describe("disposeSession timeout", () => {
           ),
           signal,
         );
+        await waitForRuntimeState(
+          () => invalidatingRuntime.peekCatalog() === null,
+          "client processed catalog invalidation while sibling initialization is held",
+          signal,
+        );
 
-        const secondCatalog = await runtime.getCatalog();
+        const secondCatalogPromise = runtime.getCatalog();
+        receipts.release(slowConnectServer.logPath, "finish-connecting");
+        const secondCatalog = await secondCatalogPromise;
         await firstCatalog;
 
         expect(Object.keys(secondCatalog.servers).toSorted()).toEqual([
@@ -3373,6 +3413,8 @@ describe("disposeSession timeout", () => {
         ]);
         expect(secondCatalog.diagnostics ?? []).toEqual([]);
       } finally {
+        receipts.release(invalidatingServer.logPath, "invalidate-while-connecting");
+        receipts.release(slowConnectServer.logPath, "finish-connecting");
         await runtime.dispose();
       }
     },

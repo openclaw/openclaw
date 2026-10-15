@@ -1,4 +1,3 @@
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { canonicalizeRealtimeTranscriptionProviderId } from "../../../realtime-transcription/provider-registry.js";
 import { getVoiceProviderConfig } from "../../../tts/voice-models.js";
@@ -66,32 +65,35 @@ export async function buildTalkTranscriptionCatalog(config: OpenClawConfig, agen
             transcriptionConfig.provider,
             ...Object.keys(transcriptionConfig.providers),
           ]).map(async (provider) => {
-            const rawConfig = getVoiceProviderConfig({
-              providerConfigs: transcriptionConfig.providers,
-              provider,
-              configuredProviderId:
-                activeTranscriptionProvider &&
-                normalizeOptionalLowercaseString(provider.id) ===
-                  normalizeOptionalLowercaseString(activeTranscriptionProvider)
-                  ? transcriptionConfig.provider
-                  : undefined,
-            });
-            const rawConfigWithModel =
-              transcriptionConfig.model && rawConfig.model === undefined
-                ? { ...rawConfig, model: transcriptionConfig.model }
-                : rawConfig;
-            const providerConfig =
-              provider.resolveConfig?.({ cfg: config, rawConfig: rawConfigWithModel }) ??
-              rawConfigWithModel;
-            const entry: Record<string, unknown> = {
-              id: provider.id,
-              label: provider.label,
-              configured: await configuredOrFalseAsync(
+            let configured =
+              transcriptionSelection.ready && provider.id === activeTranscriptionProvider;
+            if (!configured) {
+              const rawConfig = getVoiceProviderConfig({
+                providerConfigs: transcriptionConfig.providers,
+                provider,
+                configuredProviderId:
+                  provider.id === activeTranscriptionProvider
+                    ? transcriptionConfig.provider
+                    : undefined,
+              });
+              const rawConfigWithModel =
+                transcriptionConfig.model && rawConfig.model === undefined
+                  ? { ...rawConfig, model: transcriptionConfig.model }
+                  : rawConfig;
+              const providerConfig =
+                provider.resolveConfig?.({ cfg: config, rawConfig: rawConfigWithModel }) ??
+                rawConfigWithModel;
+              configured = await configuredOrFalseAsync(
                 () =>
                   provider.isConfiguredAsync?.({ cfg: config, providerConfig }) ??
                   provider.isConfigured?.({ cfg: config, providerConfig }) ??
                   false,
-              ),
+              );
+            }
+            const entry: Record<string, unknown> = {
+              id: provider.id,
+              label: provider.label,
+              configured,
               modes: ["transcription"],
               transports: ["gateway-relay"],
               brains: ["none"],

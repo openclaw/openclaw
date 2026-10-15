@@ -552,6 +552,9 @@ export async function tryWriteCompletionCache(
         ? `timed out after ${timeoutMs / 1000}s`
         : result.stderr.trim();
   } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
     failure = String(error);
   }
   if (!jsonMode) {

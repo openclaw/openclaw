@@ -52,7 +52,10 @@ GitHub-hosted runners.
 PR jobs and independent checks run to completion after a failure, including forks and retries. Setup, planning, build dependencies, cancellation, and watchdog deadlines still stop work that cannot safely proceed. Failing runs therefore take longer and use more runner time; successful runs keep the same selected checks, job names, and concurrency. `pr-failure-report` compares
 every failed or timed-out job with the newest completed scheduled main CI run
 and publishes a **pre-existing**, **new**, or **unknown** classification in its
-summary and `openclaw/ci-gate`, with machine-readable JSON output. Reasons identify
+summary and `openclaw/ci-gate`, with machine-readable JSON output. When GitHub reports
+only successful or skipped prerequisites, the reporter records that no failures
+need classification without enumerating job pages. The CI gate still checks
+selected lanes and rejects unexpected skips. Reasons identify
 matched signatures or job-name-only matches. The existing known-main-red
 allowance and gate result stay unchanged. Detected build-verifier or lint-mode
 scope differences are **unknown**; other reasons say when selected scope was
@@ -95,6 +98,25 @@ Android screenshot-input PRs and ordinary full manual CI run the existing phone
 and Wear store capture script in one hosted Ubuntu job. The final CI gate requires
 capture to succeed; unit-test-only and documentation changes omit it. See
 [the job graph](/ci/pipeline#pipeline-overview) for capture evidence and scope details.
+
+Android Release E2E adds one hosted Ubuntu KVM job to exact-source, full-scope
+manual validation when Android is selected, matching the iOS qualification
+selection. The final CI gate requires its success. Manual Android Store Release
+also requires qualification before the signing/upload job; internal distributions
+and Gateway APK publication retain their existing paths. It validates phone
+onboarding/chat/relaunch against a pinned stable Gateway, native transcript and
+keyboard behavior, and Wear native input, chat, history, restarts, and reply-reader
+behavior through a local raw-message transport at the Google Data Layer boundary.
+The production wire codec, phone bridge/controller, Gateway, and response/event
+path still execute. Real Google capability discovery, listener-service delivery,
+and Play services package/signature enforcement remain separate physical-device
+smoke coverage. Built debug APK hash, signature, package, version, and listener
+declaration checks remain in the gate; Release/R8, store signing, and upload
+remain owned by the existing release lane. See the
+[Android release validation contract](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md#release-validation)
+for evidence, rerun, and coverage details. Standard SDK images and build
+dependencies are downloaded during setup; no Google account, companion APK, or
+paired-device image is provisioned.
 
 Eligible core-source and core-test PRs use targeted type checks when every selected compiler input exists in the checkout. Deleted Markdown files and UI stylesheets do not prevent narrowing for accompanying code changes. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted compiler inputs keep the full type-check coverage.
 
@@ -161,7 +183,9 @@ Android native resource preparation uses the Mermaid renderer's filtered depende
 
 Android phone tests use up to four isolated JVMs on Blacksmith and retain [Gradle-owned cache expiry](/ci/runners#runner-backend-modes). The same four normal rows split phone tests from app lint: Wear owns Wear tests and lint plus third-party app lint, and Kotlin lint owns Play/shared lint. Canonical Blacksmith push and PR first attempts, including forks, overlap all four rows; the GitHub override, retries, manual dispatches, schedules, and noncanonical repositories retain two. All test and lint tasks remain selected.
 
-macOS Swift CI runs the app and independent package suites in separate [native phases](/ci/pipeline#macos-swift-phases), retaining every test and the existing concurrency and timeout limits.
+macOS Swift CI runs the app and independent package suites in separate [native phases](/ci/pipeline#macos-swift-phases), retaining every test and the existing concurrency limits. Ordinary native phases retain
+a 30-minute budget; full nonpublishing app-host recovery proof has 75 minutes to build
+and stage the exact runtime, exercise Retry, and verify a fresh-process relaunch.
 
 Native test builds retain coverage and source-line backtraces while omitting IDE indexes and full debugger type metadata. Local development builds keep their normal debug settings.
 

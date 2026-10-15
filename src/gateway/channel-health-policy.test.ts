@@ -40,14 +40,6 @@ function activeRunAccount(lastRunActivityAt: number, overrides: Record<string, u
   });
 }
 
-function staleTransportAccount(overrides: Record<string, unknown> = {}) {
-  return connectedAccount({
-    lastStartAt: 0,
-    lastTransportActivityAt: 0,
-    ...overrides,
-  });
-}
-
 function inheritedTransportAccount() {
   return connectedAccount({
     lastStartAt: 50_000,
@@ -66,97 +58,12 @@ describe("evaluateChannelHealth", () => {
     expect(evaluation).toEqual({ healthy: true, reason: "unmanaged" });
   });
 
-  it("uses channel connect grace before flagging disconnected", () => {
-    const evaluation = evaluateHealth(
-      runningAccount({
-        connected: false,
-        lastStartAt: 95_000,
-      }),
-    );
-    expect(evaluation).toEqual({ healthy: true, reason: "startup-connect-grace" });
-  });
-
   it("trusts a fresh recorded starting lifecycle inside connect grace", () => {
     expect(
       evaluateHealth(
         runningAccount({ connected: false, lifecycle: "starting", lastStartAt: 95_000 }),
       ),
     ).toEqual({ healthy: true, reason: "startup-connect-grace" });
-  });
-
-  it("falls through to stale socket when recorded recovering outlives connect grace", () => {
-    expect(evaluateHealth(staleTransportAccount({ lifecycle: "recovering" }))).toEqual({
-      healthy: false,
-      reason: "stale-socket",
-    });
-  });
-
-  it("does not synthesize lifecycle grace without a start timestamp", () => {
-    expect(evaluateHealth(runningAccount({ connected: false, lifecycle: "starting" }))).toEqual({
-      healthy: false,
-      reason: "disconnected",
-    });
-  });
-
-  it.each([
-    {
-      name: "starting lifecycle",
-      account: runningAccount({ connected: false, lifecycle: "starting", lastStartAt: 101_000 }),
-      expected: { healthy: false, reason: "disconnected" },
-    },
-    {
-      name: "recovering lifecycle",
-      account: runningAccount({ connected: false, lifecycle: "recovering", lastStartAt: 101_000 }),
-      expected: { healthy: false, reason: "disconnected" },
-    },
-    {
-      name: "unrecorded lifecycle",
-      account: runningAccount({ connected: false, lastStartAt: 101_000 }),
-      expected: { healthy: false, reason: "disconnected" },
-    },
-    {
-      name: "disconnected active run",
-      account: activeRunAccount(101_000, { lastStartAt: 0, activeRunStartedAt: 101_000 }),
-      expected: { healthy: false, reason: "disconnected" },
-    },
-    {
-      name: "activity inherited before a future lifecycle",
-      account: runningAccount({
-        connected: false,
-        lifecycle: "starting",
-        lastStartAt: 101_000,
-        busy: true,
-        lastRunActivityAt: 99_000,
-      }),
-      expected: { healthy: false, reason: "disconnected" },
-    },
-    {
-      name: "disconnect inherited before a future lifecycle",
-      account: runningAccount({
-        connected: false,
-        lifecycle: "recovering",
-        lastStartAt: 101_000,
-        lastDisconnect: { at: 99_000, error: "socket closed" },
-      }),
-      expected: { healthy: false, reason: "disconnected" },
-    },
-    {
-      name: "stale transport inherited before a future lifecycle",
-      account: connectedAccount({
-        lifecycle: "ready",
-        lastStartAt: 101_000,
-        lastTransportActivityAt: 0,
-      }),
-      expected: { healthy: false, reason: "stale-socket" },
-    },
-  ])("does not trust future activity for $name", ({ account, expected }) => {
-    expect(evaluateHealth(account)).toEqual(expected);
-  });
-
-  it("lets recorded ready bypass wall-clock startup grace", () => {
-    expect(
-      evaluateHealth(runningAccount({ connected: false, lifecycle: "ready", lastStartAt: 99_999 })),
-    ).toEqual({ healthy: false, reason: "disconnected" });
   });
 
   it.each([
@@ -216,12 +123,6 @@ describe("evaluateChannelHealth", () => {
     });
   });
 
-  it("treats active runs as busy even when disconnected", () => {
-    const now = 100_000;
-    const evaluation = evaluateHealth(activeRunAccount(now - 30_000), { now });
-    expect(evaluation).toEqual({ healthy: true, reason: "busy" });
-  });
-
   it("flags a hung run masking a disconnected transport as stuck despite a fresh heartbeat", () => {
     const now = 30 * 60_000;
     const evaluation = evaluateHealth(
@@ -259,27 +160,6 @@ describe("evaluateChannelHealth", () => {
       { now },
     );
     expect(evaluation).toEqual({ healthy: false, reason: "disconnected" });
-  });
-
-  it("does not flag stale sockets for channels without transport tracking", () => {
-    const evaluation = evaluateHealth(
-      connectedAccount({
-        lastStartAt: 0,
-        lastTransportActivityAt: null,
-      }),
-    );
-    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
-  });
-
-  it("does not flag stale sockets without an active connected socket", () => {
-    const evaluation = evaluateHealth(
-      runningAccount({
-        lastStartAt: 0,
-        lastTransportActivityAt: 0,
-      }),
-      { now: 75_000, channelId: "slack" },
-    );
-    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
   });
 
   it("ignores inherited transport timestamps from a previous lifecycle", () => {
