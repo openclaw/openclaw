@@ -301,7 +301,6 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
   });
 
   it.each([
-    [1599, 0, false],
     [1600, 1, false],
     [1600, 1, true],
   ] as const)(

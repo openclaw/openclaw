@@ -1979,7 +1979,7 @@ export const en: TranslationMap & {
       dialogLabel: "Provider sign-in",
       prepareDialogLabel: "Local model setup",
       title: "Sign in with a provider",
-      connected: "Account connected. Choose a model when you want to test a reply.",
+      connected: "Account connected.",
       prepareTitle: "Set up a local model",
       starting: "Starting provider sign-in…",
       prepareStarting: "Starting local model setup…",

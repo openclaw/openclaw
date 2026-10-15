@@ -363,13 +363,13 @@ it("activates and restores setup credentials off-thread while preserving later n
 });
 
 it.each([
-  { selectedModel: "meta/muse-spark-1.3", selectModel: undefined },
-  { selectedModel: "meta/muse-spark-1.2", selectModel: undefined },
-  { selectedModel: "meta/muse-spark-1.3", selectModel: true },
-  { selectedModel: "meta/muse-spark-1.3", selectModel: false },
+  { selectedModel: "meta/muse-spark-1.3", modelName: "Muse Spark 1.3", selectModel: undefined },
+  { selectedModel: "meta/muse-spark-1.2", modelName: "Muse Spark 1.2", selectModel: undefined },
+  { selectedModel: "meta/muse-spark-1.3", modelName: "Muse Spark 1.3", selectModel: true },
+  { selectedModel: "meta/muse-spark-1.3", modelName: "Muse Spark 1.3", selectModel: false },
 ])(
   "activates the Muse route for main (model: $selectedModel, selectModel: $selectModel)",
-  async ({ selectedModel, selectModel }) => {
+  async ({ selectedModel, modelName, selectModel }) => {
     const setup = await fixture({ codex: true, primaryModel: modelRef });
     const starter = "meta/muse-spark-1.3";
     const original = { alias: "Existing Meta API model", agentRuntime: { id: "openclaw" } };
@@ -428,6 +428,7 @@ it.each([
             profiles: [],
             defaultModel: starter,
             agentRuntimeId: "muse",
+            nativeRuntimeConsent: ["muse"],
           }),
         },
       ],
@@ -550,6 +551,11 @@ it.each([
         );
         await whenAdmittedWizardSessionSettled(session);
         expect(session.getStatus(), session.getError()).toBe("done");
+        await expect(session.next()).resolves.toMatchObject({
+          done: true,
+          status: "done",
+          modelActivation: { modelRef: selectedModel, modelName },
+        });
       } finally {
         unsubscribe();
         resetConfigRuntimeState();
@@ -569,9 +575,11 @@ it.each([
           deps: setup.deps,
         }),
       );
-      expect(result).toMatchObject({ ok: true, modelRef: selectedModel });
+      expect(result).toMatchObject({ ok: true, modelRef: selectedModel, modelName });
     }
     const selected = (await readConfigFileSnapshot()).sourceConfig;
+    expect(selected.agents?.entries?.main?.nativeRuntimeConsent).toEqual(["muse"]);
+    expect(selected.agents?.entries?.other?.nativeRuntimeConsent).toBeUndefined();
     if (selectModel === false) {
       expect(JSON.stringify(selected.agents?.entries?.main?.model)).toBe(previousAgentModel);
     } else {
