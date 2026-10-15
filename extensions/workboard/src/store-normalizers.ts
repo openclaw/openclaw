@@ -388,9 +388,15 @@ function normalizeAttempt(record: Record<string, unknown>): WorkboardRunAttempt 
   });
 }
 
-function normalizeComment(record: Record<string, unknown>): WorkboardComment | null {
+function normalizeComment(
+  record: Record<string, unknown>,
+  stored?: readonly WorkboardComment[],
+): WorkboardComment | null {
   const id = normalizeOptionalString(record.id);
-  const body = normalizeBoundedString(record.body, undefined, 2000, "comment body");
+  // Lifecycle updates must preserve stored text; only new or edited bodies need validation.
+  const body =
+    stored?.find((comment) => comment.id === id && comment.body === record.body)?.body ??
+    normalizeBoundedString(record.body, undefined, 2000, "comment body");
   const createdAt = normalizeTimestamp(record.createdAt, 0);
   if (!id || !body || !createdAt) {
     return null;
@@ -801,7 +807,7 @@ export function normalizeMetadata(
     ),
     comments: normalizeList(
       record.comments,
-      normalizeComment,
+      (entry) => normalizeComment(entry, fallback.comments),
       MAX_CARD_COMMENTS,
       fallback.comments,
     ),

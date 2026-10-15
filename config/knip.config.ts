@@ -18,6 +18,8 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  // The prepublish registry executes this shared build-and-pack lifetime by path.
+  "scripts/lib/plugin-npm-build-and-pack.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
   "scripts/generate-postgres-schema.mts!",
   // Immutable activation and release deployment launch this packaged entry by path.
@@ -834,7 +836,6 @@ const config = {
     // The Lit/Solid presentation fixture and focused UI tests consume these seams;
     // the full-tree companion scan continues to audit their actual consumers.
     "ui/src/components/provider-icon.ts": ["exports"],
-    "ui/src/components/settings-ui.ts": ["exports"],
     "ui/src/components/terminal/terminal-panel.ts": ["types"],
     "ui/src/pages/chat/components/chat-attachment-card-solid.tsx": ["exports"],
     "ui/src/pages/chat/components/chat-camera-capture.tsx": ["types"],

@@ -21,7 +21,6 @@ import {
   applyExtractedSkillRoot,
   withExtractedArchiveRootMock,
   installPackageDirMock,
-  markClawPackageIndependentlyOwnedMock,
   pathExistsMock,
   tempDirs,
   expectInstallPackageSourceDir,
@@ -60,28 +59,6 @@ describe("skills-clawhub", () => {
   });
 
   registerRemoteClawHubTests(() => testWorkspaceDir);
-
-  it.each([
-    { clawManaged: false, recordsIndependentOwner: true },
-    { clawManaged: true, recordsIndependentOwner: false },
-  ])(
-    "records a direct skill install independently when clawManaged=$clawManaged",
-    async ({ clawManaged, recordsIndependentOwner }) => {
-      const result = await installTestSkill(testWorkspaceDir, "agentreceipt", { clawManaged });
-      expectInstalledSkill(result);
-      if (recordsIndependentOwner) {
-        expect(markClawPackageIndependentlyOwnedMock).toHaveBeenCalledWith({
-          kind: "skill",
-          source: "clawhub",
-          ref: "agentreceipt",
-          version: "1.0.0",
-          workspace: testWorkspaceDir,
-        });
-      } else {
-        expect(markClawPackageIndependentlyOwnedMock).not.toHaveBeenCalled();
-      }
-    },
-  );
 
   it("marks a missing deferred directory receipt as recovery incomplete", async () => {
     pathExistsMock.mockImplementation(
@@ -132,6 +109,30 @@ describe("skills-clawhub", () => {
     });
 
     expect(result).toMatchObject({ ok: false, recoveryIncomplete: true });
+  });
+
+  it("preserves incomplete recovery through the public ClawHub skill install", async () => {
+    await writeTrackedSkill(testWorkspaceDir, "agentreceipt", {
+      installedVersion: "1.0.0",
+      skillMd: "old skill",
+    });
+    installPackageDirMock.mockResolvedValueOnce({
+      ok: false,
+      error: "Could not restore the displaced skill directory",
+      recoveryIncomplete: true,
+    });
+
+    const result = await installTestSkill(testWorkspaceDir, "agentreceipt", {
+      version: "2.0.0",
+      force: true,
+      clawManaged: true,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "Could not restore the displaced skill directory",
+      recoveryIncomplete: true,
+    });
   });
 
   function mockSecurity(overrides: Partial<Parameters<typeof mockSkillSecurityVerdict>[0]>) {

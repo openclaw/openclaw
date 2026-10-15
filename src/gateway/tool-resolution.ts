@@ -339,6 +339,7 @@ export async function resolveGatewayScopedTools(
     sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     currentMessageId: params.currentMessageId,
+    currentConversationOrigin: params.currentConversationOrigin,
     currentInboundAudio: params.currentInboundAudio,
     sessionId: params.sessionId,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,

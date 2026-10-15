@@ -1,12 +1,39 @@
 import { nothing } from "lit";
 import { createComponent, createSignal, flush } from "solid-js";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { LitContent } from "../../../lit/solid-content.tsx";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { renderChatPaneHeader } from "./chat-pane-header.ts";
 
 export type ChatPaneHeaderProps = Parameters<typeof renderChatPaneHeader>[0];
+
+async function settleNativeMenu() {
+  flush();
+  await Promise.resolve();
+  flush();
+}
+
+export async function openNativeMenu(menu: Element) {
+  await settleNativeMenu();
+  const panel = menu.querySelector<HTMLElement>(".oc-menu")!;
+  if (!panel.matches(":popover-open")) {
+    menu.querySelector<HTMLButtonElement>(".oc-menu-trigger")!.click();
+    await settleNativeMenu();
+  }
+  expect(panel.matches(":popover-open")).toBe(true);
+}
+
+export async function selectNativeMenu(menu: Element, value: string) {
+  await openNativeMenu(menu);
+  const item = menu.querySelector<HTMLButtonElement>(`button[data-value="${value}"]`);
+  if (!item) {
+    throw new Error(`Expected native menu action: ${value}`);
+  }
+  expect(item.disabled).toBe(false);
+  item.click();
+  await settleNativeMenu();
+}
 
 export function chatPaneHeaderSessionRow(
   patch: Partial<GatewaySessionRow> = {},

@@ -81,7 +81,9 @@ On a fresh Mac, choose **This Mac** during onboarding. **Getting things ready**
 prepares the included runtime, starts the Gateway, and verifies that it is
 ready. This setup needs no runtime download, Node installation, Terminal,
 Homebrew, or administrator access. Connecting an AI provider can still require
-internet access.
+internet access. The first-run handoff keeps waiting while the app retries
+Gateway startup, then opens automatic setup once the Gateway is ready. A terminal
+failure or cancellation leaves onboarding unfinished.
 
 The app creates `<state>/bin/openclaw`, a small shell wrapper that runs the
 current bundled CLI with Bun and the included SQLite library. When the app runs

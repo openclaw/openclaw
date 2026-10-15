@@ -1,4 +1,3 @@
-import { html, nothing } from "lit";
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
@@ -36,9 +35,11 @@ import {
   resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { ensureBoardViewElement, renderBoardSessionSurface } from "./board-session-surface.tsx";
+import { emptyLegacyContent, solidContent } from "../../lit/solid-content.tsx";
+import { ensureBoardViewElement } from "./board-session-surface.tsx";
 import { ChatPaneHistory } from "./chat-pane-history.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
+import { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
@@ -621,23 +622,17 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   protected renderBoardPanel(board: ResolvedBoardView, layout: SidebarLayout) {
     const session = this.resolveBoardConversation();
     if (!this.isBoardPanelAvailable(board)) {
-      return nothing;
+      return emptyLegacyContent;
     }
     const error = !board.provider.hasLoadedSnapshot && board.provider.loadError$.value;
-    if (error) {
-      return html`<div
-        class="board-session-surface__state board-session-surface__state--error"
-        role="alert"
-      >
-        ${t("dashboardDocument.loadFailed", { error })}
-      </div>`;
-    }
     // Only the loaded board acknowledgment supplies a missing owner; its display key
     // must not replace the original session target (notably global versus a literal key).
     session.agentId ??= parseAgentSessionKey(board.snapshot.sessionKey)?.agentId;
     const connectionGeneration = this.connectionGeneration;
-    const renderSurface = () =>
-      renderBoardSessionSurface({
+    return solidContent(ChatBoardPanel, {
+      error: error || undefined,
+      elementReady: Boolean(customElements.get("openclaw-board-view")),
+      surface: {
         active: {
           owner: this,
           isPresented: () => isSidebarSlotVisible(layout, "dashboard") && this.visuallyPresented,
@@ -663,9 +658,8 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
             board.provider.refreshWidgetAppView(name, revision),
         } satisfies BoardViewCallbacks,
         widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
-      });
-    // Changing Lit's directive chain would replace the retained Solid board owner.
-    return html`${renderSurface()}`;
+      },
+    });
   }
 
   protected showDashboard(expanded: boolean): void {

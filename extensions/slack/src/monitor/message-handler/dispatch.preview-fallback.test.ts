@@ -25,7 +25,13 @@ import { slackSetupPlugin } from "../../channel.setup.js";
 import type { SlackSendResult } from "../../send.js";
 import { getSlackSessionRuns } from "../session-run-targets.js";
 import {
+  checkpoint,
+  contentTaskId,
   emitCompactProgressScenario,
+  expectRecordFields,
+  planUpdate,
+  requireMockCall,
+  taskUpdate,
   type SlackReplyOptionEvent,
 } from "./dispatch.compact-progress.test-support.js";
 import type { PreparedSlackMessage } from "./types.js";
@@ -174,20 +180,6 @@ function requireCapturedItemEventHandler() {
 
 const requireRecord = createRequireRecord("object", "label-not-object");
 
-function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(fields)) {
-    expect(record[key]).toEqual(value);
-  }
-}
-
-function requireMockCall(mock: unknown, index: number, label: string): unknown[] {
-  const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.[index];
-  if (!call) {
-    throw new Error(`missing ${label} call ${index + 1}`);
-  }
-  return call;
-}
-
 function expectMockCallArgFields(mock: unknown, index: number, fields: Record<string, unknown>) {
   expectRecordFields(requireRecord(requireMockCall(mock, index, "call")[0], "params"), fields);
 }
@@ -217,23 +209,6 @@ function expectNativeStreamText(text: string, count = 1) {
     },
   );
   expect(matches).toHaveLength(count);
-}
-
-function planUpdate(title: string) {
-  return { type: "plan_update", title };
-}
-
-function taskUpdate(
-  id: unknown,
-  title: string,
-  status: "pending" | "in_progress" | "complete" | "error",
-  extra?: Record<string, unknown>,
-) {
-  return { type: "task_update", id, title, status, ...extra };
-}
-
-function contentTaskId(prefix: string) {
-  return expect.stringMatching(new RegExp(`^${prefix}_[a-f0-9]{8}_1$`, "u"));
 }
 
 function collectNativeTaskUpdates() {
@@ -270,10 +245,6 @@ function progressAccount(
 
 function preamble(progressText: string, itemId: string, phase?: string): SlackReplyOptionEvent {
   return { kind: "item", itemKind: "preamble", progressText, itemId, phase };
-}
-
-function checkpoint(run: () => Promise<void>): { kind: "checkpoint"; run: () => Promise<void> } {
-  return { kind: "checkpoint", run };
 }
 
 function delivered(index = 0) {
@@ -1830,6 +1801,30 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       if (finalInStream) {
         expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
       }
+    },
+  );
+
+  it.each([true, false])(
+    "retracts a native model-wait headline before the final reply (detailed=%s)",
+    async (toolProgress) => {
+      const waitText = "Waiting for the local model to respond";
+      await dispatchNativeProgressScenario({
+        finalPayload: { text: FINAL_REPLY_TEXT },
+        progress: { style: "card", nativeTaskCards: true, toolProgress },
+        events: [
+          { kind: "item", itemKind: "model-wait", phase: "update", progressText: waitText },
+          checkpoint(async () => {
+            const start = requireRecord(startSlackStreamMock.mock.calls[0]?.[0], "wait start");
+            expect(start.chunks).toContainEqual(planUpdate(waitText));
+          }),
+          { kind: "item", itemKind: "model-wait", phase: "end" },
+          checkpoint(async () => {
+            const clear = requireRecord(appendSlackStreamMock.mock.calls.at(-1)?.[0], "wait clear");
+            expect(clear.chunks).toContainEqual(planUpdate(toolProgress ? "Thinking" : "Working"));
+          }),
+        ],
+      });
+      expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
     },
   );
 

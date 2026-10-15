@@ -14,7 +14,7 @@ import {
   SettingsStatus,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
-import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
+import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { LitContent } from "../../lit/solid-bridge.ts";
@@ -204,25 +204,14 @@ function SignIn(props: StateProps) {
                 }
               >
                 {(step) => (
-                  <LitContent
-                    render={() => {
-                      const renderedStep = step();
-                      const cancelAction = document.createElement("button");
-                      cancelAction.type = "button";
-                      cancelAction.className = "btn btn--sm profile-auth-connect-cancel";
-                      cancelAction.disabled = state().cancelBusy;
-                      cancelAction.textContent = t("profilePage.modelAccounts.cancelAction");
-                      cancelAction.addEventListener("click", () => state().connectStatus("cancel"));
-                      return renderWizardStepControls({
-                        step: renderedStep,
-                        value: state().stepValue,
-                        busy: state().busy,
-                        inputId: "profile-account-auth-answer",
-                        leadingAction: cancelAction,
-                        onValueChange: (value) => state().setStepValue(renderedStep.id, value),
-                        onAnswer: (value) => state().answerStep(renderedStep.id, value),
-                      });
-                    }}
+                  <WizardStepControls
+                    step={step()}
+                    value={state().stepValue}
+                    busy={state().busy}
+                    inputId="profile-account-auth-answer"
+                    leadingAction={cancel()}
+                    onValueChange={(value) => state().setStepValue(step().id, value)}
+                    onAnswer={(value) => state().answerStep(step().id, value)}
                   />
                 )}
               </Show>

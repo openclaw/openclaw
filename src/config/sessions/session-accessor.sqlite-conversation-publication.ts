@@ -5,7 +5,7 @@ import type { Selectable } from "kysely";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
   createSqliteCommitReceipt,
-  hasSqliteCommitReceiptCoverage,
+  readSqliteCommitReceipt,
   type SqliteCommittedFact,
   type SqliteCommitReceipt,
   type SqliteCommitSource,
@@ -146,38 +146,6 @@ export function deferConversationWorkerReceipt(
   );
 }
 
-function isConversationPublication(
-  value: unknown,
-  keys: readonly string[],
-): value is ConversationPublication {
-  if (
-    !isRecord(value) ||
-    !isRecord(value.source) ||
-    typeof value.source.identity !== "string" ||
-    typeof value.source.incarnation !== "string" ||
-    !(value.facts instanceof Map)
-  ) {
-    return false;
-  }
-  return (
-    hasSqliteCommitReceiptCoverage(value, {
-      source: { identity: value.source.identity, incarnation: value.source.incarnation },
-      domain: "conversation-catalogue-associations",
-      keys,
-    }) &&
-    [...value.facts].every(
-      ([key, fact]) =>
-        typeof key === "string" &&
-        isRecord(fact) &&
-        fact.kind === "postimage" &&
-        isRecord(fact.value) &&
-        fact.value.kind === "catalogue" &&
-        isRecord(fact.value.row) &&
-        typeof fact.value.row.conversation_id === "string",
-    )
-  );
-}
-
 /** Direct registration is worker-owned; entry workers retain their separate session receipt. */
 export function withConversationPublication(
   factory: SqliteWorkerAdmissionFactory,
@@ -253,17 +221,22 @@ export function withConversationPublication(
         }
         return;
       }
-      if (
-        !isConversationPublication(facts, expectedKeys()) ||
-        facts.source.identity !== expected.identity ||
-        facts.source.incarnation !== expected.incarnation
-      ) {
-        throw new Error("Conversation registration receipt is invalid");
-      }
+      const receipt = readSqliteCommitReceipt<ConversationFact>(facts, {
+        domain: "conversation-catalogue-associations",
+        source: expected,
+        keys: expectedKeys(),
+        invalidReceiptMessage: "Conversation registration receipt is invalid",
+        isFact: (_key, fact) =>
+          fact.kind === "postimage" &&
+          isRecord(fact.value) &&
+          fact.value.kind === "catalogue" &&
+          isRecord(fact.value.row) &&
+          typeof fact.value.row.conversation_id === "string",
+      });
       const installed = {
-        ...facts,
+        ...receipt,
         facts: new Map(
-          [...facts.facts].map(([key, fact]) => [
+          [...receipt.facts].map(([key, fact]) => [
             key,
             unknown || superseded.has(key) ? ({ kind: "unknown" } as const) : fact,
           ]),

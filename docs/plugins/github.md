@@ -176,6 +176,8 @@ hovercard, and GitHub links open externally.
   Refreshes use GitHub ETags for unchanged item and commit responses; identity
   changes, eviction, or a failed refresh retire those cached responses. Repository
   visibility is checked again for every authenticated refresh.
+  Refreshes reuse author and coauthor avatars for up to five minutes when the
+  corresponding item or commits are unchanged.
 - Slow preview reads (500 ms or longer) log phase durations for identity preparation,
   cache/load wait, delivery credential checks, metadata rendering, optional decoration,
   and upstream authentication/network waits. Network timings cover response headers;

@@ -11,6 +11,32 @@ import type {
   CodexThreadItemsListResponse,
 } from "./app-server/protocol.js";
 
+/** Bounded native metadata prepared by projectCodexCatalogNativeThread. */
+export type CodexCatalogNativeThread = Pick<
+  CodexThread,
+  | "id"
+  | "projectId"
+  | "sessionId"
+  | "ephemeral"
+  | "name"
+  | "cwd"
+  | "modelProvider"
+  | "cliVersion"
+  | "path"
+  | "originator"
+  | "createdAt"
+  | "updatedAt"
+  | "recencyAt"
+  | "preview"
+  | "source"
+  | "gitInfo"
+  | "status"
+>;
+
+export type CodexCatalogNativePage = Omit<CodexThreadListResponse, "data"> & {
+  data: CodexCatalogNativeThread[];
+};
+
 export type CodexCatalogHome = {
   /** Revalidate discovery before a new operation captures its source. */
   assertCurrent(): void;

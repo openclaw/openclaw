@@ -40,11 +40,6 @@ import { commitComposerDraft } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
 import { isPastedTextAttachment } from "./chat-pasted-text.ts";
 import { ChatPermissionPicker } from "./chat-permission-picker.tsx";
-import {
-  handleChatComposerDropdownShow,
-  markPointerOpenedChatComposerDropdown,
-  restorePointerOpenedChatComposerTrigger,
-} from "./chat-picker-overlay.ts";
 import { ChatVoiceStatus } from "./chat-voice-activity.tsx";
 
 type ChatComposerViewContext = ReturnType<typeof createChatComposerContext>;
@@ -233,8 +228,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             <div
               class={`agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar ${props.offline ? "agent-chat__input--offline" : ""}${context.dictation?.active ? " agent-chat__input--dictating" : ""}${!context.canCompose ? " agent-chat__input--disabled" : ""}`}
               aria-busy={props.disabledReasonBusy ? "true" : "false"}
-              onWa-show={handleChatComposerDropdownShow}
-              onWa-after-show={restorePointerOpenedChatComposerTrigger}
               onOpenclaw-composer-dismiss-invocations={() => {
                 resetSlashMenuState(context.state);
                 resetSkillMenuState(context.state);
@@ -243,10 +236,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                 context.requestUpdate();
               }}
               onClick={(event: MouseEvent) => focusComposerFromChrome(event, context.canCompose)}
-              onPointerDown={(event: PointerEvent) => {
-                markPointerOpenedChatComposerDropdown(event);
-                focusComposerFromChrome(event, context.canCompose);
-              }}
+              onPointerDown={(event: PointerEvent) =>
+                focusComposerFromChrome(event, context.canCompose)
+              }
               ref={context.state.composerInputRef ?? undefined}
             >
               {context.menus.slashMenuVisible ? (

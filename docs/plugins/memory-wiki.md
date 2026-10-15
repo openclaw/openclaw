@@ -214,6 +214,10 @@ Compiled output also powers first-pass wiki indexing for search/get, claim-id
 lookup back to owning pages, compact prompt supplements, and report
 generation.
 
+Compile preserves existing indexes and dashboard notes when their files cannot
+be read. It reports the read error instead of treating the page as missing;
+resolve the filesystem error and compile again.
+
 Source edits and vault restores become machine-facing only after the next
 compile. Restarting or refreshing the plugin lifecycle compares the vault's
 causally chained compile publication with SQLite and rejects a snapshot from a

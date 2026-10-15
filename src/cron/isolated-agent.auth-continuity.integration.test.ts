@@ -339,3 +339,147 @@ describe("persisted cron inference identity through the real embedded runner", (
     },
   );
 });
+
+describe("legacy cron jobs without a recorded account through the real embedded runner", () => {
+  const openaiUrl = "https://api.openai.com/v1";
+  const localUrl = "http://127.0.0.1:11434/v1";
+
+  function model(id: string) {
+    return {
+      id,
+      name: id,
+      reasoning: false,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 1024,
+    };
+  }
+
+  async function runLegacyJob(params: { openaiApiKey?: string; storedProfile: boolean }) {
+    return await withOpenClawTestState(
+      {
+        label: "cron-legacy-account",
+        env: {
+          OPENAI_API_KEY: undefined,
+          OPENAI_OAUTH_TOKEN: undefined,
+          OPENAI_BASE_URL: undefined,
+        },
+      },
+      async (state) => {
+        installPrivateUpdateHandoffStore(state.root);
+        const requests: Array<{ url: string; authorization: string | null }> = [];
+        const providerFetch: typeof fetch = async (input, init) => {
+          const request = new Request(input, init);
+          if (request.method !== "POST" || !request.url.endsWith("/responses")) {
+            throw new Error(`Unexpected external I/O in cron credential fixture: ${request.url}`);
+          }
+          requests.push({ url: request.url, authorization: request.headers.get("authorization") });
+          return completedResponse("gpt-4.1");
+        };
+        vi.spyOn(globalThis, "fetch").mockImplementation(providerFetch);
+        vi.spyOn(getAiTransportHost(), "buildModelFetch").mockReturnValue(providerFetch);
+        const cfg: OpenClawConfig = {
+          agents: {
+            entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
+            defaults: {
+              model: { primary: "openai/gpt-4.1", fallbacks: ["local/gpt-4.1"] },
+              models: {
+                "openai/gpt-4.1": {
+                  agentRuntime: { id: "openclaw" },
+                  params: { transport: "sse" },
+                },
+                "local/gpt-4.1": { agentRuntime: { id: "openclaw" }, params: { transport: "sse" } },
+              },
+            },
+          },
+          ...(params.storedProfile
+            ? { auth: { profiles: { [platformId]: { provider: "openai", mode: "api_key" } } } }
+            : {}),
+          models: {
+            mode: "replace",
+            providers: {
+              openai: {
+                api: "openai-responses",
+                baseUrl: openaiUrl,
+                agentRuntime: { id: "openclaw" },
+                ...(params.openaiApiKey ? { apiKey: params.openaiApiKey } : {}),
+                models: [model("gpt-4.1")],
+              },
+              // A credentialless loopback route, so its own account check admits it.
+              local: {
+                api: "openai-responses",
+                baseUrl: localUrl,
+                agentRuntime: { id: "openclaw" },
+                models: [model("gpt-4.1")],
+              },
+            },
+          },
+          plugins: { allow: ["openai"], slots: { memory: "none" } },
+          skills: { load: { watch: false } },
+          tools: { deny: ["*"] },
+        };
+        if (params.storedProfile) {
+          await persistAuthProfileBatch({
+            profiles: [
+              {
+                profileId: platformId,
+                credential: { type: "api_key", provider: "openai", key: platformKey },
+              },
+            ],
+          });
+        }
+        await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
+        const job: CronStoredJob = {
+          id: "legacy-account",
+          name: "Legacy account",
+          agentId: "main",
+          enabled: true,
+          createdAtMs: 1,
+          updatedAtMs: 1,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          delivery: { mode: "none" },
+          payload: { kind: "agentTurn", message: "Reply.", lightContext: true },
+          state: {},
+        };
+        try {
+          const result = await runCronIsolatedAgentTurn({
+            cfg,
+            deps: {},
+            job,
+            deliveryAttemptFence: null,
+            message: "Reply.",
+            sessionKey: "cron:legacy-account",
+            lane: "cron",
+          });
+          return { result, requests };
+        } finally {
+          await resetPreparedModelRuntimeSnapshotsForTest();
+        }
+      },
+    );
+  }
+
+  it("keeps running on its provider-config key", async () => {
+    const { result, requests } = await runLegacyJob({
+      openaiApiKey: "synthetic-config-key",
+      storedProfile: false,
+    });
+
+    expect(result.status, result.error).toBe("ok");
+    expect(requests).toEqual([
+      { url: `${openaiUrl}/responses`, authorization: "Bearer synthetic-config-key" },
+    ]);
+  });
+
+  it("stops on an unadopted stored account instead of falling back", async () => {
+    const { result, requests } = await runLegacyJob({ storedProfile: true });
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("Automation has no recorded inference account");
+    expect(requests).toEqual([]);
+  });
+});

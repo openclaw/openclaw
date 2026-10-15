@@ -3,7 +3,7 @@ import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-brand
 import type { ConfigAutoSaveStatus } from "../lib/config/config-state-model.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
-import { defineSolidBridge, LitContent } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, LitContent, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { icons } from "./icons.ts";
 import { Icon } from "./solid/icon.tsx";
 import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
@@ -172,3 +172,23 @@ defineSolidBridge<{ props?: SettingsSaveIndicatorProps }>(
     properties: { props: { default: undefined, attribute: false } },
   },
 );
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-settings-save-indicator": SolidBridgeElement<{
+      props?: SettingsSaveIndicatorProps;
+    }>;
+  }
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-settings-save-indicator": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-settings-save-indicator"]
+      > & {
+        "prop:props"?: SettingsSaveIndicatorProps;
+      };
+    }
+  }
+}

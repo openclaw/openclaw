@@ -19,6 +19,10 @@ import {
   startBuiltControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
+import {
+  createControlUiStreamingReply,
+  createStreamingReplyProbeInitScript,
+} from "../ui/src/test-helpers/control-ui-streaming-reply.ts";
 import { createControlUiTeamScaleFixture } from "../ui/src/test-helpers/control-ui-team-scale-fixture.ts";
 import {
   mapColdLoadCpuProfile,
@@ -156,6 +160,8 @@ function summarizeSidebarWindows(
 const { values } = parseArgs({
   options: {
     "live-events": { type: "boolean", default: false },
+    "streaming-reply": { type: "boolean", default: false },
+    "init-script": { type: "string", multiple: true, default: [] },
     "sidebar-list-churn": { type: "boolean", default: false },
     "sidebar-row-transfer": { type: "string", default: "full" },
     "bundle-dir": { type: "string" },
@@ -166,6 +172,9 @@ const { values } = parseArgs({
     output: { type: "string", default: ".artifacts/control-ui-cold-load" },
   },
 });
+if (values["streaming-reply"] && values["live-events"]) {
+  throw new Error("streaming-reply measures an isolated answer; do not combine with live-events");
+}
 if (values["sidebar-list-churn"] && !values["live-events"]) {
   throw new Error("sidebar-list-churn requires live-events");
 }
@@ -220,9 +229,13 @@ const fixture = createControlUiTeamScaleFixture({
   baseUrl: server.baseUrl,
   sandboxUrl: buildSandboxHostPath({ blockDescendantFrames: true }),
   sandboxPort: address.port,
-  liveRun: values["live-events"],
+  liveRun: values["live-events"] || values["streaming-reply"],
   sidebarListChurn: values["sidebar-list-churn"],
 });
+const streamingReply = values["streaming-reply"] ? createControlUiStreamingReply() : undefined;
+const extraInitScripts = await Promise.all(
+  values["init-script"].map((file) => readFile(file, "utf8")),
+);
 let sidebarLists = fixture.sidebarListChurn
   ? createTeamScaleSidebarListOwner(fixture.sidebarListChurn)
   : undefined;
@@ -318,7 +331,7 @@ try {
     },
   );
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top) return; ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${fixture.sidebarListChurn ? `window.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params)));` : ""}\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory })} })();`,
+    content: `;(() => { if (window !== window.top) return; ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${fixture.sidebarListChurn ? `window.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params)));` : ""}\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")} })();`,
   });
   const url = controlUiSessionUrl(server.baseUrl, fixture.selectedSessionKey, "dashboard");
   async function settle() {
@@ -491,6 +504,92 @@ try {
           assetBaseUrl: new URL("assets/", server.baseUrl).href,
           assetDirectory: path.join(bundleDir, "assets"),
         });
+    let streaming;
+    if (streamingReply) {
+      const composer = page.locator(".agent-chat__composer-combobox textarea").last();
+      await composer.focus();
+      await cdp.send("Performance.enable");
+      let previousCpu = (await cdp.send("Performance.getMetrics")).metrics;
+      let previousDelivered = 0;
+      const cpu: Array<{
+        delivered: number;
+        deltas: number;
+        milliseconds: Record<string, number>;
+      }> = [];
+      await page.evaluate((input) => Reflect.get(window, "__streamingReply").start(input), {
+        ...streamingReply,
+        sessionKey: fixture.selectedSessionKey,
+        runId: fixture.scenario.inFlightRun!.runId,
+      });
+      const streamingInput = new AbortController();
+      const nativeInput = (async () => {
+        while (!streamingInput.signal.aborted) {
+          await page.keyboard.press("x");
+          await new Promise((resolve) => {
+            setTimeout(resolve, 500);
+          });
+        }
+      })();
+      try {
+        for (let quartile = 1; quartile <= 4; quartile++) {
+          await page.waitForFunction(
+            (count) => Reflect.get(window, "__streamingReply").read().delivered >= count,
+            Math.floor((streamingReply.deltas.length * quartile) / 4),
+            { timeout: 60_000 },
+          );
+          await page.evaluate(
+            () =>
+              new Promise<void>((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+              }),
+          );
+          const nextCpu = (await cdp.send("Performance.getMetrics")).metrics;
+          const delivered = await page.evaluate(
+            () => Reflect.get(window, "__streamingReply").read().delivered,
+          );
+          cpu.push({
+            delivered,
+            deltas: delivered - previousDelivered,
+            milliseconds: Object.fromEntries(
+              ["TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcStyleDuration"].map(
+                (name) => [
+                  name,
+                  1000 *
+                    (nextCpu.find((metric) => metric.name === name)!.value -
+                      previousCpu.find((metric) => metric.name === name)!.value),
+                ],
+              ),
+            ),
+          });
+          previousCpu = nextCpu;
+          previousDelivered = delivered;
+        }
+      } finally {
+        streamingInput.abort();
+        await nativeInput;
+      }
+      streaming = {
+        ...(await page.evaluate(() => Reflect.get(window, "__streamingReply").finish())),
+        cpu,
+      };
+      if (!streaming.finalHtml) {
+        throw new Error("Streaming reply produced no visible Markdown");
+      }
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.streaming.json`),
+        JSON.stringify(
+          {
+            head,
+            chars: streamingReply.text.length,
+            deltasPerSecond: streamingReply.deltasPerSecond,
+            ...streaming,
+          },
+          null,
+          2,
+        ),
+      );
+      await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.streaming.png`) });
+    }
     let live;
     const readLivePresentation = () =>
       page.evaluate(
@@ -650,6 +749,7 @@ try {
       harnessWarnings,
       visual,
       live,
+      streaming,
     };
     results.push(result);
     console.log(JSON.stringify(result));
@@ -674,6 +774,7 @@ try {
         bundleDir,
         fixture: fixture.counts,
         sidebarView,
+        streamingReply: values["streaming-reply"],
         sidebarListChurn: values["sidebar-list-churn"],
         sidebarRowTransfer,
         sidebarComparison: values["sidebar-list-churn"]

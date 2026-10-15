@@ -30,7 +30,7 @@ import {
 const BARGE_IN_RMS_THRESHOLD = 0.02;
 const BARGE_IN_PEAK_THRESHOLD = 0.08;
 const BARGE_IN_CONSECUTIVE_SPEECH_FRAMES = 2;
-const AUDIO_APPEND_TIMEOUT_MS = 8_000;
+const AUDIO_APPEND_LIVENESS_TIMEOUT_MS = 30_000;
 const RELAY_CLOSE_TIMEOUT_MS = 8_000;
 const MAX_PENDING_ACTIVATION_EVENTS = 32;
 const MAX_PENDING_ACTIVATION_EVENT_BYTES = 256 * 1024;
@@ -50,6 +50,8 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   private closed = false;
   private closeCompletion: Promise<void> = Promise.resolve();
   private audioAppendAbortController: AbortController | null = null;
+  private pendingAudioAppends = 0;
+  private audioAppendTimer: number | undefined;
   private readonly audioInputBudget = new RealtimeTalkAudioInputBudget((detail) =>
     this.ctx.callbacks.onInputNotice?.(detail),
   );
@@ -227,9 +229,13 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         return;
       }
       // Drop stale frames past the budget without ending the call, but make the loss
-      // visible so the user repeats it. The append timeout still fails a dead relay.
+      // visible so the user repeats it. Only a lack of progress fails a slow relay.
       if (!this.audioInputBudget.reserve(frameMs)) {
         return;
+      }
+      this.pendingAudioAppends += 1;
+      if (this.pendingAudioAppends === 1) {
+        this.resetAudioAppendTimer();
       }
       const pcm = floatToPcm16(samples);
       void this.ctx.client
@@ -242,18 +248,37 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           },
           {
             signal: abortController.signal,
-            timeoutMs: AUDIO_APPEND_TIMEOUT_MS,
+            timeoutMs: null,
           },
         )
-        .catch((error: unknown) => this.fail(error))
-        // Close resets the budget first, so late settlements cannot report recovery.
-        .finally(() => this.audioInputBudget.settle(frameMs));
+        .then(() => {
+          if (abortController.signal.aborted) {
+            return;
+          }
+          this.pendingAudioAppends -= 1;
+          this.resetAudioAppendTimer();
+          this.audioInputBudget.settle(frameMs);
+        })
+        .catch((error: unknown) => this.fail(error));
     });
+  }
+
+  private resetAudioAppendTimer(): void {
+    window.clearTimeout(this.audioAppendTimer);
+    this.audioAppendTimer =
+      !this.closed && this.pendingAudioAppends > 0
+        ? window.setTimeout(
+            () => this.fail(t("chat.composer.realtimeTalkRelayUnresponsive")),
+            AUDIO_APPEND_LIVENESS_TIMEOUT_MS,
+          )
+        : undefined;
   }
 
   private abortPendingAudioAppends(): void {
     this.audioAppendAbortController?.abort();
     this.audioAppendAbortController = null;
+    this.pendingAudioAppends = 0;
+    this.resetAudioAppendTimer();
     this.audioInputBudget.reset();
   }
 

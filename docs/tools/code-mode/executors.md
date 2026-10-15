@@ -127,6 +127,20 @@ without yielding. Fresh cells get fresh globals even when a worker is reused.
 Settled input and guest errors release their cell context and keep healthy workers
 available for reuse. Native failures, interrupted execution, and cancellation
 still retire the worker.
+
+Node keeps at most four completed workers warm. Surplus workers expire after
+30 seconds; one can remain warm for five minutes. Diagnostic memory samples and
+stability logs expose the cumulative `workerLifecycle` counters. Prometheus exports
+`openclaw_worker_started_total{script="code-mode-node.worker.js"}` and
+`openclaw_worker_retired_total` with bounded retirement reasons: `eviction` for
+the warm-cache limit, `idle-expiry` for idle deadlines, `dispose` for explicit
+continuation or standalone cleanup, `shutdown` for host closure, `crash` for
+native worker errors, and `gc-thrash` for the near-limit GC watchdog. Memory
+pressure and runtime replacement retain `memory_pressure` and `rotation`.
+Retirement counts advance only after native exit; cleanup retries keep the first
+recorded reason. Start counts remain grouped by script, since a new worker has
+no retirement reason yet.
+
 Node Code Mode leaves garbage collection to V8 instead of requesting inspector
 full collections between cells or while a cell is suspended. Its heap limit,
 execution deadline, GC-pressure detection, and worker retirement still apply.

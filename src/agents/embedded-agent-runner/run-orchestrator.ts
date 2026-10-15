@@ -40,13 +40,13 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveModelFallbackAvailability,
-  resolveRunModelFallbacksOverride,
 } from "../agent-scope.js";
 import { createAssistantErrorTranscript } from "../assistant-error-transcript.js";
-import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
-import type { AgentHarnessPluginSelection } from "../harness/runtime-plugin-load-plan.js";
+import {
+  runBestEffortCallback,
+  serializeAgentEventCallback,
+} from "../embedded-agent-subscribe.callback.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
-import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import {
   getPreparedModelRuntimePluginGeneration,
   runOutsidePreparedModelRuntimePluginGenerationScope,
@@ -95,7 +95,10 @@ import {
 } from "./run/prepared-runtime-context.js";
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
 import { createRecoveryMessageActionTurnCapability } from "./run/recovery-message-action-capability.js";
-import { resolveInitialEmbeddedRunModel } from "./run/runtime-resolution.js";
+import {
+  resolveEmbeddedRuntimePluginSelections,
+  resolveInitialEmbeddedRunModel,
+} from "./run/runtime-resolution.js";
 import { prepareEmbeddedRunSession } from "./run/session-bootstrap.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 import {
@@ -236,6 +239,8 @@ async function runEmbeddedAgentForSession(
     throwIfAborted();
     return enqueueGlobal(async () => {
       const started = Date.now();
+      const onAgentEvent = serializeAgentEventCallback(params.onAgentEvent);
+      params = { ...params, onAgentEvent };
       const refresh = createEmbeddedAgentPluginRuntimeRefresh(params);
       const usage = createUsageAccumulator();
       let refreshed = false;
@@ -243,7 +248,6 @@ async function runEmbeddedAgentForSession(
       let terminal: ReturnType<typeof createAgentLifecycleTerminalBackstop> | undefined;
       let assistantErrorTranscript: ReturnType<typeof createAssistantErrorTranscript> | undefined;
       const ownsAssistantErrorTranscript = params.assistantErrorTranscript === undefined;
-      const onAgentEvent = params.onAgentEvent;
       const onAttemptStart = params.onAttemptStart;
       const runGeneration = async (): Promise<EmbeddedAgentRunResult> => {
         throwIfAborted();
@@ -291,16 +295,6 @@ async function runEmbeddedAgentForSession(
           provider: params.provider,
           model: params.model,
         });
-        const explicitHarnessRuntime = params.agentHarnessId ?? params.agentHarnessRuntimeOverride;
-        const requestedHarnessRuntime =
-          explicitHarnessRuntime ?? params.agentHarnessRuntimePreparationHint;
-        const runtimePluginFallbacksOverride =
-          params.modelFallbacksOverride ??
-          resolveRunModelFallbacksOverride({
-            cfg: config,
-            agentId: requestedWorkspaceResolution.agentId,
-            sessionKey: params.sessionKey,
-          });
         const pluginMetadataSnapshot =
           params.pluginGeneration?.pluginMetadataSnapshot ??
           loadPluginMetadataSnapshot({
@@ -308,24 +302,13 @@ async function runEmbeddedAgentForSession(
             workspaceDir: runtimeWorkspaceResolution.workspaceDir,
             env: process.env,
           });
-        const runtimePluginSelections = resolveModelCandidateChain({
-          cfg: config,
+        const runtimePluginSelections = resolveEmbeddedRuntimePluginSelections({
+          run: params,
+          config,
           agentId: requestedWorkspaceResolution.agentId,
           manifestPlugins: pluginMetadataSnapshot,
-          provider: requestedRuntimeSelection.provider,
-          model: requestedRuntimeSelection.modelId,
-          requestedRouteResolution: params.requestedRouteResolution,
-          fallbacksOverride: runtimePluginFallbacksOverride,
-        }).map((candidate, index): AgentHarnessPluginSelection =>
-          Object.assign(
-            { provider: candidate.provider, modelId: candidate.model },
-            // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
-            requestedHarnessRuntime && (index === 0 || explicitHarnessRuntime)
-              ? { runtime: requestedHarnessRuntime }
-              : {},
-            { agentId: requestedWorkspaceResolution.agentId },
-          ),
-        );
+          requestedModel: requestedRuntimeSelection,
+        });
         const preparedInput = {
           config,
           agentId: requestedWorkspaceResolution.agentId,
