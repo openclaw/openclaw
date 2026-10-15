@@ -522,6 +522,28 @@ describe("usage.status provider usage cache", () => {
     }
   });
 
+  it("continues refreshing after the startup async-work scope closes", async () => {
+    const startupScope = new AsyncWorkScope();
+    let release: (() => void) | undefined;
+    try {
+      await startupScope.track(async () => {
+        release = observeProviderUsageMetrics({
+          getConfig: () => config,
+          listener: () => {},
+          refreshIntervalMs: 50,
+        });
+        await vi.waitFor(() => expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce());
+      });
+      await startupScope.drain();
+
+      await vi.waitFor(() => {
+        expect(mocks.loadProviderUsageSummary.mock.calls.length).toBeGreaterThanOrEqual(2);
+      });
+    } finally {
+      release?.();
+    }
+  });
+
   it("does not schedule provider requests after the observer is released", async () => {
     vi.useFakeTimers();
     const release = observeProviderUsageMetrics({

@@ -14,7 +14,7 @@ import type {
   UsageSummary,
 } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { runOutsideAsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
 import { formatForLog } from "../ws-log.js";
 import {
   clearProviderUsageRuntimeSnapshot,
@@ -576,7 +576,11 @@ export function observeProviderUsageMetrics(params: {
         const refreshIntervalMs =
           params.refreshIntervalMs ?? PROVIDER_USAGE_METRICS_REFRESH_INTERVAL_MS;
         const nextRefreshDelayMs = Math.max(0, refreshIntervalMs - (Date.now() - refreshStartedAt));
-        timer = setTimeout(() => void refresh(), nextRefreshDelayMs);
+        // This observer outlives the plugin-start or config-reload scope that created it.
+        // Do not let recurring timers retain that scope after it has drained and closed.
+        timer = runOutsideAsyncWorkScope(() =>
+          setTimeout(() => void refresh(), nextRefreshDelayMs),
+        );
         timer.unref?.();
       }
     }

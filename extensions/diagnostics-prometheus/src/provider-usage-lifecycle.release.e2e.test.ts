@@ -633,6 +633,9 @@ describe("diagnostics-prometheus provider usage lifecycle", () => {
     }
     const scrapeTriggeredRequests = providerRequestCount - requestsBeforeScrapes;
     expect(scrapeTriggeredRequests).toBe(0);
+    await expect
+      .poll(() => providerRequestCount, { timeout: 80_000 })
+      .toBe(initialProviderRequests + 1);
     const restrictedHeaders = {
       "x-forwarded-for": "203.0.113.25",
       "x-forwarded-proto": "https",
