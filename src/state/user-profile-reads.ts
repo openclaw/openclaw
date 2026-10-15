@@ -2,6 +2,7 @@ import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.j
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { captureUserProfileAuthorityRead } from "./user-profile-events.js";
+import { readUserProfileCatalogSnapshot } from "./user-profile-list.js";
 import type { CachedGitHubIdentity, CachedGitHubIdentityBinding } from "./user-profiles.types.js";
 
 type ProfileReadOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env">;
@@ -51,12 +52,21 @@ export async function readUserProfileSnapshot(
   githubAccountIds?: readonly number[],
   options: ProfileReadOptions = {},
 ) {
-  const context = captureOpenClawStateWorkerContext(options);
-  const { executeOpenClawStateWorker } = await import("./openclaw-state-worker-store.js");
-  return await executeOpenClawStateWorker(context, {
-    type: "userProfiles.list",
-    input: githubAccountIds ? { githubAccountIds } : undefined,
-  });
+  const snapshot = await readUserProfileCatalogSnapshot(options);
+  return {
+    profiles: snapshot.map(({ githubAccountIds: _, ...profile }) => profile),
+    ...(githubAccountIds
+      ? {
+          githubProfiles: snapshot.flatMap((profile) =>
+            profile.githubAccountIds.flatMap((accountId) =>
+              !profile.mergedInto && githubAccountIds.includes(accountId)
+                ? [{ accountId, profileId: profile.id }]
+                : [],
+            ),
+          ),
+        }
+      : {}),
+  };
 }
 
 /** Candidate IDs and search labels; current recipient policy remains caller-owned. */

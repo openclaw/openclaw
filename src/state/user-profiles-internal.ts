@@ -165,6 +165,7 @@ export const userProfileDisplaySelection = [
   "avatar_mime",
   "avatar_sha256",
   "merged_into",
+  "created_at",
   "updated_at",
   userProfileAvatarPresence,
 ] as const;

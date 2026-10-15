@@ -7,8 +7,13 @@ import {
 } from "./openclaw-state-db.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
 import { prepareUserProfileCatalog, publishUserProfilesChange } from "./user-profile-list.js";
+import { readUserProfileSnapshot } from "./user-profile-reads.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
+  ensureCanonicalUserProfileForEmail,
+  ensureCanonicalUserProfileForTailscaleIdentity,
+  linkCanonicalUserProfileEmail,
+  setCanonicalUserProfileRole,
   setCanonicalUserProfileDisplayName,
 } from "./user-profile-writes.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
@@ -19,6 +24,73 @@ vi.mock("./openclaw-state-worker-store.js", async (importOriginal) => {
     ...actual,
     runOpenClawStateWorkerOperation: vi.fn(actual.runOpenClawStateWorkerOperation),
   };
+});
+
+it("reuses committed email profiles and roster facts without writer admission across edits and merges", async () => {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "profile-reuse-" });
+  let release = () => {};
+  try {
+    const first = await ensureCanonicalUserProfileForEmail("first@example.test");
+    const second = await ensureCanonicalUserProfileForEmail("second@example.test");
+    release = (await prepareUserProfileCatalog()).release;
+    const expectResident = async (profile: typeof first) => {
+      const { id, displayName, avatarMime, mergedInto, createdAt, updatedAt, role } = profile;
+      const expected = {
+        id,
+        displayName,
+        avatarMime,
+        mergedInto,
+        createdAt,
+        updatedAt,
+        ...(role ? { role } : {}),
+      };
+      vi.mocked(runOpenClawStateWorkerOperation).mockClear();
+      const sql = observeMainThreadSql();
+      try {
+        expect(await ensureCanonicalUserProfileForEmail(" FIRST@EXAMPLE.TEST ")).toEqual(expected);
+        expect(
+          await ensureCanonicalUserProfileForTailscaleIdentity({
+            login: "first@example.test",
+            name: "Provider Name",
+          }),
+        ).toEqual(expected);
+        expect((await readUserProfileSnapshot()).profiles).toContainEqual({
+          ...expected,
+          emails:
+            profile.id === first.id
+              ? ["first@example.test"]
+              : ["first@example.test", "second@example.test"],
+          githubIdentity: null,
+          hasAvatar: false,
+        });
+        expect(runOpenClawStateWorkerOperation).not.toHaveBeenCalled();
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+      }
+    };
+    await expectResident(first);
+    const renamed = (await setCanonicalUserProfileDisplayName(first.id, "Saved Name")).profile;
+    await expectResident(renamed);
+    const assigned = await setCanonicalUserProfileRole(first.id, "reader");
+    await expectResident(assigned);
+    const linked = await linkCanonicalUserProfileEmail("first@example.test", second.id);
+    await expectResident(linked.profile);
+    await expect(
+      ensureCanonicalUserProfileForEmail("first@example.test", {
+        assertCurrent() {
+          throw new Error("connection revoked");
+        },
+      }),
+    ).rejects.toThrow("connection revoked");
+    expect(await ensureCanonicalUserProfileForEmail("new@example.test")).toMatchObject({
+      displayName: "new",
+    });
+  } finally {
+    vi.restoreAllMocks();
+    release();
+    await state.cleanup();
+  }
 });
 
 it("serves the first owner ensure after catalog hydration and applies write receipts", async () => {

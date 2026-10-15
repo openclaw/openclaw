@@ -161,6 +161,22 @@ export function readResidentGatewayOwnerProfile(pathname: string) {
   return toUserProfile({ ...owner, created_at: owner.gatewayOwnerCreatedAt });
 }
 
+/** Existing authenticated email bindings use the same write-through catalog as role checks. */
+export function readResidentUserProfileForEmail(email: string, pathname: string) {
+  const catalog = profileCatalogs.get(pathname);
+  const binding = catalog?.valid && profileBindings.get(catalog.rows)?.byEmail.get(email);
+  if (!binding) {
+    return undefined;
+  }
+  catalog.assertCurrent?.(binding.profileId);
+  const profile = resolveCatalogProfile(catalog.rows, binding.profileId);
+  if (profile) {
+    catalog.assertCurrent?.(profile.id);
+    return toUserProfile(profile);
+  }
+  return undefined;
+}
+
 /** Sharing pickers consume the session projection's committed display catalog. */
 export function listResidentUserProfileDisplayFacts(options: OpenClawStateDatabaseOptions = {}) {
   const catalog = profileCatalogs.get(profileCatalogPath(options));
@@ -636,6 +652,33 @@ export async function prepareUserProfileCatalog(options: OpenClawStateDatabaseOp
     },
     release: catalog.release,
   };
+}
+
+/** Lists share committed profile facts rather than reserving the shared-state writer. */
+export async function readUserProfileCatalogSnapshot(options: OpenClawStateDatabaseOptions = {}) {
+  const catalog = await acquireUserProfileCatalog(options);
+  try {
+    return [...catalog.rows.values()]
+      .toSorted(
+        (left, right) =>
+          left.created_at - right.created_at ||
+          Buffer.compare(Buffer.from(left.id), Buffer.from(right.id)),
+      )
+      .map((row) => {
+        catalog.assertCurrent(row.id);
+        return {
+          ...toUserProfile(row),
+          emails: [...(catalog.bindings.emailsByProfile.get(row.id) ?? [])].toSorted(
+            (left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)),
+          ),
+          githubIdentity: row.githubIdentity ? { ...row.githubIdentity } : null,
+          hasAvatar: row.has_avatar === 1,
+          githubAccountIds: row.githubAccountIds ?? [],
+        };
+      });
+  } finally {
+    catalog.release();
+  }
 }
 
 /** Prepare once off-thread; execution reads only committed facts retained by this owner. */

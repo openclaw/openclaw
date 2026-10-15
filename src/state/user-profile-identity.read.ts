@@ -6,15 +6,11 @@ import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
-import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "./openclaw-state-db.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 import {
   selectProfileAccessEntries,
-  selectStoredGitHubIdentities,
   selectUserProfileGitHubIdentities,
 } from "./user-profile-github-identity.js";
 import {
@@ -30,7 +26,6 @@ import {
   userProfileDisplaySelection,
   toUserProfile,
 } from "./user-profiles-internal.js";
-import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import type {
   ProfileDisplayRow,
   UserProfileEmailBinding,
@@ -104,63 +99,6 @@ export function readUserProfileIdForEmail(db: EngineConnection, email: string): 
   }
   const alias = selectUserProfileEmailAlias(db, email);
   return alias ? selectResolvedUserProfileMetadataById(db, alias.profile_id)?.id : undefined;
-}
-
-export function readUserProfileSnapshotSync(
-  options: OpenClawStateDatabaseOptions = {},
-  githubAccountIds?: readonly number[],
-) {
-  ensureUserProfilesSchema(options);
-  const database = openOpenClawStateDatabase(options);
-  return runSqliteDeferredTransactionSync(
-    database.db,
-    () => {
-      const kysely = userProfilesDb(database.db);
-      const profiles = executeSqliteQuerySync(
-        database.db,
-        kysely
-          .selectFrom("user_profiles")
-          .select([
-            ...userProfileDisplaySelection,
-            "created_at",
-            ...(tableHasColumn(database.db, "user_profiles", "role") ? (["role"] as const) : []),
-          ])
-          .orderBy("created_at", "asc")
-          .orderBy("id", "asc"),
-      ).rows;
-      const emails = executeSqliteQuerySync(
-        database.db,
-        kysely
-          .selectFrom("user_profile_emails")
-          .select(["profile_id", "email"])
-          .orderBy("email", "asc"),
-      ).rows;
-      const githubIdentities = selectUserProfileGitHubIdentities(database.db);
-      const emailsByProfile = new Map<string, string[]>(profiles.map(({ id }) => [id, []]));
-      for (const { profile_id, email } of emails) {
-        emailsByProfile.get(profile_id)?.push(email);
-      }
-      return {
-        profiles: profiles.map((profile) =>
-          Object.assign(toUserProfile(profile), {
-            emails: emailsByProfile.get(profile.id) ?? [],
-            githubIdentity: githubIdentities.get(profile.id) ?? null,
-            hasAvatar: profile.has_avatar === 1,
-          }),
-        ),
-        ...(githubAccountIds
-          ? {
-              githubProfiles: [
-                ...selectStoredGitHubIdentities(database.db, undefined, githubAccountIds),
-              ].flatMap(([profileId, { accounts }]) =>
-                accounts.map(({ accountId }) => ({ accountId, profileId })),
-              ),
-            }
-          : {}),
-      };
-    },
-    { databaseLabel: database.path, operationLabel: "user-profiles.list" },
-  );
 }
 
 /** Resolve current authority and display together on the caller's admitted connection. */
