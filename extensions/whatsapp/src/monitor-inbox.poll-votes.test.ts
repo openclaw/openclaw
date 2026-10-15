@@ -19,6 +19,7 @@ import { readWhatsAppPollResultsContext } from "./poll-results-context.js";
 import {
   readWhatsAppPollRecord,
   recordWhatsAppPoll,
+  WHATSAPP_POLL_CHAT_INDEX_STORES,
   WHATSAPP_POLL_RECORD_STORES,
   WHATSAPP_POLL_TALLY_STORES,
   type WhatsAppPollOrigin,
@@ -364,6 +365,84 @@ describe("web monitor inbox poll votes", () => {
       code: "PLUGIN_STATE_WRITE_FAILED",
     });
     await listener.close();
+  });
+
+  describe("poll deletion", () => {
+    const OTHER_MEMBER = "15550004444@s.whatsapp.net";
+
+    function revoke(params: { remoteJid: string; participant?: string; fromMe?: boolean }) {
+      return {
+        key: {
+          id: `REVOKE${++nextId}`,
+          remoteJid: params.remoteJid,
+          fromMe: params.fromMe ?? false,
+          ...(params.participant ? { participant: params.participant } : {}),
+        },
+        message: {
+          protocolMessage: {
+            type: 0, // REVOKE
+            key: { id: "POLL1", remoteJid: params.remoteJid, fromMe: false },
+          },
+        },
+        messageTimestamp: Math.floor(Date.now() / 1000),
+      };
+    }
+
+    async function storedPollKeys() {
+      const keys: string[] = [];
+      for (const options of [
+        ...Object.values(WHATSAPP_POLL_RECORD_STORES),
+        ...Object.values(WHATSAPP_POLL_CHAT_INDEX_STORES),
+        ...Object.values(WHATSAPP_POLL_TALLY_STORES),
+      ]) {
+        keys.push(...(await pollState.openStore(options).entries()).map((row) => row.key));
+      }
+      return keys;
+    }
+
+    async function addVotedMemberPoll(sock: Awaited<ReturnType<typeof startInboxMonitor>>["sock"]) {
+      await addPoll({ origin: "received", chatJid: GROUP, creatorJids: [MEMBER] });
+      await emit(sock, groupVote({ pollCreatorJid: MEMBER }));
+      await emit(
+        sock,
+        groupVote({ pollCreatorJid: MEMBER, participant: OTHER_MEMBER, voterJid: OTHER_MEMBER }),
+      );
+      expect(await tallyKeys("received")).toHaveLength(2);
+    }
+
+    it("(v) deletes the record, index rows and tallies when the creator deletes the poll", async () => {
+      const onMessage = vi.fn();
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+      await addVotedMemberPoll(sock);
+      await emit(sock, revoke({ remoteJid: GROUP, participant: MEMBER }));
+      expect(await storedPollKeys()).toEqual([]);
+      expect(
+        await readWhatsAppPollResultsContext({ account: ACCOUNT, chatJids: [GROUP] }),
+      ).toBeUndefined();
+      expect(onMessage).not.toHaveBeenCalled();
+      await listener.close();
+    });
+
+    it("(w) ignores a deletion of the poll by another group member", async () => {
+      const onMessage = vi.fn();
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+      await addVotedMemberPoll(sock);
+      const before = await storedPollKeys();
+      await emit(sock, revoke({ remoteJid: GROUP, participant: OTHER_MEMBER }));
+      expect(await storedPollKeys()).toEqual(before);
+      await listener.close();
+    });
+
+    it("(x) deletes the agent's poll when the linked phone deletes it", async () => {
+      await addPoll({ origin: "sent", chatJid: DM });
+      const onMessage = vi.fn();
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+      await emit(sock, vote());
+      await waitForMessageCalls(onMessage, 1);
+      await emit(sock, revoke({ remoteJid: DM, fromMe: true }));
+      expect(await storedPollKeys()).toEqual([]);
+      await listener.close();
+    });
   });
 
   it("(l) leaves ordinary text unchanged", async () => {

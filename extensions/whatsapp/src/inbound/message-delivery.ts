@@ -39,7 +39,7 @@ import {
 } from "./message-normalization.js";
 import { addWhatsAppOutboundMentionsToContent } from "./outbound-mentions.js";
 import { recordWhatsAppInboundPoll } from "./poll-creation-record.js";
-import { resolveWhatsAppPollVote } from "./poll-vote-inbound.js";
+import { resolveWhatsAppPollRevoke, resolveWhatsAppPollVote } from "./poll-vote-inbound.js";
 import { normalizeWhatsAppSendResult } from "./send-result.js";
 import type { WhatsAppAttachedSocketSession } from "./socket-session.js";
 import type { WebInboundCallbackMessage } from "./types.js";
@@ -419,12 +419,12 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     if (await resolveApprovalReaction(rawMsg)) {
       return "completed";
     }
+    const pollDeps = { accountId: options.accountId, self, resolveInboundJid };
+    if (await resolveWhatsAppPollRevoke(rawMsg, pollDeps)) {
+      return "completed";
+    }
     // Votes are counted here; only a direct-chat vote on our own poll continues, as a derived message.
-    const pollVote = await resolveWhatsAppPollVote(rawMsg, {
-      accountId: options.accountId,
-      self,
-      resolveInboundJid,
-    });
+    const pollVote = await resolveWhatsAppPollVote(rawMsg, pollDeps);
     if (pollVote.kind === "completed") {
       return "completed";
     }

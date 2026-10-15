@@ -118,7 +118,7 @@ export const WHATSAPP_POLL_TALLY_STORES: Record<WhatsAppPollOrigin, OpenKeyedSto
     defaultTtlMs: WHATSAPP_POLL_TTL_MS,
   },
 };
-const RETIRE_PAGE_SIZE = 500;
+const DELETE_PAGE_SIZE = 500;
 
 // Only storage-availability failures are worth replaying; everything else is permanent.
 const TRANSIENT_READ_CODES = new Set([
@@ -529,6 +529,73 @@ export async function listWhatsAppChatPollIds(params: {
   });
 }
 
+/** Deletes every row under a prefix, a page at a time; maxEntries bounds the loop. */
+async function deleteKeyPrefix(
+  store: PluginStateKeyedStore<unknown, 2>,
+  prefix: string,
+  maxEntries: number,
+): Promise<number> {
+  let count = 0;
+  for (let page = 0; page * DELETE_PAGE_SIZE <= maxEntries; page++) {
+    const rows = await store.entriesInKeyRange(
+      buildWhatsAppKeyPrefixRange(prefix, DELETE_PAGE_SIZE),
+    );
+    if (rows.length === 0) {
+      break;
+    }
+    for (const row of rows) {
+      if (await store.delete(row.key)) {
+        count++;
+      }
+    }
+  }
+  return count;
+}
+
+/**
+ * Removes one poll's chat index rows, tallies and record after its creator
+ * deleted it for everyone. The record goes last, so a transient failure is
+ * replayed against it.
+ */
+export async function deleteWhatsAppPoll(params: {
+  account: WhatsAppPollAccount;
+  pollMessageId: string;
+  record: WhatsAppPollRecord;
+}): Promise<void> {
+  const pollMessageId = normalizeWhatsAppPollMessageId(params.pollMessageId);
+  const scope = pollMessageId ? resolveWhatsAppPollScope(params.account) : undefined;
+  if (!pollMessageId || !scope) {
+    return;
+  }
+  const { origin, recordedAt, chatJids } = params.record;
+  await runWhatsAppPollStoreOperation({
+    operation: "delete",
+    fallback: undefined,
+    transient: "write",
+    run: async () => {
+      const stamp = String(recordedAt).padStart(13, "0");
+      const indexStore = openWhatsAppPollStore<unknown>(WHATSAPP_POLL_CHAT_INDEX_STORES[origin]);
+      for (const chatJid of chatJids) {
+        await indexStore?.delete(
+          `${buildChatIndexPrefix(scope, chatJid)}${stamp}:${pollMessageId}`,
+        );
+      }
+      const tally = WHATSAPP_POLL_TALLY_STORES[origin];
+      const tallyStore = openWhatsAppPollStore<unknown>(tally);
+      if (tallyStore) {
+        await deleteKeyPrefix(
+          tallyStore,
+          buildWhatsAppPollTallyPrefix(scope, pollMessageId),
+          tally.maxEntries,
+        );
+      }
+      await openWhatsAppPollStore<unknown>(WHATSAPP_POLL_RECORD_STORES[origin])?.delete(
+        `${scope.prefix}${pollMessageId}`,
+      );
+    },
+  });
+}
+
 /**
  * Removes every poll record, chat index row and tally row of one account, for
  * whichever phone was linked. Called when its credentials are retired; never
@@ -558,25 +625,7 @@ export async function retireWhatsAppPollState(params: {
       transient: "none",
       run: async () => {
         const store = openWhatsAppPollStore<unknown>(options);
-        if (!store) {
-          return 0;
-        }
-        let count = 0;
-        // Each page is deleted before the next read; maxEntries bounds the loop.
-        for (let page = 0; page * RETIRE_PAGE_SIZE <= options.maxEntries; page++) {
-          const rows = await store.entriesInKeyRange(
-            buildWhatsAppKeyPrefixRange(prefix, RETIRE_PAGE_SIZE),
-          );
-          if (rows.length === 0) {
-            break;
-          }
-          for (const row of rows) {
-            if (await store.delete(row.key)) {
-              count++;
-            }
-          }
-        }
-        return count;
+        return store ? await deleteKeyPrefix(store, prefix, options.maxEntries) : 0;
       },
     });
   }
