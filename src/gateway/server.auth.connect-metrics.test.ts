@@ -39,7 +39,9 @@ test("measures trusted-proxy connect success, rejection, and failed hello delive
     setDiagnosticsEnabledForProcess(true);
     const unsubscribe = onInternalDiagnosticEvent(
       (event) => {
-        if (event.type === "gateway.rpc" && event.method === "connect") events.push(event);
+        if (event.type === "gateway.rpc" && event.method === "connect") {
+          events.push(event);
+        }
       },
       { include: ["gateway.rpc"] },
     );
@@ -52,6 +54,7 @@ test("measures trusted-proxy connect success, rejection, and failed hello delive
           "x-forwarded-proto": "https",
           ...(outcome === "error" ? {} : { "x-forwarded-user": "private-user@example.com" }),
         });
+        // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply below preserves the intercepted socket receiver.
         const originalSend = WebSocket.prototype.send;
         const spy =
           outcome === "unavailable"
@@ -61,7 +64,9 @@ test("measures trusted-proxy connect success, rejection, and failed hello delive
               ) {
                 if (typeof args[0] === "string" && args[0].includes('"hello-ok"')) {
                   const callback = args.findLast((arg) => typeof arg === "function");
-                  if (typeof callback !== "function") throw new Error("missing send callback");
+                  if (typeof callback !== "function") {
+                    throw new Error("missing send callback");
+                  }
                   callback(new Error("synthetic delivery failure"));
                   return;
                 }
