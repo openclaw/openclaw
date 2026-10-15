@@ -5,13 +5,13 @@ import type {
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRegistryFixture } from "openclaw/plugin-sdk/plugin-test-contracts";
 import {
-  clearActivePluginRegistry,
   createEmptyPluginRegistry,
   createPluginRecord,
   disposePluginRegistryInstances,
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
+  waitForPluginRegistryRetirement,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   getSandboxBackendFactory,
@@ -143,8 +143,9 @@ describe("OpenShell plugin registration lifecycle", () => {
       expect(readBackend().resolveWorkdir?.(workdirParams)).toBe("/sandbox/unstarted");
       setActivePluginRegistry(registry.registry);
       setActivePluginRegistry(createEmptyPluginRegistry());
-      // Publication retires the replaced registry asynchronously; clearing joins that cleanup.
-      await clearActivePluginRegistry();
+      await expect(waitForPluginRegistryRetirement(registry.registry)).resolves.toMatchObject({
+        failures: [],
+      });
       expect(readBackend()).toEqual(originalBackend);
     } finally {
       await expect(disposePluginRegistryInstances(registry.registry)).resolves.toMatchObject({

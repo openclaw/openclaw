@@ -172,6 +172,7 @@ export {
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
+  waitForPluginRegistryRetirement,
 } from "../plugins/runtime.js";
 export {
   listImportedBundledPluginFacadeIds,

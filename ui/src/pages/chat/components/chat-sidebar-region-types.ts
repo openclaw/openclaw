@@ -1,10 +1,6 @@
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
 import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import {
-  emptyLegacyContent,
-  type LegacyTemplateResult,
-  type solidContent,
-} from "../../../lit/solid-content.tsx";
+import { emptyLegacyContent, type LegacyTemplateResult } from "../../../lit/solid-content.tsx";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import type { SidebarLayout, SidebarSlotId } from "../sidebar-layout.ts";
 
@@ -14,11 +10,7 @@ export type SidebarPanelDefinition = {
   icon: LegacyTemplateResult;
   shortcut?: KeyboardShortcutCombo;
   available: boolean;
-  content:
-    | LegacyTemplateResult
-    | ReturnType<typeof solidContent>
-    | typeof emptyLegacyContent
-    | null;
+  content: LegacyTemplateResult | typeof emptyLegacyContent | null;
   loading: LegacyTemplateResult;
   headerAction?: LegacyTemplateResult;
   empty: {

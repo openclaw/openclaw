@@ -2,11 +2,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
-import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { createChatProps } from "./chat-view.test-helpers.ts";
-import { ChatView, type ChatProps } from "./chat-view.tsx";
+import {
+  disposeChatView,
+  renderChatInto as renderNativeChatInto,
+} from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -17,24 +18,15 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  cleanupSolid();
   resetChatViewState();
   resetTranscriptTestDom();
 });
 
-const views = new WeakMap<
-  HTMLElement,
-  ReturnType<typeof mountSolid<Parameters<typeof ChatView>[0]>>
->();
-
-function renderChatInto(container: HTMLElement, overrides: Partial<ChatProps> = {}) {
-  const props = { props: createChatProps({ currentSessionId: "goal-session", ...overrides }) };
-  const previous = views.get(container);
-  if (previous) {
-    previous.update(props);
-  } else {
-    views.set(container, mountSolid(ChatView, props, container));
-  }
+function renderChatInto(
+  container: HTMLElement,
+  overrides: Parameters<typeof renderNativeChatInto>[1] = {},
+) {
+  renderNativeChatInto(container, { currentSessionId: "goal-session", ...overrides });
 }
 
 describe("chat goal status", () => {
@@ -66,7 +58,7 @@ describe("chat goal status", () => {
     "renders goal details and gates actions when connected=%s",
     (connected) => {
       const onGoalAction = vi.fn();
-      const container = document.createElement("div");
+      const container = createComposerContainer();
       const props = {
         selectedSession: goalSession(),
         onGoalAction,
@@ -123,7 +115,7 @@ describe("chat goal status", () => {
   );
 
   it("exposes the pause reason in a keyboard-accessible tooltip and freezes elapsed time", () => {
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     const now = Date.now();
     const selectedSession = goalSession({ createdAt: now - 60_000 });
     const onGoalAction = vi.fn();
@@ -168,9 +160,9 @@ describe("chat goal status", () => {
   });
 
   it("restores goal actions and expansion after a transient missing session goal", () => {
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     onTestFinished(() => {
-      views.get(container)?.dispose();
+      disposeChatView(container);
     });
     const onGoalAction = vi.fn();
     const selectedSession = goalSession({ status: "paused", pausedAt: Date.now() });
@@ -193,7 +185,7 @@ describe("chat goal status", () => {
 
   it("edits the plain objective and restores the conversation draft on cancellation", () => {
     let draft = "Keep my conversation draft";
-    const container = document.createElement("div");
+    const container = createComposerContainer();
     const onDraftChange = vi.fn((next: string) => {
       draft = next;
     });
