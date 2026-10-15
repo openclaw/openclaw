@@ -98,21 +98,18 @@ export const MEMORY_SEARCH_TOOL_CONTRACT = {
     const aliases = [
       ["min_score", "minScore"],
       ["max_results", "maxResults"],
-      // Most other OpenClaw list/search tools spell their result cap `limit`.
       ["limit", "maxResults"],
     ] as const;
     if (!aliases.some(([alias]) => Object.hasOwn(params, alias))) {
       return args;
     }
     const normalized = { ...params };
-    // Explicit camelCase values win, including invalid values that validation must reject.
+    // Precedence: maxResults > max_results > limit, even for invalid values validation must reject.
     for (const [alias, key] of aliases) {
-      if (Object.hasOwn(normalized, alias)) {
-        if (!Object.hasOwn(normalized, key)) {
-          normalized[key] = normalized[alias];
-        }
-        delete normalized[alias];
+      if (Object.hasOwn(normalized, alias) && !Object.hasOwn(normalized, key)) {
+        normalized[key] = normalized[alias];
       }
+      delete normalized[alias];
     }
     return normalized;
   },

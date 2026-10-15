@@ -67,6 +67,7 @@ describe("memory tool schemas", () => {
   it.each([
     { query: "X", min_score: 0.3, max_results: 3 },
     { query: "X", minScore: 0.3, maxResults: 3 },
+    { query: "X", minScore: 0.3, limit: 3 },
   ])("normalizes supported search argument spellings: %j", (args) => {
     const tool = createMemorySearchToolOrThrow();
     const prepared = tool.prepareArguments?.(args) ?? args;
@@ -74,23 +75,29 @@ describe("memory tool schemas", () => {
     expect(prepared).toEqual({ query: "X", minScore: 0.3, maxResults: 3 });
   });
 
-  it("accepts limit as the result cap", () => {
+  it.each([
+    { maxResults: 3, limit: 10 },
+    { max_results: 3, limit: 10 },
+    { limit: 10, max_results: 5, maxResults: 3 },
+  ])("keeps explicit result caps over limit: %j", (caps) => {
     const tool = createMemorySearchToolOrThrow();
-    const prepared = tool.prepareArguments?.({ query: "X", limit: 10 });
+    const prepared = tool.prepareArguments?.({ query: "X", ...caps });
     expect(Value.Check(tool.parameters, prepared)).toBe(true);
-    expect(prepared).toEqual({ query: "X", maxResults: 10 });
+    expect(prepared).toEqual({ query: "X", maxResults: 3 });
   });
 
-  it("keeps explicit result caps over limit", () => {
+  it.each([0, -1, 1.5, "3", null])("rejects invalid result caps: %j", (value) => {
     const tool = createMemorySearchToolOrThrow();
-    expect(tool.prepareArguments?.({ query: "X", maxResults: 3, limit: 10 })).toEqual({
-      query: "X",
-      maxResults: 3,
-    });
-    expect(tool.prepareArguments?.({ query: "X", max_results: 3, limit: 10 })).toEqual({
-      query: "X",
-      maxResults: 3,
-    });
+    for (const caps of [
+      { limit: value },
+      { maxResults: value },
+      { maxResults: value, max_results: 3, limit: 10 },
+      { max_results: value, limit: 10 },
+    ]) {
+      const prepared = tool.prepareArguments?.({ query: "X", ...caps });
+      expect(prepared).toEqual({ query: "X", maxResults: value });
+      expect(Value.Check(tool.parameters, prepared)).toBe(false);
+    }
   });
 
   it("describes search as evidence-driven without repeating supplied recall", () => {
