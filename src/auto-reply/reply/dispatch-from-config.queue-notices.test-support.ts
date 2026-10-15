@@ -63,7 +63,7 @@ export function registerQueuedFollowupNoticeCases(noVisibleReplyFallbackText: st
     { phase: "evicted during progress flush", reason: "steering-unavailable" },
   ] as const)("reports a truthful $reason queue notice when $phase", async ({ phase, reason }) => {
     setNoAbort();
-    const sessionKey = `test:queue-notice:${phase}`;
+    const sessionKey = `test:queue-notice:${reason}:${phase}`;
     const queued = createDeferred();
     const releaseReply = createDeferred();
     const progressStarted = createDeferred();

@@ -243,23 +243,20 @@ export async function runReplyAgent(
     }
 
     const effectiveShouldSteer = !isHeartbeat && !resetTriggered && shouldSteer;
-    const effectiveShouldFollowup = !resetTriggered && shouldFollowup;
+    const isActiveSteer = effectiveShouldSteer && isActive;
     const messageInjectionDisposition = opts?.messageInjectionDisposition ?? "none";
     const activeReplyOperation = controllerInput.mailbox.owner.active;
     const steeringRequesterMismatch =
-      effectiveShouldSteer &&
-      isActive &&
-      hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation);
+      isActiveSteer && hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation);
     let shouldQueueRequesterMismatch =
       steeringRequesterMismatch &&
       followupRun.run.config.messages?.queue?.allowCollaborativeSteering === false;
-    // A source-only reservation still owns completion, but is not a steering target.
-    const shouldQueueProvidedSteer =
-      effectiveShouldSteer &&
-      isActive &&
-      messageInjectionDisposition === "none" &&
-      !activeReplyOperation &&
-      Boolean(providedReplyOperation);
+    // A rejected or vanished target leaves input with the follow-up queue,
+    // independently of whether the incoming requester could collaborate.
+    const shouldQueueUnavailableSteer =
+      isActiveSteer &&
+      (messageInjectionDisposition === "rejected" ||
+        (messageInjectionDisposition === "none" && !activeReplyOperation));
     const typingSignals = createTypingSignaler({
       typing,
       mode: typingMode,
@@ -278,8 +275,7 @@ export async function runReplyAgent(
       activeSourceTurnId,
     );
     const shouldQueueTerminalReceiptSteer =
-      effectiveShouldSteer &&
-      isActive &&
+      isActiveSteer &&
       messageInjectionDisposition === "none" &&
       terminalDeliveryBlockReason !== undefined;
 
@@ -303,14 +299,10 @@ export async function runReplyAgent(
       resolvedVerboseLevel,
       verboseLevelOverride: followupRun.run.verboseLevelOverride,
     };
-    const baseShouldEmitToolResult = createShouldEmitToolResult(toolResultOptions);
-    const channelProgressCanConsumeToolResults =
-      Boolean(opts?.forceToolResultProgress) && Boolean(opts?.onToolResult);
-    const shouldEmitToolResult = () =>
-      channelProgressCanConsumeToolResults || baseShouldEmitToolResult();
-    const shouldEmitToolOutput = createShouldEmitToolOutput(toolResultOptions);
-
-    const pendingToolTasks = new Set<Promise<void>>();
+    const shouldEmitToolResult =
+      opts?.forceToolResultProgress && opts.onToolResult
+        ? () => true
+        : createShouldEmitToolResult(toolResultOptions);
     const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
     const touchActiveSessionEntry = () =>
       touchQueuedReplySessionActivity(
@@ -343,9 +335,8 @@ export async function runReplyAgent(
     }
 
     if (
-      effectiveShouldSteer &&
-      isActive &&
-      !shouldQueueProvidedSteer &&
+      isActiveSteer &&
+      !shouldQueueUnavailableSteer &&
       !shouldQueueRequesterMismatch &&
       !shouldQueueTerminalReceiptSteer &&
       messageInjectionDisposition === "none"
@@ -376,8 +367,7 @@ export async function runReplyAgent(
       interrupt: resolvedQueue.mode === "interrupt",
       isActive: isActive || questionRequesterMismatch,
       isHeartbeat,
-      shouldFollowup:
-        effectiveShouldFollowup || shouldQueueProvidedSteer || shouldQueueRequesterMismatch,
+      shouldFollowup: shouldFollowup || shouldQueueUnavailableSteer || shouldQueueRequesterMismatch,
       resetTriggered,
     });
     if (activeRunQueueAction === "drop") {
@@ -398,11 +388,15 @@ export async function runReplyAgent(
         queuedRunFollowupTurn,
         false,
       );
-      if (shouldQueueTerminalReceiptSteer || shouldQueueProvidedSteer) {
+      if (shouldQueueTerminalReceiptSteer || shouldQueueUnavailableSteer) {
         diagnosticLogger.warn("steering rejected; applying follow-up policy", {
           reason: shouldQueueTerminalReceiptSteer
             ? terminalDeliveryBlockReason
-            : "source-operation-pending",
+            : messageInjectionDisposition === "rejected"
+              ? "runtime_rejected"
+              : providedReplyOperation
+                ? "source-operation-pending"
+                : "reply-owner-ended",
           disposition: enqueued
             ? "followup-queued"
             : replyOperationRunState?.admission?.status === "skipped" &&
@@ -662,7 +656,7 @@ export async function runReplyAgent(
           onCompactionNoticePayload: (payload) => {
             pendingCompactionNotices.push(payload);
           },
-          pendingToolTasks,
+          pendingToolTasks: new Set<Promise<void>>(),
           replyMediaContext,
           replyOperation,
           replyRouteThreadId,
@@ -674,7 +668,7 @@ export async function runReplyAgent(
           setRunFollowupTurn: (runner) => {
             runFollowupTurn = runner;
           },
-          shouldEmitToolOutput,
+          shouldEmitToolOutput: createShouldEmitToolOutput(toolResultOptions),
           shouldEmitToolResult,
           traceAgentPhase,
           typingSignals,

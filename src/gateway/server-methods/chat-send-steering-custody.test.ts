@@ -513,12 +513,9 @@ describe("steering input custody", () => {
             ?.operatorAuthority,
         ).toBe(captured.authority);
         if (accepted && acrossProfiles) {
-          expect(operation.personalToolParticipants?.resolve(incomingProfile.id)?.profileId).toBe(
-            incomingProfile.id,
-          );
-          expect(() => operation.personalToolParticipants?.resolve()).toThrow(
-            "Several people have steered this turn",
-          );
+          const participants = operation.personalToolParticipants;
+          expect(participants?.resolve(incomingProfile.id)?.profileId).toBe(incomingProfile.id);
+          expect(() => participants?.resolve()).toThrow("Several people have steered this turn");
           expect(queueMessage.mock.calls[0]?.[1]?.isInboundUserMessage).toBe(false);
         }
         releaseProvider();

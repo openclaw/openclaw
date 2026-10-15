@@ -186,8 +186,7 @@ export async function writeConfigFileFromContext(
     ...(options.unsetPaths ?? []),
   ]);
   const hasAuthoredIncludes = containsConfigIncludeDirective(snapshot.parsed);
-  // Doctor repairs need the same authored projection so roster moves preserve nested includes.
-  // Missing snapshots also use this owner; exact bootstrap rosters carry explicitSetPaths.
+  // Preserve roster includes during Doctor repairs; bootstrap rosters use explicitSetPaths.
   if (snapshot.valid || (snapshot.exists && hasAuthoredIncludes)) {
     const webhookMigration = hasAuthoredIncludes
       ? projectWebhookMigrationIncludeWrite(authoredSourceConfig, authoredConfig)
@@ -344,8 +343,6 @@ export async function writeConfigFileFromContext(
     validationEnvBase,
   );
   const committedRevision = hashConfigRevision(json, includeFileHashes, includeFileTargets);
-  // Compare resolved modes: an unchanged authored $include has no local mode literal.
-  const gatewayModeAfter = resolveGatewayMode(sourceConfigForPreflight);
   const suspiciousReasons = resolveConfigWriteSuspiciousReasons({
     existsBefore: snapshot.exists,
     unreadableBefore: snapshot.readError != null,
@@ -353,7 +350,8 @@ export async function writeConfigFileFromContext(
     nextBytes,
     hasMetaBefore,
     gatewayModeBefore,
-    gatewayModeAfter,
+    // Compare resolved modes: an unchanged authored $include has no local mode literal.
+    gatewayModeAfter: resolveGatewayMode(sourceConfigForPreflight),
   });
 
   const readTestLogFlag = (name: string) => isVitestRuntimeEnv(deps.env) && deps.env[name] === "1";

@@ -15,7 +15,11 @@ export function prepareDoctorConfigWriteStage(params: {
   installedPluginIdRecovery?: InstalledPluginIdRecovery;
   explicitSetPaths?: ConfigWriteOptions["explicitSetPaths"];
 }):
-  | { config: OpenClawConfig; remainingPaths: string[][]; persistCanonicalAgentRoster: boolean }
+  | {
+      config: OpenClawConfig;
+      remainingPaths: readonly (readonly string[])[];
+      persistCanonicalAgentRoster: boolean;
+    }
   | undefined {
   const steeringPath = ["messages", "queue", "allowCollaborativeSteering"];
   if (
@@ -48,7 +52,7 @@ export function prepareDoctorConfigWriteStage(params: {
     ) {
       return {
         config: defaultOnly,
-        remainingPaths: remaining.paths.map((field) => [...field]),
+        remainingPaths: remaining.paths,
         persistCanonicalAgentRoster: false,
       };
     }
