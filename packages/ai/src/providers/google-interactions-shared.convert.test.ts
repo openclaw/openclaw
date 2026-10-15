@@ -223,7 +223,7 @@ describe("buildGoogleInteractionsParams", () => {
   });
 
   it.each([true, false])(
-    "leaves room for unbounded Interactions thinking (enabled=%s)",
+    "preserves the caller output cap for Interactions thinking (enabled=%s)",
     (enabled) => {
       const params = buildGoogleInteractionsParams(
         { ...model, id: "gemini-3-flash-preview", reasoning: true, maxTokens: 65536 },
@@ -232,7 +232,7 @@ describe("buildGoogleInteractionsParams", () => {
       );
       const serialized = JSON.stringify(params);
       expect(JSON.parse(serialized).generation_config).toEqual({
-        max_output_tokens: 65536,
+        max_output_tokens: 64,
         thinking_level: "low",
         thinking_summaries: enabled ? "auto" : "none",
       });

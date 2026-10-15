@@ -548,8 +548,19 @@ describe("google transport stream", () => {
       maxTokens: 64,
       cap: 8192,
       expected: {
-        maxOutputTokens: 8192,
+        maxOutputTokens: 64,
         thinkingConfig: { includeThoughts: true, thinkingLevel: "LOW" },
+      },
+    },
+    {
+      name: "Gemini 3 automatic thinking",
+      id: "gemini-3.1-pro-preview",
+      reasoning: "adaptive",
+      maxTokens: 64,
+      cap: 8192,
+      expected: {
+        maxOutputTokens: 64,
+        thinkingConfig: { includeThoughts: true },
       },
     },
     {
@@ -559,12 +570,12 @@ describe("google transport stream", () => {
       maxTokens: 64,
       cap: 8192,
       expected: {
-        maxOutputTokens: 8192,
+        maxOutputTokens: 64,
         thinkingConfig: { includeThoughts: true, thinkingBudget: -1 },
       },
     },
   ] as const)(
-    "reserves visible output in serialized requests: $name",
+    "applies thinking and caller output budgets in serialized requests: $name",
     async ({ id, reasoning, maxTokens, cap, expected }) => {
       for (const api of ["google-generative-ai", "google-vertex"] as const) {
         mockGoogleTextResponse();

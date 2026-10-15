@@ -228,10 +228,6 @@ export function buildGoogleGenerationConfig(
       });
       maxOutputTokens = adjusted.maxTokens;
       thinkingConfig.thinkingBudget = adjusted.thinkingBudget;
-    } else if (!isGemma4Model(model) || thinking?.enabled) {
-      // Levels and automatic (-1) thinking have no numeric upper bound. They
-      // share maxOutputTokens too, so allow the model ceiling, not a guessed budget.
-      maxOutputTokens = model.maxTokens;
     }
   }
   return {

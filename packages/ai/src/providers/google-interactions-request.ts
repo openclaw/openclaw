@@ -7,7 +7,6 @@ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import {
   buildGoogleInteractionsSimpleThinking,
-  buildGoogleGenerationConfig,
   type GoogleApiType,
   type GoogleProviderOptions,
 } from "./google-shared.js";
@@ -227,13 +226,7 @@ export function buildGoogleInteractionsParams<T extends GoogleApiType>(
     generationConfig.temperature = options.temperature;
   }
   if (options.maxTokens !== undefined) {
-    // Interactions exposes levels, not numeric thinking budgets. Do not reserve
-    // a numeric budget here that this transport cannot send to the provider.
-    generationConfig.max_output_tokens = buildGoogleGenerationConfig(
-      model,
-      options.thinking ? { enabled: true, level: options.thinking.level } : undefined,
-      options.maxTokens,
-    ).maxOutputTokens;
+    generationConfig.max_output_tokens = options.maxTokens;
   }
   if (options.stop && options.stop.length > 0) {
     generationConfig.stop_sequences = options.stop;
