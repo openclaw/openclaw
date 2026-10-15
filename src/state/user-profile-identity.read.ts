@@ -225,7 +225,7 @@ export function selectUserProfileIdentityInDatabase(
 export function selectUserProfileDisplaysInDatabase(
   db: EngineConnection,
   ids: readonly string[],
-): Map<string, Omit<ProfileDisplayRow, "role"> | undefined> {
+): Map<string, Omit<ProfileDisplayRow, "role" | "created_at"> | undefined> {
   const profiles = userProfilesDb(db).selectFrom("user_profiles");
   const rows = executeSqliteQuerySync(
     db,
@@ -251,7 +251,8 @@ export function selectUserProfileDisplaysInDatabase(
     )
   ) {
     // Native BLOB keys compare by value in SQLite, not by Map object identity.
-    const displays: Map<string, Omit<ProfileDisplayRow, "role"> | undefined> = new Map();
+    const displays: Map<string, Omit<ProfileDisplayRow, "role" | "created_at"> | undefined> =
+      new Map();
     for (const id of ids) {
       displays.set(
         id,
@@ -273,7 +274,7 @@ export function selectUserProfileDisplaysInDatabase(
 /** Project a bounded display cohort from the resident Gateway catalog. */
 export function projectUserProfileDisplays(
   ids: readonly string[],
-  resolve: (id: string) => Omit<ProfileDisplayRow, "role"> | undefined,
+  resolve: (id: string) => Omit<ProfileDisplayRow, "role" | "created_at"> | undefined,
 ) {
   return new Map(
     ids.flatMap((id) => {

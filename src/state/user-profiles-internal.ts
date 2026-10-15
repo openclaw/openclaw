@@ -165,7 +165,6 @@ export const userProfileDisplaySelection = [
   "avatar_mime",
   "avatar_sha256",
   "merged_into",
-  "created_at",
   "updated_at",
   userProfileAvatarPresence,
 ] as const;
@@ -175,6 +174,7 @@ export function selectProfileDisplayEntries(db: EngineConnection, ids?: string[]
     .selectFrom("user_profiles")
     .select([
       ...userProfileDisplaySelection,
+      "created_at",
       ...(tableHasColumn(db, "user_profiles", "role") ? (["role"] as const) : []),
     ])
     .select((eb) =>
@@ -403,7 +403,7 @@ export function readUserProfileAvatarCommand(
 }
 
 export function projectUserProfileDisplay(
-  profile: Omit<ProfileDisplayRow, "role">,
+  profile: Omit<ProfileDisplayRow, "role" | "created_at">,
 ): UserProfileDisplay {
   const avatarMime = normalizeUserProfileAvatarMime(profile.avatar_mime);
   return {
