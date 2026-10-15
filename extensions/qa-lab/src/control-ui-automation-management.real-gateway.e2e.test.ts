@@ -215,8 +215,7 @@ suite.define(() => {
             executablePath: process.execPath,
             argsPrefix: [path.join(repoRoot, "openclaw.mjs")],
             cwd: repoRoot,
-            // Repository fixtures stage auth directly; package repair has separate coverage.
-            usePackagedPlugins: false,
+            usePackagedPlugins: true,
           },
           providerMode: "mock-openai",
           providerBaseUrl: provider.baseUrl,
@@ -448,7 +447,7 @@ suite.define(() => {
             executablePath: process.execPath,
             argsPrefix: [path.join(repoRoot, "openclaw.mjs")],
             cwd: repoRoot,
-            usePackagedPlugins: false,
+            usePackagedPlugins: true,
           },
           providerMode: "mock-openai",
           providerBaseUrl: provider.baseUrl,
