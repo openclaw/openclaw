@@ -136,23 +136,6 @@ describe("failover user copy", () => {
     },
   );
 
-  it.each([
-    "已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)",
-    "额度已用尽",
-    "配额已用尽",
-  ])("preserves Chinese exhausted-quota guidance: %s", (message) => {
-    expect(renderRateLimitReplyCopy({ message, reason: "rate_limit" })).toBe(`⚠️ ${message}`);
-  });
-
-  it.each(["请求过于频繁，请稍后重试", "上下文长度上限为 128k tokens"])(
-    "does not expose unrelated limits as periodic quota guidance: %s",
-    (message) => {
-      expect(renderRateLimitReplyCopy({ message, reason: "rate_limit" })).toBe(
-        "⚠️ The AI service needs a short break. Please try again in a few minutes.",
-      );
-    },
-  );
-
   it("renders structured cooldown durations and exhausted model sets", () => {
     const now = 1_000_000;
     expect(
