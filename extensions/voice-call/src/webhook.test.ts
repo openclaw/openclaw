@@ -6,8 +6,7 @@ import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-tes
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import * as webhookRequestGuards from "openclaw/plugin-sdk/webhook-request-guards";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import type { z } from "zod";
-import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
+import { normalizeVoiceCallConfig, type VoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
@@ -94,10 +93,12 @@ type TwilioProviderTestDouble = VoiceCallProvider &
     | "clearTtsQueue"
   >;
 
-type VoiceCallConfigInput = z.input<typeof VoiceCallConfigSchema>;
+type VoiceCallConfigInput = Record<string, unknown> & {
+  serve?: Partial<VoiceCallConfig["serve"]>;
+};
 
 const createConfig = (overrides: VoiceCallConfigInput = {}): VoiceCallConfig => {
-  const config = VoiceCallConfigSchema.parse({
+  const config = normalizeVoiceCallConfig({
     ...overrides,
     serve: { ...overrides.serve, port: overrides.serve?.port || 1 },
   });

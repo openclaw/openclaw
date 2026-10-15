@@ -481,6 +481,9 @@ export function writeSessionEntry(
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
     delete normalizedEntry.visibility;
   }
+  if (normalizedEntry.archivedAt || normalizedEntry.incognito) {
+    delete normalizedEntry.pendingExecNotifications;
+  }
   const canonicalEntry = stripRuntimeOnlySessionSkillsFields(
     projectCanonicalSessionEntryShape({ ...normalizedEntry }),
   );

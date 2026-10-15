@@ -454,6 +454,17 @@ async function sendFollowupPayloads(params: {
           : originRoutable
             ? "origin"
             : "dispatcher";
+    if (route === "origin") {
+      // Retain every collected source's policy: an explicit request must not be
+      // silenced by a passive message sharing the same follow-up batch.
+      const suppressions = (turn.queued.deliveryCorrelations ?? []).flatMap((correlation) =>
+        correlation.shouldSuppressReply ? [correlation.shouldSuppressReply(payload)] : [],
+      );
+      if (suppressions.length > 0 && suppressions.every(Boolean)) {
+        logVerbose("followup queue: origin reply suppressed by source policy");
+        continue;
+      }
+    }
     await typing.signalTextDelta(payload.text);
     if (route !== "origin") {
       await dispatchPayload(payload);
@@ -504,6 +515,9 @@ async function sendFollowupPayloads(params: {
           defaultRuntime.error?.(`followup queue: route-reply failed: ${routeError}`);
         }
       } else if (result.delivered) {
+        for (const correlation of turn.queued.deliveryCorrelations ?? []) {
+          correlation.onReplyDelivered?.(payload);
+        }
         await params.onObservedReplyDelivery?.();
         if (!result.ok) {
           logVerbose(

@@ -49,7 +49,11 @@ export type SessionEntryReadWorkerResult = {
 export type SessionEntryListWorkerInput = {
   kind: "session-entry-list";
   database: { agentId: string; path: string };
-  scope: SessionEntryListScope & { cleanupSession?: string; pendingInputRecovery?: true };
+  scope: SessionEntryListScope & {
+    cleanupSession?: string;
+    pendingInputRecovery?: true;
+    pendingExecRecovery?: { afterSessionKey?: string; limit: number };
+  };
   expectedIdentity?: DatabasePathIdentity;
   continuation?: CanonicalSessionReaderContinuation;
   ifRevision?: string;
@@ -65,6 +69,8 @@ export type SessionEntryListWorkerResult = {
   nextCronRunUpdatedAt?: number | null;
   /** Last scanned cron key when another retention page may remain. */
   nextCronRunSessionKey?: string | null;
+  /** Last selected exec owner when another recovery page may remain. */
+  nextExecRecoverySessionKey?: string | null;
 };
 
 export type SessionExactEntriesWorkerInput = {

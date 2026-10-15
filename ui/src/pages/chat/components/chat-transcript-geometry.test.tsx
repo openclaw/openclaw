@@ -1,21 +1,23 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { VirtualizerController } from "@tanstack/lit-virtual";
-import { html, nothing, render } from "lit";
+import { Virtualizer } from "@tanstack/virtual-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
-import { renderChatThread } from "./chat-thread.test-support.ts";
+import {
+  render,
+  renderChatThread,
+  mountTestTranscript,
+} from "../test-helpers/chat-transcript-native.tsx";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
-  mountTestTranscript,
   resetTranscriptTestDom,
   resizeObservers,
   threadProps,
@@ -58,10 +60,10 @@ describe("chat transcript geometry", () => {
       const rows = Array.from({ length: 100 }, (_, index) => ({
         kind: "content" as const,
         key: `row:${index}`,
-        content: html`<div>Turn ${index}</div>`,
+        content: <div>Turn {index}</div>,
       }));
       const renderRow = vi.fn((row: TranscriptRow) =>
-        row.kind === "content" ? row.content : nothing,
+        row.kind === "content" ? row.content : null,
       );
       const container = document.body.appendChild(document.createElement("div"));
       const renderWindow = (windowRows = rows) => {
@@ -105,32 +107,25 @@ describe("chat transcript geometry", () => {
       '<div class="chat-virtual-row" data-index="0" style="height: 100.375px"></div>';
     const row = expectDefined(container.firstElementChild, "measured row");
     vi.spyOn(row, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 50.1875));
-    const controller = new VirtualizerController<HTMLDivElement, HTMLElement>(
-      {
-        addController: vi.fn(),
-        removeController: vi.fn(),
-        requestUpdate: vi.fn(),
-        updateComplete: Promise.resolve(true),
+    const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+      count: 1,
+      estimateSize: () => 100,
+      getScrollElement: () => container,
+      getItemKey: () => "fractional",
+      observeElementRect: (_, callback) => {
+        callback({ width: 800, height: 600 });
       },
-      {
-        count: 1,
-        estimateSize: () => 100,
-        getScrollElement: () => container,
-        getItemKey: () => "fractional",
-        observeElementRect: (_, callback) => {
-          callback({ width: 800, height: 600 });
-        },
-        observeElementOffset: (_, callback) => {
-          callback(0, false);
-        },
-        scrollToFn: (offset) => {
-          container.scrollTop = offset;
-        },
+      observeElementOffset: (_, callback) => {
+        callback(0, false);
       },
-    );
-    controller.hostConnected();
-    controller.hostUpdated();
-    const virtualizer = controller.getVirtualizer();
+      scrollToFn: (offset) => {
+        container.scrollTop = offset;
+      },
+    });
+    // eslint-disable-next-line no-underscore-dangle -- TanStack requires adapter mounting to install lifecycle cleanup.
+    const dispose = virtualizer._didMount();
+    // eslint-disable-next-line no-underscore-dangle -- TanStack requires adapter updates to bind observed elements.
+    virtualizer._willUpdate();
     virtualizer.getVirtualItems();
     try {
       const commit = readConnectedTranscriptRows(container, virtualizer);
@@ -139,7 +134,7 @@ describe("chat transcript geometry", () => {
       expect(virtualizer.itemSizeCache.get("fractional")).toBe(100.375);
       expect(readConnectedTranscriptRows(container, virtualizer)?.()).toBe(false);
     } finally {
-      controller.hostDisconnected();
+      dispose();
     }
   });
 
@@ -151,7 +146,7 @@ describe("chat transcript geometry", () => {
     const rows = Array.from({ length: 4 }, (_, index) => ({
       kind: "content" as const,
       key: `fractional:${index}`,
-      content: html`<div>row ${index}</div>`,
+      content: <div>row {index}</div>,
     }));
     const { container, transcript, renderRows } = await mountTestTranscript(
       "fractional-rows",
@@ -178,7 +173,7 @@ describe("chat transcript geometry", () => {
     async (disconnect) => {
       const flushFrames = stubAnimationFrames();
       const rows = [
-        { kind: "content", key: "reply", content: html`<div>Reply</div>` },
+        { kind: "content", key: "reply", content: <div>Reply</div> },
       ] satisfies TranscriptRow[];
       const { container, transcript, renderRows } = await mountTestTranscript(
         "coalesced-end",
@@ -296,7 +291,7 @@ describe("chat transcript geometry", () => {
 
       // A disconnected shell retires its old column observation before remounting.
       transcript.hostDisconnected();
-      render(nothing, region);
+      render(null, region);
       await flushDeferredRowPrune();
       transcript.hostConnected();
       renderTranscript();
@@ -330,7 +325,7 @@ describe("chat transcript geometry", () => {
 
       emitResize(replacement, 700, 400);
       transcript.hostDisconnected();
-      render(nothing, region);
+      render(null, region);
       flushFrames();
       expect(readInnerBounds).not.toHaveBeenCalled();
       vi.mocked(requestAnimationFrame).mockClear();
@@ -348,7 +343,7 @@ describe("chat transcript geometry", () => {
       expect(restored.style.getPropertyValue("--chat-position-rail-viewport-height")).toBe("720px");
     } finally {
       transcript.hostDisconnected();
-      render(nothing, region);
+      render(null, region);
     }
   });
 

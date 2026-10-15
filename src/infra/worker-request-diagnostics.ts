@@ -39,6 +39,12 @@ const detailedTiming = isDiagnosticFlagEnabled("sqlite.worker-timing");
 
 // Exact owner commands only: SDK callers may supply private suffixes.
 const coreCommands = new Set([
+  "devicePairing.lookup",
+  "devicePairing.list",
+  "devicePairing.updateMetadata",
+  "devicePairing.updatePresence",
+  "devicePairing.verifyToken",
+  "devicePairing.ensureToken",
   "session.actor.read",
   "session.actor.acceptInput",
   "session.actor.adoptRun",

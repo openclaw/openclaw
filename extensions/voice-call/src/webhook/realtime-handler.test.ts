@@ -10,7 +10,7 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { WebSocket, type RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { VoiceCallConfigSchema, type VoiceCallRealtimeConfig } from "../config.js";
+import { normalizeVoiceCallConfig, type VoiceCallRealtimeConfig } from "../config.js";
 import { CallManager } from "../manager.js";
 import type { CallRecord, NormalizedEvent, ToolHandlerContext } from "../types.js";
 import {
@@ -1551,7 +1551,7 @@ describe("RealtimeCallHandler path routing", () => {
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 function createHandler() {
-  const config = VoiceCallConfigSchema.parse({ realtime: { enabled: true } });
+  const config = normalizeVoiceCallConfig({ realtime: { enabled: true } });
   const resolveRegistration = vi.fn((): never => {
     throw new Error("Rejected upgrades must not acquire a provider");
   });

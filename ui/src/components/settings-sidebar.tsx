@@ -32,13 +32,12 @@ import {
   settingsNavigationOwnerRoute,
   settingsSearchTextMatches,
 } from "../lib/settings-navigation.ts";
-import { LitContent } from "../lit/solid-content.tsx";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.tsx";
 import { renderGatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
-import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
+import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
 import "./agent-select-registration.ts";
 import "./settings-save-indicator.tsx";
 import "../styles/settings.css";
@@ -263,7 +262,7 @@ function SettingsNavigationItem(props: {
           when={props.routeId === "custodian"}
           fallback={<Icon name={navigationIconForRoute(props.routeId)} />}
         >
-          <LitContent value={renderThemeBrandIcon(undefined, props.branding)} />
+          <ThemeBrandingIcon branding={props.branding} />
         </Show>
       </span>
       <span class="settings-sidebar__item-label">

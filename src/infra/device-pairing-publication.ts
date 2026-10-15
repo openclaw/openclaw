@@ -23,6 +23,7 @@ type Publication = {
   mutation?: object;
   complete: boolean;
   rows: Map<string, DevicePairingBinding | null>;
+  devices: Map<string, PairedDevice | null>;
   nodes?: DevicePairingNodeSnapshot;
   pending: Set<() => void>;
 };
@@ -65,6 +66,8 @@ export function invalidateDevicePairingNodeSnapshot(path: string): void {
   if (publication) {
     publication.epoch++;
     publication.nodes = undefined;
+    publication.devices.clear();
+    publication.complete = false;
   }
 }
 
@@ -88,6 +91,7 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       blocked: false,
       complete: false,
       rows: new Map(),
+      devices: new Map(),
       pending: new Set(),
     };
   }
@@ -99,9 +103,23 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
   const install = (rows: readonly DevicePairingBindingFact[]) => {
     for (const row of rows) {
       captured.rows.set(row.deviceId, row.binding ? { ...row.binding } : null);
+      captured.devices.set(row.deviceId, structuredClone(row.device));
     }
   };
   return {
+    readDevice(deviceId: string) {
+      for (const service of captured.pending) {
+        service();
+      }
+      if (publications.get(path) !== captured || captured.blocked) {
+        return undefined;
+      }
+      const device = captured.devices.get(deviceId);
+      // Public callers own mutable rows; never lend them the authorization publication.
+      return device === undefined && !captured.complete
+        ? undefined
+        : structuredClone(device ?? null);
+    },
     isCurrent: () =>
       publications.get(path) === captured && captured.epoch === epoch && !captured.mutation,
     completeRevision: () =>
@@ -147,6 +165,7 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       }
       if (complete) {
         captured.rows.clear();
+        captured.devices.clear();
       }
       captured.revision = revision;
       install(rows);

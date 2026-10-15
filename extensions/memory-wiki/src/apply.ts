@@ -118,7 +118,7 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
       ...(Array.isArray(params.claims) ? { claims: normalizeMutationClaims(params.claims) } : {}),
       ...(params.contradictions ? { contradictions: params.contradictions } : {}),
       ...(params.questions ? { questions: params.questions } : {}),
-      ...(typeof confidence === "number" ? { confidence } : {}),
+      ...(confidence !== undefined ? { confidence } : {}),
       ...(params.status ? { status: params.status } : {}),
     };
   }
@@ -229,7 +229,7 @@ async function applyCreateSynthesisMutation(params: {
       ...(params.mutation.claims ? { claims: normalizeWikiClaims(params.mutation.claims) } : {}),
       ...(contradictions ? { contradictions } : {}),
       ...(questions ? { questions } : {}),
-      ...(typeof params.mutation.confidence === "number"
+      ...(params.mutation.confidence !== undefined
         ? { confidence: params.mutation.confidence }
         : {}),
       status: params.mutation.status?.trim() || "active",
@@ -270,7 +270,7 @@ function buildUpdatedFrontmatter(params: {
   }
   if (params.mutation.confidence === null) {
     delete frontmatter.confidence;
-  } else if (typeof params.mutation.confidence === "number") {
+  } else if (params.mutation.confidence !== undefined) {
     frontmatter.confidence = params.mutation.confidence;
   }
   if (params.mutation.status?.trim()) {
