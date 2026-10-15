@@ -55,6 +55,20 @@ export const loadCodexNativeSubagentMonitorTestFixture = () =>
 export const loadCodexAbortTranscriptTestFixture = () =>
   import("./src/app-server/transcript-abort.test-support.js");
 
+/**
+ * Keeps the host node-invoke deadline test on this boundary rather than deep-importing the listing
+ * internals: the paired-node listing owner that chooses the forwarded `timeoutMs`, and the
+ * whole-codex-home scan budget its exhaustive `--search-all` route reuses. Loaded on demand so
+ * snapshot consumers of this barrel do not pull the node listing in.
+ */
+export const loadCodexCliSessionNodeListingTestFixture = async () => {
+  const [{ listCodexCliSessionsOnNode }, { NODE_INVOKE_TIMEOUT_MS }] = await Promise.all([
+    import("./src/node-cli-sessions.js"),
+    import("./src/session-catalog-parsing.js"),
+  ]);
+  return { listCodexCliSessionsOnNode, NODE_INVOKE_TIMEOUT_MS };
+};
+
 type CodexHarnessPromptSnapshot = {
   developerInstructions: string;
   parentLocalInstructions: string | null;

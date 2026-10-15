@@ -19,11 +19,14 @@
  * `runtime.nodes.invoke`'s `timeoutMs` into `node.invoke` (`src/plugins/service-nodes.ts:112`,
  * `src/plugins/cli-gateway-nodes-runtime.ts:55`) is not exercised here; both production
  * implementations were read rather than measured.
+ *
+ * The listing owner and the scan budget are reached through `extensions/codex/test-api.ts`, the
+ * plugin's test boundary, because `extensions/AGENTS.md` requires core tests to consume bundled
+ * plugin helpers through a promoted barrel rather than deep-importing `extensions/codex/src/**`.
  */
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listCodexCliSessionsOnNode } from "../extensions/codex/src/node-cli-sessions.js";
-import { NODE_INVOKE_TIMEOUT_MS } from "../extensions/codex/src/session-catalog-parsing.js";
+import { loadCodexCliSessionNodeListingTestFixture } from "../extensions/codex/test-api.js";
 import { NodeRegistry } from "../src/gateway/node-registry.js";
 import { makeClient, registerNodeSession } from "../src/gateway/node-registry.test-helpers.js";
 import { respondUnavailableOnNodeInvokeErrorWithProvenance } from "../src/gateway/server-methods/nodes.helpers.js";
@@ -124,6 +127,8 @@ function startNodeFixture() {
 
 describe("Codex node session listing against the real node invoke deadline", () => {
   it("returns the exhaustive page the truncation notice offers, after the measured handler duration", async () => {
+    const { listCodexCliSessionsOnNode, NODE_INVOKE_TIMEOUT_MS } =
+      await loadCodexCliSessionNodeListingTestFixture();
     vi.useFakeTimers();
     const { runtime, readRequest, answerNode } = startNodeFixture();
 
@@ -154,6 +159,8 @@ describe("Codex node session listing against the real node invoke deadline", () 
   });
 
   it("keeps the bounded listing on a budget the same duration exhausts", async () => {
+    const { listCodexCliSessionsOnNode, NODE_INVOKE_TIMEOUT_MS } =
+      await loadCodexCliSessionNodeListingTestFixture();
     vi.useFakeTimers();
     const { runtime, readRequest, answerNode } = startNodeFixture();
 
