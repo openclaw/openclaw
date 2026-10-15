@@ -45,22 +45,35 @@ import { collectSessionEntryLookupKeys } from "./store-entry.js";
 const MAX_SNAPSHOTS = 128;
 const MAX_BYTES = 8 * 1024 * 1024;
 
+// Transcript producers replace changed rows and envelopes; shared subtrees stay
+// immutable. Weak keys do not keep evicted payloads alive.
+const transcriptSizes = new WeakMap<object, number>();
+
 // Residency is a heap estimate, not a wire-size limit. Trusted postimages are
 // acyclic plain data; count strings without allocating or scanning their JSON.
-function estimateReplicaBytes(value: unknown): number {
+function estimateReplicaBytes(value: unknown, sizes?: WeakMap<object, number>): number {
   if (typeof value === "string") {
     return 16 + value.length * 2;
   }
   if (!value || typeof value !== "object") {
     return 8;
   }
-  if (Array.isArray(value)) {
-    return value.reduce<number>((bytes, child) => bytes + 16 + estimateReplicaBytes(child), 32);
+  const known = sizes?.get(value);
+  if (known !== undefined) {
+    return known;
   }
   let bytes = 32;
-  for (const key in value) {
-    bytes += 16 + key.length * 2 + estimateReplicaBytes(Reflect.get(value, key));
+  if (Array.isArray(value)) {
+    bytes = value.reduce<number>(
+      (total, child) => total + 16 + estimateReplicaBytes(child, sizes),
+      bytes,
+    );
+  } else {
+    for (const key in value) {
+      bytes += 16 + key.length * 2 + estimateReplicaBytes(Reflect.get(value, key), sizes);
+    }
   }
+  sizes?.set(value, bytes);
   return bytes;
 }
 
@@ -90,6 +103,7 @@ export function ensureReplicaSubscription(): void {
     const publishedKey =
       !("all" in change) && !change.factsInvalidated ? change.sessionKey : undefined;
     const created = publishedKey ? readPreparedSessionEntryChange(change, publishedKey) : undefined;
+    const source = readPreparedSessionEntryPublicationSource(change);
     if (publishedKey && created?.fullEntry && typeof created.source.identity === "string") {
       const target: FileTarget = {
         sessionKey: publishedKey,
@@ -126,21 +140,13 @@ export function ensureReplicaSubscription(): void {
       const { database, sessionKey } = cell.target;
       if (
         database.kind !== "file" ||
-        !sessionChangeAffectsStoredRow(change, {
-          sessionKeys: collectSessionEntryLookupKeys(sessionKey),
-          storePaths: new Set([database.nativeLocation]),
-          databaseIdentities: new Set([database.physicalIdentity]),
-        })
+        !sessionChangeAffectsStoredRow(change, cell.publicationScope)
       ) {
         continue;
       }
       // A command's partial publication precedes its full receipt. Its native
       // token rejects superseded postimages without cancelling that receipt.
-      const prepared =
-        !("all" in change) && !change.factsInvalidated && change.sessionKey === sessionKey
-          ? readPreparedSessionEntryChange(change, sessionKey)
-          : undefined;
-      const source = readPreparedSessionEntryPublicationSource(change);
+      const prepared = publishedKey === sessionKey ? created : undefined;
       const unchangedMarker =
         !prepared &&
         !("all" in change) &&
@@ -264,6 +270,27 @@ function targetKey(target: SessionActorTarget): string {
   );
 }
 
+function getOrCreateCell(target: FileTarget): ReplicaCell {
+  const key = targetKey(target);
+  let cell = pool.cells.get(key);
+  if (!cell) {
+    cell = {
+      target,
+      // Matching depends only on this cell's fixed physical target, never its receipts.
+      publicationScope: {
+        sessionKeys: collectSessionEntryLookupKeys(target.sessionKey),
+        storePaths: new Set([target.database.nativeLocation]),
+        databaseIdentities: new Set([target.database.physicalIdentity]),
+      },
+      handles: 0,
+      bytes: 0,
+      transcriptBytes: 0,
+    };
+    pool.cells.set(key, cell);
+  }
+  return cell;
+}
+
 function discard(cell: ReplicaCell): void {
   if (cell.snapshot || cell.entry || cell.transcript) {
     pool.snapshots -= 1;
@@ -322,7 +349,7 @@ function retainTranscript(cell: ReplicaCell, transcript: SessionActorTranscriptR
     pool.snapshots += 1;
   }
   const previousBytes = cell.transcriptBytes;
-  const bytes = estimateReplicaBytes(transcript);
+  const bytes = estimateReplicaBytes(transcript, transcriptSizes);
   cell.transcript = transcript;
   cell.transcriptBytes = bytes;
   cell.bytes += bytes - previousBytes;
@@ -570,12 +597,7 @@ export function retainSessionActorEntryFacts(
   }
   for (const [index, { target, facts, dependencySessionIds }] of prepared.entries()) {
     const writeToken = tokens[index]!;
-    const key = targetKey(target);
-    let cell = pool.cells.get(key);
-    if (!cell) {
-      cell = { target, handles: 0, bytes: 0, transcriptBytes: 0 };
-      pool.cells.set(key, cell);
-    }
+    const cell = getOrCreateCell(target);
     if (cell.snapshot) {
       const current = scopedWriteToken(target, cell.snapshot.dependencySessionIds);
       if (current === cell.snapshot.writeToken) {
@@ -597,12 +619,7 @@ export function createSessionActorReplica(params: {
   ensureReplicaSubscription();
   const target = structuredClone(params.target);
   const key = targetKey(target);
-  let cell = pool.cells.get(key);
-  if (!cell) {
-    cell = { target, handles: 0, bytes: 0, transcriptBytes: 0 };
-    pool.cells.set(key, cell);
-  }
-  const owned = cell;
+  const owned = getOrCreateCell(target);
   owned.handles += 1;
   let closed = false;
 

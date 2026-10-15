@@ -1199,6 +1199,7 @@ const shardRequiresTests = (shard, tests, fallback) =>
       : fallback(plan);
   });
 // The same capped matrix owns compact and plugin work; admit its longest rows first.
+const packedNodeTestRows = [];
 const nodeTestShards = targetNodeTestShards
   .toSorted(
     (a, b) =>
@@ -1300,8 +1301,51 @@ const nodeTestShards = targetNodeTestShards
         delete row.shard_name;
       }
     }
+    if (packedGroups) {
+      packedNodeTestRows.push({ row, groups });
+    }
     return row;
   });
+const nodeTestGroupPools = {};
+if (
+  typeof nodeTestGroupsCodec?.decodeNodeTestGroups === "function" &&
+  packedNodeTestRows.reduce((size, { row }) => size + row.groups_gzip_base64.length, 0) > 128_000
+) {
+  // Compress repeated paths across rows, without changing the runner's per-row contract.
+  // Each pool stays below Linux's per-environment-string limit, including base64 overhead.
+  let pool = [];
+  let rows = [];
+  const flush = () => {
+    const poolKey = `pool-${Object.keys(nodeTestGroupPools).length + 1}`;
+    nodeTestGroupPools[poolKey] = encodeNodeTestGroups(pool);
+    rows.forEach((row, index) => {
+      row.groups_pool = poolKey;
+      row.groups_index = index;
+      delete row.groups_gzip_base64;
+    });
+    pool = [];
+    rows = [];
+  };
+  for (const { row, groups } of packedNodeTestRows) {
+    // Oversized individual descriptors retain their existing standalone transport.
+    if (row.groups_gzip_base64.length > 60_000) {
+      continue;
+    }
+    if (encodeNodeTestGroups([...pool, groups]).length > 60_000) {
+      if (pool.length) {
+        flush();
+      }
+      if (encodeNodeTestGroups([groups]).length > 60_000) {
+        continue;
+      }
+    }
+    pool.push(groups);
+    rows.push(row);
+  }
+  if (pool.length) {
+    flush();
+  }
+}
 const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
 // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
 if (compactPlanMode && nodeTestNonDistShards.length > nodeMatrixLimit) {
@@ -1529,6 +1573,7 @@ const manifest = {
   source_channel_test_env_json: JSON.stringify(sourceChannelTestEnv),
   run_checks_node_core_nondist: nodeTestNonDistShards.length > 0,
   checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
+  node_test_group_pools_json: JSON.stringify(nodeTestGroupPools),
   run_checks_node_core_dist: runNodeCoreDist,
   run_check: runCheck,
   // Older scope owners retain these guards rather than silently dropping coverage.

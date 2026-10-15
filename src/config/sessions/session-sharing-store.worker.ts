@@ -6,10 +6,10 @@ import {
   withSqlitePostCommitPublications,
 } from "../../infra/sqlite-post-commit.js";
 import {
-  assertTransactionUsable,
   runSqliteSingleStatementSync,
   runSqliteWorkerTransactionSync,
 } from "../../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
@@ -69,7 +69,7 @@ export function bindSqliteWorkerBackend(
     }
     return database;
   };
-  return {
+  return bindSqliteWorkerDatabase<SessionSharingWorkerOperations>(db, {
     execute(command) {
       const scope = { ...command.input.scope };
       const target = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteScope(scope)));
@@ -310,12 +310,5 @@ export function bindSqliteWorkerBackend(
         ),
       );
     },
-    assertSettled() {
-      assertTransactionUsable(db);
-      if (db.isTransaction) {
-        throw new Error("Session collaboration transaction did not settle");
-      }
-    },
-    close() {},
-  };
+  });
 }

@@ -1,14 +1,5 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onSettled,
-  Show,
-  untrack,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
-import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { ModelProviderAccountRecovery, ModelProviderLoginView } from "./login-view.tsx";
 import { ModelProvidersController } from "./model-providers-controller.ts";
@@ -31,15 +22,12 @@ export function ModelProvidersContent(props: {
     return controller.viewProps();
   });
   let initialLoadComplete = false;
-  const showContent = createMemo(() => {
+  const showProviderDetails = createMemo(() => {
     const snapshot = current();
-    // Global defaults can be edited from the catalog and config while provider details load.
-    const defaultsReady =
-      snapshot.props.configuredModels.length > 0 &&
-      snapshot.props.defaultsMutationBlockedReason === null;
     if (
       snapshot.props.connected &&
-      (defaultsReady || (!snapshot.props.loading && controller.installedAgents.initialized))
+      !snapshot.props.loading &&
+      controller.installedAgents.initialized
     ) {
       initialLoadComplete = true;
     }
@@ -58,21 +46,13 @@ export function ModelProvidersContent(props: {
   return (
     <ModelProvidersPageShell
       body={
-        <Show
-          when={showContent()}
-          fallback={
-            <div class="model-providers__loading">
-              <SettingsLoadingSkeleton rows={1} />
-            </div>
-          }
-        >
-          <ModelProviders
-            {...current().props}
-            accountRecovery={<Recovery />}
-            installedAgents={current().installedAgentsAvailable ? installedAgents : undefined}
-            providerScope={<ModelProviderScope {...current().scope} />}
-          />
-        </Show>
+        <ModelProviders
+          {...current().props}
+          providerDetailsReady={showProviderDetails()}
+          accountRecovery={<Recovery />}
+          installedAgents={current().installedAgentsAvailable ? installedAgents : undefined}
+          providerScope={<ModelProviderScope {...current().scope} />}
+        />
       }
       loginMessage={current().loginMessage}
       login={

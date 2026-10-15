@@ -26,7 +26,10 @@ type DevicePairingMutationContext = {
 
 export function devicePairingMutation<Input, Result>(
   operation: (input: Input, context: DevicePairingMutationContext) => Result,
-  { publishPairing = true }: { publishPairing?: boolean } = {},
+  {
+    publishPairing = true,
+    pairedDeviceId,
+  }: { publishPairing?: boolean; pairedDeviceId?: (input: Input) => string } = {},
 ) {
   return (input: Input, { open }: WorkerOperationContext): Result => {
     const database = open();
@@ -34,7 +37,10 @@ export function devicePairingMutation<Input, Result>(
       () =>
         withDevicePairingMutationAdmission(() => {
           const snapshot = publishPairing
-            ? readPairedDevicePairingSnapshotFromDatabase(database.db)
+            ? readPairedDevicePairingSnapshotFromDatabase(
+                database.db,
+                pairedDeviceId?.(input).trim(),
+              )
             : undefined;
           const before = snapshot?.pairedByDeviceId;
           const after = before ? structuredClone(before) : undefined;

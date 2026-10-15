@@ -36,6 +36,84 @@ function expectNoDispatch(f: ReturnType<typeof preExistingCandidate>) {
 }
 
 describePosix("prior-CI forward main admission", () => {
+  it("preserves the UNKNOWN budget while rematerializing a cold main before authority", () => {
+    const f = preExistingCandidate();
+    const unknown = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
+    f.save({
+      ...f.state(),
+      mainProofDelaySeconds: 197,
+      mainProofDelayAfterObservations: 5,
+      observations: [
+        {},
+        {},
+        {},
+        {},
+        { advanceMain: true, pr: unknown },
+        { pr: unknown },
+        { pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" } },
+      ],
+    });
+
+    const result = f.adminPriorCi(f.path);
+
+    expect(result.error, result.output).toBeUndefined();
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain("Prior-CI local-only main unavailable");
+    expect(f.state().mainProofDelayedAt).not.toBeNull();
+    expect(f.state().mainAdvances).toHaveLength(1);
+    expect(f.state().mutations).toBe(1);
+    expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
+    expect(f.git(["rev-parse", `${f.record().landed}^1`])).toBe(f.state().mainAdvances[0]);
+  });
+
+  it.each([
+    { transport: "graphql", proofSeconds: 197, readSeconds: 55, admitted: true },
+    { transport: "rest", proofSeconds: 197, readSeconds: 55, admitted: true },
+    { transport: "graphql", proofSeconds: 197, readSeconds: 61, admitted: false },
+    { transport: "rest", proofSeconds: 197, readSeconds: 61, admitted: false },
+    { transport: "rest", proofSeconds: 901, readSeconds: 0, admitted: false },
+  ])(
+    "keeps remote settlement bounded after $proofSeconds seconds of local proof over $transport ($readSeconds seconds remote)",
+    ({ transport, proofSeconds, readSeconds, admitted }) => {
+      const f = preExistingCandidate();
+      const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
+      const state = f.state();
+      const observations = [
+        { main, pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } },
+        {
+          pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" },
+          advanceSeconds: readSeconds,
+        },
+      ];
+      state.mainProofDelaySeconds = proofSeconds;
+      state.mainProofDelayMain = main;
+      if (transport === "rest") {
+        state.graphqlMergeProjection = { mergeStateStatus: "UNKNOWN" };
+        state.restObservations = [{}, {}, {}, ...observations];
+      } else {
+        state.observations = [{}, ...observations];
+      }
+      f.save(state);
+
+      const result = f.adminPriorCi(f.path);
+
+      expect(result.error, result.output).toBeUndefined();
+      expect(f.state().mainProofDelayedAt, result.output).not.toBeNull();
+      if (admitted) {
+        expect(result.status, result.output).toBe(0);
+        expect(f.state().mutations).toBe(1);
+        expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
+        expect(f.git(["rev-parse", `${f.record().landed}^1`])).toBe(main);
+      } else {
+        expect(result.status, result.output).not.toBe(0);
+        expect(result.output).toContain(
+          proofSeconds > 900 ? "900s/32-round limit" : "60s settle limit",
+        );
+        expectNoDispatch(f);
+      }
+    },
+  );
+
   it.each([
     "unsupported Git",
     "stderr",

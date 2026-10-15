@@ -1,6 +1,6 @@
 # Settings Design Language
 
-Every settings surface (the `/settings` takeover pages plus the Plugins/Skills hubs) uses one structural pattern. Workspace styles live in `ui/src/styles/settings.css`, while controls shared with startup surfaces live in `ui/src/styles/settings-controls.css` and `settings-native-controls.css`. Solid views use `ui/src/components/solid/settings-ui.tsx`; unported Lit views retain only `renderSettingsRow` and `renderSettingsSegmented` in `ui/src/components/settings-ui.ts`.
+Every settings surface (the `/settings` takeover pages plus the Plugins/Skills hubs) uses one structural pattern. Workspace styles live in `ui/src/styles/settings.css`, while controls shared with startup surfaces live in `ui/src/styles/settings-controls.css` and `settings-native-controls.css`. Shared layout and control components live in `ui/src/components/solid/settings-ui.tsx`.
 
 ## Anatomy
 
