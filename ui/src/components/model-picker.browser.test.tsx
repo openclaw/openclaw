@@ -177,8 +177,7 @@ describe("ModelPicker", () => {
     try {
       await updatePickers(host);
       const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
-      picker.querySelector<HTMLButtonElement>(".picker-select__trigger")!.click();
-      await picker.updateComplete;
+      await openPicker(picker);
       const row = picker.querySelector<HTMLElement>(
         '[role="option"][data-value="openai/fixture-beta"]',
       )!;

@@ -592,7 +592,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
   }
   if (options.sidebarLiveChurn) {
     // Changes stop at 14 seconds; allow a second to settle before the quiet window.
-    liveEvents.splice(0, liveEvents.length);
+    liveEvents.splice(0);
     for (let index = 0; index < 125; index++) {
       const atMs = (index + 1) * 160;
       const genuineChange = atMs < 14_000;
@@ -603,15 +603,16 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
           kind: genuineChange ? "presence.visible-change" : "presence.equivalent",
           event: "presence",
           payload: {
-            presence: presenceEntries.map((entry, personIndex) => ({
-              ...entry,
-              ts,
-              user: { ...entry.user },
-              watchedSessions:
-                genuineChange && personIndex === 1 && index % 2 === 0
-                  ? []
-                  : [...(entry.watchedSessions ?? [])],
-            })),
+            presence: presenceEntries.map((entry, personIndex) =>
+              Object.assign({}, entry, {
+                ts,
+                user: { ...entry.user },
+                watchedSessions:
+                  genuineChange && personIndex === 1 && index % 2 === 0
+                    ? []
+                    : [...(entry.watchedSessions ?? [])],
+              }),
+            ),
           },
         });
       } else {

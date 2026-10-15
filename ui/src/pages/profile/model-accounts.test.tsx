@@ -183,7 +183,9 @@ async function mountAccounts(
     async start(providerId = "openai") {
       button(accounts, ".profile-auth-add-account").click();
       await waitForSolid(() =>
-        expect(accounts.querySelector(".profile-auth-provider")).not.toBeNull(),
+        expect(button(accounts, ".profile-auth-provider .picker-select__trigger").disabled).toBe(
+          false,
+        ),
       );
       await openPicker(accounts.querySelector<HTMLElement>(".profile-auth-provider")!);
       await waitForSolid(() =>

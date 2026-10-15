@@ -6,7 +6,7 @@ type AgentsViewProps = Parameters<typeof Agents>[0];
 type AgentFilesProps = Parameters<typeof AgentFiles>[0];
 
 export function primaryModelPicker(container: ParentNode) {
-  return container.querySelector(
+  return container.querySelector<HTMLElement>(
     'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
   );
 }

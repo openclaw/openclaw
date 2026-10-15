@@ -67,7 +67,12 @@ function selectProfileAvatar(page: ParentNode) {
 
 async function startProfileSignIn(page: ParentNode) {
   page.querySelector<HTMLButtonElement>(".profile-auth-add-account")!.click();
-  await waitForFast(() => expect(page.querySelector(".profile-auth-provider")).not.toBeNull());
+  await waitForFast(() =>
+    expect(
+      page.querySelector<HTMLButtonElement>(".profile-auth-provider .picker-select__trigger")
+        ?.disabled,
+    ).toBe(false),
+  );
   await openPicker(page.querySelector<HTMLElement>(".profile-auth-provider")!);
   await waitForFast(() =>
     expect(page.querySelector('[role="option"][data-value="openai"]')).not.toBeNull(),

@@ -29,8 +29,7 @@ describe("Solid model picker interop", () => {
     expect(trigger.textContent).toContain("Selected");
     expect(trigger.textContent).toContain("API");
     expect(trigger.querySelector('[data-provider-icon="codex"]')).not.toBeNull();
-    trigger.click();
-    await picker.updateComplete;
+    await openPicker(picker);
     const group = picker.querySelector('[role="group"][aria-label="OpenAI"]')!;
     expect(group.querySelector('[data-provider-icon="codex"]')).not.toBeNull();
     expect(

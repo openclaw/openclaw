@@ -101,8 +101,8 @@ it.each(["profile", "device-local"] as const)(
     );
     for (const slot of ["ui", "chat"]) {
       const picker = container
-        .querySelector(`#settings-font-${slot}`)
-        ?.closest<HTMLElement>("openclaw-select-picker")!;
+        .querySelector(`#settings-font-${slot}`)!
+        .closest<HTMLElement>("openclaw-select-picker")!;
       await openPicker(picker);
       expect(picker?.querySelector('[role="option"][data-value="theme"]')?.textContent).toContain(
         "Claw · Instrument Sans",
