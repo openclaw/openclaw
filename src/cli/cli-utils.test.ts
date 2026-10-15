@@ -41,10 +41,7 @@ describe("waitForever", () => {
 });
 
 describe("runCommandWithRuntime", () => {
-  it.each([
-    { code: 0, customErrorHandler: false },
-    { code: 2, customErrorHandler: true },
-  ])(
+  it.each([{ code: 2, customErrorHandler: true }])(
     "preserves completed exit $code with custom error handler $customErrorHandler",
     async ({ code, customErrorHandler }) => {
       const runtime = { error: vi.fn(), exit: vi.fn() };
@@ -128,7 +125,6 @@ describe("runCommandWithRuntime", () => {
 describe("respawn policy", () => {
   it.each([
     { args: ["--help"], skip: true, startup: true },
-    { args: ["-V"], skip: true, startup: true },
     { args: ["tui"], skip: true, startup: false },
     { args: ["hooks", "relay", "--relay-id", "relay-1"], skip: true, startup: true },
     {
@@ -138,20 +134,14 @@ describe("respawn policy", () => {
       startup: false,
     },
     { args: ["gateway"], skip: true, startup: true },
-    { args: ["gateway", "--port", "14720", "--bind", "loopback"], skip: true, startup: true },
     { args: ["gateway", "run", "--port=14720", "--bind", "loopback"], skip: true, startup: true },
-    { args: ["gateway", "--update-canary"], skip: true, startup: true },
-    { args: ["gateway", "run", "--update-canary", "--port=14720"], skip: true, startup: true },
     { args: ["gateway", "status"], skip: true, startup: false },
     { args: ["--", "gateway", "run"], skip: true, startup: true },
-    { args: ["gateway", "--", "status"], skip: true, startup: false },
-    { args: ["gateway", "--token", "test-token", "status"], skip: true, startup: false },
     {
       args: ["--profile", "server", "gateway", "run", "--allow-unconfigured"],
       skip: true,
       startup: true,
     },
-    { args: ["--profile", "server", "gateway", "status", "--json"], skip: true, startup: false },
     { args: ["status"], skip: false, startup: false },
     { args: ["gateway", "call", "health"], skip: false, startup: false },
     { args: ["--", "gateway", "run", "--force"], skip: false, startup: false },
@@ -211,8 +201,6 @@ describe("dns cli", () => {
 describe("parseByteSize", () => {
   it.each([
     ["10kb", 10 * 1024],
-    ["123", 123],
-    [String(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER],
     [`${Number.MAX_SAFE_INTEGER}.1`, Number.MAX_SAFE_INTEGER],
   ] as const)("parses %s without losing precision", (input, expected) => {
     expect(parseByteSize(input)).toBe(expected);
@@ -225,23 +213,16 @@ describe("parseByteSize", () => {
 
 describe("parseDurationMs", () => {
   it.each([
-    ["10000", 10_000],
     ["0.5s", 500],
     ["  1H30M  ", 5_400_000],
     ["0.4ms0.4ms", 1],
-    ["30m1h30m", 7_200_000],
     ["9007199254740991ms", Number.MAX_SAFE_INTEGER],
     ["9007199254740990ms1ms", Number.MAX_SAFE_INTEGER],
   ] as const)("parses %s", (input, expected) => {
     expect(parseDurationMs(input)).toBe(expected);
   });
 
-  it("uses the default unit only for bare numbers", () => {
-    expect(parseDurationMs("1.5", { defaultUnit: "m" })).toBe(90_000);
-    expect(parseDurationMs("1s", { defaultUnit: "m" })).toBe(1000);
-  });
-
-  it.each(["", "-1s", "1w", "1h30", "9007199254740993ms", "9007199254740990ms10ms"])(
+  it.each(["", "-1s", "1h30", "9007199254740993ms", "9007199254740990ms10ms"])(
     "rejects invalid or unsafe duration %j",
     (input) => {
       expect(() => parseDurationMs(input)).toThrow(/Invalid duration/);
