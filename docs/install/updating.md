@@ -191,6 +191,8 @@ Service membership uses the running Gateway's process ancestry and native superv
 facts. An external terminal that inherited service environment markers can still update after native
 membership is verified as external. Reparented children remain inside when they
 share the Gateway's macOS process group or launchd job, or its systemd unit cgroup.
+On macOS, verified external launchd membership is sufficient even when a root-owned
+`login` process prevents a complete ancestry walk, including in integrated terminals.
 An already-current core update never refuses for service membership. When membership
 cannot be verified as external, it completes with `already-current` and a warning
 that plugin, runtime, and service maintenance was deferred, before that maintenance

@@ -173,7 +173,7 @@ const authCredentialCallers = new Map<string, readonly string[]>([
   ],
   [
     key(authEnrollmentRuntime, "enrollOwnedAuthProfileAuthorization"),
-    [key("src/agents/mcp-auth-profile-authorization.ts", "captureMcpAuthProfileAuthorization")],
+    [key("src/agents/auth-profiles/authorization.ts", "captureAuthProfileAuthorization")],
   ],
   [
     key(authCells, "deleteAuthProfileJsonCell"),
@@ -571,7 +571,11 @@ const callers = new Map<string, readonly string[]>([
   [key(accounts, "writeRecord"), [key(accounts, "writeProfile"), key(accounts, "writeLinks")]],
   [
     key(accounts, "writeProfile"),
-    [key(accounts, "updateUserModelAuthProfile"), key(accounts, "connectUserModelAccount")],
+    [
+      key(accounts, "updateUserModelAuthProfile"),
+      key(accounts, "connectUserModelAccount"),
+      key(accounts, "enrollPersonalAuthProfileAuthorizationInDatabase"),
+    ],
   ],
   [
     key(accounts, "writeLinks"),
@@ -592,6 +596,11 @@ const callers = new Map<string, readonly string[]>([
   [
     key(accounts, "connectUserModelAccount"),
     [key(profileWorker, "userProfiles.modelAccount.connect")],
+  ],
+  // Enrollment preserves credential bytes and requires the same admitted personal writer.
+  [
+    key(accounts, "enrollPersonalAuthProfileAuthorizationInDatabase"),
+    [key(profileWorker, "userProfiles.modelAccount.enrollAuthorization")],
   ],
   [key(accounts, "mergeUserModelAccounts"), [key(profileMerge, "mergeUserProfiles")]],
   [

@@ -1,9 +1,6 @@
 import type { ProviderDefaultThinkingPolicyContext } from "openclaw/plugin-sdk/core";
 import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  normalizeOpenAIServiceTier,
-  supportsOpenAIResponsesFastMode,
-} from "openclaw/plugin-sdk/provider-model-metadata";
+import { supportsOpenAIResponsesFastMode } from "openclaw/plugin-sdk/provider-model-metadata";
 import type {
   ModelApi,
   ModelProviderConfig,
@@ -48,7 +45,6 @@ export function resolveFastModeSupport(ctx: ProviderFastModePolicyContext): bool
   }
   return (
     (resolveOpenAIModelServiceTiers(ctx)?.includes("priority") ?? true) &&
-    normalizeOpenAIServiceTier(ctx.params?.serviceTier ?? ctx.params?.service_tier) === undefined &&
     supportsOpenAIResponsesFastMode(ctx)
   );
 }

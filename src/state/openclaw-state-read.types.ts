@@ -225,6 +225,7 @@ export type OpenClawStateReadCommand =
       type: "userProfiles.catalogIdentity";
       input: import("./user-profile-catalog-identity.read.js").UserProfileCatalogIdentityInput;
     }
+  | { type: "userModelAccounts.authorization"; authProfileId: string }
   | { type: "userModelAccounts.links"; profileId: string }
   | { type: "userModelAccounts.summary"; profileId: string; authProfileId: string }
   | { type: "userModelAccounts.selection"; profileId?: string; authProfileId: string }

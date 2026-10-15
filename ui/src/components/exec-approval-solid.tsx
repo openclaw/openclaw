@@ -9,6 +9,7 @@ import {
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import {
+  ApprovalCountdown,
   approvalRemainingLabel,
   approvalTitle,
   ExecApprovalCard,
@@ -49,11 +50,11 @@ function renderApprovalQueueList(params: {
             >
               <span class="exec-approval-list__agent">{agent}</span>
               <span class="exec-approval-list__command mono">{command}</span>
-              <openclaw-approval-countdown
+              <ApprovalCountdown
                 class="exec-approval-list__expiry"
                 aria-hidden="true"
-                prop:expiresAtMs={entry.expiresAtMs}
-                prop:compact={true}
+                expiresAtMs={entry.expiresAtMs}
+                compact={true}
               />
             </button>
           );
