@@ -4,6 +4,7 @@ import type {
   ControlUiAccessory,
   ControlUiDisposer,
   ControlUiHost,
+  ControlUiInlineView,
   ControlUiNavigationItem,
   ControlUiPage,
   ControlUiPanel,
@@ -27,6 +28,7 @@ export type ControlUiContributions = {
   actions: ControlUiAction;
   accessories: ControlUiAccessory;
   widgets: ControlUiWidget;
+  inlineViews: ControlUiInlineView;
   replacements: ControlUiReplacement;
 };
 
@@ -38,6 +40,7 @@ export type ControlUiPluginCapability = {
   readonly registryStatus: "pending" | "complete" | "failed";
   readonly canReload: boolean;
   isLoading: (pluginId: string) => boolean;
+  inlineViewCheck: (key: string) => ((payload: unknown) => boolean) | undefined;
   reload: () => Promise<void>;
   refresh: () => Promise<void>;
   subscribe: (listener: () => void) => ControlUiDisposer;

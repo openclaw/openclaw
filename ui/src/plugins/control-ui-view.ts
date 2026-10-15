@@ -9,7 +9,13 @@ import { applicationContext } from "../app/context.ts";
 import { livePresentation, type PresentationValue } from "../lit/presentation-binding.ts";
 import type { ControlUiPluginCapability } from "./control-ui-capability.ts";
 
-export type ViewKind = "pages" | "panels" | "accessories" | "widgets" | "replacements";
+export type ViewKind =
+  | "pages"
+  | "panels"
+  | "accessories"
+  | "widgets"
+  | "inlineViews"
+  | "replacements";
 
 class PluginSurfaceDirective extends AsyncDirective {
   private host?: LitElement;
@@ -148,9 +154,11 @@ export function renderPluginContribution(
   key: string,
   props: unknown,
   presented: PresentationValue = true,
+  defaultView: unknown = nothing,
 ) {
   return html`<openclaw-plugin-view
     .kind=${kind}
+    .defaultView=${defaultView}
     .contributionKey=${key}
     .props=${props}
     .presented=${livePresentation(presented)}

@@ -1,10 +1,11 @@
 import { attachPluginApiFacades, type OpenClawPluginApiWithoutFacades } from "./api-facades.js";
+import { createPluginInlineViewResult } from "./inline-view.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi } from "./types.js";
 
 type BuildPluginApiParams = Omit<
   OpenClawPluginApiWithoutFacades,
-  keyof typeof noops | "registerNodeCliFeature" | "runtimeSource"
+  keyof typeof noops | "registerNodeCliFeature" | "runtimeSource" | "inlineView"
 > & {
   runtimeSource?: string;
   handlers?: Partial<Pick<OpenClawPluginApi, keyof typeof noops>>;
@@ -130,6 +131,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
   ) as Pick<OpenClawPluginApi, keyof typeof noops>;
   const api: OpenClawPluginApiWithoutFacades = {
     id: params.id,
+    inlineView: (viewId, payload, options) =>
+      createPluginInlineViewResult(params.id, viewId, payload, options),
     name: params.name,
     version: params.version,
     description: params.description,

@@ -96,7 +96,7 @@ type PluginControlUiTabGroup = "control" | "agent";
 export type PluginControlUiDescriptor = {
   id: string;
   /** "tab" adds a sidebar tab; "widget" advertises a trusted dashboard renderer. */
-  surface: "session" | "tool" | "run" | "settings" | "tab" | "widget" | "link-reader";
+  surface: "session" | "tool" | "run" | "settings" | "tab" | "widget" | "link-reader" | "inline";
   /** Required for link-reader surfaces; passive models rendered by the host, never plugin JS. */
   linkReader?: ControlUiLinkReaderMetadata;
   label: string;

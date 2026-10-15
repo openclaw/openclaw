@@ -52,6 +52,7 @@ const UI_CAPABILITY_BY_CONTRIBUTION = {
   actions: "action",
   accessories: "accessory",
   widgets: "widget",
+  inlineViews: "inline",
   replacements: "replacement",
 } as const satisfies Record<
   keyof ControlUiContributions,
@@ -62,6 +63,7 @@ const CONTRIBUTION_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 const ACTIVATION_TIMEOUT_MS = 15_000;
 
 export class ControlUiPluginRuntime implements ControlUiPluginCapability {
+  private readonly inlineChecks = new Map<string, (payload: unknown) => boolean>();
   private readonly owners = new Map<string, ControlUiPluginOwner>();
   private readonly preloads = new ControlUiPluginAssetPreloads();
   private readonly selected = new Map<ControlUiSurface, { key: string; signal: AbortSignal }>();
@@ -113,6 +115,10 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       this.loadingOwners.size === 0
       ? "complete"
       : "pending";
+  }
+
+  inlineViewCheck(key: string): ((payload: unknown) => boolean) | undefined {
+    return this.inlineChecks.get(key);
   }
 
   isLoading(pluginId: string): boolean {
@@ -186,6 +192,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       return;
     }
     this.retireOwners();
+    this.inlineChecks.clear();
     this.client = client;
     this.connectionId = connectionId;
     this.diagnostics = [];
@@ -215,6 +222,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     this.loadingOwners.clear();
     this.catalogStatus = "pending";
     this.loadingCatalog = "pending";
+    this.inlineChecks.clear();
     this.publish();
     const current = () =>
       !this.disposed && this.client === client && this.refreshGeneration === generation;
@@ -226,6 +234,18 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       ]);
       if (!current()) {
         return;
+      }
+      if (catalog.inlineViews?.length) {
+        const { createInlinePayloadCheck } = await import("./control-ui-inline-schema.ts");
+        if (!current()) {
+          return;
+        }
+        for (const descriptor of catalog.inlineViews) {
+          this.inlineChecks.set(
+            descriptor.pluginId + "/" + descriptor.id,
+            createInlinePayloadCheck(descriptor.schema),
+          );
+        }
       }
       this.diagnostics = catalog.diagnostics;
       this.catalogStatus = "complete";
@@ -332,6 +352,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
         replacements: new Map(),
         accessories: new Map(),
         widgets: new Map(),
+        inlineViews: new Map(),
       },
       selections: new Map<ControlUiSurface, string | null>(),
     };
@@ -505,6 +526,12 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     const values: ControlUiRegistration<ControlUiContributions[K]>[] = [];
     for (const owner of this.owners.values()) {
       for (const [id, entry] of owner.contributions[kind]) {
+        if (
+          kind === "inlineViews" &&
+          !this.inlineChecks.has(owner.descriptor.pluginId + "/" + id)
+        ) {
+          continue;
+        }
         values.push({
           key: `${owner.descriptor.pluginId}/${id}`,
           pluginId: owner.descriptor.pluginId,

@@ -24,6 +24,7 @@ import {
   canvasPreviewsMatch,
   normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
+import { pluginInlineViewItems } from "../../lib/chat/plugin-inline-views.ts";
 import { extractToolCardsCached, type CanvasToolPreview } from "../../lib/chat/tool-cards.ts";
 import {
   buildCompactionDividerItem,
@@ -132,6 +133,7 @@ export function buildChatItems(
   inputOrder: ChatInputOrderState = { keys: [] },
 ): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
+  const inlineInvocations = new Set<string>();
   const tools = props.toolMessages.filter(
     (message): message is Record<string, unknown> => asRecord(message) !== null,
   );
@@ -287,6 +289,7 @@ export function buildChatItems(
       continue;
     }
 
+    items.push(...pluginInlineViewItems(item, inlineInvocations));
     const isToolResult = normalized.role.toLowerCase() === "toolresult";
     const persistedCanvasSource = isToolResult ? extractChatMessagePreview(msg) : null;
     if (persistedCanvasSource) {
@@ -635,6 +638,20 @@ export function buildChatItems(
     items,
     toolItems.map((tool) => tool.projection),
   );
+  for (const tool of toolItems) {
+    for (const item of pluginInlineViewItems(tool.projection.item, inlineInvocations)) {
+      projections.push({
+        ...tool.projection,
+        bounds:
+          tool.projection.bounds ??
+          resolveProjectionBounds(
+            tool.runId,
+            normalizeOptionalString(tool.projection.item.message.openclawToolStreamAfterSendId),
+          ),
+        item,
+      });
+    }
+  }
   insertChatItemsByTimestamp(items, projections);
 
   // The active claw is telemetry, not a placeholder: it stays through visible

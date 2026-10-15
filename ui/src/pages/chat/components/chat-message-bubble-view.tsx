@@ -20,6 +20,7 @@ import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { presentedContent } from "../../../lit/presentation-binding.ts";
 import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
+import { PluginInlineView } from "../../../plugins/control-ui-inline-view.tsx";
 import { renderPluginSurface } from "../../../plugins/control-ui-view.ts";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { renderAsyncQuestionSummary } from "./chat-async-question.ts";
@@ -449,6 +450,16 @@ function BubbleContents(props: ContentProps) {
           </div>
         </Show>
       </Show>
+      <For each={props.state().inlineViewBlocks} keyed={(block) => block.toolCallId}>
+        {(block) => (
+          <PluginInlineView
+            block={block()}
+            sessionKey={props.options.sessionKey ?? ""}
+            agentId={props.options.agentId}
+            presented={props.options.presented}
+          />
+        )}
+      </For>
       <Show when={props.state().hasToolCards}>
         <Show
           when={

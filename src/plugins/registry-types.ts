@@ -457,7 +457,12 @@ export type PluginRegistry = {
   >;
   trustedToolPolicies: PluginTrustedToolPolicyRegistryRegistration[];
   toolMetadata: Array<PluginRegistrationOwner & { metadata: PluginToolMetadataRegistration }>;
-  controlUiDescriptors: Array<PluginRegistrationOwner & { descriptor: PluginControlUiDescriptor }>;
+  controlUiDescriptors: Array<
+    PluginRegistrationOwner & {
+      descriptor: PluginControlUiDescriptor;
+      validateInlinePayload?: (value: unknown) => boolean;
+    }
+  >;
   runtimeLifecycles: Array<
     PluginRegistrationOwner & { lifecycle: PluginRuntimeLifecycleRegistration }
   >;

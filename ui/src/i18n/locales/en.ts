@@ -123,6 +123,11 @@ export const en: TranslationMap & {
     selectionScope: "Choose views for this browser window. Built-in views are always available.",
     builtin: "Built-in view",
     retryView: "Retry plugin view",
+    inlineLoading: "Loading plugin view…",
+    inlineUnavailable:
+      "This view is unavailable. Check that its plugin is installed, enabled, and allowed for your account. Reload the conversation after installing or updating the plugin.",
+    inlineInvalidPayload:
+      "This saved view is incompatible with the installed plugin. The original summary is shown above.",
     reload: "Reload plugin UI",
     dashboardTitle: "Session dashboard",
     dashboardEmpty: "This session has no dashboard widgets yet.",

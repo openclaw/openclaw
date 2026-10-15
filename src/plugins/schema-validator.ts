@@ -92,6 +92,20 @@ function applyValidatedSourceDefaults(
   return value;
 }
 
+/** Admit once; display projections reuse this check without serializing schemas. */
+export function compileJsonSchemaCheck(schema: JsonSchemaValue): (value: unknown) => boolean {
+  const error = findJsonSchemaShapeError(schema);
+  if (error) {
+    throw new Error(sanitizeTerminalText(`invalid schema: ${error}`));
+  }
+  // Display schemas use standard annotation-only formats, consistently with the browser.
+  // SAFETY: the schema shape was admitted above; normalization returns TypeBox-compatible JSON Schema.
+  const validator = Compile(
+    normalizeJsonSchemaForTypeBox(schema, { format: "annotation" }) as never,
+  );
+  return (value) => validator.Check(value);
+}
+
 function compileSchema(schema: JsonSchemaValue): TypeBoxValidator {
   return withPluginFormatSemantics(() => Compile(normalizeJsonSchemaForTypeBox(schema) as never));
 }

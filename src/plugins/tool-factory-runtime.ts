@@ -6,6 +6,7 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithTrackedCancellation } from "../shared/async-work-scope.js";
+import { bindPluginInlineViewInvocation } from "./inline-view.js";
 import { prepareMemoryAudienceRead } from "./memory-audience.js";
 import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
@@ -93,11 +94,12 @@ export function bindPluginToolCallbacks(
       if (pending) {
         await racePromiseWithAbortSignal(pending, signal);
       }
-      return invoke(() => {
+      const result = await invoke(() => {
         const execute = (executionSignal?: AbortSignal) =>
           tool.execute(toolCallId, params, executionSignal, onUpdate);
         return signal ? runWithTrackedCancellation(signal, execute) : execute();
       });
+      return bindPluginInlineViewInvocation(result, entry.pluginId, tool.name, toolCallId);
     },
     ...(prepare
       ? { prepareArguments: (args: unknown) => invoke(() => prepare.call(tool, args)) }

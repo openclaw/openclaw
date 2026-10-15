@@ -11,6 +11,7 @@ import {
 } from "./host-hooks.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
+import { compileJsonSchemaCheck } from "./schema-validator.js";
 
 /** Copy bounded plugin metadata before it becomes a browser routing contract. */
 function normalizeLinkReaderMetadata(value: unknown): ControlUiLinkReaderMetadata | undefined {
@@ -77,6 +78,7 @@ const controlUiSurfaces = new Set<PluginControlUiDescriptor["surface"]>([
   "tab",
   "widget",
   "link-reader",
+  "inline",
 ]);
 const reservedTabSlugs = new Set([
   "api",
@@ -177,6 +179,21 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
       );
       return;
     }
+    let validateInlinePayload: ((value: unknown) => boolean) | undefined;
+    if (surface === "inline") {
+      try {
+        if (typeof descriptor.schema !== "boolean" && !isRecord(descriptor.schema)) {
+          throw new Error("inline views require a JSON Schema");
+        }
+        validateInlinePayload = compileJsonSchemaCheck(descriptor.schema);
+      } catch (error) {
+        reportRegistrationError(
+          record,
+          "Invalid inline view schema for " + id + ": " + String(error),
+        );
+        return;
+      }
+    }
     const existing = registry.controlUiDescriptors.find(
       (entry) => entry.pluginId === record.id && entry.descriptor.id === id,
     );
@@ -220,9 +237,11 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
         ? "page"
         : surface === "widget"
           ? "widget"
-          : surface === "link-reader"
-            ? "link-reader"
-            : undefined;
+          : surface === "inline"
+            ? "inline"
+            : surface === "link-reader"
+              ? "link-reader"
+              : undefined;
     // Missing declarations are advisory: metadata never grants or denies a UI registration.
     if (capability && record.uiCapabilities && !record.uiCapabilities.includes(capability)) {
       state.reportRegistrationWarning(
@@ -233,6 +252,7 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
     registry.controlUiDescriptors.push(
       // Descriptors are admitted metadata, so retained snapshots need no executable lease.
       createIdentityRegistration(record, {
+        ...(validateInlinePayload ? { validateInlinePayload } : {}),
         descriptor: {
           ...descriptor,
           id,

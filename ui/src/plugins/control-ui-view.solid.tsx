@@ -299,7 +299,19 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
       { once: true, signal: abort.signal },
     );
     try {
+      const generation = mountGeneration;
       viewContext = {
+        reportError: (failure) => {
+          if (
+            mountAbort === abort &&
+            generation === mountGeneration &&
+            !abort.signal.aborted &&
+            host.isConnected &&
+            !disposed
+          ) {
+            fail(failure);
+          }
+        },
         host: scopeControlUiHost(registration.host, abort.signal, () => host.isConnected),
         signal: abort.signal,
         props: scopedProps(abort.signal),
@@ -332,7 +344,13 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
           };
         },
       };
-      handle = registration.value.mount(container, viewContext);
+      const mounted = registration.value.mount(container, viewContext);
+      // A plugin can report a synchronous failure before returning its disposer.
+      if (abort.signal.aborted) {
+        mounted?.dispose?.();
+      } else {
+        handle = mounted;
+      }
     } catch (failure) {
       fail(failure);
     }
@@ -436,10 +454,12 @@ export function PluginContribution(props: {
   contributionKey: string;
   props: unknown;
   presented?: boolean;
+  fallback?: unknown;
 }) {
   return (
     <PluginView
       kind={props.kind}
+      defaultView={props.fallback}
       contributionKey={props.contributionKey}
       props={props.props}
       presented={props.presented ?? true}

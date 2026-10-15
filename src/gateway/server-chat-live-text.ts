@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { AgentEventPayload, AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
@@ -6,6 +7,7 @@ import {
   appendChatCanvasBlocksToMessage,
   type ChatCanvasBlock,
 } from "./chat-display-projection.canvas.js";
+import { projectPluginInlineView } from "./chat-display-projection.inline-view.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import type { ChatRunState } from "./server-chat-state.js";
 
@@ -112,6 +114,27 @@ export function prepareAgentWirePayload(
   isCurrent: () => boolean,
 ): AgentEventPayload {
   let payload = event.runId === clientRunId ? event : { ...event, runId: clientRunId };
+  if (event.stream === "tool" && event.data.phase === "result") {
+    const result = asOptionalRecord(event.data.result);
+    const inline =
+      !event.data.isError &&
+      projectPluginInlineView(result?.details, {
+        toolCallId: event.data.toolCallId,
+        toolName: event.data.name,
+      });
+    if (inline && result) {
+      payload = {
+        ...payload,
+        data: {
+          ...payload.data,
+          result: {
+            ...result,
+            details: { ...asOptionalRecord(result.details), pluginView: inline },
+          },
+        },
+      };
+    }
+  }
   if (event.stream === "item" && event.data.kind === "preamble") {
     payload = {
       ...payload,

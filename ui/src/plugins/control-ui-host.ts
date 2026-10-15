@@ -345,6 +345,7 @@ export function createControlUiPluginHost(
       registerAction: (value) => runtime.register(owner, "actions", value),
       registerAccessory: (value) => runtime.register(owner, "accessories", value),
       registerWidget: (value) => runtime.register(owner, "widgets", value),
+      registerInlineView: (value) => runtime.register(owner, "inlineViews", value),
       registerReplacement: (value) => runtime.register(owner, "replacements", value),
       selectReplacement(surface, id) {
         current();

@@ -143,6 +143,7 @@ Its id must match the plugin manifest. Register contributions through
 | `registerAction`                        | Composer, header, or session menu actions. An optional `resolve` function supplies the current label, hidden state, and disabled state. |
 | `registerPanel`                         | Session panels.                                                                                                                         |
 | `registerAccessory`                     | Session header content.                                                                                                                 |
+| `registerInlineView`                    | Data-populated native views in the chat transcript.                                                                                     |
 | `registerWidget`                        | Native dashboard widget views.                                                                                                          |
 | `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, or `tool-result`.                                                                |
 
@@ -294,6 +295,136 @@ plugin activation closes a dock that activation still owns. Use
 `host.subscribe(...)` to refresh your action when `host.dock.openSessionKey`
 changes. See the [dock contract](/plugins/sdk-subpaths#control-ui-conversation-dock)
 for replacement, visibility, access, and context limits.
+
+## Inline views from tools
+
+A native plugin can register a predefined inline component and return **data** for
+it from a tool. The agent selects the tool and its arguments; it does not author
+HTML, JavaScript, templates, or a component. This is native plugin UI, not a
+sandboxed widget or MCP App.
+
+Register the backend display contract and return its descriptor:
+
+```typescript
+api.session.controls.registerControlUiDescriptor({
+  id: "incident-dashboard",
+  surface: "inline",
+  label: "Incident dashboard",
+  requiredScopes: ["operator.read"],
+  schema: {
+    type: "object",
+    properties: { incidentId: { type: "string" } },
+    required: ["incidentId"],
+  },
+});
+
+api.registerTool({
+  name: "show_incident",
+  label: "Show incident",
+  description: "Show an incident dashboard.",
+  parameters: {
+    type: "object",
+    properties: { incidentId: { type: "string" } },
+    required: ["incidentId"],
+  },
+  async execute(_toolCallId, args: { incidentId: string }) {
+    return api.inlineView(
+      "incident-dashboard",
+      { incidentId: args.incidentId },
+      {
+        summary: `Showing incident ${args.incidentId}.`,
+      },
+    );
+  },
+});
+```
+
+The helper binds the canonical manifest plugin id (not the display name). It
+returns ordinary text content containing the required nonblank summary, plus
+`details: { pluginInlineView: { pluginId, viewId, payload } }`.
+
+Payloads must be plain JSON, at most **16 KiB of serialized UTF-8**. Summaries
+are at most **4 KiB of serialized UTF-8 JSON**, keeping the complete result within nested tool
+history limits. Store larger data in the plugin and pass an ordinary resource
+id. JSON Schema is required and compiled at registration; malformed schemas
+fail registration. Formats are annotations. Live and history projections check
+bounded data against the currently installed schema, without changing the stored
+result. HTML-looking strings are not inspected or blocked by core.
+
+In the browser entry, register the matching installed component:
+
+```typescript
+export default defineControlUiPlugin({
+  id: "incident-tools",
+  activate(host) {
+    host.ui.registerInlineView({
+      id: "incident-dashboard",
+      mount(element, context) {
+        const heading = document.createElement("h3");
+        heading.textContent = "Incident dashboard";
+        element.append(heading);
+        // Read context.props.payload and fetch the resource through context.host.
+        return { dispose: () => heading.remove() };
+      },
+    });
+  },
+});
+```
+
+The host supplies `payload`, `toolCallId`, `toolName`, `sessionKey`, and
+`agentId`. Payload fields cannot override that context. Each tool call owns
+an independent view, keyed by its owning run and tool-call id; repeated receipt of the same
+result does not add another instance. There is no in-place tool-driven update
+protocol in this version. Use plugin-owned state and `host.ui.invalidate()`
+for interactive state shared with another view.
+
+- **Live:** the view appears as soon as its successful tool result arrives,
+  after its summary, without waiting for the agent final reply or expanding
+  tool details. Direct and nested Tool Search calls use their actual call identity.
+- **History:** reload reconstructs the display from the stored descriptor,
+  never by rerunning the agent or tool. Only rows near the scroll viewport mount
+  components. Offscreen instances are disposed/aborted; a measured-height
+  placeholder preserves scrolling while the row remains present. Virtualization
+  can remove the entire row, and scrolling back may mount a new instance.
+- **Availability:** the backend descriptor, browser registration, current viewer
+  scopes, plugin enablement, and Custom plugin UI lab must still permit the view.
+  Missing plugins/views, incompatible payloads, loading, and activation failures
+  preserve the original summary and show an availability notice. No original
+  caller privilege is inherited by a later viewer. Reload the conversation after
+  reinstalling a missing plugin or repairing an incompatible saved payload schema;
+  this reprojects stored results and does not rerun tools.
+- **Errors:** a thrown mount/update error or `context.reportError?.(error)`
+  retires that instance and offers **Retry plugin view**. A stale instance cannot
+  report an error against its replacement. Handle ordinary action errors inside
+  your component when a full remount is not appropriate.
+- **Versioning:** no plugin version is stored. History uses the installed current
+  renderer. Keep view ids stable and support older payload shapes when updating
+  the plugin; otherwise the summary remains the fallback.
+- **Other surfaces:** text-only clients/model context receive the tool normal
+  summary content; this feature does not force channel tool-progress delivery.
+  Inline views are not dashboard pins or hosted/embed dispatch targets.
+
+### Inline plugin author responsibilities
+
+Mounting must be repeatable display/read work. Do not acknowledge an incident,
+submit a payment, or mutate a resource just because history was scrolled into
+view. Mutations belong to an explicit click or the original authorized tool.
+Release subscriptions, observers, and framework roots in `dispose`, and honor
+`context.signal` after asynchronous work.
+
+Native plugins run with the existing installation trust boundary and current
+connection authority. The host does not add a sandbox, per-plugin RPC allowlist,
+or generic HTML policing. Plugin authors own safe rendering: prefer
+`textContent`/framework text interpolation for data. If your component uses
+HTML, URL, script, or other executable sinks, validate/sanitize for that sink.
+Never persist credentials, secrets, or bearer-capability references in a payload
+or summary. On every backend request, authorize the **current viewer** against
+resource/session ACLs; a saved resource id is not authorization.
+
+See the runnable [incident example](https://github.com/openclaw/openclaw/tree/main/examples/inline-incident):
+it reads current status, acknowledges through a scope-checked plugin Gateway
+method on an explicit button click, and shares plugin state with a session panel
+opened using both `sessionKey` and `agentId`.
 
 ## Build and reload
 
