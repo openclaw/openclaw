@@ -368,7 +368,6 @@ async function callMainSessionTool(params: {
   return readOkMcpPayload(await sendMainSessionToolCall(params));
 }
 
-
 function getScopedToolsCall(index: number): ScopedToolsCall {
   const call = resolveGatewayScopedToolsMock.mock.calls[index]?.[0];
   if (typeof call !== "object" || call === null) {
