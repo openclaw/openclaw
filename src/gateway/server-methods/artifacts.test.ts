@@ -491,67 +491,71 @@ describe("managed artifact lifecycle", () => {
       },
     });
   });
-  it("keeps scoped managed downloads bound to their exact artifact id", async () => {
-    const artifactId = "artifact_managed_media_11111111-1111-4111-8111-111111111111";
-    const otherURL =
-      "/api/chat/media/outgoing/agent%3Amain%3Amain/22222222-2222-4222-8222-222222222222/full";
-    const query = {
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      artifactId,
-      runId: "run-output",
-      messageRole: "assistant",
-    };
-    for (const payload of [{ url: otherURL }, { data: "YWx0ZXJuYXRl" }, {}]) {
-      mockedMessages([
-        {
-          role: "assistant",
-          content: [{ type: "file", artifactId, title: "stale-name.txt", ...payload }],
-          __openclaw: { seq: 3, runId: "run-output" },
-        },
-      ]);
-      hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
-      const missing = await downloadArtifact(query);
-      expectFields(expectErrorDetails(missing.calls), { type: "artifact_not_found", artifactId });
-      expect(hoisted.resolveManagedUrlDownload).not.toHaveBeenCalled();
-
-      const url =
-        "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full?mediaTicket=fixture";
-      hoisted.resolveManagedArtifactDownload.mockResolvedValue({
+  it.each([undefined, 480])(
+    "keeps scoped managed downloads bound to their exact artifact id (preview %s)",
+    async (previewWidth) => {
+      const artifactId = "artifact_managed_media_11111111-1111-4111-8111-111111111111";
+      const otherURL =
+        "/api/chat/media/outgoing/agent%3Amain%3Amain/22222222-2222-4222-8222-222222222222/full";
+      const query = {
+        sessionKey: "agent:main:main",
+        agentId: "main",
         artifactId,
-        sessionKey: query.sessionKey,
-        type: "file",
-        title: "report.csv",
-        mimeType: "text/csv",
-        sizeBytes: 8,
-        url,
-        expiresAt: "2026-09-14T12:00:00.000Z",
-      });
-      const downloaded = await downloadArtifact(query);
-      expectFields(expectOkPayload(downloaded.calls), {
-        url,
-        artifact: {
-          id: artifactId,
+        runId: "run-output",
+        messageRole: "assistant",
+        ...(previewWidth === undefined ? {} : { previewWidth }),
+      };
+      for (const payload of [{ url: otherURL }, { data: "YWx0ZXJuYXRl" }, {}]) {
+        mockedMessages([
+          {
+            role: "assistant",
+            content: [{ type: "file", artifactId, title: "stale-name.txt", ...payload }],
+            __openclaw: { seq: 3, runId: "run-output" },
+          },
+        ]);
+        hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
+        const missing = await downloadArtifact(query);
+        expectFields(expectErrorDetails(missing.calls), { type: "artifact_not_found", artifactId });
+        expect(hoisted.resolveManagedUrlDownload).not.toHaveBeenCalled();
+
+        const url =
+          "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full?mediaTicket=fixture";
+        hoisted.resolveManagedArtifactDownload.mockResolvedValue({
+          artifactId,
           sessionKey: query.sessionKey,
           type: "file",
           title: "report.csv",
           mimeType: "text/csv",
           sizeBytes: 8,
-          runId: "run-output",
-          messageSeq: 3,
-          source: "session-transcript",
-          download: { mode: "url" },
-        },
-      });
-      expect(hoisted.resolveManagedArtifactDownload).toHaveBeenLastCalledWith({
-        sessionKey: query.sessionKey,
-        agentId: "main",
-        defaultAgentId: "main",
-        artifactId,
-      });
-      expect(hoisted.resolveManagedUrlDownload).not.toHaveBeenCalled();
-    }
-  });
+          url,
+          expiresAt: "2026-09-14T12:00:00.000Z",
+        });
+        const downloaded = await downloadArtifact(query);
+        expectFields(expectOkPayload(downloaded.calls), {
+          url,
+          artifact: {
+            id: artifactId,
+            sessionKey: query.sessionKey,
+            type: "file",
+            title: "report.csv",
+            mimeType: "text/csv",
+            sizeBytes: 8,
+            runId: "run-output",
+            messageSeq: 3,
+            source: "session-transcript",
+            download: { mode: "url" },
+          },
+        });
+        expect(hoisted.resolveManagedArtifactDownload).toHaveBeenLastCalledWith({
+          sessionKey: query.sessionKey,
+          agentId: "main",
+          defaultAgentId: "main",
+          artifactId,
+        });
+        expect(hoisted.resolveManagedUrlDownload).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("requires filtered transcript membership before issuing a managed download ticket", async () => {
     const artifactId = "artifact_managed_media_11111111-1111-4111-8111-111111111111";

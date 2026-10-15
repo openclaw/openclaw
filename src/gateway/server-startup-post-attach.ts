@@ -540,7 +540,6 @@ export async function startGatewayPostAttachRuntime(
     getCurrentPluginRegistry?: () => PluginRegistry;
     getCurrentPluginServices?: () => PluginServicesHandle | null;
     getCurrentPluginMetadataSnapshot?: () => PluginMetadataSnapshot | undefined;
-    getCurrentActivationSourceConfig?: () => OpenClawConfig | null;
     getCronService?: () => PluginServiceCronHost | null | undefined;
     onChannelsStarted?: () => Awaitable<void>;
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
@@ -662,33 +661,23 @@ export async function startGatewayPostAttachRuntime(
       return startupLogPromise;
     }
     // Sidecar failure can settle public readiness before this producer finishes.
-    startupLogPromise = params.trackStartupWork(() => {
-      // A replacement can win while plugins load or startup logging is queued.
-      // Keep model, trust warnings, and loaded ids on that same runtime generation.
-      const startupRuntimeCurrent = params.pluginRuntimeClaim?.isCurrent() !== false;
-      const startupPluginRegistry = startupRuntimeCurrent
-        ? pluginRegistry
-        : (params.getCurrentPluginRegistry?.() ?? pluginRegistry);
-      return measureStartup(params.startupTrace, "post-attach.log", () =>
+    startupLogPromise = params.trackStartupWork(() =>
+      measureStartup(params.startupTrace, "post-attach.log", () =>
         runtimeDeps.logGatewayStartup({
-          cfg: startupRuntimeCurrent ? params.cfgAtStart : params.getConfig(),
-          activationSourceConfig: startupRuntimeCurrent
-            ? params.activationSourceConfig
-            : (params.getCurrentActivationSourceConfig?.() ?? undefined),
+          cfg: params.cfgAtStart,
+          activationSourceConfig: params.activationSourceConfig,
           env: process.env,
-          manifestRecords: startupRuntimeCurrent
-            ? params.pluginManifestRecords
-            : (params.getCurrentPluginMetadataSnapshot?.()?.plugins ?? []),
+          manifestRecords: params.pluginManifestRecords,
           ...(params.ambientEnvTriggers ? { ambientEnvTriggers: params.ambientEnvTriggers } : {}),
-          loadedPluginIds: startupPluginRegistry.plugins
+          loadedPluginIds: pluginRegistry.plugins
             .filter((plugin) => plugin.status === "loaded")
             .map((plugin) => plugin.id),
           log: params.log,
           isNixMode: params.isNixMode,
           startupStartedAt: params.startupStartedAt,
         }),
-      );
-    });
+      ),
+    );
     void startupLogPromise.catch(() => {});
     assignStartupLogOwner(startupLogPromise);
     return startupLogPromise;

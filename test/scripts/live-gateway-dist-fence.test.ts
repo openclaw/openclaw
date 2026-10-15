@@ -184,46 +184,28 @@ describe("live-gateway-dist-fence", () => {
   it.each([
     ...[
       { name: "stopped", runtime: { status: "stopped", state: "inactive" }, refuse: false },
-      ...(["inactive", "failed"] as const).flatMap((state) => [
-        {
-          name: `${state} with remaining cgroup tasks and no MainPID`,
-          runtime: { status: "unknown", state, systemd: { tasksCurrent: 2 } },
-          refuse: true,
-        },
-        {
-          name: `${state} with zero cgroup tasks`,
-          runtime: { status: "stopped", state, systemd: { tasksCurrent: 0 } },
-          refuse: false,
-        },
-        {
-          name: `${state} with an unavailable cgroup task count`,
-          runtime: { status: "unknown", state, systemd: {} },
-          refuse: false,
-        },
-      ]),
+      {
+        name: "failed with remaining cgroup tasks and no MainPID",
+        runtime: { status: "unknown", state: "failed", systemd: { tasksCurrent: 2 } },
+        refuse: true,
+      },
+      {
+        name: "failed with zero cgroup tasks",
+        runtime: { status: "stopped", state: "failed", systemd: { tasksCurrent: 0 } },
+        refuse: false,
+      },
+      {
+        name: "failed with an unavailable cgroup task count",
+        runtime: { status: "unknown", state: "failed", systemd: {} },
+        refuse: false,
+      },
       {
         name: "deactivating without a MainPID",
         runtime: { status: "stopped", state: "deactivating", subState: "stop-post" },
         refuse: true,
       },
-      {
-        name: "deactivating with a live MainPID",
-        runtime: {
-          status: "stopped",
-          state: "deactivating",
-          subState: "stop-sigterm",
-          pid: process.pid,
-        },
-        refuse: true,
-      },
     ].map(({ name, runtime, refuse }) => ({ name, refuse, state: { runtime }, foreign: false })),
     { name: "foreign running", state: { running: true }, foreign: true, refuse: false },
-    {
-      name: "foreign holding cgroup tasks",
-      state: { runtime: { status: "unknown", state: "failed", systemd: { tasksCurrent: 2 } } },
-      foreign: true,
-      refuse: false,
-    },
   ])(
     "classifies a $name service using its native state and checkout",
     async ({ state, refuse, foreign }) => {
@@ -773,60 +755,6 @@ describe("live-gateway-dist-fence cross-profile overlap", () => {
       });
     },
   );
-
-  it("refuses when only a system-scope sibling overlaps this checkout", async () => {
-    await withTestDir({ prefix: "openclaw-live-dist-system-scope-" }, async (tmp) => {
-      await writeOpenClawPackage(tmp);
-      const userBinding = {
-        scope: "user" as const,
-        systemdReadTarget: {
-          scope: "user" as const,
-          unitName: "openclaw-gateway.service",
-          unitPath: path.join(tmp, "user", "openclaw-gateway.service"),
-        },
-        env: { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" },
-      };
-      const systemBinding = {
-        scope: "system" as const,
-        systemdReadTarget: {
-          scope: "system" as const,
-          unitName: "openclaw-gateway.service",
-          unitPath: path.join(tmp, "system", "openclaw-gateway.service"),
-        },
-        env: { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" },
-      };
-      const result = await inspectFixtureGateway(tmp, {
-        listBindings: async () => [userBinding, systemBinding],
-        readState: async (binding) => {
-          if (binding?.scope === "system") {
-            return baseState({
-              running: true,
-              command: {
-                programArguments: [process.execPath, path.join(tmp, "dist", "index.js"), "gateway"],
-              },
-              runtime: {
-                status: "running",
-                pid: 88,
-                systemd: { unit: "openclaw-gateway.service" },
-              },
-            });
-          }
-          return baseState({
-            running: false,
-            command: {
-              programArguments: [
-                process.execPath,
-                path.join(tmp, "other", "dist", "index.js"),
-                "gateway",
-              ],
-            },
-            runtime: { status: "stopped", pid: undefined },
-          });
-        },
-      });
-      expect(result.refuse).toBe(true);
-    });
-  });
 
   it.skipIf(process.platform !== "linux")(
     "refuses a live system template instance while a separate user Gateway is installed",

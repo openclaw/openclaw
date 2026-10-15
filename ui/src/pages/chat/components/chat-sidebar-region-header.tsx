@@ -100,6 +100,7 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
   );
   return (
     <Menu
+      lazy
       id={`side-panel-type-${id}`}
       class="side-panel-type-menu"
       panelClass="side-panel-type-menu__panel"

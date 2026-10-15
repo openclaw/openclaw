@@ -7,7 +7,6 @@ import {
   resolveDiscordMessageSnapshots,
   resolveDiscordMessageStickers,
   resolveDiscordReferencedForwardMessage,
-  resolveDiscordSnapshotStickers,
   type DiscordSnapshotMessage,
 } from "./message-forwarded.js";
 import { formatDiscordMediaText } from "./message-media.js";
@@ -56,7 +55,7 @@ export function resolveDiscordMessageMentionDocuments(message: Message): string[
     return embedDocuments;
   }
   const componentDocuments: string[] = [];
-  collectDiscordTextDisplayDocuments(resolveDiscordMessageComponents(message), componentDocuments);
+  collectDiscordTextDisplayDocuments(message.components, componentDocuments);
   return componentDocuments;
 }
 
@@ -136,18 +135,6 @@ function resolveDiscordForwardedMessagesText(message: Message): string {
   );
 }
 
-function resolveDiscordMessageComponents(message: Message): unknown {
-  const components = (message as { components?: unknown }).components;
-  if (components !== undefined) {
-    return components;
-  }
-  try {
-    return (message as { rawData?: { components?: unknown } }).rawData?.components;
-  } catch {
-    return undefined;
-  }
-}
-
 function extractDiscordComponentsV2Text(components: unknown): string {
   const parts: string[] = [];
   collectDiscordTextDisplayDocuments(components, parts);
@@ -213,7 +200,7 @@ export function resolveDiscordRawMessageText(
   const content = normalizeOptionalString(message.content) ?? "";
   const mediaText = formatDiscordMediaText({
     attachments: message.attachments ?? undefined,
-    stickers: resolveDiscordSnapshotStickers(message),
+    stickers: resolveDiscordMessageStickers(message),
   });
   const text =
     content ||

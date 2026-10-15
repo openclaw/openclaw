@@ -77,51 +77,35 @@ async function registerWorktree(origin?: string) {
 }
 
 describe("registered guest publication target discovery", () => {
-  it.each(["cold", "registry-invalidated"] as const)(
-    "shares %s Git discovery across concurrent options readers",
-    async (state) => {
-      await withReadFixture(async (fixture) => {
-        const worktree = await registerWorktree("https://github.com/example/project.git");
-        if (state === "registry-invalidated") {
-          expect(
-            await fixture.invoke("sessions.github.options", { sessionKey }),
-          ).toHaveBeenCalledWith(true, expect.objectContaining({ shared: publisher }));
-          for (const repoFingerprint of ["replacement-fingerprint", worktree.repoFingerprint]) {
-            await updateRegistryWorktree(process.env, worktree.id, {
-              repositoryIdentity: { repoRoot: worktree.repoRoot, repoFingerprint },
-            });
+  it("shares Git discovery across concurrent options readers", async () => {
+    await withReadFixture(async (fixture) => {
+      await registerWorktree("https://github.com/example/project.git");
+      const readers = 8;
+      const ready = createDeferredCore();
+      const readOwner = registryRead.readLiveRegistryWorktreeByOwner;
+      let arrived = 0;
+      vi.spyOn(registryRead, "readLiveRegistryWorktreeByOwner").mockImplementation(
+        async (...args) => {
+          const owner = await readOwner(...args);
+          if (++arrived === readers) {
+            ready.resolve();
           }
-        }
-        const readers = 8;
-        const ready = createDeferredCore();
-        const readOwner = registryRead.readLiveRegistryWorktreeByOwner;
-        let arrived = 0;
-        vi.spyOn(registryRead, "readLiveRegistryWorktreeByOwner").mockImplementation(
-          async (...args) => {
-            const owner = await readOwner(...args);
-            if (++arrived === readers) {
-              ready.resolve();
-            }
-            await ready.promise;
-            return owner;
-          },
-        );
-        const lookup = vi.spyOn(managedWorktrees, "resolveRepositoryIdentity");
-        const responses = await Promise.all(
-          Array.from({ length: readers }, () =>
-            fixture.invoke("sessions.github.options", { sessionKey }),
-          ),
-        );
-        for (const response of responses) {
-          expect(response).toHaveBeenCalledWith(
-            true,
-            expect.objectContaining({ shared: publisher }),
-          );
-        }
-        expect(lookup).toHaveBeenCalledOnce();
-      }, guest);
-    },
-  );
+          await ready.promise;
+          return owner;
+        },
+      );
+      const lookup = vi.spyOn(managedWorktrees, "resolveRepositoryIdentity");
+      const responses = await Promise.all(
+        Array.from({ length: readers }, () =>
+          fixture.invoke("sessions.github.options", { sessionKey }),
+        ),
+      );
+      for (const response of responses) {
+        expect(response).toHaveBeenCalledWith(true, expect.objectContaining({ shared: publisher }));
+      }
+      expect(lookup).toHaveBeenCalledOnce();
+    }, guest);
+  });
 
   it("reuses positive target discovery for 15 seconds while publication still checks live Git", async () => {
     await withReadFixture(async (fixture) => {
@@ -173,40 +157,27 @@ describe("registered guest publication target discovery", () => {
     }, guest);
   });
 
-  it("invalidates cached discovery on registry revisions and checks the current connection on hits", async () => {
+  it("checks the current connection on cached discovery hits", async () => {
     await withReadFixture(async (fixture) => {
-      const worktree = await registerWorktree("https://github.com/example/project.git");
+      await registerWorktree("https://github.com/example/project.git");
       const options = () => fixture.invoke("sessions.github.options", { sessionKey });
       expect(await options()).toHaveBeenCalledWith(
         true,
         expect.objectContaining({ shared: publisher }),
       );
-      // Restoring the same fields must not resurrect facts from the retired registry revision.
-      for (const repoFingerprint of ["replacement-fingerprint", worktree.repoFingerprint]) {
-        await updateRegistryWorktree(process.env, worktree.id, {
-          repositoryIdentity: { repoRoot: worktree.repoRoot, repoFingerprint },
-        });
-      }
-      const lookup = vi
-        .spyOn(managedWorktrees, "resolveRepositoryIdentity")
-        .mockRejectedValueOnce(new Error("Repository read unavailable"));
-      expect(await options()).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: "Repository read unavailable" }),
-      );
+      const lookup = vi.spyOn(managedWorktrees, "resolveRepositoryIdentity");
       expect(await options()).toHaveBeenCalledWith(
         true,
         expect.objectContaining({ shared: publisher }),
       );
-      expect(lookup).toHaveBeenCalledTimes(2);
+      expect(lookup).not.toHaveBeenCalled();
       fixture.disconnect();
       expect(await options()).toHaveBeenCalledWith(
         false,
         undefined,
         expect.objectContaining({ code: "FORBIDDEN" }),
       );
-      expect(lookup).toHaveBeenCalledTimes(2);
+      expect(lookup).not.toHaveBeenCalled();
     }, guest);
   });
 

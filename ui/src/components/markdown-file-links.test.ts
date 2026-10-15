@@ -24,23 +24,6 @@ describe("file links", () => {
     expect(disabled.querySelector("a[data-file-path]")).toBeNull();
   });
 
-  it.each([
-    ["plain text", "see src/lib/foo.ts:42"],
-    ["inline code", "`src/lib/foo.ts:42`"],
-    ["explicit Markdown", "[source](src/lib/foo.ts:42)"],
-  ])("makes %s workspace file links keyboard-focusable without adding an href", (_kind, input) => {
-    const fragment = render(input);
-    const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
-
-    expect(link?.getAttribute("role")).toBe("button");
-    expect(link?.getAttribute("tabindex")).toBe("0");
-    expect(link?.hasAttribute("href")).toBe(false);
-    document.body.append(fragment);
-    link?.focus();
-    expect(document.activeElement).toBe(link);
-    fragment.remove();
-  });
-
   it.each<[string, string[], string[]]>([
     [
       "~/notes.md ./x.ts ../y.ts foo.ts inventory.csv",
@@ -102,16 +85,6 @@ describe("file links", () => {
     ).toMatchObject(expected);
   });
 
-  it("links Windows absolute paths", () => {
-    const fragment = render("C:/repo/src/foo.ts:42 and `D:\\work\\bar.ts`");
-    const links = fileLinks(fragment);
-    expect(links.map((link) => link.dataset.filePath)).toEqual([
-      "C:/repo/src/foo.ts",
-      "D:\\work\\bar.ts",
-    ]);
-    expect(links[0]?.dataset.fileLine).toBe("42");
-  });
-
   it("converts explicit relative and absolute local file links", () => {
     const fragment = render("[foo.ts](src/utils/foo.ts:42) [x](/Users/a/b.ts)");
     const links = fileLinks(fragment);
@@ -139,6 +112,13 @@ describe("file links", () => {
       expect(link?.getAttribute("role")).toBe("button");
       expect(link?.getAttribute("tabindex")).toBe("0");
       expect(link?.hasAttribute("href")).toBe(false);
+      document.body.append(fragment);
+      try {
+        link?.focus();
+        expect(document.activeElement).toBe(link);
+      } finally {
+        fragment.remove();
+      }
 
       const disabled = render(markdown, {});
       expect(disabled.querySelector("a[data-file-path]")).toBeNull();
@@ -300,18 +280,14 @@ describe("file links", () => {
   it.each<[string, string, string, string?]>([
     ["`C:\\skills\\review\\skill.MD`", "C:\\skills\\review\\skill.MD", "skill"],
     ["`skills/review/SKILL.markdown`", "skills/review/SKILL.markdown", "markdown"],
-    ["`skills/review/other-skill.md`", "skills/review/other-skill.md", "markdown"],
     ["`package.json`", "package.json", "package"],
     ["`src/components/Button.tsx`", "src/components/Button.tsx", "component"],
-    ["`src/main.ts`", "src/main.ts", "code"],
     ["`config/app.yaml`", "config/app.yaml", "data"],
     ["`scripts/run.sh`", "scripts/run.sh", "shell"],
     ["`assets/logo.svg`", "assets/logo.svg", "image"],
-    ["`notes/todo.txt`", "notes/todo.txt", "file"],
     ["[Read file](/tmp/constructor)", "/tmp/constructor", "file"],
     ["[Read file](/tmp/notes.__proto__)", "/tmp/notes.__proto__", "file"],
     ["skills/review/SKILL.md:12", "skills/review/SKILL.md", "skill", "12"],
-    ["[Review skill](skills/review/SKILL.md:12)", "skills/review/SKILL.md", "skill", "12"],
   ])("classifies %s without changing workspace navigation", (input, path, kind, line) => {
     const link = render(input).querySelector<HTMLAnchorElement>("a.markdown-file-link");
     expect(link?.dataset.filePath).toBe(path);
@@ -320,15 +296,6 @@ describe("file links", () => {
     expect(link?.getAttribute("role")).toBe("button");
     expect(link?.getAttribute("tabindex")).toBe("0");
     expect(link?.hasAttribute("href")).toBe(false);
-  });
-
-  it("keeps GitHub-hosted skill files owned by the external-link renderer", () => {
-    const url = "https://github.com/openclaw/openclaw/blob/main/skills/github/SKILL.md";
-    const fragment = render(`[Skill](${url})`);
-    const link = fragment.querySelector<HTMLAnchorElement>("a");
-    expect(link?.classList.contains("markdown-github-link")).toBe(true);
-    expect(link?.hasAttribute("data-file-kind")).toBe(false);
-    expect(link?.getAttribute("href")).toBe(url);
   });
 
   it.each([

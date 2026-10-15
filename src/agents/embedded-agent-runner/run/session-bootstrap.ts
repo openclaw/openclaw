@@ -556,7 +556,11 @@ export async function claimAgentSessionWriter(params: RunEmbeddedAgentParams): P
       expected: { sessionId: expectedSessionId, lifecycleRevision: expectedLifecycleRevision },
       patch: { activeWriterRunId: params.runId },
     },
-    { skipMaintenance: true, ...sessionEntryCommitGuardOptions(snapshot.assertActive) },
+    {
+      skipMaintenance: true,
+      preserveActivity: true,
+      ...sessionEntryCommitGuardOptions(snapshot.assertActive),
+    },
   );
   if (
     claimed &&

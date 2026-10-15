@@ -350,22 +350,6 @@ describe("deliverReplies identity passthrough", () => {
   });
 });
 
-describe("createSlackReplyDeliveryPlan fallback classification", () => {
-  const threadTs = "1234567890.123456";
-  const messageTs = "9999999999.999999";
-
-  it("keeps legacy thread-stickiness for genuine replies when callers omit isThreadReply", () => {
-    expect(
-      createSlackReplyDeliveryPlan({
-        replyToMode: "off",
-        incomingThreadTs: threadTs,
-        messageTs,
-        hasRepliedRef: { value: false },
-      }).peekThreadTs(),
-    ).toBe(threadTs);
-  });
-});
-
 describe("createSlackReplyDeliveryPlan", () => {
   it("lets draft previews inspect first thread targets without consuming them", () => {
     const hasRepliedRef = { value: false };

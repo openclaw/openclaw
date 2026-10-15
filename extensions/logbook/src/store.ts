@@ -189,10 +189,8 @@ export class LogbookStore {
     return this.execute("saveStandup", { day, text });
   }
 
-  captureFrame(params: CapturedFrame): Promise<number> {
-    // Snapshot before admission so a queued caller cannot mutate the capture bytes.
-    const buffer = Buffer.from(params.buffer);
-    const input = { ...params, buffer };
+  captureFrame(input: CapturedFrame): Promise<number> {
+    const { buffer } = input;
     return this.frameIo.run(async () => {
       const contentHash = createHash("sha256").update(buffer).digest("hex");
       const previous = await this.executeWorker("lastFrame", undefined);

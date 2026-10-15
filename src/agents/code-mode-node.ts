@@ -72,14 +72,16 @@ function prepareInput(input: NodeInput) {
   };
 }
 const retiringPools = new Set<NodePool>();
-const idlePools = new Map<NodePool, GatewayScheduledJob>();
+const idlePools = new Map<NodePool, GatewayScheduledJob[]>();
 const poolLifetimes = new WeakMap<LegacyPluginSdkResourceHost, NodePoolLifetime>();
 let nextPoolId = 0;
 const MAX_IDLE_POOLS = 4;
 const memoryPressure = channel("openclaw.memory.critical");
 
 function removeIdlePool(owner: NodePool): void {
-  idlePools.get(owner)?.cancel();
+  for (const job of idlePools.get(owner) ?? []) {
+    job.cancel();
+  }
   idlePools.delete(owner);
   if (!idlePools.size) {
     memoryPressure.unsubscribe(retireIdlePools);
@@ -220,13 +222,19 @@ async function releasePool(owner: NodePool): Promise<void> {
   idlePools.set(
     owner,
     // Warm-worker retirement belongs to the host, never the completed turn's transcript context.
-    runInDetachedAsyncContext(() =>
+    runInDetachedAsyncContext(() => [
       lifetime.scheduler.schedule({
         id: `code-mode-worker-idle:${++nextPoolId}`,
         delayMs: 5 * 60_000,
         run: () => closePool(owner),
       }),
-    ),
+      lifetime.scheduler.schedule({
+        id: `code-mode-worker-surplus:${++nextPoolId}`,
+        delayMs: 30_000,
+        // Keep one warm isolate through gaps without retaining the completed burst.
+        run: () => (idlePools.keys().next().value === owner ? undefined : closePool(owner)),
+      }),
+    ]),
   );
   if (idlePools.size === 1) {
     memoryPressure.subscribe(retireIdlePools);

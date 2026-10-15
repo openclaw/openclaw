@@ -114,6 +114,7 @@ Workboard sidebar entries offer pin/unpin and, with write access, confirmed boar
     - If a selected session is deleted and recreated, its new details replace the old ones and clear the previous timeline interval without clearing your session selection. An unfinished drag on the old timeline cannot change the new interval. Refreshing the same instance retains its selected interval. Context details from a different session instance show an error and can be retried with **Refresh**.
     - The overview loads session summaries first. Full system-prompt breakdowns load when you select a session; the `has:context` filter still works before opening details.
     - Sessions CSV and JSON exports include only selected sessions that match the active filters; with no selection, they include all matching sessions. JSON exports keep the displayed usage snapshot and load prompt details for the same session instance. If that session has been replaced, refresh Usage and export again.
+    - Export formats stay disabled while an export is being prepared, so another format cannot replace the pending report.
     - CSV and JSON exports require complete usage data for the exported sessions. A complete explicit selection can be exported while other sessions are still computing. If the selected data is incomplete, the export shows an error instead of downloading partial totals. Refresh Usage and try again, or narrow the date range.
 
   </Accordion>

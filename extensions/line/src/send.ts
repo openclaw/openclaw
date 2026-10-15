@@ -56,19 +56,10 @@ const LINE_LOCATION_LABEL_LIMIT = 100;
 // delivery, while rejected responses keep their status with prefix-only diagnostics.
 const LINE_PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024;
 
-// Refresh insertion order so overflow evicts expired entries first, then the oldest live fetch.
+// Completion order also orders expiry; evict the oldest fetch on overflow.
 function rememberLineIdentity<T>(cache: LineIdentityCache<T>, key: string, value: T): void {
-  const entry = { value, fetchedAt: Date.now() };
   cache.values.delete(key);
-  cache.values.set(key, entry);
-  if (cache.values.size <= PROFILE_CACHE_MAX_ENTRIES) {
-    return;
-  }
-  for (const [cachedKey, cached] of cache.values) {
-    if (entry.fetchedAt - cached.fetchedAt >= PROFILE_CACHE_TTL_MS) {
-      cache.values.delete(cachedKey);
-    }
-  }
+  cache.values.set(key, { value, fetchedAt: Date.now() });
   pruneMapToMaxSize(cache.values, PROFILE_CACHE_MAX_ENTRIES);
 }
 

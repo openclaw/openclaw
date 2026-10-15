@@ -3,12 +3,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
+import { listChromeMcpTabs } from "./chrome-mcp-tabs.js";
+import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import {
   resetChromeMcpSessionsForTest,
   setChromeMcpSessionFactoryForTest,
-} from "./chrome-mcp-session.js";
-import { listChromeMcpTabs } from "./chrome-mcp-tabs.js";
-import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
+} from "./chrome-mcp.test-support.js";
 import * as chromeModule from "./chrome.js";
 import { registerBrowserBasicRoutes } from "./routes/basic.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./routes/test-helpers.js";
@@ -19,6 +19,11 @@ import { makeBrowserProfile, makeBrowserServerState } from "./server-context.tes
 const { mockChromeMcpProcesses, resetChromeMcpProcessMocks } = await vi.hoisted(
   () => import("./chrome-mcp-process.test-support.js"),
 );
+
+vi.mock("./chrome-mcp-connect.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chrome-mcp-connect.js")>();
+  return { ...actual, createChromeMcpSession: vi.fn(actual.createChromeMcpSession) };
+});
 
 beforeEach(() => {
   getChromeMcpModule.clear();
@@ -89,7 +94,7 @@ function createExistingSessionProcessFixture(
       };
     },
   );
-  const factory = vi.fn(async () => {
+  const factory = vi.fn(() => {
     if (options.attachElapsedMs) {
       vi.setSystemTime(Date.now() + options.attachElapsedMs);
     }

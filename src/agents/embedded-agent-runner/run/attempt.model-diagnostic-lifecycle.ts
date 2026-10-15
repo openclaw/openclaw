@@ -32,6 +32,7 @@ import {
 import { formatPropagatedDiagnosticTraceparent } from "../../../infra/diagnostic-trace-propagation.js";
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
 import { withModelTransportContext } from "../../../llm/model-transport-context.js";
+import { createModelCallStreamProgressReporter } from "../../../logging/diagnostic-model-stream-progress.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -275,6 +276,10 @@ export function createModelLifecycle(params: {
     ...(observer.promptStats ? { promptStats: observer.promptStats } : {}),
     trace,
   };
+  const reportStreamProgress = createModelCallStreamProgressReporter({
+    config: params.ctx.config,
+    target: eventBase,
+  });
   emitCoreModelRequestStartedDiagnosticEvent(
     eventBase,
     params.ctx.ownerGeneration,
@@ -454,7 +459,7 @@ export function createModelLifecycle(params: {
       firstEventObserved = true;
       clearWait();
       observer.observeResponseChunk(startedAt, chunk);
-      observer.maybeEmitStreamProgress(eventBase);
+      reportStreamProgress(observer.state.terminalEventEmitted ? undefined : callId);
       if (params.ctx.onOutputDelta && isModelOutputDelta(chunk)) {
         params.ctx.onOutputDelta();
       }

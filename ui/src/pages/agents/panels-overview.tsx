@@ -14,9 +14,9 @@ import {
   renderDecisionModelPicker,
   type DecisionModelEntry,
 } from "../../components/decision-model-picker.ts";
-import "../../components/multi-select-registration.ts";
 import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
+import { MultiSelect } from "../../components/multi-select.tsx";
 import "../../components/tooltip.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status-state.ts";
 import { PanelRefreshStatus as PanelRefreshNotice } from "../../components/solid/panel-refresh-status.tsx";
@@ -444,20 +444,18 @@ export function AgentOverview(
           title={t("agents.overview.fallbacks")}
           stacked={true}
           control={
-            <openclaw-multi-select
+            <MultiSelect
               class="agent-fallbacks"
-              prop:options={fallbackOptions()}
-              prop:value={fallbackChips()}
-              prop:isExcluded={isPrimaryModel()}
-              prop:getValueKey={normalizeAgentModelRefForConfig}
-              prop:placeholder={t("agents.overview.addFallback")}
-              prop:accessibleLabel={t("agents.overview.fallbacks")}
-              prop:allowCustom={!catalogOwnsChoices()}
-              prop:disabled={disabled()}
-              prop:onChange={(next: string[]) =>
-                params.onModelFallbacksChange(params.agent.id, next)
-              }
-              prop:onOpen={params.onModelCatalogOpen}
+              options={fallbackOptions()}
+              value={fallbackChips()}
+              isExcluded={isPrimaryModel()}
+              getValueKey={normalizeAgentModelRefForConfig}
+              placeholder={t("agents.overview.addFallback")}
+              accessibleLabel={t("agents.overview.fallbacks")}
+              allowCustom={!catalogOwnsChoices()}
+              disabled={disabled()}
+              onChange={(next: string[]) => params.onModelFallbacksChange(params.agent.id, next)}
+              onOpen={params.onModelCatalogOpen}
             />
           }
         />

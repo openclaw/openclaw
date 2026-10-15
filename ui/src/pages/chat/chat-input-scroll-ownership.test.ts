@@ -1,5 +1,4 @@
 /* @vitest-environment jsdom */
-import type { ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createInitializationContext } from "./chat-pane.test-support.ts";
@@ -37,7 +36,7 @@ function userMessage(sendId: string) {
 }
 function setup() {
   const requestUpdate = vi.fn();
-  const host: ReactiveControllerHost = {
+  const host = {
     addController: () => undefined,
     removeController: () => undefined,
     requestUpdate,

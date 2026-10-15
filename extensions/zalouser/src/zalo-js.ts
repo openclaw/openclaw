@@ -5,10 +5,8 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   asDateTimestampMs,
   asFiniteNumberInRange,
-  isFutureDateTimestampMs,
   parseStrictFiniteNumber,
   parseStrictNonNegativeInteger,
-  resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
@@ -509,7 +507,7 @@ function readCachedGroupContext(profile: string, groupId: string): ZaloGroupCont
   if (!cached) {
     return null;
   }
-  if (!isFutureDateTimestampMs(cached.expiresAt)) {
+  if (cached.expiresAt <= Date.now()) {
     groupContextCache.delete(key);
     return null;
   }
@@ -521,7 +519,7 @@ function readCachedGroupContext(profile: string, groupId: string): ZaloGroupCont
 
 function trimGroupContextCache(now: number): void {
   for (const [key, value] of groupContextCache) {
-    if (isFutureDateTimestampMs(value.expiresAt, { nowMs: now })) {
+    if (value.expiresAt > now) {
       continue;
     }
     groupContextCache.delete(key);
@@ -535,13 +533,9 @@ function writeCachedGroupContext(profile: string, context: ZaloGroupContext): vo
   if (groupContextCache.has(key)) {
     groupContextCache.delete(key);
   }
-  const expiresAt = resolveExpiresAtMsFromDurationMs(GROUP_CONTEXT_CACHE_TTL_MS, { nowMs: now });
-  if (expiresAt === undefined) {
-    return;
-  }
   groupContextCache.set(key, {
     value: context,
-    expiresAt,
+    expiresAt: now + GROUP_CONTEXT_CACHE_TTL_MS,
   });
   trimGroupContextCache(now);
 }

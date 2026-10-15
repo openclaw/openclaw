@@ -22,6 +22,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { defineControlUiFrameIdentityTests } from "./control-ui-screenshot-identity.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -450,13 +451,21 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
       "Set up and verify a model",
       "Connect with an API key or token",
     ];
-    const loadingSectionTops = await Promise.all(
-      sectionTitles.map(
-        async (name) =>
-          (await page.locator(".model-setup__loading-sections h2").getByText(name).boundingBox())!
-            .y,
-      ),
-    );
+    const loadingGeometry = await page.evaluate(() => {
+      const root = document.querySelector<HTMLElement>(
+        '.model-setup__loading[role="status"][aria-busy="true"]',
+      );
+      if (!root?.checkVisibility()) {
+        throw new Error("Expected the model-setup loading sections to remain visible.");
+      }
+      return Array.from(root.querySelectorAll(".model-setup__loading-sections h2"), (heading) => {
+        const { top, height } = heading.getBoundingClientRect();
+        return { title: heading.textContent, top, height };
+      });
+    });
+    expect(loadingGeometry.map((heading) => heading.title)).toEqual(sectionTitles);
+    expect(loadingGeometry.every((heading) => heading.height > 0)).toBe(true);
+    const loadingSectionTops = loadingGeometry.map((heading) => heading.top);
     expect(await page.locator(".connect-splash").count()).toBe(0);
     expect([...requestedWorkspaceModules]).toEqual([]);
     await captureProof(page, "06-first-run-routed-before-detection", [loadingSections]);
@@ -966,6 +975,8 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     await page.clock.runFor(2_000);
     expect(await target.textContent()).toBe("");
   });
+
+  defineControlUiFrameIdentityTests(createPageWithoutRecording);
 
   it("falls back to the login gate when stored credentials are rejected", async () => {
     const page = await createPage();

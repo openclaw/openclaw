@@ -5,6 +5,7 @@ import { dynamic, type JSX } from "@solidjs/web";
 import { For, Match, Show, Switch, createMemo } from "solid-js";
 import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
+import { browserTabKey } from "../../../components/browser/browser-target.ts";
 import { iconData } from "../../../components/icon-data.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
@@ -27,9 +28,11 @@ import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
 import { renderPluginSurface } from "../../../plugins/control-ui-view.ts";
 import { resolveSpawnedSubagent, type SpawnedSubagent } from "../chat-spawned-subagent.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
+import { BrowserTabCardHost } from "./browser-tab-card.tsx";
 import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
 import { DiffStatChips } from "./chat-diff-render.solid.tsx";
-import { renderChatPermissionCard } from "./chat-divider.ts";
+import { ChatPermissionCard } from "./chat-divider.tsx";
+import type { BrowserTabPreview } from "./chat-tool-cards.ts";
 import { ExpandedToolCardContent } from "./chat-tool-content.solid.tsx";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import {
@@ -43,6 +46,20 @@ const TOOL_ROW_VERB_KEYS: Partial<Record<ToolCallView["kind"], string>> = {
   search: "chat.toolCards.verbs.searched",
   fetch: "chat.toolCards.verbs.fetched",
 };
+
+export function BrowserTabPreviews(props: { previews: readonly BrowserTabPreview[] | undefined }) {
+  return (
+    <For each={props.previews} keyed={(item) => browserTabKey(item.preview)}>
+      {(item) => (
+        <BrowserTabCardHost
+          preview={item().preview}
+          revision={item().revision}
+          latest={item().latest}
+        />
+      )}
+    </For>
+  );
+}
 
 const MUTATION_VERB_KEYS = {
   update: ["editing", "edited", "edit"],
@@ -555,7 +572,7 @@ function ToolCardView(props: ToolCardProps) {
       }
     >
       {(request) => (
-        <LitContent value={renderChatPermissionCard(request(), props.options.onPermissionRetry)} />
+        <ChatPermissionCard request={request()} onRetry={props.options.onPermissionRetry} />
       )}
     </Show>
   );

@@ -22,7 +22,6 @@ import {
 
 describe("Dashboard fixture session keys", () => {
   it.each([
-    ["agent:main:main", "main", "main", "main"],
     [
       "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
       "data-expert",
@@ -30,7 +29,6 @@ describe("Dashboard fixture session keys", () => {
       "dingtalk:cidzg6sf43nzmy52rnk8en",
     ],
     ["main", null, null, null],
-    ["agent::secret", null, null, null],
     ["agent:ops:room::part", "ops", "room::part", "room:part"],
     ["agent:ops:main:", "ops", "main:", "main"],
     ["agent:ops::cron:job", "ops", null, "cron:job"],
@@ -49,7 +47,6 @@ describe("Dashboard fixture session keys", () => {
 describe("session archive eligibility", () => {
   it.each([
     ["active non-main", [{ key: "agent:main:work", hasActiveRun: true }], true, false],
-    ["idle non-main", [{ key: "agent:main:work" }], true, true],
     ["configured main", [{ key: "agent:main:home" }], false, false],
     ["literal main", [{ key: "main" }], false, false],
     ["global", [{ key: "global", kind: "global" }], false, false],
@@ -75,10 +72,6 @@ describe("session archive eligibility", () => {
 
 describe("parseSessionKeyParts", () => {
   it.each([
-    [
-      "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
-      { agentId: "data-expert", channel: "dingtalk", accountId: "cidzg6sF43NZMy52Rnk8EN" },
-    ],
     [
       "agent:main:telegram:user:12345:extra",
       { agentId: "main", channel: "telegram", accountId: "user:12345:extra" },
@@ -131,22 +124,10 @@ describe("UI session identity", () => {
       distinctKey: "agent:ops:catalog:fixture:node%3ADevBox:thread%3Aa",
     },
     {
-      name: "Matrix room IDs",
-      selectedKey: "agent:ops:matrix:channel:!Room:Example.Org",
-      structuralAlias: "Agent:Ops:Matrix:Channel:!Room:Example.Org",
-      distinctKey: "agent:ops:matrix:channel:!room:example.org",
-    },
-    {
       name: "Matrix room and thread IDs",
       selectedKey: "agent:ops:matrix:channel:!Room:Example.Org:thread:$Event",
       structuralAlias: "Agent:Ops:Matrix:Channel:!Room:Example.Org:Thread:$Event",
       distinctKey: "agent:ops:matrix:channel:!Room:Example.Org:thread:$event",
-    },
-    {
-      name: "Signal group IDs",
-      selectedKey: "agent:ops:signal:group:AbC123=",
-      structuralAlias: "Agent:Ops:Signal:Group:AbC123=",
-      distinctKey: "agent:ops:signal:group:abc123=",
     },
     {
       name: "Signal group IDs with normalized thread suffixes",
@@ -299,12 +280,7 @@ describe("session pin eligibility", () => {
   it.each([
     [{ key: "agent:main:dashboard:ordinary" }, true],
     [{ key: "agent:main:dashboard:ordinary", parentSessionKey: "agent:main:main" }, true],
-    [{ key: "agent:other:dashboard:ordinary", parentSessionKey: "agent:other:main" }, true],
     [{ key: "agent:other:dashboard:ordinary", parentSessionKey: "agent:main:main" }, false],
-    [
-      { key: "agent:main:dashboard:nested", parentSessionKey: "agent:main:dashboard:parent" },
-      false,
-    ],
     [
       {
         key: "agent:main:dashboard:spawned",

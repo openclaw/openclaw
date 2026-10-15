@@ -450,60 +450,6 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     await expect(fs.readFile(legacyPath, "utf8")).resolves.toContain("claimCount");
   });
 
-  it("defers a publication that completes during lifecycle reconciliation", async () => {
-    const { config } = await createPersistentVault({ initialize: true });
-    await publishSnapshot(config, snapshot("before"));
-    const nextSnapshot = snapshot("during reconciliation");
-    const nextGeneration = resolveMemoryWikiCompiledCacheGeneration(nextSnapshot);
-    const nextPublicationId = randomUUID();
-    const nextReservationId = randomUUID();
-    const parentPublicationId = (await loadMemoryWikiVaultIdentity(config.vault.path))
-      .compiledCachePublicationId;
-    await appendMemoryWikiLog(config.vault.path, {
-      type: "compile",
-      timestamp: "2026-07-17T00:01:00.000Z",
-      details: { compiledCacheReservationId: nextReservationId },
-    });
-    const sourceGeneration = await resolveMemoryWikiVaultSourceGeneration(config.vault.path);
-    const externalStore = createCacheStore();
-    let publishDuringLookup = true;
-    const reconcilingStore = createMemoryWikiCompiledCacheStore(
-      <T>(options: OpenBlobStoreOptions) => {
-        const blobStore = createPluginBlobStoreForTests<T>("memory-wiki", options, blobStoreEnv);
-        return {
-          ...blobStore,
-          async lookup(key) {
-            const entry = await blobStore.lookup(key);
-            if (publishDuringLookup) {
-              publishDuringLookup = false;
-              await appendMemoryWikiLog(config.vault.path, {
-                type: "compile",
-                timestamp: "2026-07-17T00:01:00.000Z",
-                details: {
-                  compiledCachePublicationId: nextPublicationId,
-                  compiledCacheParentPublicationId: parentPublicationId,
-                  compiledCacheReservationId: nextReservationId,
-                  compiledCacheSourceGeneration: sourceGeneration,
-                },
-              });
-              await externalStore.write(config, nextSnapshot, nextGeneration, nextPublicationId);
-            }
-            return entry;
-          },
-        };
-      },
-    );
-    configureMemoryWikiCompiledCacheStore(reconcilingStore);
-
-    await activateVault(config);
-
-    await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
-    await activateVault(config);
-    expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe(
-      "during reconciliation",
-    );
-  });
-
   it("rejects claims newer than a restored vault after lifecycle refresh", async () => {
     const { rootDir, config } = await createPersistentVault({ initialize: true });
     await publishSnapshot(config, snapshot("backup"));
@@ -688,7 +634,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     expect((await loadMemoryWikiCompiledCache(config))?.claims[0]?.text).toBe("recoverable");
   });
 
-  it("keeps a restored owner closed when lifecycle reconciliation fails", async () => {
+  it("keeps a restored owner closed when its durable identity cannot be loaded", async () => {
     const { rootDir, config } = await createPersistentVault({ initialize: true });
     await publishSnapshot(config, snapshot("backup"));
     const logPath = path.join(rootDir, ".openclaw-wiki", "log.jsonl");
@@ -696,31 +642,22 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     await publishSnapshot(config, snapshot("Private newer claim."));
     await fs.writeFile(logPath, backupLog, "utf8");
 
-    const errors: unknown[] = [];
-    let failNextRead = true;
-    const store = createMemoryWikiCompiledCacheStore(
-      <T>(options: OpenBlobStoreOptions) => {
-        const blobStore = createPluginBlobStoreForTests<T>("memory-wiki", options, blobStoreEnv);
-        return {
-          ...blobStore,
-          async lookup(key) {
-            if (failNextRead) {
-              failNextRead = false;
-              throw new Error("transient reconciliation failure");
-            }
-            return await blobStore.lookup(key);
-          },
-        };
-      },
-      { onReadError: (error) => errors.push(error) },
-    );
     configureMemoryWikiCompiledCacheStore(undefined);
-    configureMemoryWikiCompiledCacheStore(store);
-    await expect(activateVault(config)).rejects.toThrow("transient reconciliation failure");
+    configureMemoryWikiCompiledCacheStore(createCacheStore());
+    const identity = await loadMemoryWikiValidatedVaultIdentity(rootDir);
+    activateMemoryWikiCompiledCacheOwner(
+      config,
+      identity.vaultGeneration!,
+      identity.compiledCachePublicationId,
+    );
+    await expect(
+      reconcileMemoryWikiCompiledCacheOwner(config, async () => {
+        throw new Error("transient reconciliation failure");
+      }),
+    ).rejects.toThrow("transient reconciliation failure");
 
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
-    expect(errors).toHaveLength(1);
   });
 
   it("rejects a predecessor snapshot when a vault path is reused", async () => {

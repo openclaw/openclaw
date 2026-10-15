@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
-  assertTransactionUsable,
+  bindSqliteWorkerDatabase,
   ensureOpenClawAgentStandingIntentsSchema,
   runSqliteImmediateTransactionSync,
   withSqlitePostCommitPublications,
@@ -54,12 +54,8 @@ export function bindSqliteWorkerBackend(
       return result;
     }),
   );
-  let closed = false;
-  return {
+  return bindSqliteWorkerDatabase<StandingIntentWorkerOperations>(db, {
     execute(command) {
-      if (closed) {
-        throw new Error("Standing-intent worker binding is closed");
-      }
       if (schemaPrepared) {
         return { kind: "schema-prepared" };
       }
@@ -75,29 +71,20 @@ export function bindSqliteWorkerBackend(
       return transact<
         StandingIntentWorkerOperations[keyof StandingIntentWorkerOperations]["output"]
       >(() => {
-        switch (command.type) {
-          case "create":
-            return result(createStandingIntentInDatabase(db, command.input));
-          case "list":
-            return result(listStandingIntentsInDatabase(db, command.input));
-          case "sweep":
-            return result(maintainStandingIntentLifecycle(db, command.input.nowMs ?? Date.now()));
-          case "cancel":
-            return result(cancelStandingIntentInDatabase(db, command.input));
-          case "match":
-            return result(matchStandingIntentsInDatabase(db, command.input));
+        if (command.type === "create") {
+          return result(createStandingIntentInDatabase(db, command.input));
         }
-        throw new Error("Unknown standing-intent command");
+        if (command.type === "list") {
+          return result(listStandingIntentsInDatabase(db, command.input));
+        }
+        if (command.type === "sweep") {
+          return result(maintainStandingIntentLifecycle(db, command.input.nowMs ?? Date.now()));
+        }
+        if (command.type === "cancel") {
+          return result(cancelStandingIntentInDatabase(db, command.input));
+        }
+        return result(matchStandingIntentsInDatabase(db, command.input));
       });
     },
-    assertSettled() {
-      assertTransactionUsable(db);
-      if (!db.isOpen || db.isTransaction) {
-        throw new Error("Standing-intent operation left an unsettled native connection");
-      }
-    },
-    close() {
-      closed = true;
-    },
-  };
+  });
 }

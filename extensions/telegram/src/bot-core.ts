@@ -278,7 +278,7 @@ export async function createTelegramBotCore(
     const storePath = telegramDeps.resolveStorePath(params.cfg.session?.store, { agentId });
     try {
       const storedActivation = (
-        await telegramDeps.getSessionEntryAsync?.({
+        await telegramDeps.getSessionEntryAsync({
           storePath,
           sessionKey: params.sessionKey,
         })
@@ -333,6 +333,7 @@ export async function createTelegramBotCore(
       shouldSkipUpdate,
       telegramDeps: {
         ...telegramDeps,
+        runModelsAuthLoginFlow: defaultTelegramNativeCommandDeps.runModelsAuthLoginFlow,
         sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
       },
     });

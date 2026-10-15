@@ -22,32 +22,6 @@ const SLACK_SOCKET_SHARED_CONNECTION_DOCS_URL =
   "https://docs.slack.dev/apis/events-api/using-socket-mode#using-multiple-connections";
 const SLACK_SOCKET_HELLO_MARKER = Buffer.from('"hello"');
 
-function getSocketEmitter(app: unknown): EmitterLike | null {
-  const receiver = (app as { receiver?: unknown }).receiver;
-  const client =
-    receiver && typeof receiver === "object"
-      ? (receiver as { client?: unknown }).client
-      : undefined;
-  if (!client || typeof client !== "object") {
-    return null;
-  }
-  const on = (client as { on?: unknown }).on;
-  const off = (client as { off?: unknown }).off;
-  if (typeof on !== "function" || typeof off !== "function") {
-    return null;
-  }
-  return {
-    on: (event, listener) =>
-      (
-        on as (this: unknown, event: string, listener: (...args: unknown[]) => void) => unknown
-      ).call(client, event, listener),
-    off: (event, listener) =>
-      (
-        off as (this: unknown, event: string, listener: (...args: unknown[]) => void) => unknown
-      ).call(client, event, listener),
-  };
-}
-
 function isBufferArray(value: unknown): value is Buffer[] {
   return Array.isArray(value) && value.every((entry) => Buffer.isBuffer(entry));
 }
@@ -86,13 +60,10 @@ export function formatSlackSocketModeSharedConnectionWarning(activeConnections: 
 }
 
 export function registerSlackSocketModeConnectionDiagnostics(params: {
-  app: unknown;
+  client: EmitterLike;
   onSharedConnection: (activeConnections: number) => void;
 }): () => void {
-  const emitter = getSocketEmitter(params.app);
-  if (!emitter) {
-    return () => {};
-  }
+  const emitter = params.client;
   let hasWarned = false;
   const listener = (message: unknown, isBinary?: unknown) => {
     if (isBinary === true || hasWarned) {
@@ -112,21 +83,13 @@ export function registerSlackSocketModeConnectionDiagnostics(params: {
 }
 
 export function waitForSlackSocketDisconnect(
-  app: unknown,
+  emitter: EmitterLike,
   abortSignal?: AbortSignal,
 ): Promise<{
   event: SlackSocketDisconnectEvent;
   error?: unknown;
 }> {
   return new Promise((resolve) => {
-    const emitter = getSocketEmitter(app);
-    if (!emitter) {
-      abortSignal?.addEventListener("abort", () => resolve({ event: "disconnect" }), {
-        once: true,
-      });
-      return;
-    }
-
     const disconnectListener = () => resolveOnce({ event: "disconnect" });
     const startFailListener = (error?: unknown) =>
       resolveOnce({ event: "unable_to_socket_mode_start", error });

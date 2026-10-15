@@ -279,6 +279,18 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/agents/auth-profiles/authorization-enrollment-runtime.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["enrollOwnedAuthProfileAuthorization"],
+        guard: "params.context.maintenanceScope?.ownsSchemaMaintenance",
+        evidence:
+          "Only the synchronous exclusive-Doctor branch opens the native agent transaction, with captured live admission, credential-preserving CAS and commit settlement. Ordinary shared/agent enrollment still dispatches through the existing worker/executor; nested callbacks and unguarded calls retain runtime classification.",
+      },
+    ],
+  ],
+  [
     "src/state/openclaw-state-db-legacy-backfills.ts",
     [
       {
@@ -3495,6 +3507,8 @@ export function inventory(root = defaultRoot, ref = "", staged = false) {
     texts,
     (file, operation) => classify(file, operation).tier !== "T1",
     classifyKnownEntry,
+    // Historical snapshots supply counts; only current-source diagnostics are consumed below.
+    !ref,
   );
   if (!ref && compatibility.violations.length > 0) {
     throw new Error(
