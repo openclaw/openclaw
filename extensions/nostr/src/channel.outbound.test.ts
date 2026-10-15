@@ -1,3 +1,4 @@
+import { npubEncode } from "nostr-tools/nip19";
 import {
   buildChannelInboundEventContext,
   type dispatchInboundDirectDm as DispatchInboundDirectDm,
@@ -112,6 +113,47 @@ const send = (text: string) =>
   });
 
 describe("nostr gateway lifecycle", () => {
+  it("normalizes and deduplicates literal admission keys for each account lifecycle", async () => {
+    const key = "ab".repeat(32);
+    const h = await startGateway({
+      account: buildResolvedNostrAccount({
+        config: {
+          dmPolicy: "allowlist",
+          allowFrom: [key.toUpperCase(), " nostr:" + npubEncode(key) + " ", key],
+        },
+      }),
+    });
+    expect(h.options.admissionPubkeys).toEqual([key]);
+    h.abort.abort();
+    await h.task;
+    const next = await startGateway({
+      account: buildResolvedNostrAccount({
+        config: { dmPolicy: "allowlist", allowFrom: ["cd".repeat(32)] },
+      }),
+    });
+    expect(next.options.admissionPubkeys).toEqual(["cd".repeat(32)]);
+  });
+
+  it.each([
+    { dmPolicy: "allowlist", allowFrom: [] },
+    { dmPolicy: "allowlist", allowFrom: [TEST_HEX_PUBLIC_KEY, 123] },
+    { dmPolicy: "allowlist", allowFrom: [TEST_HEX_PUBLIC_KEY, "*"] },
+    { dmPolicy: "allowlist", allowFrom: [TEST_HEX_PUBLIC_KEY, "accessGroup:friends"] },
+    { dmPolicy: "allowlist", allowFrom: [TEST_HEX_PUBLIC_KEY, "invalid"] },
+    { dmPolicy: "allowlist", allowFrom: [TEST_HEX_PUBLIC_KEY, ""] },
+    { dmPolicy: "pairing", allowFrom: [TEST_HEX_PUBLIC_KEY] },
+    { dmPolicy: "open", allowFrom: ["*"] },
+    { dmPolicy: "disabled", allowFrom: [TEST_HEX_PUBLIC_KEY] },
+    { allowFrom: [TEST_HEX_PUBLIC_KEY] },
+  ] as const)("keeps canonical admission for nonliteral or other policies: %j", async (config) => {
+    const h = await startGateway({
+      account: buildResolvedNostrAccount({
+        config: { ...config, allowFrom: [...config.allowFrom] },
+      }),
+    });
+    expect(h.options.admissionPubkeys).toBeUndefined();
+  });
+
   it.each([false, true])("retires the bus before shutdown settles (failure=%s)", async (fails) => {
     const close = Promise.withResolvers<void>();
     const closing = Promise.withResolvers<void>();
