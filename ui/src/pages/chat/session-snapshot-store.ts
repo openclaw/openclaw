@@ -148,7 +148,12 @@ function createSnapshotRecord(
   let snapshot: ChatSessionSnapshot;
   let weight: number;
   try {
-    const json = JSON.stringify(pending.snapshot);
+    // Pairing credentials stay in the live projection, never the browser's disk cache.
+    const json = JSON.stringify(pending.snapshot, (key, value: unknown) =>
+      (key === "content" || key === "openclawDisplayContent") && Array.isArray(value)
+        ? value.filter((block) => asOptionalRecord(block)?.type !== "openclaw_pairing_qr")
+        : value,
+    );
     snapshot = JSON.parse(json);
     weight = json.length;
   } catch {
