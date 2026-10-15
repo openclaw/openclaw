@@ -29,7 +29,6 @@ type behaviorFixture struct {
 	RelPath                   string         `json:"rel_path"`
 	SourceFile                string         `json:"source_file"`
 	ExpectedFile              string         `json:"expected_file,omitempty"`
-	ExpectedErrorContains     string         `json:"expected_error_contains,omitempty"`
 	ExpectedOutputContains    []string       `json:"expected_output_contains,omitempty"`
 	ExpectedOutputNotContains []string       `json:"expected_output_not_contains,omitempty"`
 	Rules                     []behaviorRule `json:"rules"`
@@ -161,15 +160,6 @@ func runBehaviorFixture(t *testing.T, dir string, fixture behaviorFixture) {
 		t.Fatalf("unsupported fixture mode %q", fixture.Mode)
 	}
 
-	if fixture.ExpectedErrorContains != "" {
-		if err == nil {
-			t.Fatalf("expected error containing %q, got nil", fixture.ExpectedErrorContains)
-		}
-		if !strings.Contains(err.Error(), fixture.ExpectedErrorContains) {
-			t.Fatalf("expected error containing %q, got %v", fixture.ExpectedErrorContains, err)
-		}
-		return
-	}
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
