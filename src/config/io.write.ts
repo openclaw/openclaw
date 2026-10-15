@@ -318,7 +318,6 @@ export async function writeConfigFileFromContext(
   const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
   const nextHash = hashConfigRaw(json);
   const previousHash = hashConfigRaw(snapshot.raw);
-  const changedPathCount = changedPaths.size;
   const previousBytes =
     typeof snapshot.raw === "string" ? Buffer.byteLength(snapshot.raw, "utf-8") : null;
   const sizeBaselineBytes = resolveConfigSizeBaselineBytes({
@@ -343,6 +342,8 @@ export async function writeConfigFileFromContext(
     validationEnvBase,
   );
   const committedRevision = hashConfigRevision(json, includeFileHashes, includeFileTargets);
+  // Compare resolved modes: an unchanged authored $include has no local mode literal.
+  const gatewayModeAfter = resolveGatewayMode(sourceConfigForPreflight);
   const suspiciousReasons = resolveConfigWriteSuspiciousReasons({
     existsBefore: snapshot.exists,
     unreadableBefore: snapshot.readError != null,
@@ -350,8 +351,7 @@ export async function writeConfigFileFromContext(
     nextBytes,
     hasMetaBefore,
     gatewayModeBefore,
-    // Compare resolved modes: an unchanged authored $include has no local mode literal.
-    gatewayModeAfter: resolveGatewayMode(sourceConfigForPreflight),
+    gatewayModeAfter,
   });
 
   const readTestLogFlag = (name: string) => isVitestRuntimeEnv(deps.env) && deps.env[name] === "1";
@@ -368,7 +368,7 @@ export async function writeConfigFileFromContext(
         configPath,
         previousHash: previousHash ?? null,
         nextHash,
-        changedPathCount,
+        changedPathCount: changedPaths.size,
       }),
     );
   };
@@ -400,7 +400,7 @@ export async function writeConfigFileFromContext(
     previousBytes,
     nextBytes,
     previousMetadata: resolveConfigStatMetadata(previousStat),
-    changedPathCount,
+    changedPathCount: changedPaths.size,
     changedPaths: [...changedPaths],
     origin: options.auditOrigin,
     hasMetaBefore,
