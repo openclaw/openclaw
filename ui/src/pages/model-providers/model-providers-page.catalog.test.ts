@@ -513,6 +513,7 @@ describe("Models page catalog publication", () => {
         updatedAt: 2,
       },
     };
+    page.requestUpdate();
     await page.updateComplete;
     await retryCatalog(page);
 
@@ -560,6 +561,7 @@ describe("Models page catalog publication", () => {
         updatedAt: 2,
       },
     };
+    first.requestUpdate();
     await first.updateComplete;
 
     pending.resolve({

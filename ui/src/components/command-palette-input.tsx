@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, onCleanup, onSettled } from "solid-js";
+import { createEffect, createMemo, onCleanup, onSettled } from "solid-js";
+import { liveValue as createLiveValue } from "../lib/reactive/live-value.ts";
 
 export const COMMAND_PALETTE_INPUT_ID = "cmd-palette-input";
 
@@ -74,6 +75,11 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
   let frame: number | undefined;
   let measuredValue: string | undefined;
   let measuredPlaceholder: string | undefined;
+  // Browser composition and selection belong to the live field until its value changes.
+  const committedValue = createMemo(() => props.value);
+  const committedPlaceholder = createMemo(() => props.placeholder);
+  // The compiler batches native attributes; result/ARIA updates must not rewrite the field.
+  const bindValue = createLiveValue(committedValue);
   const scheduleLayout = () => {
     if (frame !== undefined) {
       return;
@@ -89,7 +95,7 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
     });
   };
   createEffect(
-    () => ({ value: props.value, placeholder: props.placeholder }),
+    () => ({ value: committedValue(), placeholder: committedPlaceholder() }),
     ({ value, placeholder }) => {
       // Input events already measured the edit. Selection and search updates
       // leave the caret, scroll position, and existing geometry untouched.
@@ -122,6 +128,7 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
         <textarea
           ref={(element) => {
             textarea = element;
+            bindValue(element);
           }}
           autofocus
           rows={1}
@@ -133,8 +140,7 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
           aria-controls={props.controls}
           aria-activedescendant={props.activeDescendant}
           aria-describedby={props.describedBy}
-          placeholder={props.placeholder}
-          value={props.value}
+          placeholder={committedPlaceholder()}
           disabled={props.disabled}
           readonly={props.readOnly}
           onScroll={handlePaletteInputScroll}

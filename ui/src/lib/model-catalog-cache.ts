@@ -18,9 +18,10 @@ type ModelCatalogInvalidationScope = ModelCatalogReadScope & {
   sessionsOnly?: boolean;
   sessionModelRevision?: string;
 };
-export type ModelCatalogCacheUpdate =
-  | { type: "published" }
-  | { type: "invalidated"; matches: (scope: ModelsListParams, key: string) => boolean };
+export type ModelCatalogCacheUpdate = {
+  type: "published" | "invalidated";
+  matches: (scope: ModelsListParams, key: string) => boolean;
+};
 
 export type ModelCatalogClient = Pick<GatewayBrowserClient, "request">;
 export type ModelCatalogInvalidation = "clear" | "refresh";
@@ -180,7 +181,9 @@ export function publishModelCatalogResult(
     : undefined;
   cache.entries.delete(key);
   cache.entries.set(key, entry);
+  const requiredSnapshot = cache.requiresSnapshot;
   cache.requiresSnapshot = result.modelSelectionPolicy?.restricted === true;
+  const admissionChanged = requiredSnapshot !== cache.requiresSnapshot;
   for (const pending of cache.requests.get(key)?.values() ?? []) {
     if (discoverySucceeded && (params.refresh || !pending.refresh)) {
       pending.resolve(result);
@@ -193,7 +196,13 @@ export function publishModelCatalogResult(
       matches: (_scope, candidateKey) => candidateKey !== key,
     });
   }
-  notifyModelCatalogCache(client, { type: "published" });
+  notifyModelCatalogCache(client, {
+    type: "published",
+    // Global admission changes matter to cold scopes. Held projections keep their
+    // own receipt; successful refresh/eviction invalidations are published above.
+    matches: (_scope, candidateKey) =>
+      candidateKey === key || (admissionChanged && !cache.entries.get(candidateKey)?.result),
+  });
   return true;
 }
 

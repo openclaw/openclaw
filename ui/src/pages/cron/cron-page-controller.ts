@@ -33,7 +33,6 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { formatMissingOperatorReadScopeMessage } from "../../lib/gateway-errors.ts";
-import { modelCatalogKey, modelCatalogParams } from "../../lib/model-catalog-cache.ts";
 import {
   loadModelCatalog,
   modelCatalogRefreshError,
@@ -413,17 +412,15 @@ export class CronPageController {
     if (!client || !agentId || !isGatewayAvailable(this.context.gateway.snapshot)) {
       return;
     }
-    this.stopModelSuggestions ??= subscribeModelCatalogCache(client, (update) => {
-      if (!this.active || this.cron.client !== client || update.type !== "invalidated") {
-        return;
-      }
-      const scope = modelCatalogParams({
-        agentId: this.context.agentSelection.state.selectedId ?? undefined,
-      });
-      if (update.matches(scope, modelCatalogKey(scope))) {
-        void this.loadModelSuggestions(this.cron);
-      }
-    });
+    this.stopModelSuggestions ??= subscribeModelCatalogCache(
+      client,
+      (update) => {
+        if (this.active && this.cron.client === client && update.type === "invalidated") {
+          void this.loadModelSuggestions(this.cron);
+        }
+      },
+      () => ({ agentId: this.context.agentSelection.state.selectedId ?? undefined }),
+    );
     const request = { state: cronState, agentId };
     this.modelSuggestionsRequest = request;
     // Only the latest catalog request may publish rows or errors.

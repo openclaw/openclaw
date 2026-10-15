@@ -78,12 +78,15 @@ export function ModelProvidersPageBody(props: ModelProvidersPageProps & { host: 
     context,
     () => setRevision((value) => value + 1),
   );
+  // Only changed input facts, not enclosing projection refreshes, invalidate the controller.
+  const routeData = createMemo(() => props.routeData);
+  const loaderPending = createMemo(() => props.loaderPending ?? false);
   createEffect(
-    () => ({ routeData: props.routeData, loaderPending: props.loaderPending ?? false }),
+    () => ({ routeData: routeData(), loaderPending: loaderPending() }),
     (value) => {
-      controller.routeData = value.routeData;
-      controller.loaderPending = value.loaderPending;
+      Object.assign(controller, value);
       controller.beforeUpdate();
+      controller.requestUpdate();
     },
   );
   createEffect(revision, () => {

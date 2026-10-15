@@ -75,12 +75,21 @@ export function readAgentModelCatalog(
 export function subscribeModelCatalogCache(
   client: ModelCatalogClient,
   listener: (update: ModelCatalogCacheUpdate) => void,
+  readScope?: () => ModelCatalogReadScope,
 ): () => void {
+  const scopedListener = readScope
+    ? (update: ModelCatalogCacheUpdate) => {
+        const scope = modelCatalogParams(readScope());
+        if (update.matches(scope, modelCatalogKey(scope))) {
+          listener(update);
+        }
+      }
+    : listener;
   const listeners = modelCatalogObservers.get(client) ?? new Set();
   modelCatalogObservers.set(client, listeners);
-  listeners.add(listener);
+  listeners.add(scopedListener);
   return () => {
-    if (listeners.delete(listener) && listeners.size === 0) {
+    if (listeners.delete(scopedListener) && listeners.size === 0) {
       modelCatalogObservers.delete(client);
     }
   };

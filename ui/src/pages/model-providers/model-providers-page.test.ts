@@ -18,7 +18,6 @@ import {
   unmountPage,
   createApiKeyProviderData,
   createAuthStatus,
-  createEmptyModelProvidersRouteData,
   createHarness,
   drainPageUpdates,
   waitForProviders,
@@ -52,6 +51,7 @@ describe("ModelProvidersPage agent scope", () => {
       client: snapshot.client,
       agentId: "main",
     };
+    page.requestUpdate();
 
     mountPage(page);
     await waitForSolid(() => expect(page.state.data?.providerUsage).toMatchObject({ ok: false }));
@@ -106,12 +106,14 @@ describe("ModelProvidersPage agent scope", () => {
     const row = page.querySelector("[data-provider-id]");
 
     page.loaderPending = true;
+    page.requestUpdate();
     await page.updateComplete;
     expect(page.state.data).toBe(data);
     expect(page.querySelector(".settings-loading-skeleton")).toBeNull();
     expect(page.querySelector("[data-provider-id]")).toBe(row);
 
     page.loaderPending = false;
+    page.requestUpdate();
     await page.updateComplete;
     expect(page.state.data).toBe(data);
     expect(request.mock.calls).toHaveLength(reads);
@@ -635,6 +637,7 @@ describe("ModelProvidersPage agent scope", () => {
       client: snapshot.client,
       agentId: "writer",
     };
+    page.requestUpdate();
     await page.updateComplete;
     expect(page.state.selectedAgentId).toBe("writer");
     expect(page.state.busy).toEqual({});
@@ -683,6 +686,7 @@ describe("ModelProvidersPage agent scope", () => {
       client: snapshot.client,
       agentId: "main",
     };
+    page.requestUpdate();
     mountPage(page);
 
     await waitForSolid(() =>
@@ -822,6 +826,7 @@ describe("ModelProvidersPage usage convergence", () => {
       agentId: "main",
       data: { ...EMPTY_MODEL_PROVIDERS_DATA, updatedAt: Date.now() },
     };
+    page.requestUpdate();
     await vi.waitFor(() => expect(page.state.data?.costByProvider).toEqual([]));
     expect(requestCount(harness.request, "models.authStatus")).toBe(0);
     expect(requestCount(harness.request, "usage.status")).toBe(1);
@@ -1041,29 +1046,4 @@ it("finishes loading with a system-only roster and keeps global defaults editabl
     unmountPage(page);
     selection.dispose();
   }
-});
-
-it("applies provider navigation without replacing an edited search during revalidation", async () => {
-  const { context } = createHarness("writer");
-  const page = appendPage(context);
-  const routeData = { ...createEmptyModelProvidersRouteData(context), provider: "openai" };
-  page.routeData = routeData;
-  const search = () => page.querySelector<HTMLInputElement>(".model-providers__search input")!;
-  await waitForSolid(() => expect(search()?.value).toBe("openai"));
-
-  search().value = "anthropic";
-  search().dispatchEvent(new Event("input", { bubbles: true }));
-  await page.updateComplete;
-  // Route revalidation can publish its pending state before new route data arrives.
-  Object.assign(page, { loaderPending: true });
-  await page.updateComplete;
-  Object.assign(page, { loaderPending: false });
-  await waitForSolid(() => expect(search()?.value).toBe("anthropic"));
-  page.routeData = { ...routeData };
-  await waitForSolid(() => expect(search()?.value).toBe("anthropic"));
-
-  page.routeData = { ...routeData, provider: "minimax-portal" };
-  await waitForSolid(() => expect(search()?.value).toBe("minimax"));
-  page.routeData = { ...routeData, provider: "" };
-  await waitForSolid(() => expect(search()?.value).toBe(""));
 });

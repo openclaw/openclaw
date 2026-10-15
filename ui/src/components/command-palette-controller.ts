@@ -125,7 +125,12 @@ export class PaletteController {
     promise: Promise<void>;
     loadedAt?: number;
   };
-  private readonly modelReader = new ModelCatalogReader(() => this.publish());
+  private modelItems: readonly CommandPaletteItem[] = [];
+  private readonly modelReader = new ModelCatalogReader(() => {
+    // Project accepted catalog publications, not every rendering/selection read.
+    this.modelItems = getCommandPaletteModelItems(this.modelReader.snapshot);
+    this.publish();
+  });
   private readonly gateway: GatewayPageController;
 
   constructor(
@@ -385,6 +390,7 @@ export class PaletteController {
 
   private clearCatalogSearch() {
     this.modelReader.clear();
+    this.modelItems = [];
     this.catalogLoad = undefined;
     this.catalogItems = [];
     this.pluginIcons.reset();
@@ -661,7 +667,7 @@ export class PaletteController {
           this.context?.nativeDeviceSettings,
         ),
         ...this.catalogItems,
-        ...getCommandPaletteModelItems(models),
+        ...this.modelItems,
       ],
       sessionSearchPending: this.sessionSearchPending,
       catalogSearchPending: Boolean(

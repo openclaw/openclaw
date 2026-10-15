@@ -186,7 +186,13 @@ export class AgentsPageState
   });
   private readonly subscriptions = new SubscriptionsController(this)
     .watchStore(() => this.context?.config)
-    .watch(() => this.client, subscribeModelCatalogCache)
+    .watch(
+      () => this.client,
+      (client, notify) =>
+        subscribeModelCatalogCache(client, notify, () => ({
+          agentId: this.agentsSelectedId ?? undefined,
+        })),
+    )
     .effect(
       () => this.context?.settingsAgentSelection,
       (selection) => {

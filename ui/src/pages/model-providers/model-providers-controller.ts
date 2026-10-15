@@ -66,28 +66,8 @@ export class ModelProvidersController extends ModelPageController {
 
   context: ApplicationContext;
 
-  private routeDataValue: ModelProvidersRouteData | undefined;
-  get routeData() {
-    return this.routeDataValue;
-  }
-  set routeData(value: ModelProvidersRouteData | undefined) {
-    if (this.routeDataValue === value) {
-      return;
-    }
-    this.routeDataValue = value;
-    this.requestUpdate();
-  }
-  private loaderPendingValue = false;
-  get loaderPending() {
-    return this.loaderPendingValue;
-  }
-  set loaderPending(value: boolean) {
-    if (this.loaderPendingValue === value) {
-      return;
-    }
-    this.loaderPendingValue = value;
-    this.requestUpdate();
-  }
+  routeData: ModelProvidersRouteData | undefined;
+  loaderPending = false;
 
   readonly state: ModelProvidersState = {
     data: null,
@@ -259,7 +239,13 @@ export class ModelProvidersController extends ModelPageController {
       () => this.context?.gateway,
       (gateway) => this.installedAgents.subscribe(gateway),
     )
-    .watch(() => this.context?.gateway.snapshot.client, modelCatalog.subscribeModelCatalogCache)
+    .watch(
+      () => this.context?.gateway.snapshot.client,
+      (client, notify) =>
+        modelCatalog.subscribeModelCatalogCache(client, notify, () => ({
+          agentId: this.state.selectedAgentId ?? undefined,
+        })),
+    )
     .watchStore(
       () => this.context?.runtimeConfig,
       (runtimeConfig) => {

@@ -35,7 +35,7 @@ describe("model catalog display cache", () => {
     try {
       unsubscribeRetired();
       publishModelCatalogResult(beginModelCatalogRead(client, {}), {}, { models: [published] });
-      expect(active).toHaveBeenCalledWith({ type: "published" });
+      expect(active).toHaveBeenCalledWith({ type: "published", matches: expect.any(Function) });
       expect(retired).not.toHaveBeenCalled();
       unsubscribeActive();
       active.mockClear();
