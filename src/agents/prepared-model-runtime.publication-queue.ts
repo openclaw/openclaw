@@ -31,6 +31,12 @@ export class PreparedModelRuntimePublicationQueue {
     return publication;
   }
 
+  admit(completion: Promise<void>, isCurrent: () => boolean) {
+    const refresh = { completion, isCurrent };
+    this.#latestRefresh = refresh;
+    return refresh;
+  }
+
   complete(
     publication: Promise<void>,
     isCurrent: () => boolean,
@@ -38,8 +44,7 @@ export class PreparedModelRuntimePublicationQueue {
     startup?: PreparedModelRuntimeStartup,
   ): Promise<void> {
     const assertLifetime = capturePreparedModelRuntimeLifetime();
-    const refresh = { completion: publication, isCurrent };
-    this.#latestRefresh = refresh;
+    const refresh = this.admit(publication, isCurrent);
     // Join outside the queue so successors can run; startup bounds only this observer.
     const completion = options.joinSupersedingPublication
       ? (async () => {
