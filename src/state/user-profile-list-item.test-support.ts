@@ -12,8 +12,7 @@ import {
   userProfilesDb,
   toUserProfile,
 } from "./user-profiles-internal.js";
-import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
-import { UserProfileNotFoundError } from "./user-profiles-schema.js";
+import { ensureUserProfilesSchema, UserProfileNotFoundError } from "./user-profiles-schema.js";
 
 export function getUserProfileListItem(
   profileId: string,

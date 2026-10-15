@@ -32,6 +32,7 @@ import {
   applyUserProfileEmailBinding,
   bindPreparedUserProfileIdentity,
   projectUserProfileDisplay,
+  projectUserProfileSnapshot,
   projectCatalogUserProfileIdentity,
   resolveCatalogProfile,
   toUserProfile,
@@ -655,27 +656,16 @@ export async function prepareUserProfileCatalog(options: OpenClawStateDatabaseOp
 }
 
 /** Lists share committed profile facts rather than reserving the shared-state writer. */
-export async function readUserProfileCatalogSnapshot(options: OpenClawStateDatabaseOptions = {}) {
+export async function readUserProfileSnapshot(
+  githubAccountIds?: readonly number[],
+  options: OpenClawStateDatabaseOptions = {},
+) {
   const catalog = await acquireUserProfileCatalog(options);
   try {
-    return [...catalog.rows.values()]
-      .toSorted(
-        (left, right) =>
-          left.created_at - right.created_at ||
-          Buffer.compare(Buffer.from(left.id), Buffer.from(right.id)),
-      )
-      .map((row) => {
-        catalog.assertCurrent(row.id);
-        return {
-          ...toUserProfile(row),
-          emails: [...(catalog.bindings.emailsByProfile.get(row.id) ?? [])].toSorted(
-            (left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)),
-          ),
-          githubIdentity: row.githubIdentity ? { ...row.githubIdentity } : null,
-          hasAvatar: row.has_avatar === 1,
-          githubAccountIds: row.githubAccountIds ?? [],
-        };
-      });
+    for (const row of catalog.rows.values()) {
+      catalog.assertCurrent(row.id);
+    }
+    return projectUserProfileSnapshot(catalog.rows, catalog.bindings, githubAccountIds);
   } finally {
     catalog.release();
   }

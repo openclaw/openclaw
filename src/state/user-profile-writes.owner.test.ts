@@ -1,13 +1,17 @@
 import { expect, it, vi } from "vitest";
+import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
-import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
+import {
+  executeOpenClawStateWorker,
+  runOpenClawStateWorkerOperation,
+} from "./openclaw-state-worker-store.js";
 import { prepareUserProfileCatalog, publishUserProfilesChange } from "./user-profile-list.js";
-import { readUserProfileSnapshot } from "./user-profile-reads.js";
+import { listProfiles } from "./user-profile-reads.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
@@ -15,6 +19,7 @@ import {
   linkCanonicalUserProfileEmail,
   setCanonicalUserProfileRole,
   setCanonicalUserProfileDisplayName,
+  syncCanonicalGitHubIdentity,
 } from "./user-profile-writes.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
 
@@ -23,6 +28,7 @@ vi.mock("./openclaw-state-worker-store.js", async (importOriginal) => {
   return {
     ...actual,
     runOpenClawStateWorkerOperation: vi.fn(actual.runOpenClawStateWorkerOperation),
+    executeOpenClawStateWorker: vi.fn(actual.executeOpenClawStateWorker),
   };
 });
 
@@ -33,7 +39,10 @@ it("reuses committed email profiles and roster facts without writer admission ac
     const first = await ensureCanonicalUserProfileForEmail("first@example.test");
     const second = await ensureCanonicalUserProfileForEmail("second@example.test");
     release = (await prepareUserProfileCatalog()).release;
-    const expectResident = async (profile: typeof first) => {
+    const expectResident = async (
+      profile: typeof first,
+      githubIdentity: UserProfileListItem["githubIdentity"] = null,
+    ) => {
       const { id, displayName, avatarMime, mergedInto, createdAt, updatedAt, role } = profile;
       const expected = {
         id,
@@ -45,6 +54,7 @@ it("reuses committed email profiles and roster facts without writer admission ac
         ...(role ? { role } : {}),
       };
       vi.mocked(runOpenClawStateWorkerOperation).mockClear();
+      vi.mocked(executeOpenClawStateWorker).mockClear();
       const sql = observeMainThreadSql();
       try {
         expect(await ensureCanonicalUserProfileForEmail(" FIRST@EXAMPLE.TEST ")).toEqual(expected);
@@ -54,16 +64,17 @@ it("reuses committed email profiles and roster facts without writer admission ac
             name: "Provider Name",
           }),
         ).toEqual(expected);
-        expect((await readUserProfileSnapshot()).profiles).toContainEqual({
+        expect(await listProfiles()).toContainEqual({
           ...expected,
           emails:
             profile.id === first.id
               ? ["first@example.test"]
               : ["first@example.test", "second@example.test"],
-          githubIdentity: null,
+          githubIdentity,
           hasAvatar: false,
         });
         expect(runOpenClawStateWorkerOperation).not.toHaveBeenCalled();
+        expect(executeOpenClawStateWorker).not.toHaveBeenCalled();
         sql.expectIdle();
       } finally {
         sql.restore();
@@ -74,8 +85,18 @@ it("reuses committed email profiles and roster facts without writer admission ac
     await expectResident(renamed);
     const assigned = await setCanonicalUserProfileRole(first.id, "reader");
     await expectResident(assigned);
+    const githubIdentity = {
+      login: "first-account",
+      profileUrl: "https://github.com/first-account",
+      avatarUrl: "https://avatars.githubusercontent.com/u/101?v=4",
+    };
+    const verified = await syncCanonicalGitHubIdentity({
+      identity: { accountId: 101, login: "first-account" },
+      authenticationAlias: { kind: "email", email: "first@example.test" },
+    });
+    await expectResident(verified, githubIdentity);
     const linked = await linkCanonicalUserProfileEmail("first@example.test", second.id);
-    await expectResident(linked.profile);
+    await expectResident(linked.profile, githubIdentity);
     await expect(
       ensureCanonicalUserProfileForEmail("first@example.test", {
         assertCurrent() {
