@@ -20,6 +20,7 @@ import {
 import type { SessionRowReadView } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
+import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -39,6 +40,7 @@ type SessionChangeContext = Pick<
   | "getRuntimeConfig"
   | "sessionRowProjectionOwner"
   | "getSessionEventSubscriberConnIds"
+  | "getSessionMessageSubscriberConnIds"
   | "workerSessionPlacementService"
   | "mentionInbox"
 >;
@@ -123,6 +125,28 @@ function snapshotTarget(payload: SessionChangedPayload, scope: SessionEventAgent
     : undefined;
 }
 
+function resolveSessionDrain(
+  context: SessionChangeContext,
+  payload: SessionChangedPayload,
+  scope: SessionEventAgentScope | null,
+  eventReceivers: ReadonlySet<string>,
+): { connIds: ReadonlySet<string>; subscriptionKey: string } | undefined {
+  if (!payload.sessionKey || !scope?.[1] || !["reset", "delete", "new"].includes(payload.reason)) {
+    return undefined;
+  }
+  const key = resolveSessionStoreKey({
+    cfg: context.getRuntimeConfig(),
+    sessionKey: payload.sessionKey,
+    storeAgentId: scope[1],
+  });
+  const subscriptionKey = resolveSessionSubscriptionKey(key, scope[1]);
+  const messageReceivers = context.getSessionMessageSubscriberConnIds?.(subscriptionKey);
+  return {
+    connIds: new Set([...eventReceivers, ...(messageReceivers ?? [])]),
+    subscriptionKey,
+  };
+}
+
 function broadcastSessionsChanged(
   context: SessionChangeContext,
   payload: SessionChangedPayload,
@@ -130,13 +154,10 @@ function broadcastSessionsChanged(
   includeSnapshot = true,
   read?: SessionRowReadView,
 ): void {
-  const connIds = context.getSessionEventSubscriberConnIds();
-  if (!hasSessionChangeReceivers(connIds)) {
-    return;
-  }
   if (scope === null) {
     return;
   }
+  const connIds = context.getSessionEventSubscriberConnIds();
   const [eventAgentId, routingAgentId, compatibilityOwnerAgentId] = scope;
   const routingOptions = {
     ...(routingAgentId ? { agentId: routingAgentId } : {}),
@@ -147,6 +168,23 @@ function broadcastSessionsChanged(
     ...(eventAgentId ? { agentId: eventAgentId } : {}),
     ts: Date.now(),
   };
+  const drain = resolveSessionDrain(context, payload, scope, connIds);
+  if (drain && drain.connIds.size > 0) {
+    // Publish in row order; a slow recipient must reconnect instead of missing eviction.
+    context.broadcastToConnIds(
+      "socket.drain",
+      { ...eventPayload, agentId: routingAgentId },
+      drain.connIds,
+      {
+        ...routingOptions,
+        sessionKeys: [drain.subscriptionKey],
+        dropIfSlow: false,
+      },
+    );
+  }
+  if (!hasSessionChangeReceivers(connIds)) {
+    return;
+  }
   if (!includeSnapshot) {
     // Native plugins need the keyed notice, but a keyed WebSocket payload would
     // ask recipient projection to read the unavailable row again.
@@ -384,13 +422,20 @@ export function emitSessionsChanged(
     void context.mentionInbox?.invalidateAsync(payload.sessionKey);
   }
   const connIds = context.getSessionEventSubscriberConnIds();
-  if (!hasSessionChangeReceivers(connIds)) {
+  // Lightweight contexts without either kind of listener need no routing config.
+  if (!hasSessionChangeReceivers(connIds) && !context.getSessionMessageSubscriberConnIds) {
     return;
   }
   const cfg = context.getRuntimeConfig();
   const scope: SessionEventAgentScope | null = payload.sessionKey
     ? resolveSessionEventAgentScope(cfg, payload.sessionKey, payload.agentId)
     : [payload.agentId, payload.agentId, undefined];
+  if (
+    !hasSessionChangeReceivers(connIds) &&
+    !resolveSessionDrain(context, payload, scope, connIds)?.connIds.size
+  ) {
+    return;
+  }
   if (options.preparedPublication && payload.sessionKey) {
     return broadcastSessionsChanged(context, payload, scope, true, options.sessionRows);
   }

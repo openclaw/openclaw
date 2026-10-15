@@ -452,11 +452,51 @@ describe("sessions.changed coalescing", () => {
     await flushPendingSessionsChangedEvents(context);
     expect(earlyPublications).toBe(0);
     expect(
-      vi.mocked(context.broadcastToConnIds).mock.calls.map(([, payload]) => payload),
+      vi.mocked(context.broadcastToConnIds).mock.calls.map(([event, payload]) => [event, payload]),
     ).toMatchObject([
-      { reason: "patch", sessionId: "removed" },
-      { reason: "delete", sessionId: "removed" },
+      ["sessions.changed", { reason: "patch", sessionId: "removed" }],
+      ["socket.drain", { reason: "delete", sessionId: "removed" }],
+      ["sessions.changed", { reason: "delete", sessionId: "removed" }],
     ]);
+  });
+
+  it.each([
+    { key: "main", agentId: "main", subscriptionKey: "agent:main:main" },
+    { key: "global", agentId: "work", subscriptionKey: "agent:work:global" },
+  ])(
+    "routes $key teardown to message-only subscribers for $agentId",
+    async ({ key, agentId, subscriptionKey }) => {
+      const context = createContext(new Set(), {
+        agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+      });
+      context.getSessionMessageSubscriberConnIds = vi.fn(
+        (requestedKey) => new Set(requestedKey === subscriptionKey ? ["message-reader"] : []),
+      );
+
+      await emitAndSettleLeading(context, { reason: "reset", sessionKey: key, agentId });
+      await flushPendingSessionsChangedEvents(context);
+
+      expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        "socket.drain",
+        expect.objectContaining({ sessionKey: key, agentId, reason: "reset" }),
+        new Set(["message-reader"]),
+        expect.objectContaining({ agentId, dropIfSlow: false }),
+      );
+    },
+  );
+
+  it("sends one drain notice to the union of list and message subscribers", async () => {
+    const context = createContext(new Set(["list-reader", "both"]));
+    context.getSessionMessageSubscriberConnIds = () => new Set(["message-reader", "both"]);
+
+    await emitAndSettleLeading(context, { reason: "reset", sessionKey: "agent:main:main" });
+    await flushPendingSessionsChangedEvents(context);
+
+    const drains = vi
+      .mocked(context.broadcastToConnIds)
+      .mock.calls.filter(([event]) => event === "socket.drain");
+    expect(drains).toHaveLength(1);
+    expect(drains[0]?.[2]).toEqual(new Set(["list-reader", "message-reader", "both"]));
   });
 
   it("joins a different session admitted while shutdown is draining", async () => {
