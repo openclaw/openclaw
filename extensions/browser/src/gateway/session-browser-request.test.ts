@@ -130,33 +130,6 @@ describe("closed session browser route", () => {
     },
   );
 
-  it("returns only the owned tab for the real UI startup /tabs request", async () => {
-    const respond = await request({ method: "GET", path: "/tabs" });
-    expect(respond).toHaveBeenCalledWith(true, {
-      running: true,
-      tabs: [{ targetId: "isolated-tab", title: "Review" }],
-    });
-    expect(mocked.dispatch).not.toHaveBeenCalled();
-  });
-
-  it("binds evaluation to the isolated target", async () => {
-    const path = "/act";
-    const body = { kind: "evaluate", fn: "() => location.href" };
-    const respond = await request({ method: "POST", path, body });
-    expect(respond).toHaveBeenCalledWith(true, { ok: true });
-    expect(mocked.dispatch).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        path,
-        query: expect.objectContaining({
-          targetId: "isolated-tab",
-          profile: "openclaw",
-          managedOnly: true,
-        }),
-        body: expect.objectContaining({ ...body, targetId: "isolated-tab", profile: "openclaw" }),
-      }),
-    );
-  });
-
   it("rejects batch and close actions that could escape the single-tab operation contract", async () => {
     for (const kind of ["batch", "close"]) {
       await rejectedRequest(
@@ -183,10 +156,24 @@ describe("closed session browser route", () => {
         await assertion;
       }
       events.push(mocked.current ? "authorized effect" : "stale effect");
-      return { status: 200, body: {} };
+      return { status: 200, body: { ok: true } };
     });
-    await request({ method: "POST", path: "/navigate", body: { url: "https://example.test" } });
+    const path = "/act";
+    const body = { kind: "evaluate", fn: "() => location.href" };
+    // Exercise the allowed-action gate as well as the synchronous effect fence.
+    await request({ method: "POST", path, body });
     expect(events).toEqual(["authorized effect", "revoked"]);
+    expect(mocked.dispatch).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        path,
+        query: expect.objectContaining({
+          targetId: "isolated-tab",
+          profile: "openclaw",
+          managedOnly: true,
+        }),
+        body: expect.objectContaining({ ...body, targetId: "isolated-tab", profile: "openclaw" }),
+      }),
+    );
   });
 
   it("does not return data after authority changes during the action", async () => {
@@ -216,7 +203,14 @@ describe("closed session browser route", () => {
     });
     const pending = request(params);
     await entered.promise;
-    completed.resolve(params.path === "/tabs" ? [] : { status: 200, body: { private: true } });
+    completed.resolve(
+      params.path === "/tabs"
+        ? [
+            { targetId: "admin-tab", title: "Private" },
+            { targetId: "isolated-tab", title: "Review" },
+          ]
+        : { status: 200, body: { private: true } },
+    );
     const revoke = vi.fn(() => {
       mocked.current = false;
     });
@@ -224,6 +218,13 @@ describe("closed session browser route", () => {
     const respond = await pending;
     expect(respond).toHaveBeenCalledWith(true, expect.anything());
     expect(respond.mock.invocationCallOrder[0]).toBeLessThan(revoke.mock.invocationCallOrder[0]!);
+    if (params.path === "/tabs") {
+      expect(respond).toHaveBeenCalledWith(true, {
+        running: true,
+        tabs: [{ targetId: "isolated-tab", title: "Review" }],
+      });
+      expect(mocked.dispatch).not.toHaveBeenCalled();
+    }
   });
 
   it("rejects conflicting nested and canonical session identities", async () => {

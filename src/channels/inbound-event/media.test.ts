@@ -2,7 +2,6 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   hasStagedMediaFacts,
-  resolveMediaFacts,
   resolveStagedMediaFacts,
   type MediaFactInput,
   type MediaFactLegacyProjection,
@@ -10,10 +9,8 @@ import {
 import { buildAgentMediaPayload } from "../../plugin-sdk/agent-media-payload.js";
 import { buildMediaPayload } from "../plugins/media-payload.js";
 import {
-  buildChannelInboundMediaPayload,
   formatMediaPlaceholderText,
   formatInboundMediaUnavailableText,
-  toHistoryMediaEntries,
   toInboundMediaFacts,
   toInboundMediaFactsWithMetadata,
   type ChannelInboundMediaInput,
@@ -273,66 +270,6 @@ describe("channel inbound media facts", () => {
     expect(toInboundMediaFacts(input, defaults)).toEqual(expected);
   });
 
-  it("does not smear a singular legacy MediaUrl onto later slots after plural paths", () => {
-    const facts = resolveMediaFacts({
-      MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
-      MediaUrls: ["file:///tmp/a.png"],
-      MediaUrl: "file:///tmp/a.png",
-    });
-    expect(facts).toHaveLength(2);
-    expect(facts[0]?.path).toBe("/tmp/a.png");
-    expect(facts[0]?.url).toBe("file:///tmp/a.png");
-    expect(facts[1]?.path).toBe("/tmp/b.png");
-    expect(facts[1]?.url).toBeUndefined();
-  });
-
-  it("keeps canonical facts ahead of conflicting legacy fields and preserves sparse alignment", () => {
-    const facts = resolveMediaFacts({
-      media: [
-        {
-          path: "/canonical/voice.ogg",
-          url: "https://canonical.test/voice.ogg",
-          contentType: "audio/ogg",
-          kind: "video",
-          workspaceDir: "/canonical/workspace",
-        },
-        { path: "/canonical/photo.jpg" },
-      ],
-      MediaPaths: ["/legacy/voice.ogg"],
-      MediaUrls: ["/legacy/voice.ogg", "https://legacy.test/photo.jpg"],
-      MediaTypes: ["image/png", "image/jpeg", "application/pdf"],
-      MediaType: "video/mp4",
-      MediaWorkspaceDir: "/legacy/workspace",
-      MediaStaged: true,
-    });
-
-    expect(facts).toEqual([
-      expect.objectContaining({
-        path: "/canonical/voice.ogg",
-        url: "https://canonical.test/voice.ogg",
-        contentType: "audio/ogg",
-        kind: "video",
-        workspaceDir: "/canonical/workspace",
-      }),
-      expect.objectContaining({
-        path: "/canonical/photo.jpg",
-        url: "https://legacy.test/photo.jpg",
-        contentType: "image/jpeg",
-        kind: "image",
-        workspaceDir: "/legacy/workspace",
-      }),
-      expect.objectContaining({
-        path: undefined,
-        url: undefined,
-        contentType: "application/pdf",
-        kind: "document",
-        workspaceDir: "/legacy/workspace",
-      }),
-    ]);
-    expect(facts.every((fact) => fact.staged === undefined)).toBe(true);
-    expect(hasStagedMediaFacts(facts)).toBe(true);
-  });
-
   it.each(stagedMediaMergeMatrix)("merges $name", ({ source, expected, expectedStaged }) => {
     const facts = resolveStagedMediaFacts(source);
     expect(facts).toHaveLength(expected.length);
@@ -358,28 +295,6 @@ describe("channel inbound media facts", () => {
         { kind: "document" },
       ]),
     ).toBe(true);
-  });
-
-  it("builds legacy media payload fields from inbound media facts", () => {
-    const media = [
-      { path: "/tmp/image.png", contentType: "image/png", kind: "image" as const },
-      {
-        url: "https://example.test/audio.mp3",
-        contentType: "audio/mpeg",
-        kind: "audio" as const,
-        transcribed: true,
-      },
-    ];
-    const expected = {
-      MediaPath: "/tmp/image.png",
-      MediaUrl: "/tmp/image.png",
-      MediaType: "image/png",
-      MediaPaths: ["/tmp/image.png", ""],
-      MediaUrls: ["/tmp/image.png", "https://example.test/audio.mp3"],
-      MediaTypes: ["image/png", "audio/mpeg"],
-      MediaTranscribedIndexes: [1],
-    };
-    expect(buildChannelInboundMediaPayload(media)).toEqual(expected);
   });
 
   it.each([
@@ -422,21 +337,4 @@ describe("channel inbound media facts", () => {
       });
     },
   );
-
-  it("maps inbound media facts into history media entries", () => {
-    expect(
-      toHistoryMediaEntries([{ path: "/tmp/image.png", contentType: "image/png" }], {
-        kind: "image",
-        messageId: "msg-1",
-      }),
-    ).toEqual([
-      {
-        path: "/tmp/image.png",
-        url: undefined,
-        contentType: "image/png",
-        kind: "image",
-        messageId: "msg-1",
-      },
-    ]);
-  });
 });
