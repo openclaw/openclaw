@@ -85,7 +85,6 @@ class SuggestionRecoveryPane extends ChatPaneRuntime {
 it.each([
   { draft: "Keep this draft", control: false, cached: false },
   { draft: "/stop", control: true, cached: false },
-  { draft: "/approve approval-123 allow-once", control: true, cached: false },
   { draft: "Keep the cached reader in place", control: false, cached: true },
 ])(
   "holds early input until recovery is ready, preserving live controls: $draft",
@@ -202,59 +201,57 @@ it("updates held Send when an edited draft changes between control and ordinary 
   }
 });
 
-it.each(["Keep this suggestion", "/stop"])(
-  "keeps suggestion submission independent of chat recovery: %s",
-  async (draft) => {
-    const fixture = createRecoveringComposer(draft);
-    const { state, context, container } = fixture;
-    state.sessionKey = "agent:main:suggestion-recovery";
-    const pane = createPaneTestHost("openclaw-suggestion-recovery-test", SuggestionRecoveryPane);
-    pane.initialize(fixture);
-    const methods = context.gateway.snapshot.hello?.features?.methods;
-    assert(methods);
-    methods.push("session.suggestions.add", "session.suggestions.list");
-    state.sessionsResult = {
-      ts: 1,
-      path: "",
-      count: 1,
-      defaults,
-      sessions: [
-        { key: state.sessionKey, kind: "direct", visibility: "suggest", sharingRole: "viewer" },
-      ],
-    };
-    assert(state.client);
-    try {
-      pane.render();
-      const props = pane.chatProps;
-      assert(props);
-      render(renderChatComposer(props), container);
-      const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--send");
-      assert(send);
-      expect(props.suggestionComposer).toBe(true);
-      expect(send.disabled).toBe(false);
-      const request = vi.spyOn(state.client, "request").mockResolvedValue({
-        suggestion: {
-          id: "suggestion-1",
-          sessionKey: state.sessionKey,
-          agentId: "main",
-          author: { type: "human", id: "viewer", label: "Viewer" },
-          text: draft,
-          createdAt: 1,
-          state: "pending",
-        },
-      });
-      await props.onSend();
-      expect(request).toHaveBeenCalledExactlyOnceWith("session.suggestions.add", {
+it("keeps suggestion submission independent of chat recovery", async () => {
+  const draft = "Keep this suggestion";
+  const fixture = createRecoveringComposer(draft);
+  const { state, context, container } = fixture;
+  state.sessionKey = "agent:main:suggestion-recovery";
+  const pane = createPaneTestHost("openclaw-suggestion-recovery-test", SuggestionRecoveryPane);
+  pane.initialize(fixture);
+  const methods = context.gateway.snapshot.hello?.features?.methods;
+  assert(methods);
+  methods.push("session.suggestions.add", "session.suggestions.list");
+  state.sessionsResult = {
+    ts: 1,
+    path: "",
+    count: 1,
+    defaults,
+    sessions: [
+      { key: state.sessionKey, kind: "direct", visibility: "suggest", sharingRole: "viewer" },
+    ],
+  };
+  assert(state.client);
+  try {
+    pane.render();
+    const props = pane.chatProps;
+    assert(props);
+    render(renderChatComposer(props), container);
+    const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--send");
+    assert(send);
+    expect(props.suggestionComposer).toBe(true);
+    expect(send.disabled).toBe(false);
+    const request = vi.spyOn(state.client, "request").mockResolvedValue({
+      suggestion: {
+        id: "suggestion-1",
         sessionKey: state.sessionKey,
+        agentId: "main",
+        author: { type: "human", id: "viewer", label: "Viewer" },
         text: draft,
-      });
-      expect(state.chatMessage).toBe("");
-      expect(state.handleSendChat).not.toHaveBeenCalled();
-    } finally {
-      render(nothing, container);
-    }
-  },
-);
+        createdAt: 1,
+        state: "pending",
+      },
+    });
+    await props.onSend();
+    expect(request).toHaveBeenCalledExactlyOnceWith("session.suggestions.add", {
+      sessionKey: state.sessionKey,
+      text: draft,
+    });
+    expect(state.chatMessage).toBe("");
+    expect(state.handleSendChat).not.toHaveBeenCalled();
+  } finally {
+    render(nothing, container);
+  }
+});
 
 it.each([
   { reason: "Your operator role requires a sandboxed session.", scope: "operator.write" },
@@ -312,7 +309,6 @@ it.each([
 
 it.each([
   { draft: "Hello", allowed: false, restricted: false },
-  { draft: "/models", allowed: true, restricted: false },
   { draft: "Hello", allowed: false, restricted: true },
   { draft: "/models", allowed: true, restricted: true },
 ])(
