@@ -29,6 +29,7 @@ import {
 } from "./agent-session-loop-resource-loader.test-support.js";
 import { AuthStorage } from "./auth-storage.js";
 import type { ToolDefinition } from "./extensions/types.js";
+import { convertToLlm } from "./messages.js";
 import { ModelRegistry } from "./model-registry.js";
 import { createAgentSession } from "./sdk.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
@@ -231,7 +232,7 @@ describe("createAgentSession fork retention", () => {
           currentStreamFn: session.agent.streamFn!,
           sessionFork: { sessionId, agentId: "main", runId: `parent-${run}` },
         });
-        await (await streamFn(model, { messages: session.messages }, {})).result();
+        await (await streamFn(model, { messages: convertToLlm(session.messages) }, {})).result();
       } finally {
         session.dispose();
       }
