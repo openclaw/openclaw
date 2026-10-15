@@ -402,14 +402,10 @@ describe("FRV continuation preflight", () => {
       fixture.producer.conclusion = conclusion;
       await expect(
         continueFailed(fixture.plan, "77", fixture.client, { dryRun: true }),
-      ).resolves.toMatchObject(
-        conclusion === "success"
-          ? { action: "would-rerun-parent" }
-          : {
-              action: "would-rerun",
-              status: { failed: [expect.objectContaining({ key: "artifact:npm", runId: "81" })] },
-            },
-      );
+      ).resolves.toMatchObject({
+        action: "would-rerun",
+        status: { failed: [expect.objectContaining({ key: "artifact:npm", runId: "81" })] },
+      });
       expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
       expect(fixture.client.rerunParent).not.toHaveBeenCalled();
     },
