@@ -250,11 +250,6 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
               }
               aria-disabled={props.disabled ? "true" : "false"}
               title={props.disabledReason ?? view().triggerTitle}
-              onClick={(event: MouseEvent) => {
-                if (props.disabled) {
-                  event.preventDefault();
-                }
-              }}
             >
               {view().showReasoning ? (
                 <span

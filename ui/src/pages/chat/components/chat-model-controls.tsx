@@ -546,11 +546,8 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
       commonDisabled ||
       effortMutationDisabled ||
       (thinking.options.length === 0 && fastMode.disabled);
-    // Floating UI deliberately tracks a live anchor. Keep the eventual effort
-    // control in layout while catalog state is transient (and until an open model
-    // menu closes), so a sibling appearing cannot move that anchor mid-interaction.
-    const reserveEffortPicker =
-      !hasResolvableModel && (catalogLoadingWithoutSnapshot || props.modelPickerOpen === true);
+    // CSS keeps the empty effort slot beside an open picker until its catalog resolves.
+    const reserveEffortPicker = !hasResolvableModel;
     const showEffortPicker = hasResolvableModel || reserveEffortPicker;
     return {
       model: {

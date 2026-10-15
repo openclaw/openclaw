@@ -36,6 +36,7 @@ function mountPicker() {
       isDefault: false,
     })),
     onModelSelect: vi.fn(async () => {}),
+    onOpenChange: vi.fn(),
   };
   let update!: () => void;
   mountSolid(
@@ -78,11 +79,25 @@ function mountPicker() {
   return { params, update, picker, trigger, search, composer, toggle };
 }
 
-it("keeps typing in the filter and preserves focus and query across catalog rerenders", async () => {
+it("opens during activation and preserves filter focus and query across catalog rerenders", async () => {
   const { search, composer, toggle, params, update, trigger } = mountPicker();
+  let visibleAtActivation = false;
+  container.addEventListener(
+    "click",
+    () => {
+      queueMicrotask(() => {
+        visibleAtActivation = container
+          .querySelector("[data-anchored-overlay]")!
+          .matches(":popover-open");
+      });
+    },
+    { once: true },
+  );
   composer.value = "Keep this draft";
   composer.focus();
   await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
+  expect(visibleAtActivation).toBe(true);
+  expect(params.onOpenChange).toHaveBeenCalledExactlyOnceWith(true);
   expect(document.activeElement).toBe(search);
   await userEvent.keyboard("beta");
   expect(search.value).toBe("beta");
@@ -106,6 +121,16 @@ it("keeps typing in the filter and preserves focus and query across catalog rere
   trigger.focus();
   await userEvent.keyboard("1");
   expect(params.onModelSelect).toHaveBeenCalledWith("example/beta", "main", undefined);
+});
+
+it("keeps a disabled picker closed on keyboard activation", async () => {
+  const { picker, trigger, params, update } = mountPicker();
+  params.disabled = true;
+  update();
+  trigger.focus();
+  await userEvent.keyboard("{Enter}");
+  expect(picker.open).toBe(false);
+  expect(params.onOpenChange).not.toHaveBeenCalled();
 });
 
 it("leaves digit shortcuts to a nested native menu", async () => {
