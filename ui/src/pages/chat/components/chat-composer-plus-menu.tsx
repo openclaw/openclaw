@@ -40,6 +40,7 @@ import {
   renderCapabilityToggleRow,
   menuDivider,
 } from "./chat-composer-menu-rows.tsx";
+import { closeOtherChatComposerPickers } from "./chat-picker-overlay.ts";
 
 registerEnglishCatalog(registerMcpEnglish);
 
@@ -606,6 +607,7 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
               handleMenuSelection(item, event, handle.overlay.surface, props.menu);
             }
           }}
+          onBeforeShow={() => closeOtherChatComposerPickers(host)}
           onOpenChange={(open) => {
             host.toggleAttribute("open", open);
             if (open) {

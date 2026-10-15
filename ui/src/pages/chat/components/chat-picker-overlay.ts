@@ -1,4 +1,5 @@
 import { syncAnchoredOverlay } from "../../../components/anchored-overlay.ts";
+import { registryFor } from "../../../components/overlay-registry.ts";
 import { consumeTooltipEscape } from "../../../components/tooltip.ts";
 import { clearChatModelSearchOnEscape } from "./chat-model-picker-search.ts";
 
@@ -116,6 +117,9 @@ function connectChatComposerPickerDismissal(ownerDocument: Document): () => void
     ) {
       return;
     }
+    if (registryFor(ownerDocument).stack.at(-1)?.surface.matches(":popover-open")) {
+      return;
+    }
     if (clearChatModelSearchOnEscape(event)) {
       return;
     }
@@ -168,7 +172,7 @@ function connectChatComposerPickerDismissal(ownerDocument: Document): () => void
   return () => controller.abort();
 }
 
-function closeOtherChatComposerPickers(source: HTMLElement): void {
+export function closeOtherChatComposerPickers(source: HTMLElement): void {
   const composer = source.closest(".agent-chat__input");
   if (!composer) {
     return;

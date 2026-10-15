@@ -1,7 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createOverlay } from "../../../components/overlay-lifecycle.ts";
 import { settleTooltip, tooltipSurface } from "../../../components/tooltip.test-support.ts";
+import { closeChatPaneDetails } from "../chat-pane-shared.ts";
 import {
   installChatComposerPickerDismissal,
   handleChatComposerDetailsToggle,
@@ -80,6 +82,77 @@ describe("chat picker overlay", () => {
       expect(document.activeElement).toBe(trigger);
     }
   });
+
+  it.each([
+    [
+      "context",
+      '<div class="context-usage"><details data-picker data-chat-native-picker><summary>Context</summary><div popover="manual"><input></div></details></div>',
+    ],
+    [
+      "Plus",
+      '<div class="agent-chat__attach-menu" data-picker><button>Plus</button><div popover="manual"><input></div></div>',
+    ],
+    [
+      "emoji",
+      '<button>Emoji</button><div class="emoji-menu-popup" data-picker popover="manual"><input></div>',
+    ],
+  ])(
+    "leaves %s Escape to its native owner before another composer's invocation menu",
+    (_, markup) => {
+      const invocationComposer = document.createElement("div");
+      invocationComposer.className = "agent-chat__input";
+      invocationComposer.innerHTML = '<div class="slash-menu"></div>';
+      const nativeComposer = document.createElement("div");
+      nativeComposer.className = "agent-chat__input";
+      nativeComposer.innerHTML = markup;
+      document.body.append(invocationComposer, nativeComposer);
+      const dismissInvocations = vi.fn();
+      invocationComposer.addEventListener(
+        "openclaw-composer-dismiss-invocations",
+        dismissInvocations,
+      );
+      const dismissPaneDetails = (event: KeyboardEvent) => {
+        if (
+          !event.defaultPrevented &&
+          event.key === "Escape" &&
+          closeChatPaneDetails(nativeComposer)
+        ) {
+          event.preventDefault();
+        }
+      };
+      document.addEventListener("keydown", dismissPaneDetails, true);
+      onTestFinished(() => document.removeEventListener("keydown", dismissPaneDetails, true));
+      onTestFinished(installChatComposerPickerDismissal(document));
+      const surface = nativeComposer.querySelector<HTMLElement>("[popover]")!;
+      const trigger = nativeComposer.querySelector<HTMLElement>("summary, button")!;
+      const picker = nativeComposer.querySelector<HTMLElement>("[data-picker]")!;
+      const overlay = createOverlay("composer-escape-test");
+      onTestFinished(() => overlay.dispose());
+      overlay.bindSurface(surface);
+      overlay.bindTrigger(trigger);
+      overlay.subscribe((open) => picker.toggleAttribute("open", open));
+      expect(overlay.request(true)).toBe(true);
+      const field = surface.querySelector("input")!;
+      field.focus();
+
+      const escape = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+      field.dispatchEvent(escape);
+      expect(surface.matches(":popover-open")).toBe(false);
+      expect(picker.hasAttribute("open")).toBe(false);
+      expect(escape.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(trigger);
+      expect(dismissInvocations).not.toHaveBeenCalled();
+
+      invocationComposer.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+      expect(dismissInvocations).toHaveBeenCalledOnce();
+    },
+  );
 
   it("shares dismissal until the final owner releases it and can reconnect", () => {
     const releaseFirst = installChatComposerPickerDismissal(document);
