@@ -302,6 +302,11 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
       logWarn(
         `node workspace command failed (${params.command}, ${code}): ${boundedWorkerError(message, WORKSPACE_DIAGNOSTIC_MAX_CHARS)}`,
       );
+    } else if (code === "UNAVAILABLE") {
+      // The caller only sees the generic message; keep the original failure in the node log.
+      logWarn(
+        `node worker supervisor command failed (${params.command}, ${code}): ${boundedWorkerErrorWithCode(error, WORKSPACE_DIAGNOSTIC_MAX_CHARS)}`,
+      );
     }
     return { handled: true as const, ok: false as const, code, message };
   }

@@ -859,6 +859,34 @@ setInterval(() => {}, 1000);
     expect(message.length).toBeLessThan(256);
   });
 
+  it("logs the original supervisor failure while returning only the generic error", async () => {
+    const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const supervisor = supervisorWith(fullReceipt());
+    supervisor.status.mockRejectedValueOnce(
+      new Error(`TEST_NODE_WORKER_SUPERVISOR_FAILURE Authorization: Bearer ${secret}`),
+    );
+    try {
+      const { result } = await invokePrivate({
+        command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+        paramsJSON: JSON.stringify({ launchId: "launch-1" }),
+        supervisor,
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "node worker supervisor command failed" },
+      });
+      expect(warn).toHaveBeenCalledOnce();
+      const logged = String(warn.mock.calls[0]?.[0]);
+      expect(logged).toContain(NODE_WORKER_SUPERVISOR_STATUS_COMMAND);
+      expect(logged).toContain("TEST_NODE_WORKER_SUPERVISOR_FAILURE");
+      expect(logged).not.toContain(secret);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("preserves a terminal capacity result across node invoke", async () => {
     const input = launchInput();
     const supervisor = supervisorWith(fullReceipt(input));
