@@ -111,6 +111,20 @@ describe("ClickClack discussion state persistence", () => {
     }
   });
 
+  it("does not create a remote channel when installation persistence fails", async () => {
+    const harness = createHarness({ label: "Unpersisted installation" });
+    const failure = new Error("installation store unavailable");
+    harness.runtime.state.openKeyedStoreV2 = () => {
+      throw failure;
+    };
+    const service = new ClickClackDiscussionService(harness.runtime, {
+      clientFactory: () => harness.client,
+    });
+
+    await expect(service.open("agent:main:unpersisted-installation")).rejects.toBe(failure);
+    expect(harness.createChannel).not.toHaveBeenCalled();
+  });
+
   it("requires a durable installation identity after successful registration", async () => {
     const harness = createHarness({ label: "Missing durable installation" });
     const openStore = harness.runtime.state.openKeyedStoreV2;
