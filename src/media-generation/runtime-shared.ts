@@ -282,10 +282,14 @@ function prepareCapabilityModelCandidates(params: CapabilityModelCandidatesParam
     // auto provider fallback candidates.
     return { candidates: [override], add };
   }
+  if (normalizeOptionalString(params.modelOverride)) {
+    throw new Error(
+      `Unknown model override: ${params.modelOverride}. Use a provider/model reference or a model listed by a provider.`,
+    );
+  }
 
   // Cross-provider fallback is a fixed product policy; Doctor removes the retired opt-out.
   const autoProviderFallbackEnabled = params.autoProviderFallback ?? true;
-  add(params.modelOverride, true);
   add(resolveAgentModelPrimaryValue(params.modelConfig), autoProviderFallbackEnabled);
   for (const fallback of resolveAgentModelFallbackValues(params.modelConfig)) {
     add(fallback, autoProviderFallbackEnabled);

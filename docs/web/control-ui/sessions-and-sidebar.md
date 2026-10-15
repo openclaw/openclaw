@@ -27,7 +27,9 @@ The icon rail stays separate from the selected navigation list. **Pages** opens
 available built-in pages, dashboards, and plugin destinations, **Sessions** opens conversations,
 and **Users** opens the people list. Its header selects **Online** (the default)
 or **All users**, including offline profiles from the authorized user directory.
-The header is a filter, not a collapse control. Hover or focus an icon for its name.
+The header is a filter, not a collapse control. Pages always hides dashboards from
+archived sessions and has no archive toggle. To find archived sessions in the
+sidebar, use the **Sessions** filter instead. Hover or focus an icon for its name.
 The active agent's avatar sits at the top of the rail and opens the agent menu;
 in team mode it opens the workspace menu. The accented **+**, labeled **New conversation**,
 sits directly below the avatar, separated from navigation by a divider. It stays in
@@ -190,6 +192,13 @@ Tab completes a folder name. If the starting workspace does not exist yet, Brows
 opens the home folder. Errors for paths you enter remain visible.
 
 For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, thinking, and fast-mode choices. New sessions restore the last fast-mode choice, including an explicit off choice, for supported providers. The new-session picker also shows recent projects and folders derived only from sessions created by that profile. These conveniences follow the person across browsers; they do not grant access to a project or path.
+
+For a selected project, **Checkout** uses the Gateway's availability decision for
+the chosen agent. If Current checkout is unavailable and a managed checkout is
+allowed, New session selects **New worktree** before submission. **Current checkout**
+stays visible but disabled with an explanation. Allowed saved choices stay selected;
+an unavailable saved choice is corrected without clearing your prompt, model, or
+effort. The Gateway checks access again when the session is created.
 
 Guests with session access can save these choices in their own profile without
 broader Gateway write permission. This does not allow changing another person's

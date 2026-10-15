@@ -67,7 +67,7 @@ function reader(f: Fixture) {
       sessionId: f.scope.sessionId,
     });
     if (!retained) {
-      throw new Error("Actor did not publish its context metadata receipt");
+      throw new Error("Actor did not publish its projection receipt");
     }
     return retained;
   };
@@ -75,7 +75,7 @@ function reader(f: Fixture) {
     replica,
     receipt,
     install() {
-      expect(replica.beginRead().install(f.read())).toBe(true);
+      expect(replica.beginRead()(f.read())).toBe(true);
     },
     accounting: () =>
       withSessionTranscriptProjectionReceipt({ ...receipt(), contextOnly: true }, () =>
@@ -96,13 +96,13 @@ function reader(f: Fixture) {
   };
 }
 
-it("publishes rewritten stored bytes after cold hydration and preserves committed totals on rollback", async () => {
+it("reads rewritten stored bytes from compact receipts and preserves committed totals on rollback", async () => {
   await withActor((f) => {
     const { header, questionJson } = seed(f, true);
     const context = reader(f);
     try {
       context.install();
-      expect(context.receipt().facts.contextMetadata).toBeDefined();
+      expect(context.receipt().facts.contextMetadata).toBeUndefined();
       expect(context.accounting()).toMatchObject({
         kind: "value",
         value: {
@@ -120,8 +120,8 @@ it("publishes rewritten stored bytes after cold hydration and preserves committe
           { seq: 1, expectedEventJson: questionJson, event: rewritten },
         ]);
       });
-      // Consume the commit publication directly, without an actor read to refresh its bytes.
-      expect(context.receipt().facts.contextMetadata).toBeDefined();
+      // The compact publication advances version facts; readers own stored byte selection.
+      expect(context.receipt().facts.contextMetadata).toBeUndefined();
       const expected = { eventCount: 2, byteSize: storedBytes(rewritten) + storedBytes(answer) };
       expect(context.accounting()).toMatchObject({ kind: "value", value: expected });
       expect(context.bounded()).toMatchObject({
@@ -154,14 +154,14 @@ it("publishes rewritten stored bytes after cold hydration and preserves committe
 });
 
 it.each(["reset", "compaction", "leaf"] as const)(
-  "falls back to the durable context after %s changes the active window",
+  "reads the durable context after %s changes the active window",
   async (kind) => {
     await withActor((f) => {
       const { header } = seed(f);
       const context = reader(f);
       try {
         context.install();
-        expect(context.receipt().facts.contextMetadata).toBeDefined();
+        expect(context.receipt().facts.contextMetadata).toBeUndefined();
         const control =
           kind === "leaf"
             ? { type: kind, id: "control", parentId: "answer", targetId: "question" }

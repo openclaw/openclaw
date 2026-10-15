@@ -83,6 +83,8 @@ export function resolveExtraParams(params: {
     });
   const sources = [defaultParams, modelParams, agentModelParams, agentParams];
   const merged = Object.assign({}, ...sources);
+  canonicalizeExtraParamAlias(merged, sources, ["serviceTier", "service_tier"]);
+  canonicalizeExtraParamAlias(merged, sources, ["fastMode", "fast_mode"]);
   canonicalizeExtraParamAlias(merged, sources, ["parallel_tool_calls", "parallelToolCalls"]);
   canonicalizeExtraParamAlias(
     merged,
@@ -146,6 +148,12 @@ export function resolvePreparedExtraParams(params: {
     ...sanitizeExtraParamsRecord(resolvedExtraParams),
     ...override,
   };
+  canonicalizeExtraParamAlias(
+    merged,
+    [resolvedExtraParams, override],
+    ["serviceTier", "service_tier"],
+  );
+  canonicalizeExtraParamAlias(merged, [resolvedExtraParams, override], ["fastMode", "fast_mode"]);
   canonicalizeMaxTokensParam({
     merged,
     sources: [resolvedExtraParams, override],

@@ -3758,7 +3758,7 @@ td.data-table-key-col {
   display: flex;
   max-height: var(--openclaw-modal-height-limit);
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-xl);
   background: color-mix(in srgb, var(--card) 96%, black 4%);
