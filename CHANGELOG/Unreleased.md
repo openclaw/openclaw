@@ -2,4 +2,4 @@
 
 ### Fixes
 
-- GitHub maintenance: retain stale PR warning receipts when the 100-label limit prevents labeling, continue scanning, and verify scan checkpoints against the same cache backend and ref used to save them.
+- GitHub maintenance: retain stale PR warning receipts when the 100-label limit prevents labeling and continue scanning without removing existing labels or repeating warnings.
