@@ -123,7 +123,12 @@ describe("transcript media block spacing", () => {
       const images = Array.from(
         container.querySelectorAll<HTMLImageElement>("img.chat-message-image"),
       );
-      await Promise.all(images.map((element) => element.decode()));
+      // Admit each lazy image through the viewport before awaiting its decode.
+      // The last media block can be below Chromium's loading margin.
+      for (const element of images) {
+        element.scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
+        await element.decode();
+      }
       expectRhythm(container, 11);
       if (streaming) {
         for (const isStreaming of [true, false]) {

@@ -262,11 +262,17 @@ describe("shared chat content column", () => {
                   ),
                 ];
                 expect(images.length, `${context}: ${key} image count`).toBe(count);
-                await expect
-                  .poll(() =>
-                    images.every((element) => element.complete && element.naturalWidth > 0),
-                  )
-                  .toBe(true);
+                // Production defers offscreen images; exercise their viewport admission
+                // before checking decoded geometry rather than requiring eager downloads.
+                for (const element of images) {
+                  element.scrollIntoView({
+                    block: "center",
+                    inline: "nearest",
+                    behavior: "instant",
+                  });
+                  await element.decode();
+                  expect(element.naturalWidth).toBeGreaterThan(0);
+                }
               }
               for (const selector of [".code-block-wrapper", ".markdown-table"]) {
                 const block = container.querySelector(selector)!;

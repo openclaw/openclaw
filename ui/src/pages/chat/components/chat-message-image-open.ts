@@ -9,6 +9,7 @@ import {
 } from "./chat-message-attachment-availability.ts";
 import {
   resolveManagedImageResource,
+  readCachedManagedImageUrl,
   loadManagedImageBlob,
   managedImageInlineVariant,
 } from "./chat-message-image-loading.ts";
@@ -65,7 +66,9 @@ export async function loadGalleryImage(
       image.url,
       opts,
       image.artifactId,
-      original ? "full" : managedImageInlineVariant(image),
+      original || readCachedManagedImageUrl(image.url, opts, image.artifactId, "full")
+        ? "full"
+        : managedImageInlineVariant(image),
       retryFailed,
       chatImageRenditionWidth("viewer"),
     );

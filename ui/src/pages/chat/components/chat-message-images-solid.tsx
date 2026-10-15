@@ -348,7 +348,10 @@ class MessageImagePresentation {
     element.className = "chat-message-image";
     element.referrerPolicy = "no-referrer";
     element.decoding = "async";
-    element.loading = "lazy";
+    // Local bytes and a mounted handoff are already admitted. Deferring their
+    // replacement decode can introduce blank frames during custody updates.
+    element.loading =
+      isInlineImageSource(url) || this.retained?.status === "retaining" ? "eager" : "lazy";
     if (url.includes("&variant=thumbnail&width=")) {
       // Signed native requests let the browser choose density and apply its own
       // data-saving policy; authenticated blob requests select a bounded tier above.
@@ -611,6 +614,10 @@ function ImageFrame(props: {
   const compact = () => props.model.state === "unavailable";
   const pending = () => props.model.state === "loading";
   const loadOriginal = () => readImageOriginalBlob(image(), props.options);
+  // Native previews use the viewer’s file controls. Show their inline menu only
+  // when a failed preview cannot open that viewer, never over retained pixels.
+  const hasFileActions = () =>
+    props.model.managed || (compact() && isLocalAssistantAttachmentSource(image().url ?? ""));
   // A mounted preview keeps its initial frame when the upload receipt adds dimensions.
   // Fresh history mounts use those durable dimensions; older facts retain a stable fallback.
   const dimensions = untrack(() => resolveChatImagePreviewSize(props.model.image));
@@ -668,11 +675,7 @@ function ImageFrame(props: {
           </button>
         </span>
       </Show>
-      <Show
-        when={
-          !pending() && (props.model.managed || isLocalAssistantAttachmentSource(image().url ?? ""))
-        }
-      >
+      <Show when={!pending() && hasFileActions()}>
         <ChatImageActions title={title()} readOriginalBlob={loadOriginal} />
       </Show>
     </span>

@@ -439,7 +439,7 @@ it.each([
   },
 );
 
-it("downloads reference-only images through the shared inline bytes path with their agent", async () => {
+it("loads bounded reference-only previews through the shared RPC path with their agent", async () => {
   vi.useFakeTimers();
   try {
     const artifact = {
@@ -452,7 +452,11 @@ it("downloads reference-only images through the shared inline bytes path with th
     const request = vi.fn(async (method: string) =>
       method === "artifacts.list"
         ? { artifacts: [artifact, artifact] }
-        : { artifact, encoding: "base64", data: "cG5n" },
+        : {
+            artifact: { ...artifact, mimeType: "image/webp" },
+            encoding: "base64",
+            data: "cHJldmlldw==",
+          },
     );
     const { row } = mountMedia(request, { sessionKey: "global", agentId: "work" });
     await row.updateComplete;
@@ -465,6 +469,7 @@ it("downloads reference-only images through the shared inline bytes path with th
         sessionKey: "global",
         agentId: "work",
         artifactId: "reference-image",
+        previewWidth: 480,
       },
       { timeoutMs: 30_000 },
     );
@@ -472,8 +477,8 @@ it("downloads reference-only images through the shared inline bytes path with th
     const imageSource = row.querySelector("img")!.src;
     expect(imageSource).toMatch(/^blob:/);
     const downloaded = await fetch(imageSource);
-    expect(downloaded.headers.get("content-type")).toBe("image/png");
-    expect(await downloaded.text()).toBe("png");
+    expect(downloaded.headers.get("content-type")).toBe("image/webp");
+    expect(await downloaded.text()).toBe("preview");
     expect(row.querySelector("img")?.getAttribute("alt")).toBe("Inline screenshot");
   } finally {
     vi.useRealTimers();
