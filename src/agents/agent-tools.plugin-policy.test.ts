@@ -3,11 +3,11 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayMethodOwner } from "../gateway/methods/descriptor.js";
 import { createGatewayMethodRegistry } from "../gateway/methods/registry.js";
+import { authorizeGatewayRequestPreDispatch } from "../gateway/server-methods/request-authorization.js";
 import {
   createContext,
   createOperatorClient,
 } from "../gateway/server-plugin-in-process-dispatch.test-support.js";
-import { prepareGatewaySessionAccessAuthority } from "../gateway/session-access-authority.js";
 import { bindSessionRowProjection } from "../gateway/session-row-projection-access.js";
 import type { SessionRowProjection } from "../gateway/session-row-projection.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -47,8 +47,7 @@ import {
 const browserRuntime = vi.hoisted(() => ({ execute: vi.fn() }));
 const readPublicItem = vi.fn<AnyAgentTool["execute"]>();
 
-// Browser I/O is external to the captured policy boundary; registration, acquisition,
-// assembly, metadata propagation, dispatch and caller composition remain real.
+// mock-isolation: Keep browser I/O and service lifetime isolated while exercising real registration.
 vi.mock("../../extensions/browser/register.runtime.js", () => ({
   createBrowserTool: () => ({ execute: browserRuntime.execute }),
   hasBrowserNodeHostWork: () => false,
@@ -106,7 +105,7 @@ function assemble(allow: string[], deny: string[] = []) {
     cliBackends: [],
     hooks: [],
     skills: [],
-    contracts: { tools: [toolName] },
+    contracts: { tools: id === "fixture-reader" ? ["select_public_item", toolName] : [toolName] },
   }));
   for (const manifest of manifests) {
     const record = createPluginRecord({
@@ -125,13 +124,16 @@ function assemble(allow: string[], deny: string[] = []) {
       manifest.id === "browser"
         ? registerBrowserPlugin
         : (pluginApi) => {
-            pluginApi.registerTool({
-              name: "Read_Public_Item",
-              label: "Read public item",
-              description: "Read a public fixture item",
-              parameters: { type: "object", properties: {} },
-              execute: readPublicItem,
-            });
+            pluginApi.registerTool(
+              () => ({
+                name: "Read_Public_Item",
+                label: "Read public item",
+                description: "Read a public fixture item",
+                parameters: { type: "object", properties: {} },
+                execute: readPublicItem,
+              }),
+              { names: ["select_public_item"], workspaceAccess: "execute" },
+            );
             pluginApi.registerGatewayMethod("fixture-reader.read", () => {}, {
               scope: "operator.write",
               sessionAccess: {
@@ -211,6 +213,8 @@ async function prepareResourceFixture(
     methodOwner?: GatewayMethodOwner;
     toolName?: "browser" | "Read_Public_Item";
     allow?: string[];
+    unrelatedAmbientRegistry?: boolean;
+    missingSelectedRegistration?: boolean;
   } = {},
 ) {
   const toolName = options.toolName ?? "browser";
@@ -240,9 +244,13 @@ async function prepareResourceFixture(
   } as unknown as SessionRowProjection;
   const context = bindSessionRowProjection(createContext(), () => projection);
   context.getRuntimeConfig = () => config;
+  const emptyRegistry = createRuntimeTestRegistry(createPluginRuntime()).registry;
+  registries.push(emptyRegistry);
   const methodRegistry = createGatewayMethodRegistry(
-    assembled.registry.gatewayMethodDescriptors,
-    assembled.registry,
+    assembled.registry.gatewayMethodDescriptors.map((descriptor) =>
+      options.methodOwner ? { ...descriptor, owner: options.methodOwner } : descriptor,
+    ),
+    options.missingSelectedRegistration ? emptyRegistry : assembled.registry,
   );
   context.getGatewayMethodRegistry = () => methodRegistry;
   const client = createOperatorClient({ profileId: "alice", scopes: ["operator.sessions.write"] });
@@ -275,14 +283,24 @@ async function prepareResourceFixture(
   const effect = vi.fn();
   const execute = toolName === "browser" ? browserRuntime.execute : readPublicItem;
   execute.mockImplementation(async () => {
-    const { authority } = await prepareGatewaySessionAccessAuthority({
-      policy,
-      methodOwner: options.methodOwner ?? descriptor.owner,
-      requestParams: { agentId: "main", sessionKey },
-      client,
-      context,
-      ownSessionOnly: true,
-    });
+    const authorization = await withPluginRuntimeRegistryScope(
+      options.unrelatedAmbientRegistry ? emptyRegistry : assembled.registry,
+      () =>
+        authorizeGatewayRequestPreDispatch({
+          method: methodName,
+          methodRegistry,
+          requestParams: { agentId: "main", sessionKey },
+          client,
+          context,
+        }),
+    );
+    if (authorization.error) {
+      throw new Error(authorization.error.message);
+    }
+    const authority = authorization.sessionAccessAuthority;
+    if (!authority) {
+      throw new Error("Session access authority is missing");
+    }
     try {
       beforeEffect();
       authority.assertCurrent();
@@ -298,7 +316,7 @@ async function prepareResourceFixture(
     beforeEffect(callback: () => void) {
       beforeEffect = callback;
     },
-    denyBrowser(deny = "browser") {
+    denyTool(deny: string) {
       config = { ...config, tools: { ...config.tools, deny: [deny] } };
     },
     execute(route: "direct" | "dispatch_action", assertToolAllowed?: (name: string) => void) {
@@ -428,15 +446,38 @@ describe("captured registered plugin tool policy", () => {
     expect(fixture.effect).not.toHaveBeenCalled();
   });
 
-  it.each(["browser", "group:plugins"])(
-    "rechecks current %s denial before browser effects",
-    async (deny) => {
-      const fixture = await prepareResourceFixture();
-      fixture.beforeEffect(() => fixture.denyBrowser(deny));
+  it.each([
+    { toolName: "browser", deny: "browser" },
+    { toolName: "browser", deny: "group:plugins" },
+    { toolName: "Read_Public_Item", deny: "fixture-reader" },
+    { toolName: "Read_Public_Item", deny: "group:plugins" },
+  ] as const)(
+    "rechecks current $deny denial before $toolName effects",
+    async ({ toolName, deny }) => {
+      const fixture = await prepareResourceFixture({
+        toolName,
+        allow: toolName === "browser" ? [toolName] : [toolName, "select_public_item"],
+        unrelatedAmbientRegistry: true,
+      });
+      fixture.beforeEffect(() => fixture.denyTool(deny));
       await expect(fixture.execute("direct")).rejects.toThrow("current tool policy does not allow");
       expect(fixture.effect).not.toHaveBeenCalled();
     },
   );
+
+  it("uses selected method registration when the ambient registry differs", async () => {
+    const fixture = await prepareResourceFixture({ unrelatedAmbientRegistry: true });
+    await expect(fixture.execute("direct")).resolves.toMatchObject({
+      details: { allowed: "browser" },
+    });
+    expect(fixture.effect).toHaveBeenCalledOnce();
+  });
+
+  it("does not borrow registration from the ambient registry", async () => {
+    const fixture = await prepareResourceFixture({ missingSelectedRegistration: true });
+    await expect(fixture.execute("direct")).rejects.toThrow("current tool policy does not allow");
+    expect(fixture.effect).not.toHaveBeenCalled();
+  });
 
   it.each<GatewayMethodOwner>([
     { kind: "core", area: "fixture" },

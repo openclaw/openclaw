@@ -6,7 +6,7 @@ import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
-import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { parseAgentSessionKey, isIncognitoSessionKey } from "../routing/session-key.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -77,6 +77,7 @@ class SessionAccessPreparationPendingError extends SessionMutationAuthorizationC
 export async function prepareGatewaySessionAccessAuthority(request: {
   policy: GatewayMethodSessionAccess;
   methodOwner?: GatewayMethodOwner;
+  pluginRegistry?: PluginRegistry;
   requestParams: unknown;
   client: GatewayClient | null;
   context: GatewayRequestContext;
@@ -98,12 +99,10 @@ export async function prepareGatewaySessionAccessAuthority(request: {
   const toolMeta =
     pluginId &&
     requiredToolName &&
-    getPluginRegistryForContext()?.tools.some(
+    params.pluginRegistry?.tools.some(
       (entry) =>
         entry.pluginId === pluginId &&
-        (entry.names.length > 0
-          ? entry.names.includes(requiredToolName)
-          : entry.declaredNames?.has(requiredToolName)),
+        (entry.declaredNames?.has(requiredToolName) ?? entry.names.includes(requiredToolName)),
     )
       ? { pluginId }
       : undefined;
