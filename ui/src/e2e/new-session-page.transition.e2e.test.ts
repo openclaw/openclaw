@@ -158,7 +158,9 @@ suite.define(() => {
             .locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`)
             .isVisible(),
         ).toBe(true);
-        await page.keyboard.press("Escape");
+        await page
+          .locator(".shell-nav-backdrop")
+          .click({ position: { x: viewport.width - 10, y: 100 } });
         await expect
           .poll(() => page.locator(".shell").getAttribute("class"))
           .not.toContain("shell--nav-drawer-open");

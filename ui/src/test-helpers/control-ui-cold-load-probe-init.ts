@@ -11,7 +11,7 @@ export type SolidSidebarProbeOwner = {
 };
 export type SidebarLifecycle = "requestUpdate" | "prepareRender" | "commitRender";
 export type ProbeMethod = (...args: unknown[]) => unknown;
-export type ChatMethod =
+type ChatMethod =
   | "requestUpdate"
   | "performUpdate"
   | "render"
