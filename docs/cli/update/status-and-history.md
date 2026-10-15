@@ -105,6 +105,9 @@ ledger after the last repair pass. Completed obligations leave the final summary
 and persisted warning steps; pending obligations keep their retry command.
 If the ledger cannot be read, the summary retains the warnings. Messages already
 printed during an earlier phase can remain in the terminal scrollback.
+Repeated warnings appear once in the final report. If update Doctor deferred
+agent database path repair to preserve the rollback inventory, its warning points
+to `openclaw doctor --fix` without telling you to wait for the completed update.
 
 When the Gateway is reachable, status also reads its recorded channel warnings
 without checking channel services. JSON exposes these as `channelIssues`. This
