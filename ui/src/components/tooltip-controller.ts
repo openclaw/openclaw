@@ -697,13 +697,13 @@ export class TooltipController {
     }
   };
 
-  focusTriggerWithoutOpening(target: HTMLElement) {
+  focusTriggerWithoutOpening(target: HTMLElement, options?: FocusOptions) {
     if (this.#triggerElement?.contains(target) && !target.matches(":focus")) {
       // Navigation can replace a focused toggle with its inverse. Preserve the
       // focus handoff without presenting it as fresh tooltip intent.
       this.#suppressNextFocusOpen = true;
     }
-    target.focus();
+    target.focus(options);
   }
 }
 

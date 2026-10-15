@@ -25,7 +25,7 @@ import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { renderAsyncQuestionSummary } from "./chat-async-question.ts";
 import "../../../components/person-reference.ts";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
-import { renderChatPermissionCard } from "./chat-divider.ts";
+import { ChatPermissionCard } from "./chat-divider.tsx";
 import { OmittedMedia } from "./chat-message-attachment-status-solid.tsx";
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
@@ -577,7 +577,7 @@ function ToolMessage(props: ContentProps) {
       }
     >
       {(request) => (
-        <LitContent value={renderChatPermissionCard(request(), props.options.onPermissionRetry)} />
+        <ChatPermissionCard request={request()} onRetry={props.options.onPermissionRetry} />
       )}
     </Show>
   );

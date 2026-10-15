@@ -32,7 +32,6 @@ import {
 } from "../../../infra/sqlite-worker-identity.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent-db-readonly.js";
-import { hasOpenClawAgentCanonicalValidation } from "../../../state/openclaw-agent-db-validation-cache.js";
 import {
   runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAsync,
@@ -93,14 +92,6 @@ export async function repairLegacySessionRunOutcomes(
   assertCurrent: () => void,
 ): Promise<number> {
   assertCurrent();
-  const readiness = withOpenClawAgentDatabaseReadOnly(
-    hasOpenClawAgentCanonicalValidation,
-    toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey: "" })),
-  );
-  // Canonical writers reject legacy outcomes; offline imports revoke this receipt.
-  if (readiness.found && readiness.value) {
-    return 0;
-  }
   const expectedIdentity = readDatabasePathIdentitySync(scope.storePath);
   const sessionKeys: string[] = [];
   scanDoctorSessionEntryRecords(
