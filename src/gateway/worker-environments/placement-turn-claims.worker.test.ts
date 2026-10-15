@@ -559,6 +559,31 @@ it.each(["committed", "unknown"] as const)(
   },
 );
 
+it.each(["committed", "unknown"] as const)(
+  "publishes local release facts before observers across %s settlement",
+  async (outcome) => {
+    const requested = input(`release-projection-${outcome}`);
+    const claim = await placements.claimTurn(requested);
+    await placements.readProjection([requested.sessionId]);
+    const snapshots: ReturnType<typeof placements.readPublishedProjection>[] = [];
+    const stop = sessionChanges.subscribeProjection((change) => {
+      if ("sessionKey" in change && change.sessionKey === requested.sessionKey) {
+        snapshots.push(placements.readPublishedProjection(change));
+      }
+    });
+    const corrupted = losePlacementReply(requested.sessionId, outcome);
+    try {
+      await expect(placements.releaseTurn(claim)).resolves.toMatchObject({ turnClaim: null });
+      expect(corrupted()).toBe(1);
+      expect(snapshots).toHaveLength(1);
+      expect(snapshots[0]?.placements.get(requested.sessionId)?.turnClaim).toBeNull();
+      expect(placements.get(requested.sessionId)?.turnClaim).toBeNull();
+    } finally {
+      stop();
+    }
+  },
+);
+
 it("replays the same local claim without replacing its identity or a successor", async () => {
   const requested = input("idempotent");
   const claim = await placements.claimTurn(requested);
@@ -648,7 +673,7 @@ it("preserves same-session FIFO and cannot conditionally release a successor", a
   await placements.releaseTurn(next);
 });
 
-it("rolls back claim admission when live authority is revoked at commit", async () => {
+it("refuses a local claim before its effect when live authority is revoked", async () => {
   let revoked = false;
   probe.admission(operationAdmission, (request, grant, admit) => {
     if (request.stage === "commit") {
@@ -665,38 +690,6 @@ it("rolls back claim admission when live authority is revoked at commit", async 
   ).rejects.toThrow("synthetic placement admission revoked");
   expect(revoked).toBe(true);
   expect(await placements.getAsync("placement-worker-refused")).toBeUndefined();
-});
-
-it("fences retained authority before release commit and closes observers after settlement", async () => {
-  const claim = await placements.claimTurn(input("authority"));
-  const authority = await placements.prepareTurnClaimAuthority(claim);
-  const revoked = vi.fn();
-  const closed = vi.fn();
-  const unsubscribe = placements.registerTurnClaimClosedHandler(closed);
-  authority.onRevoked(revoked);
-  let commitObservation: { current: boolean; revoked: number; closed: number } | undefined;
-  probe.admission(operationAdmission, (request, grant, admit) => {
-    admit(request, grant);
-    if (request.stage === "commit") {
-      commitObservation = {
-        current: authority.isCurrent(),
-        revoked: revoked.mock.calls.length,
-        closed: closed.mock.calls.length,
-      };
-    }
-  });
-  try {
-    const released = placements.waitForTurnClaimRelease(claim.sessionId, {});
-    await placements.releaseTurn(claim);
-    await released;
-    expect(commitObservation).toEqual({ current: false, revoked: 0, closed: 0 });
-    expect(authority.isCurrent()).toBe(false);
-    expect(revoked).toHaveBeenCalledOnce();
-    expect(closed).toHaveBeenCalledExactlyOnceWith(claim);
-  } finally {
-    unsubscribe();
-    authority.release();
-  }
 });
 
 it.each(["claim", "staged result", "workspace manifest"] as const)(
@@ -839,7 +832,7 @@ it("keeps a later same-byte native claim authoritative when the old release repl
   }
 });
 
-it.each(["precommit contention", "authority", "entered writer"] as const)(
+it.each(["precommit contention", "authority"] as const)(
   "settles failed local startup without replaying it after %s",
   async (failure) => {
     const retryable = failure === "precommit contention";
@@ -861,7 +854,7 @@ it.each(["precommit contention", "authority", "entered writer"] as const)(
       vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
         (admit, attachment) =>
           createAdmission((request, grant) => {
-            if (request.stage === (failure === "entered writer" ? "commit" : "transaction")) {
+            if (request.stage === "commit") {
               throw refused;
             }
             admit(request, grant);
