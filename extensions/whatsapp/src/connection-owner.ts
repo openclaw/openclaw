@@ -27,12 +27,25 @@ export class WhatsAppConnectionOwnerBusyError extends Error {
 
 export type WhatsAppConnectionOwnerLease = Pick<FileLockHandle, "release">;
 
+export type WhatsAppGatewayConnectionOwnerLease = WhatsAppConnectionOwnerLease & {
+  /**
+   * Registers how to finish this holder's unfinished cleanup and release the lease.
+   * A later Gateway acquisition for the same auth directory runs it instead of waiting
+   * on a holder that has already exited. It must do nothing while the holder is healthy.
+   */
+  setCleanupRetry: (retry: () => Promise<void>) => void;
+};
+
 const OWNER_LOCK_STALE_MS = 5 * 60_000;
 const GATEWAY_LOCAL_OWNER_WAIT_MS = 150_000;
+const INCUMBENT_CLEANUP_RETRY_MS = 5_000;
 
 type ProcessOwner = {
   released: Promise<void>;
   resolveReleased: () => void;
+  retryCleanup: (() => Promise<void>) | null;
+  cleanupAttempt: Promise<void> | null;
+  lastCleanupError: unknown;
 };
 
 const processOwners = new Map<string, ProcessOwner>();
@@ -47,12 +60,43 @@ function ownershipCancelledError(signal?: AbortSignal): Error {
       );
 }
 
+// Single-flight so concurrent replacements never run the incumbent's cleanup twice.
+function startIncumbentCleanup(owner: ProcessOwner): void {
+  const retry = owner.retryCleanup;
+  if (!retry || owner.cleanupAttempt) {
+    return;
+  }
+  // Start through a promise so a synchronous throw is handled like a rejection.
+  const attempt = Promise.resolve()
+    .then(retry)
+    .then(
+      () => {
+        // A retry that returns without releasing leaves the replacement waiting; say so.
+        owner.lastCleanupError = owner.retryCleanup
+          ? new Error("WhatsApp connection owner still holds this account")
+          : undefined;
+      },
+      (error: unknown) => {
+        // The incumbent keeps ownership until its own cleanup succeeds.
+        owner.lastCleanupError = error;
+      },
+    );
+  const settled = attempt.finally(() => {
+    if (owner.cleanupAttempt === settled) {
+      owner.cleanupAttempt = null;
+    }
+  });
+  owner.cleanupAttempt = settled;
+}
+
 async function reserveProcessOwner(params: {
   authDir: string;
   ownerPath: string;
   signal?: AbortSignal;
   waitForLocalOwner: boolean;
 }): Promise<ProcessOwner> {
+  let waitingOn: ProcessOwner | undefined;
+  let deadline = 0;
   while (true) {
     if (params.signal?.aborted) {
       throw ownershipCancelledError(params.signal);
@@ -63,6 +107,9 @@ async function reserveProcessOwner(params: {
       const owner: ProcessOwner = {
         released: released.promise,
         resolveReleased: released.resolve,
+        retryCleanup: null,
+        cleanupAttempt: null,
+        lastCleanupError: undefined,
       };
       processOwners.set(params.ownerPath, owner);
       return owner;
@@ -70,17 +117,29 @@ async function reserveProcessOwner(params: {
     if (!params.waitForLocalOwner) {
       throw new WhatsAppConnectionOwnerBusyError(params.authDir);
     }
+    if (waitingOn !== current) {
+      // Each incumbent gets the full wait budget, as before the cleanup retry existed.
+      waitingOn = current;
+      deadline = Date.now() + GATEWAY_LOCAL_OWNER_WAIT_MS;
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new WhatsAppConnectionOwnerBusyError(
+        params.authDir,
+        current.lastCleanupError === undefined ? undefined : { cause: current.lastCleanupError },
+      );
+    }
+    // A failed incumbent shutdown leaves its lease held with no other caller able to
+    // finish it, so the replacement drives that cleanup and waits for the release.
+    startIncumbentCleanup(current);
     const outcome = await raceWithTimeout(
       current.released.then(() => "released" as const),
-      GATEWAY_LOCAL_OWNER_WAIT_MS,
+      Math.min(remainingMs, INCUMBENT_CLEANUP_RETRY_MS),
       (): "timed_out" | "aborted" => "timed_out",
       { ref: false, signal: params.signal, onAbort: () => "aborted" },
     );
     if (outcome === "aborted") {
       throw ownershipCancelledError(params.signal);
-    }
-    if (outcome === "timed_out") {
-      throw new WhatsAppConnectionOwnerBusyError(params.authDir);
     }
   }
 }
@@ -90,6 +149,7 @@ function abandonProcessOwner(ownerPath: string, owner: ProcessOwner): void {
     return;
   }
   processOwners.delete(ownerPath);
+  owner.retryCleanup = null;
   owner.resolveReleased();
 }
 
@@ -98,7 +158,7 @@ async function acquireOwnerLease(params: {
   retries: number;
   signal?: AbortSignal;
   waitForLocalOwner: boolean;
-}): Promise<WhatsAppConnectionOwnerLease> {
+}): Promise<WhatsAppGatewayConnectionOwnerLease> {
   const resolvedOwnerPath = resolveUserPath(params.authDir);
   await fs.mkdir(resolvedOwnerPath, { recursive: true });
   const ownerPath = await fs.realpath(resolvedOwnerPath);
@@ -147,6 +207,11 @@ async function acquireOwnerLease(params: {
   }
   let releasePromise: Promise<void> | null = null;
   return {
+    setCleanupRetry: (retry) => {
+      if (processOwners.get(ownerPath) === processOwner) {
+        processOwner.retryCleanup = retry;
+      }
+    },
     release: async () => {
       if (!releasePromise) {
         releasePromise = fileLock
@@ -168,7 +233,7 @@ async function acquireOwnerLease(params: {
 export async function acquireWhatsAppGatewayConnectionOwner(
   authDir: string,
   signal?: AbortSignal,
-): Promise<WhatsAppConnectionOwnerLease> {
+): Promise<WhatsAppGatewayConnectionOwnerLease> {
   // Gateway lifecycle stops an account before restarting it. A timed-out incumbent
   // must keep same-auth restarts blocked; handoff would permit concurrent sockets.
   return await acquireOwnerLease({ authDir, retries: 150, signal, waitForLocalOwner: true });
