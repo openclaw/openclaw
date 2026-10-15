@@ -91,7 +91,7 @@ it.each([
 it("hands the worker this command's budget anchor", async () => {
   let input: string | undefined;
   vi.mocked(runUtf8CommandWithTimeout).mockImplementation(async (_argv, options) => {
-    assert(typeof options !== "number");
+    assert(typeof options !== "number" && typeof options.input === "string");
     input = options.input;
     options.onOutputChunk?.(Buffer.from(report), "stdout");
     return workerResult();
