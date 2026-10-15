@@ -879,20 +879,26 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     {
       policy: "bun-compatible",
       config: unitConfig,
-      nodeFile: "packages/acp-core/src/error-format.test.ts",
+      nodeFiles: ["packages/acp-core/src/error-format.test.ts"],
     },
-
-    { policy: "bun-compatible", config: unitSrcConfig, nodeFile: "src/audit/audit-config.test.ts" },
+    {
+      policy: "bun-compatible",
+      config: unitSrcConfig,
+      nodeFiles: [],
+    },
   ] as const)(
     "admits qualified unit coverage while preserving $config siblings under $policy",
-    async ({ policy, config, nodeFile }) => {
+    async ({ policy, config, nodeFiles }) => {
       const bunFiles = [
         ...(config === unitConfig ? [graphemeTarget] : []),
+        "src/audit/audit-config.test.ts",
         libraryTarget,
         workerQuiescenceTarget,
+        "src/node-host/node-worker-workspace-processes.test.ts",
         workerClosingWindowTarget,
-      ];
-      const includePatterns = [...bunFiles, nodeFile];
+        "src/worker/worker-deploy-entry.test.ts",
+      ].toSorted();
+      const includePatterns = [...bunFiles, ...nodeFiles];
       const seen: Array<{ runtime: string | undefined; includes: string[] }> = [];
       await expect(
         runShardPlans(
@@ -911,29 +917,35 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         ),
       ).resolves.toBe(0);
       expect(seen).toEqual([
-        { runtime: "node", includes: [nodeFile] },
+        ...(nodeFiles.length ? [{ runtime: "node", includes: nodeFiles }] : []),
         { runtime: "bun", includes: bunFiles },
       ]);
       expect(new Set(seen.flatMap(({ includes }) => includes))).toEqual(new Set(includePatterns));
       for (const targets of [bunFiles, ...bunFiles.map((file) => [file])]) {
         expect(resolveCiTestRuntimeSelections({ targets }, policy)).toEqual([{ runtime: "bun" }]);
       }
-      expect(resolveCiTestRuntimeSelections({ targets: [nodeFile] }, policy)).toEqual([
-        { runtime: "node" },
-      ]);
+      for (const nodeFile of nodeFiles) {
+        expect(resolveCiTestRuntimeSelections({ targets: [nodeFile] }, policy)).toEqual([
+          { runtime: "node" },
+        ]);
+      }
       const full = resolveCiTestRuntimeSelections({ configs: [config] }, policy);
       expect(full).toEqual([
-        { runtime: "node", includePatterns: expect.arrayContaining([nodeFile]) },
-        { runtime: "bun", includePatterns: bunFiles },
+        ...(nodeFiles.length
+          ? [{ runtime: "node", includePatterns: expect.arrayContaining([...nodeFiles]) }]
+          : []),
+        { runtime: "bun", includePatterns: expect.arrayContaining(bunFiles) },
       ]);
+      const nodeIncludes = full.find((entry) => entry.runtime === "node")?.includePatterns ?? [];
+      const bunIncludes = full.find((entry) => entry.runtime === "bun")?.includePatterns ?? [];
       for (const file of bunFiles) {
-        expect(full[0]?.includePatterns).not.toContain(file);
+        expect(nodeIncludes).not.toContain(file);
       }
-      expect(full[0]?.includePatterns).not.toContain(bunTarget);
+      expect(nodeIncludes).not.toContain(bunTarget);
       if (config === unitSrcConfig) {
-        expect(full[0]?.includePatterns?.every((file) => file.startsWith("src/"))).toBe(true);
+        expect(bunIncludes.every((file) => file.startsWith("src/"))).toBe(true);
         expect(
-          full[0]?.includePatterns?.some(
+          bunIncludes.some(
             (file) => file.startsWith("src/acp/") || file.startsWith("src/security/"),
           ),
         ).toBe(false);

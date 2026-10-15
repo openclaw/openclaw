@@ -1,9 +1,10 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { zstdCompressSync } from "node:zlib";
+import { constants, zstdCompressSync } from "node:zlib";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "./app-server/test-support.js";
-import { readCodexRolloutSnapshot } from "./session-rollout-snapshot.js";
+import { readCodexSessionMeta } from "./session-catalog-provenance.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const meta = (id = "source", provider = "native-a") => ({
@@ -26,59 +27,60 @@ async function fixture(records: unknown[], compressed = false) {
     rolloutPath,
     selectedPath,
     write,
-    read: () =>
-      readCodexRolloutSnapshot({
-        sessionsRoot: dir,
-        rolloutPath,
-        threadId: "source",
-        assertCurrent: () => {},
-      }),
+    read: async () => {
+      const metadata = await readCodexSessionMeta(dir, rolloutPath, "source", {
+        canonicalSource: true,
+      });
+      if (!metadata) {
+        throw new Error("Rollout metadata could not be verified");
+      }
+      return metadata;
+    },
   };
 }
 
-describe("bounded native rollout snapshot", () => {
-  it("prefers the exact plain file and rejects later replacement or growth", async () => {
+describe("bounded native rollout metadata", () => {
+  it("keeps canonicalized catalog roots distinct from canonical source admission", async () => {
+    const f = await fixture([meta()]);
+    const alias = `${f.dir}.link`;
+    await fs.symlink(f.dir, alias);
+    const rolloutPath = path.join(alias, "rollout.jsonl");
+    await expect(readCodexSessionMeta(alias, rolloutPath, "source")).resolves.toEqual(
+      meta().payload,
+    );
+    await expect(
+      readCodexSessionMeta(alias, rolloutPath, "source", { canonicalSource: true }),
+    ).resolves.toBeUndefined();
+  });
+
+  it.each(["large history", "large decoder window"])(
+    "keeps ordinary catalog metadata readable with %s",
+    async (size) => {
+      const f = await fixture([meta()], true);
+      const history =
+        size === "large history"
+          ? randomBytes(9 * 1024 * 1024).toString("base64")
+          : "x".repeat(33 * 1024 * 1024);
+      await fs.writeFile(
+        f.selectedPath,
+        zstdCompressSync(encode([meta(), { type: "event_msg", payload: history }]), {
+          params: { [constants.ZSTD_c_windowLog]: 26 },
+        }),
+      );
+      await expect(readCodexSessionMeta(f.dir, f.rolloutPath, "source")).resolves.toEqual(
+        meta().payload,
+      );
+      await expect(f.read()).rejects.toThrow();
+    },
+  );
+
+  it("prefers the exact plain file", async () => {
     const f = await fixture([meta("source", "plain")]);
     await fs.writeFile(
       `${f.rolloutPath}.zst`,
       zstdCompressSync(encode([meta("source", "compressed")])),
     );
-    const snapshot = await f.read();
-    expect(snapshot.metadata.model_provider).toBe("plain");
-    await fs.appendFile(f.rolloutPath, encode([{ type: "event_msg", payload: {} }]));
-    await expect(snapshot.assertUnchanged()).rejects.toThrow(/changed/);
-    const current = await f.read();
-    await fs.rename(f.rolloutPath, `${f.rolloutPath}.old`);
-    await fs.copyFile(`${f.rolloutPath}.old`, f.rolloutPath);
-    await expect(current.assertUnchanged()).rejects.toThrow(/changed/);
-  });
-
-  it("rejects a newly materialized plain file after selecting compressed metadata", async () => {
-    const f = await fixture([meta()], true);
-    const snapshot = await f.read();
-    await fs.writeFile(f.rolloutPath, encode([meta()]));
-    await expect(snapshot.assertUnchanged()).rejects.toThrow(/changed/);
-  });
-
-  it.each(["replacement", "symlink"])("rejects root %s after observation", async (fault) => {
-    const f = await fixture([meta()]);
-    const snapshot = await f.read();
-    await fs.rename(f.dir, `${f.dir}.old`);
-    if (fault === "symlink") {
-      await fs.symlink(`${f.dir}.old`, f.dir);
-    } else {
-      await fs.mkdir(f.dir);
-      await fs.copyFile(path.join(`${f.dir}.old`, "rollout.jsonl"), f.rolloutPath);
-    }
-    await expect(snapshot.assertUnchanged()).rejects.toThrow();
-  });
-
-  it("rejects a changed timestamp even when content size and inode remain unchanged", async () => {
-    const f = await fixture([meta()]);
-    const snapshot = await f.read();
-    const before = await fs.stat(f.rolloutPath);
-    await fs.utimes(f.rolloutPath, before.atime, new Date(before.mtimeMs + 1_000));
-    await expect(snapshot.assertUnchanged()).rejects.toThrow(/changed/);
+    expect((await f.read()).model_provider).toBe("plain");
   });
 
   it.each([
@@ -113,13 +115,11 @@ describe("bounded native rollout snapshot", () => {
     }
     const read =
       fault === "outside root"
-        ? () =>
-            readCodexRolloutSnapshot({
-              sessionsRoot: path.join(f.dir, "child"),
-              rolloutPath: f.rolloutPath,
-              threadId: "source",
-              assertCurrent: () => {},
-            })
+        ? async () => {
+            if (!(await readCodexSessionMeta(path.join(f.dir, "child"), f.rolloutPath, "source"))) {
+              throw new Error("Rollout metadata could not be verified");
+            }
+          }
         : f.read;
     if (fault === "outside root") {
       await fs.mkdir(path.join(f.dir, "child"));
@@ -134,7 +134,7 @@ describe("bounded native rollout snapshot", () => {
       await invalid.write(Buffer.from([0xff, 10]));
       await expect(invalid.read()).rejects.toThrow();
       const valid = await fixture([meta()], compressed);
-      await expect(valid.read()).resolves.toMatchObject({ metadata: meta().payload });
+      await expect(valid.read()).resolves.toEqual(meta().payload);
     },
   );
 

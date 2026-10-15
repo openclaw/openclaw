@@ -405,7 +405,10 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
               </div>
 
               <div class="agent-chat__composer-input-row">
-                <div class="agent-chat__composer-combobox">
+                <div
+                  class="agent-chat__composer-combobox"
+                  data-prediction={context.predictionText ? "true" : undefined}
+                >
                   <Show when={context.draftKey} keyed>
                     {(scopeKey) => (
                       <ComposerTextarea
@@ -418,7 +421,37 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     )}
                   </Show>
                   <span class="agent-chat__composer-placeholder" aria-hidden="true">
-                    {context.dictation?.active ? "" : placeholder()}
+                    {context.dictation?.active || context.predictionText ? "" : placeholder()}
+                  </span>
+                  <Show when={context.predictionText}>
+                    <span class="agent-chat__composer-prediction" aria-hidden="true">
+                      {context.predictionText}
+                    </span>
+                    <div class="agent-chat__composer-prediction-actions">
+                      <button
+                        type="button"
+                        aria-label={t("chat.composer.usePrediction")}
+                        aria-keyshortcuts="Tab"
+                        onClick={() => context.acceptPrediction()}
+                      >
+                        <kbd>{t("chat.composer.predictionShortcut")}</kbd>{" "}
+                        {t("chat.composer.usePrediction")}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => context.dismissPrediction()}
+                        aria-label={t("chat.composer.dismissPrediction")}
+                      >
+                        {t("chat.composer.dismissPrediction")}
+                      </button>
+                    </div>
+                  </Show>
+                  <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+                    {context.predictionText
+                      ? t("chat.composer.predictionAvailable", {
+                          text: context.predictionText,
+                        })
+                      : ""}
                   </span>
                   <span
                     id={slashMenuAnnouncementId()}
@@ -573,6 +606,7 @@ function ComposerTextarea(view: {
         if (event.target !== context.state.composerTextarea || context.draftKey !== view.scopeKey) {
           return;
         }
+        context.dismissPrediction();
         const emojiWasOpen = context.state.emojiMenu.open;
         context.state.mentionMenu.close();
         context.state.emojiMenu.close();

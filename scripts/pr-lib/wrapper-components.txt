@@ -250,6 +250,7 @@ src/agents/agent-run-terminal-reply.ts
 src/agents/agent-runtime-id.ts
 src/agents/agent-scope-config.ts
 src/agents/agent-scope.ts
+src/agents/auth-profiles/authorization-contract.ts
 src/agents/auth-profiles/sqlite-json.ts
 src/agents/auth-profiles/store-unreadable-error.ts
 src/agents/auth-profiles/store-update-commit.ts

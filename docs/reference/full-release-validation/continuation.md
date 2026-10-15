@@ -252,7 +252,10 @@ FRV and publication workflow identities independently, then joins supported
 manifest recorded by that publisher. An original plan from attempt 1 can bind a
 final validation manifest from attempt 2. The two attempts are reported
 separately; neither is silently replaced with the latest attempt.
-Linked children retain their own observed tooling SHA/ref.
+Linked children retain their own observed tooling SHA/ref. The report preserves
+the publisher diagnostic's release version, tag, npm dist-tag and requested source
+SHA. Windows dispatch observations also retain the target tag and source tag;
+the source can differ from the overall release version.
 
 This view reports observations, **not release authorization or current registry
 visibility**. Writer selection, verification selection, job conclusions,
@@ -261,7 +264,12 @@ can retain successful readback and partial package results. Docker and VCR
 remain parent jobs; VCR copy, smoke and alias values are API step conclusions.
 Detached Windows acknowledgement, its pre-upload marker and the current child
 conclusion are separate observations. The normal ClawHub dispatch record is not
-a complete child inventory.
+a complete child inventory. Mac assets/feeds and website deployment are not
+collected by this reader. Use the native publication and website deployment
+owners for their current readbacks. The [website owner's download checks](https://github.com/openclaw/openclaw.ai#companion-downloads)
+can inspect production without deploying. For a stable release,
+`pnpm release:stable <version> --status` shows retained Mac run and appcast facts
+from the original orchestration state directory, not a new live verification.
 
 Prepared-release activation remains unknown without an authenticated link to
 its external owner. A successful inner publisher or skipped finalize job does

@@ -26,7 +26,7 @@ type Snapshot = EmbeddedSessionForkIdentity & {
   options: StreamOptions;
   publications: Message[];
   streamFn: StreamFn;
-  payload: Buffer;
+  payload: Blob;
   expires: number;
   bytes: number;
   expiryTimer: NodeJS.Timeout;
@@ -147,7 +147,7 @@ export function wrapStreamFnWithSessionFork(
         Reflect.deleteProperty(savedOptions, key);
       }
     }
-    const save = (savedPayload: Uint8Array) => {
+    const save = (savedPayload: Blob) => {
       if (!authority.active || authority.capture !== capture) {
         return;
       }
@@ -170,7 +170,7 @@ export function wrapStreamFnWithSessionFork(
         return;
       }
       const bytes =
-        savedPayload.byteLength + metadata.length + Buffer.byteLength(JSON.stringify(savedOptions));
+        savedPayload.size + metadata.length + Buffer.byteLength(JSON.stringify(savedOptions));
       forgetSnapshot(identity.sessionId);
       if (bytes <= MAX_BYTES) {
         snapshots.set(identity.sessionId, {
@@ -178,11 +178,7 @@ export function wrapStreamFnWithSessionFork(
           metadata,
           options: savedOptions,
           publications: [],
-          payload: Buffer.from(
-            savedPayload.buffer,
-            savedPayload.byteOffset,
-            savedPayload.byteLength,
-          ),
+          payload: savedPayload,
           streamFn,
           authority,
           bytes,
@@ -207,12 +203,12 @@ export function wrapStreamFnWithSessionFork(
         if (modelRequestBodyState(capturedOptions).enabled) {
           preparedPayload = finalPayload;
         } else if (isRecord(finalPayload)) {
-          save(Buffer.from(JSON.stringify(finalPayload)));
+          save(new Blob([JSON.stringify(finalPayload)]));
         }
         return finalPayload;
       },
     };
-    modelRequestBodyState(capturedOptions).onEncoded = (encoded, payload) => {
+    modelRequestBodyState(capturedOptions).onEncoded = (body, payload) => {
       if (!isRecord(payload)) {
         return;
       }
@@ -221,9 +217,7 @@ export function wrapStreamFnWithSessionFork(
       if (payload.previous_response_id && preparedPayload === undefined) {
         return;
       }
-      save(
-        payload.previous_response_id ? Buffer.from(JSON.stringify(preparedPayload)) : encoded.body,
-      );
+      save(payload.previous_response_id ? new Blob([JSON.stringify(preparedPayload)]) : body);
       preparedPayload = undefined;
     };
     return streamFn(model, context, capturedOptions);
@@ -301,7 +295,7 @@ export async function runEmbeddedSessionFork(params: {
     tools: metadata.tools,
     messages: structuredClone(snapshot.publications),
   };
-  const parentPayload: unknown = JSON.parse(snapshot.payload.toString("utf8"));
+  const parentPayload: unknown = JSON.parse(await snapshot.payload.text());
   if (!isRecord(parentPayload)) {
     throw new Error("Cache-parity session fork requires an object provider request.");
   }
