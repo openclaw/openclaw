@@ -36,6 +36,7 @@ describe("Muse post-answer finalization", () => {
         },
         authStorage,
         modelRegistry: ModelRegistry.inMemory(authStorage),
+        thinkLevel: "off",
         sessionFile: "/tmp/muse-events-test/session.jsonl",
         timeoutMs: 10_000,
         prompt: "hello",
@@ -97,7 +98,11 @@ describe("Muse post-answer finalization", () => {
               sessionId: "native",
               turnId: "turn",
               terminal: "completed",
-              sourceRange: { start: 0, end: 1 },
+              sourceRange: {
+                first: { id: "event-1", sequence: 1 },
+                last: { id: "event-1", sequence: 1 },
+                stream: { id: "native", kind: "session" },
+              },
               viewCursor: "1",
             },
           });
