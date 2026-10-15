@@ -36,7 +36,9 @@ export function renderPaneLegacyContent(content: unknown, container: HTMLElement
     return;
   }
   legacyContainers.set(container, mountSolid(LitContent, { value: content }, container));
-  onTestFinished(() => legacyContainers.delete(container));
+  onTestFinished(() => {
+    legacyContainers.delete(container);
+  });
 }
 
 function ChatPanelPrimary() {
