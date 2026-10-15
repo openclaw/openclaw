@@ -11,7 +11,7 @@ import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isMobileNodeBootstrapConnect,
   isSetupCodeHandoffBootstrapClient,
-  pairedDeviceAllowsBootstrapOperator,
+  pairedDeviceAllowsBootstrapProfile,
   resolvePairedAccessScopes,
   resolvePinnedClientMetadata,
 } from "./connect-device-metadata.js";
@@ -98,7 +98,8 @@ export async function authorizeExistingGatewayDevice(params: {
     return { ok: false, handoffBootstrapProfile };
   }
 
-  if (scopes.length > 0) {
+  // The ingress grant owns scopes; this row only pins the signed device identity.
+  if (scopes.length > 0 && !state.remoteIngressPrincipal) {
     const scopesAllowed =
       pairedScopes.length > 0 &&
       roleScopesAllow({ role, requestedScopes: scopes, allowedScopes: pairedScopes });
@@ -127,6 +128,7 @@ export async function authorizeExistingGatewayDevice(params: {
       : null;
   if (
     retryBootstrapHandoffProfile &&
+    retryBootstrapHandoffProfile.roles.includes("operator") &&
     isSetupCodeHandoffBootstrapClient({
       profile: retryBootstrapHandoffProfile,
       client: connectParams.client,
@@ -148,11 +150,14 @@ export async function authorizeExistingGatewayDevice(params: {
       return { ok: false, handoffBootstrapProfile };
     }
     if (
-      pairedDeviceAllowsBootstrapOperator({
-        device: device ? await getPairedDevice(device.id) : null,
-        devicePublicKey,
-        profile: retryBootstrapHandoffProfile,
-      })
+      pairedDeviceAllowsBootstrapProfile(
+        {
+          device: device ? await getPairedDevice(device.id) : null,
+          devicePublicKey,
+          profile: retryBootstrapHandoffProfile,
+        },
+        ["operator"],
+      )
     ) {
       // The setup code is the owner-approved upgrade artifact. Reuse the
       // same handoff after retrying or promoting an existing mobile pairing.

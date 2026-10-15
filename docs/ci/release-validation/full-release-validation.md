@@ -77,7 +77,7 @@ Docker seed runs all five lanes in every ordinary manual/release scope:
 `published-upgrade-survivor`, and `update-channel-switch`. This includes
 `npm-beta` and `npm-stable` qualification. The survivor uses `legacy-operator-state`
 with `auto-auth`, so the published driver must update
-the running managed Gateway. Every admitted canonical main run retains this
+the running managed Gateway. Every admitted upstream main run retains this
 exact combination. Frozen targets retain it when their declared scenario catalog
 supports `legacy-operator-state`; historical targets retain `base` with `auto-auth`.
 Missing historical catalogs keep that fallback; malformed or invalid catalogs fail.
@@ -89,7 +89,7 @@ runner group is configured and the existing smoke package without removing
 coverage. Hosted outage overrides and retries keep their recovery route, and
 weighted lane admission remains serial. Main and
 selected PRs, including exact-head `release_gate` fallbacks, use the
-existing `ciArtifacts` profile and canonical packer with `--skip-build`, retaining
+existing `ciArtifacts` profile and shared packer with `--skip-build`, retaining
 the runtime, public SDK declarations, and unchanged tarball integrity check.
 The hourly protected cache warmer also retains full declaration generation.
 Hosted manual CI splits QA Smoke into six parts; normal hybrid first attempts use four parts
@@ -262,10 +262,9 @@ Stable/full always include soak; setting their soak flag explicitly does not
 create another concurrency group. Parent cancellation does not cancel adopted
 children.
 
-In the canonical repository's `hybrid` runner mode, target resolution, evidence
+In the upstream repository's `hybrid` runner mode, target resolution, evidence
 reuse, candidate discovery, candidate binding, and candidate resolution use
 the small Blacksmith runner pool. These serial jobs otherwise compound hosted
-runner admission delays before tests can start. Other modes and noncanonical
-repositories retain GitHub-hosted runners; the reusable harness also honors
+runner admission delays before tests can start. Other modes and repositories retain GitHub-hosted runners; the reusable harness also honors
 its explicit hosted-runner override. Long-running decision and diagnostic
 collectors remain hosted.

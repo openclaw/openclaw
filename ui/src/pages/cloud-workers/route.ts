@@ -1,14 +1,21 @@
 import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
+import { createComponent } from "solid-js";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 
 export const page = definePage({
   ...routePageSpec("cloud-workers"),
   loader: (context: ApplicationContext) => context.runtimeConfig.ensureLoaded(),
   component: () =>
-    import("./cloud-workers-page.ts").then(() => ({
+    import("./cloud-workers-page.tsx").then((module) => ({
       header: true,
-      render: () => html`<openclaw-cloud-workers-page></openclaw-cloud-workers-page>`,
+      renderSolid: () =>
+        createComponent(ShellLayoutBoundary, {
+          traits: { toolbarHeader: true, settingsPage: true, settingsWorkspace: true },
+          get children() {
+            return createComponent(module.CloudWorkersPage, {});
+          },
+        }),
     })),
 });

@@ -10,9 +10,62 @@ sidebarTitle: "Configuration"
 
 The `channels.msteams` settings, the environment variables that stand in for the auth keys, and the history context rules.
 
+## Multiple bot accounts
+
+Use `channels.msteams.accounts.<id>` for each Teams bot registration, then route
+that account with `bindings[].match.accountId`. Root settings are shared
+defaults; account settings override them.
+
+```json5
+{
+  bindings: [
+    { agentId: "main", match: { channel: "msteams", accountId: "default" } },
+    { agentId: "support", match: { channel: "msteams", accountId: "support" } },
+  ],
+  channels: {
+    msteams: {
+      enabled: true,
+      tenantId: "<TENANT_ID>",
+      webhook: { path: "/api/messages" },
+      dmPolicy: "allowlist",
+      allowFrom: ["00000000-0000-0000-0000-000000000000"],
+      defaultAccount: "default",
+      accounts: {
+        default: {
+          appId: "<PRIMARY_CLIENT_ID>",
+          appPassword: "<PRIMARY_CLIENT_SECRET>",
+        },
+        support: {
+          appId: "<SUPPORT_CLIENT_ID>",
+          appPassword: "<SUPPORT_CLIENT_SECRET>",
+          webhook: { path: "/api/messages/support" },
+          allowFrom: ["11111111-1111-1111-1111-111111111111"],
+        },
+      },
+    },
+  },
+}
+```
+
+- Enabled accounts must use unique `appId` values and webhook paths. All bots
+  receive callbacks on `gateway.port`; separate listener ports are not required.
+- The default account uses the root webhook path (`/api/messages` when omitted).
+  A named account without an explicit path appends its normalized account ID:
+  `support` uses `/api/messages/support`. Set each Azure Bot messaging endpoint
+  to its own path, for example `https://gateway.example.com/api/messages/support`.
+- Named accounts must define their own `appId` and `appPassword` for secret
+  authentication. Those fields do not inherit from the root.
+- `tenantId`, federated-auth settings, access policy, team/channel allowlists,
+  streaming, SSO, delegated auth, and delivery settings inherit from the root
+  unless an account overrides them. `legacyWebhook` never inherits into named
+  accounts; keep compatibility listeners explicit and give each a unique port.
+- Existing root-level single-bot credentials remain the default account for
+  compatibility. Configure either that root identity or `accounts.default`,
+  not both.
+
 ## Environment variables
 
-These auth-related config keys can be set via environment variables instead of `openclaw.json` (other config keys, such as `groupPolicy` or `historyLimit`, are config-only):
+These auth-related config keys can be set via environment variables instead of `openclaw.json` for the default account only. Named accounts must define their bot identity in config (other keys, such as `groupPolicy` or `historyLimit`, are config-only):
 
 | Env var                              | Config key                | Notes                               |
 | ------------------------------------ | ------------------------- | ----------------------------------- |
@@ -28,7 +81,7 @@ These auth-related config keys can be set via environment variables instead of `
 ## History context
 
 - `channels.msteams.historyLimit` controls how many recent channel/group messages are wrapped into the prompt. Falls back to `messages.groupChat.historyLimit`, then defaults to 50. Set `0` to disable.
-- Graph thread context adds the parent and up to the oldest 50 replies alongside recent channel history. It excludes the triggering message and keeps history separate from the sender's command text, so commands quoted in history do not execute. Long fetched messages retain their beginning and end within the prompt's per-message limit.
+- Graph thread context adds the parent and up to the newest 50 replies alongside recent channel history. Graph returns replies oldest-first and caps each page at 50, so the plugin follows continuation links to reach the newest replies and then keeps the most recent window. If the reply pages cannot be retrieved in full, or their timestamps are incomplete, thread reply enrichment is omitted rather than replaced with an oldest-first prefix. It excludes the triggering message and keeps history separate from the sender's command text, so commands quoted in history do not execute. Long fetched messages retain their beginning and end within the prompt's per-message limit.
 - Thread and quoted attachment context follow `channels.msteams.contextVisibility`, falling back to `channels.defaults.contextVisibility`, then `all`. Use `allowlist` to filter both by sender allowlists (`allowFrom` / `groupAllowFrom`), or `allowlist_quote` to filter thread history while permitting quoted context.
 - DM history can be limited with `channels.msteams.dmHistoryLimit` (user turns). Per-user overrides: `channels.msteams.dms["<user_id>"].historyLimit`.
 
@@ -37,6 +90,9 @@ These auth-related config keys can be set via environment variables instead of `
 Key settings (see [/gateway/configuration](/gateway/configuration) for shared channel patterns):
 
 - `channels.msteams.enabled`: enable/disable the channel.
+- `channels.msteams.defaultAccount`: account used when `accountId` is omitted.
+- `channels.msteams.accounts.<id>.enabled`: enable/disable one Teams bot account.
+- `channels.msteams.accounts.<id>.appId`, `channels.msteams.accounts.<id>.appPassword`, `channels.msteams.accounts.<id>.webhook.path`: per-bot identity, secret, and Gateway callback path.
 - `channels.msteams.appId`, `channels.msteams.appPassword`, `channels.msteams.tenantId`: bot credentials.
 - `channels.msteams.cloud`: Teams SDK cloud environment (`Public`, `USGov`, `USGovDoD`, or `China`; default `Public`). Set with `serviceUrl` for USGov/DoD SDK clouds; China uses the SDK preset and stored Azure China Bot Framework conversation references, with Graph-backed helpers disabled until Azure China Graph routing ships.
 - `channels.msteams.serviceUrl`: Bot Connector service URL boundary for SDK proactive operations. Public cloud uses the SDK default; set for GCC (`https://smba.infra.gcc.teams.microsoft.com/teams`), GCC High, or DoD. China accepts Azure China Bot Framework channel hosts when the stored conversation reference comes from Teams operated by 21Vianet.

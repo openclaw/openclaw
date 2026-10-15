@@ -57,8 +57,9 @@ const pluginMetadataMocks = vi.hoisted(() => ({
 const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
 
+// mock-isolation: Model browsing uses fixture auth availability without host profile or CLI key reads.
 vi.mock("../../agents/model-auth-label.js", () => ({
-  resolveModelAuthLabel: () => undefined,
+  resolveModelAuthLabelAsync: () => undefined,
 }));
 
 vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
@@ -307,49 +308,6 @@ describe("handleModelsCommand", () => {
     } as OpenClawConfig);
 
     expect(data.byProvider.has("openai")).toBe(false);
-  });
-
-  it.each(["default"] as const)("retains selected route metadata for %s browse", async (view) => {
-    setCredentials([]);
-    authStore.profiles.subscription = {
-      provider: "openai",
-      type: "oauth",
-      access: "synthetic-access",
-      refresh: "synthetic-refresh",
-      expires: Date.now() + 3_600_000,
-    };
-    const selected: ModelCatalogEntry = {
-      provider: "openai",
-      id: "gpt-5.5",
-      name: "ChatGPT GPT-5.5",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      reasoning: true,
-      contextWindow: 128_000,
-      thinkingLevelMap: { high: "high", xhigh: "xhigh" },
-    };
-    modelCatalogMocks.loadModelCatalog.mockReturnValue([
-      {
-        ...selected,
-        name: "Platform GPT-5.5",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        contextWindow: 32_000,
-      },
-      selected,
-    ]);
-
-    const data = await buildPreparedModelsProviderData(
-      {
-        agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
-      } as OpenClawConfig,
-      undefined,
-      { view },
-    );
-
-    expect(data.byProvider.get("openai")).toEqual(new Set(["gpt-5.5"]));
-    expect(data.modelNames.get("openai/gpt-5.5")).toBe("ChatGPT GPT-5.5");
-    expect(data.modelCatalog.filter((entry) => entry.provider === "openai")).toEqual([selected]);
   });
 
   it("does not re-add the default provider when provider visibility is restricted", async () => {

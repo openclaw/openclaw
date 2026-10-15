@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { CronHistoryResult } from "../../../packages/gateway-protocol/src/index.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
@@ -17,13 +18,15 @@ import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
 import { cronStoreKey } from "../../cron/store/key.js";
 import {
-  pruneCronRunHistoryInDatabase,
+  applyCronRunHistoryMaintenanceInDatabase,
+  planCronRunHistoryMaintenance,
   readCronRunRecordsInDatabase,
   recordCronRunInDatabase,
 } from "../../cron/store/run-history.kernel.js";
 import type { CronRunHistoryWrite } from "../../cron/store/run-history.types.js";
 import { prepareCronRunReceiptWriteSchema } from "../../cron/store/run-receipt-write-admission.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { resolvePluginMetadataSnapshotAsync } from "../../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -51,6 +54,7 @@ async function withHistoryState(run: () => Promise<void>) {
   let registry: ReturnType<typeof captureActivePluginRegistrySnapshot> | undefined;
   try {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       registry = captureActivePluginRegistrySnapshot();
       setActivePluginRegistry(createEmptyPluginRegistry());
       try {
@@ -273,6 +277,7 @@ it("pages the exact archived Cron generation for a limited caller without main-t
         cronStorePath: storePath,
         getRuntimeConfig: () => cfg,
       });
+      await resolvePluginMetadataSnapshotAsync({ config: cfg });
       const options = {
         client: sharingPolicyClient({ scopes: ["operator.read"], user: profile.id }),
       };
@@ -411,6 +416,53 @@ it("preserves shared custom-session conversation history across recorded runs", 
   });
 });
 
+it("does not disclose hidden session keys in cron.history errors", async () => {
+  await withCronTranscript(async ({ cron, storePath, baseKey, alias, job, query }) => {
+    await patchSessionEntryCore({ agentId: "main", sessionKey: baseKey }, () => ({
+      visibility: "draft",
+    }));
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "limited",
+          definitions: {
+            limited: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+          },
+        },
+      },
+    };
+    const context = await createHistoryReadContext({
+      cron,
+      cronStorePath: storePath,
+      getRuntimeConfig: () => cfg,
+    });
+    const otherProfile = ensureProfileForEmail("cron-other-reader@example.test");
+    const client = sharingPolicyClient({ scopes: ["operator.read"], user: otherProfile.id });
+    prepareGatewayRecipientProfile(client);
+    expect(operatorSessionCap(client, cfg)).toBe("none");
+    for (const selector of [
+      { runId: "public-old-run" },
+      { runAtMs: 10 },
+      { runId: "missing-run" },
+      { runId: "public-old-run", cursor: "invalid" },
+    ]) {
+      const { respond } = await query({ id: job.id, ...selector }, { client }, context);
+      expect(respond.mock.calls).toEqual([
+        [
+          false,
+          undefined,
+          {
+            code: "UNAVAILABLE",
+            message: "The recorded cron transcript is unavailable. Refresh the run and try again.",
+          },
+        ],
+      ]);
+      expect(JSON.stringify(respond.mock.calls)).not.toContain(baseKey);
+      expect(JSON.stringify(respond.mock.calls)).not.toContain(alias);
+    }
+  });
+});
+
 it("refuses ambiguous timestamps and cursors moved to another recorded run", async () => {
   await withCronTranscript(async ({ job, record, query }) => {
     const first = await query({ id: job.id, runId: "public-old-run", limit: 1 });
@@ -481,13 +533,20 @@ it.each(["sharing", "binding", "retention", "transcript owner"] as const)(
             persistHistory([{ ...record, detail: { ...detail, sessionId: latest.sessionId } }]);
           } else if (change === "retention") {
             storageChanged =
-              runOpenClawStateWriteTransaction(({ db }) =>
-                pruneCronRunHistoryInDatabase(
+              runOpenClawStateWriteTransaction(({ db }) => {
+                const now = record.endedAt + 7 * 24 * 60 * 60_000;
+                const plan = planCronRunHistoryMaintenance(
+                  readCronRunRecordsInDatabase(db),
+                  now,
+                  new Set(),
+                );
+                return applyCronRunHistoryMaintenanceInDatabase(
                   db,
-                  record.endedAt + 7 * 24 * 60 * 60_000,
+                  plan,
+                  now,
                   prepareCronRunReceiptWriteSchema(db),
-                ),
-              ) === 1;
+                ).pruned;
+              }) === 1;
           } else if (change === "transcript owner") {
             storageChanged =
               runOpenClawAgentWriteTransaction(
@@ -513,6 +572,8 @@ it.each(["sharing", "binding", "retention", "transcript owner"] as const)(
         expect(result.respond.mock.calls).toHaveLength(1);
         expect(result.respond.mock.calls[0]?.[0]).toBe(false);
         expect(result.payload?.messages).toBeUndefined();
+        expect(JSON.stringify(result.respond.mock.calls)).not.toContain(baseKey);
+        expect(JSON.stringify(result.respond.mock.calls)).not.toContain(unrelatedKey);
       },
     );
   },

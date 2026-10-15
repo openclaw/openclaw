@@ -42,6 +42,7 @@ describe("mcp cli", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await cleanupMcpCliTestState();
   });
 
@@ -430,11 +431,21 @@ describe("mcp cli", () => {
 
   it("reports MCP doctor setup errors and sensitive literals", async () => {
     await withMcpHome(async () => {
+      vi.stubEnv("MCP_DOCTOR_AUTHORED_TOKEN", "test-token");
       await runMcpCommand([
         "mcp",
         "set",
         "docs",
-        '{"command":"./missing-mcp","env":{"DOCS_API_KEY":"literal"},"headers":{"Authorization":"Bearer literal"}}',
+        JSON.stringify({
+          command: "./missing-mcp",
+          env: { DOCS_API_KEY: "literal" },
+          headers: {
+            Authorization: "Bearer literal",
+            "X-API-Key": "${MCP_DOCTOR_AUTHORED_TOKEN:-literal-fallback}",
+            "Proxy-Authorization": "$${MCP_DOCTOR_AUTHORED_TOKEN} ${MCP_DOCTOR_AUTHORED_TOKEN}",
+            "Api-Key": "Basic ${MCP_DOCTOR_AUTHORED_TOKEN}:literal-password",
+          },
+        }),
       ]);
       mockLog.mockClear();
 
@@ -460,8 +471,54 @@ describe("mcp cli", () => {
               "headers.Authorization contains a literal sensitive value",
             ),
           }),
+          expect.objectContaining({
+            message: expect.stringContaining(
+              "headers.X-API-Key contains a literal sensitive value",
+            ),
+          }),
+          expect.objectContaining({
+            message: expect.stringContaining(
+              "headers.Proxy-Authorization contains a literal sensitive value",
+            ),
+          }),
+          expect.objectContaining({
+            message: expect.stringContaining("headers.Api-Key contains a literal sensitive value"),
+          }),
         ]),
       );
+    });
+  });
+
+  it("does not flag authored MCP header/env references after environment resolution", async () => {
+    await withMcpHome(async (home) => {
+      vi.stubEnv("MCP_DOCTOR_AUTHORED_TOKEN", "Bearer test-token");
+      const stateDir = path.join(home, ".openclaw");
+      await fs.writeFile(
+        path.join(stateDir, "mcp-servers.json"),
+        JSON.stringify({
+          docs: {
+            url: "https://mcp.example.com/mcp",
+            headers: {
+              Authorization: "${MCP_DOCTOR_AUTHORED_TOKEN}",
+              "Proxy-Authorization": "Bearer ${MCP_DOCTOR_AUTHORED_TOKEN}",
+              "X-API-Key": "${MCP_DOCTOR_AUTHORED_TOKEN:-}",
+              api_key: "${MCP_DOCTOR_AUTHORED_TOKEN}${MCP_DOCTOR_AUTHORED_TOKEN}",
+            },
+            env: { DOCS_API_KEY: "${MCP_DOCTOR_AUTHORED_TOKEN}" },
+          },
+        }),
+      );
+      await fs.writeFile(
+        path.join(stateDir, "openclaw.json"),
+        JSON.stringify({ mcp: { servers: { $include: "./mcp-servers.json" } } }),
+      );
+
+      await runMcpCommand(["mcp", "doctor", "docs", "--json"]);
+
+      expect(JSON.parse(lastLogLine())).toMatchObject({
+        ok: true,
+        servers: [{ name: "docs", ok: true, issues: [] }],
+      });
     });
   });
 
@@ -717,6 +774,7 @@ describe("mcp cli", () => {
   });
 
   it("reports omitted enabled servers while accepting omitted disabled servers", async () => {
+    const invocationExitCode = process.exitCode;
     await withMcpHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       let catalogServers: Record<
@@ -753,6 +811,9 @@ describe("mcp cli", () => {
 
       expect(JSON.parse(lastLogLine())).toMatchObject({ servers: {}, diagnostics: [] });
       expect(lastErrorLine()).toBe(`MCP check did not connect to "incomplete" in ${configPath}.`);
+      expect(process.exitCode).toBe(1);
+      // The next probe represents a new CLI invocation, not a continuation of its failed status.
+      process.exitCode = invocationExitCode;
 
       await writeMcpServers(home, {
         healthy: { command: "node" },
@@ -776,6 +837,7 @@ describe("mcp cli", () => {
         diagnostics: [],
       });
       expect(lastErrorLine()).toBe("");
+      expect(process.exitCode).toBe(invocationExitCode);
 
       mockLog.mockClear();
       await runMcpCommand(["mcp", "probe"]);

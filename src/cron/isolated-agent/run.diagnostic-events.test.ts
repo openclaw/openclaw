@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   type DiagnosticEventPayload,
@@ -34,6 +35,7 @@ import {
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 function makeParams(cfg: OpenClawConfig = {}) {
+  setRuntimeConfigSnapshot(cfg);
   return {
     deliveryAttemptFence: null,
     cfg,

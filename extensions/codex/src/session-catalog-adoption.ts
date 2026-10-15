@@ -154,22 +154,26 @@ export async function listAdoptedSessionEntries(params: {
       };
     }
   }
-  const collect = async (
-    selected: Iterable<AdoptionCandidate>,
-    readBinding: (
-      identity: AdoptionCandidate["identity"],
-    ) => Promise<ReturnType<CodexAppServerBindingStore["read"]>> = async (identity) => {
-      const bindings = params.bindingStore.readMany([identity]);
-      try {
-        return (await bindings.next()).value;
-      } finally {
-        await bindings.return(undefined);
-      }
-    },
-  ) => {
+  const revision = params.sessionEntries?.revision;
+  const cached = revision ? adoptionCandidatesByRevision.get(revision) : undefined;
+  let prepared: AdoptionCandidate[];
+  if (cached && cached.config === params.config && cached.agentId === params.agentId) {
+    prepared = cached.candidates;
+  } else {
+    prepared = [...candidates()];
+    if (revision) {
+      adoptionCandidatesByRevision.set(revision, {
+        config: params.config,
+        agentId: params.agentId,
+        candidates: prepared,
+      });
+    }
+  }
+  const bindings = params.bindingStore.readMany(prepared.map(({ identity }) => identity));
+  try {
     const adopted = new Map<string, AdoptedSessionEntry>();
-    for (const { agentId, sessionKey, sessionKeyRest, sessionId, marker, identity } of selected) {
-      const binding = await readBinding(identity);
+    for (const { agentId, sessionKey, sessionKeyRest, sessionId, marker } of prepared) {
+      const binding = (await bindings.next()).value;
       const sourceThreadId = binding?.supervisionSourceThreadId?.trim();
       const boundThreadId = binding?.threadId.trim();
       if (
@@ -192,30 +196,6 @@ export async function listAdoptedSessionEntries(params: {
       adopted.set(sourceKey, { key: sessionKey, sessionId, agentId, boundThreadId });
     }
     return adopted;
-  };
-  const revision = params.sessionEntries?.revision;
-  const cached = revision ? adoptionCandidatesByRevision.get(revision) : undefined;
-  let prepared: AdoptionCandidate[];
-  try {
-    if (cached && cached.config === params.config && cached.agentId === params.agentId) {
-      prepared = cached.candidates;
-    } else {
-      prepared = [...candidates()];
-      if (revision) {
-        adoptionCandidatesByRevision.set(revision, {
-          config: params.config,
-          agentId: params.agentId,
-          candidates: prepared,
-        });
-      }
-    }
-  } catch {
-    // Replay validation in row order so earlier row failures still win.
-    return collect(candidates());
-  }
-  const bindings = params.bindingStore.readMany(prepared.map(({ identity }) => identity));
-  try {
-    return await collect(prepared, async () => (await bindings.next()).value);
   } finally {
     await bindings.return(undefined);
   }
@@ -296,7 +276,7 @@ async function ensurePendingAdoptionBinding(params: {
   if (!ownsGeneration) {
     throw new Error(`failed to claim the OpenClaw session generation for ${params.sourceThreadId}`);
   }
-  const existing = params.bindingStore.read(params.identity);
+  const existing = await params.bindingStore.readAsync(params.identity);
   params.initialization.assertCurrent();
   if (existing) {
     if (matchesPendingAdoptionBinding(existing, params)) {
@@ -434,11 +414,11 @@ async function continueLocalCodexSessionInner(
     // under the session-store write lock so a stale Open Chat cannot revive a replacement.
     const changedError = () =>
       new CatalogParamsError("Codex OpenClaw session changed before it could be opened. Retry.");
-    const restored = await params.api.runtime.agent.session.patchSessionEntry({
+    const restored = await params.api.runtime.agent.session.prepareSessionEntryPatch({
       sessionKey: existing.key,
       readConsistency: "latest",
       preserveActivity: true,
-      update: (entry) => {
+      prepare: (entry) => {
         if (
           entry.sessionId?.trim() !== existing.sessionId ||
           entry.initializationPending === true ||

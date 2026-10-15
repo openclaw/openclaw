@@ -10,7 +10,10 @@ import type {
   UsersUnlinkAuthProfileResult,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
-import { ensureAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import {
+  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
+} from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -108,7 +111,11 @@ async function resolveLinkableAuthProfileProvider(
   if (isUserModelAuthProfileId(authProfileId)) {
     return resolveOwnedAccountProvider(owner, authProfileId, context);
   }
-  return resolveSharedAuthProfileProvider(cfg, authProfileId);
+  const store = await ensureAuthProfileStoreWithoutExternalProfilesAsync(
+    resolveSharedMainAuthAgentDir(),
+    { readOnly: true },
+  );
+  return store.profiles[authProfileId]?.provider ?? cfg.auth?.profiles?.[authProfileId]?.provider;
 }
 
 function resolveSharedAuthProfileProvider(cfg: OpenClawConfig, authProfileId: string) {
@@ -239,37 +246,42 @@ export function createModelAccountConnectService(options: {
       }
     }
   };
-  const selectLink = async (
+  const changeLink = async (
     action: ModelAccountConnectWorkerAction,
-    authProfileId: string,
-    personalOnly: boolean,
+    operation: "link" | "select" | "unlink",
+    target: string,
   ): Promise<UsersLinkAuthProfileResult> => {
     assertRunning(action);
     const context = captureOpenClawStateWorkerContext();
     const previous = [...operations.values()];
     return retainWrite(async () => {
-      const provider = personalOnly
-        ? await resolveOwnedAccountProvider(action.owner, authProfileId, context)
-        : requireLinkableProvider(
-            await resolveLinkableAuthProfileProvider(
-              options.getConfig(),
-              action.owner,
-              authProfileId,
-              context,
-            ),
-            authProfileId,
-          );
-      action.assertCurrent();
-      const links = await setUserProfileAuthLinkAsync(
-        {
-          profileId: action.owner,
-          provider,
-          authProfileId,
-          authorityProfileIds: action.actorProfileId ? [action.actorProfileId] : [],
-          assertCurrent: action.assertCurrent,
-        },
-        { context },
-      );
+      const provider =
+        operation === "unlink"
+          ? target
+          : operation === "select"
+            ? await resolveOwnedAccountProvider(action.owner, target, context)
+            : requireLinkableProvider(
+                await resolveLinkableAuthProfileProvider(
+                  options.getConfig(),
+                  action.owner,
+                  target,
+                  context,
+                ),
+                target,
+              );
+      if (operation !== "unlink") {
+        action.assertCurrent();
+      }
+      const input = {
+        profileId: action.owner,
+        provider,
+        authorityProfileIds: action.actorProfileId ? [action.actorProfileId] : [],
+        assertCurrent: action.assertCurrent,
+      };
+      const links =
+        operation !== "unlink"
+          ? await setUserProfileAuthLinkAsync({ ...input, authProfileId: target }, { context })
+          : await clearUserProfileAuthLinkAsync(input, { context });
       supersede(action.owner, provider, previous);
       options.onChanged?.();
       action.assertCurrent();
@@ -311,13 +323,13 @@ export function createModelAccountConnectService(options: {
   };
 
   return {
-    /** @deprecated Await listLinksAsync; synchronous SDK compatibility ends at the next SDK major. */
+    /** @deprecated Await listLinksAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     listLinks(action: ModelAccountConnectAction): UsersListAuthLinksResult {
       warnModelAccountConnectDeprecation("listLinks");
       assertRunning(action);
       return { links: nativeAccounts.listUserProfileAuthLinks(action.owner) };
     },
-    /** @deprecated Await linkAsync; synchronous SDK compatibility ends at the next SDK major. */
+    /** @deprecated Await linkAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     link(action: ModelAccountConnectAction, authProfileId: string): UsersLinkAuthProfileResult {
       warnModelAccountConnectDeprecation("link");
       assertRunning(action);
@@ -328,7 +340,7 @@ export function createModelAccountConnectService(options: {
         : resolveSharedAuthProfileProvider(options.getConfig(), authProfileId);
       return setLinkNative(action, requireLinkableProvider(provider, authProfileId), authProfileId);
     },
-    /** @deprecated Await unlinkAsync; synchronous SDK compatibility ends at the next SDK major. */
+    /** @deprecated Await unlinkAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     unlink(action: ModelAccountConnectAction, provider: string): UsersUnlinkAuthProfileResult {
       warnModelAccountConnectDeprecation("unlink");
       assertRunning(action);
@@ -341,7 +353,7 @@ export function createModelAccountConnectService(options: {
       options.onChanged?.();
       return { links };
     },
-    /** @deprecated Await listAsync; synchronous SDK compatibility ends at the next SDK major. */
+    /** @deprecated Await listAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     list(action: ModelAccountConnectAction, cursor?: string): UsersListModelAccountsResult {
       warnModelAccountConnectDeprecation("list");
       assertRunning(action);
@@ -351,7 +363,7 @@ export function createModelAccountConnectService(options: {
         links: nativeAccounts.listUserProfileAuthLinks(action.owner),
       };
     },
-    /** @deprecated Await selectAsync; synchronous SDK compatibility ends at the next SDK major. */
+    /** @deprecated Await selectAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     select(
       action: ModelAccountConnectAction,
       authProfileId: string,
@@ -366,13 +378,13 @@ export function createModelAccountConnectService(options: {
         authProfileId,
       );
     },
-    /** @deprecated Await statusAsync; synchronous SDK compatibility ends at the next SDK major. */
+    /** @deprecated Await statusAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     status(action: ModelAccountConnectAction, connectId: string): UsersAuthConnectStatusResult {
       warnModelAccountConnectDeprecation("status");
       const operation = findOperation(action, connectId);
       return operation ? projectResult(action, operation) : { status: "expired" };
     },
-    /** @deprecated Await cancelAsync; synchronous SDK compatibility ends at the next SDK major. */
+    /** @deprecated Await cancelAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     cancel(action: ModelAccountConnectAction, connectId: string): UsersAuthConnectStatusResult {
       warnModelAccountConnectDeprecation("cancel");
       const operation = cancelOperation(action, connectId);
@@ -388,30 +400,13 @@ export function createModelAccountConnectService(options: {
       action: ModelAccountConnectWorkerAction,
       authProfileId: string,
     ): Promise<UsersLinkAuthProfileResult> {
-      return selectLink(action, authProfileId, false);
+      return changeLink(action, "link", authProfileId);
     },
-    async unlinkAsync(
+    unlinkAsync(
       action: ModelAccountConnectWorkerAction,
       provider: string,
     ): Promise<UsersUnlinkAuthProfileResult> {
-      assertRunning(action);
-      const context = captureOpenClawStateWorkerContext();
-      const previous = [...operations.values()];
-      return retainWrite(async () => {
-        const links = await clearUserProfileAuthLinkAsync(
-          {
-            profileId: action.owner,
-            provider,
-            authorityProfileIds: action.actorProfileId ? [action.actorProfileId] : [],
-            assertCurrent: action.assertCurrent,
-          },
-          { context },
-        );
-        supersede(action.owner, provider, previous);
-        options.onChanged?.();
-        action.assertCurrent();
-        return { links };
-      });
+      return changeLink(action, "unlink", provider);
     },
     async listAsync(
       action: ModelAccountConnectAction,
@@ -464,7 +459,7 @@ export function createModelAccountConnectService(options: {
       action: ModelAccountConnectWorkerAction,
       authProfileId: string,
     ): Promise<UsersSelectModelAccountResult> {
-      return selectLink(action, authProfileId, true);
+      return changeLink(action, "select", authProfileId);
     },
     async start(
       action: ModelAccountConnectAction,

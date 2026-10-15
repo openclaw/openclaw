@@ -11,8 +11,9 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { expect } from "vitest";
+import { parse } from "yaml";
 
-function createFixtureGit(repo: string, gitEnv: NodeJS.ProcessEnv) {
+function createFixtureGit(repo: string, gitEnv: NodeJS.ProcessEnv, fixedTreeEntries = "") {
   const git = (args: string[], input?: string, cwd = repo, env?: NodeJS.ProcessEnv) =>
     execFileSync("git", ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], {
       cwd,
@@ -24,7 +25,10 @@ function createFixtureGit(repo: string, gitEnv: NodeJS.ProcessEnv) {
   const tree = (owner: string, sibling = "stable\n") => {
     const a = git(["hash-object", "-w", "--stdin"], owner);
     const b = git(["hash-object", "-w", "--stdin"], sibling);
-    return git(["mktree"], `100644 blob ${a}\towner.txt\n100644 blob ${b}\tsibling.txt\n`);
+    return git(
+      ["mktree"],
+      `${fixedTreeEntries}100644 blob ${a}\towner.txt\n100644 blob ${b}\tsibling.txt\n`,
+    );
   };
   const commit = (
     contents: string,
@@ -58,7 +62,56 @@ export function createMergeGitFixtureFactory(directory: string, gitEnv: NodeJS.P
   seed.git(["config", "user.name", "Merge Fixture"]);
   seed.git(["config", "user.email", "fixture@example.invalid"]);
   seed.git(["init", "-q", "--bare", remote]);
-  const base = seed.commit(seed.tree("before\n"), []);
+  // Preserve the real protected publisher inputs in synthetic history so the
+  // exact-main owner check remains part of each admission fixture.
+  const workflowPath = ".github/workflows/security-review.yml";
+  const workflow = readFileSync(new URL(`../../${workflowPath}`, import.meta.url), "utf8");
+  const publisher = parse(workflow);
+  const checkout = publisher.jobs.review.steps.find(
+    (step: { id?: string }) => step.id === "checkout",
+  );
+  const sources: string[] = [
+    workflowPath,
+    ...checkout.with["sparse-checkout"]
+      .trim()
+      .split(/\r?\n/u)
+      .map((path: string) => path.trim().replace(/^\//u, "")),
+  ];
+  type SourceTree = Map<string, string | SourceTree>;
+  const sourceTree: SourceTree = new Map();
+  for (const path of sources) {
+    const parts = path.split("/");
+    let parent = sourceTree;
+    for (const part of parts.slice(0, -1)) {
+      const child = parent.get(part) ?? new Map<string, string | SourceTree>();
+      if (typeof child === "string") {
+        throw new Error("Publisher source collides with a directory");
+      }
+      parent.set(part, child);
+      parent = child;
+    }
+    parent.set(
+      parts.at(-1)!,
+      seed.git(
+        ["hash-object", "-w", "--stdin"],
+        readFileSync(new URL(`../../${path}`, import.meta.url), "utf8"),
+      ),
+    );
+  }
+  const sourceEntries = (entries: SourceTree): string =>
+    [...entries]
+      .map(([name, value]) =>
+        typeof value === "string"
+          ? `100644 blob ${value}\t${name}\n`
+          : `040000 tree ${seed.git(["mktree"], sourceEntries(value))}\t${name}\n`,
+      )
+      .join("");
+  const fixedTreeEntries = sourceEntries(sourceTree);
+  const baseTree = seed.git(
+    ["mktree"],
+    `${fixedTreeEntries}${seed.git(["ls-tree", seed.tree("before\n")])}\n`,
+  );
+  const base = seed.commit(baseTree, []);
   seed.git(["update-ref", "refs/heads/main", base]);
   const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
   const preparedSources = new Map<string, ReturnType<typeof createSourceFixture>>();
@@ -74,7 +127,7 @@ export function createMergeGitFixtureFactory(directory: string, gitEnv: NodeJS.P
     const fixtureRemote = join(fixtureRoot, "remote.git");
     cpSync(repo, fixtureRepo, copyOptions);
     cpSync(remote, fixtureRemote, copyOptions);
-    const owner = createFixtureGit(fixtureRepo, gitEnv);
+    const owner = createFixtureGit(fixtureRepo, gitEnv, fixedTreeEntries);
     const { git, tree, commit } = owner;
     git(["remote", "add", "origin", fixtureRemote]);
     const sourceCommits: string[] = [];
@@ -171,7 +224,7 @@ export function createMergeGitFixtureFactory(directory: string, gitEnv: NodeJS.P
     writeFileSync(join(worktree, ".git"), `gitdir: ${fixtureRepo}/.git/worktrees/pr-123\n`);
     writeFileSync(join(fixtureRepo, ".git/worktrees/pr-123/gitdir"), `${worktree}/.git\n`);
     return {
-      ...createFixtureGit(fixtureRepo, gitEnv),
+      ...createFixtureGit(fixtureRepo, gitEnv, fixedTreeEntries),
       repo: fixtureRepo,
       remote: fixtureRemote,
       worktree,

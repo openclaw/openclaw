@@ -414,19 +414,13 @@ describe("macOS desktop host enrollment replay", () => {
     expect(await replay("darwin", "loaded-host", true)).toMatchObject({ code: 0 });
   });
 
-  it("preserves native argv bytes despite a different SSH locale", async () => {
-    expect(
-      await replay("darwin", undefined, true, "Cloud worker Développement 👨‍👩‍👧‍👦\tline\n"),
-    ).toMatchObject({ code: 0 });
-  });
-
   it("binds the runtime directory and original Node argv under a Unicode path", async () => {
     expect(
       await replay(
         "darwin",
         "original-argv",
         true,
-        "Replay fixture",
+        "Cloud worker Développement 👨‍👩‍👧‍👦\tline\n",
         "/Users/Développement 👨‍👩‍👧‍👦\tline\n",
       ),
     ).toMatchObject({ code: 0 });

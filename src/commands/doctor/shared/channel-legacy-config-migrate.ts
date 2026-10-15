@@ -15,7 +15,7 @@ import {
   isPluginDoctorMigrationDeferred,
 } from "../../../plugins/doctor-contract-registry.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
-import { isRecord } from "./legacy-config-record-shared.js";
+import { isRecord, visitChannelEntries } from "./legacy-config-record-shared.js";
 import { HISTORICAL_WEBHOOK_CHANNELS } from "./legacy-webhook-pins.js";
 
 const log = createSubsystemLogger("plugins/doctor-contracts");
@@ -51,25 +51,13 @@ function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: strin
   if (defaults) {
     migrateEntry(defaults, "channels.defaults");
   }
-  for (const [channelId, value] of Object.entries(channels)) {
-    if (!channelId.trim() || isChannelConfigMetadataKey(channelId) || !isRecord(value)) {
+  for (const channelId of Object.keys(channels)) {
+    if (!channelId.trim() || isChannelConfigMetadataKey(channelId)) {
       continue;
     }
-    const preserveEmptyPluginBlock = channelId === "feishu";
-    migrateEntry(value, `channels.${channelId}`, preserveEmptyPluginBlock);
-    const accounts = isRecord(value.accounts) ? value.accounts : null;
-    if (!accounts) {
-      continue;
-    }
-    for (const [accountId, account] of Object.entries(accounts)) {
-      if (isRecord(account)) {
-        migrateEntry(
-          account,
-          `channels.${channelId}.accounts.${accountId}`,
-          preserveEmptyPluginBlock,
-        );
-      }
-    }
+    visitChannelEntries(raw, channelId, (entry, path) =>
+      migrateEntry(entry, path, channelId === "feishu"),
+    );
   }
 }
 

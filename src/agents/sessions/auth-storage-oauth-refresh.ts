@@ -15,8 +15,8 @@ import {
 } from "./auth-storage-oauth-registry.js";
 import type {
   AuthCredential,
-  AuthStorageBackend,
   AuthStorageData,
+  LockResult,
   OAuthCredential,
 } from "./auth-storage-types.js";
 
@@ -49,7 +49,9 @@ export function isAuthStorageOAuthRefreshFence(
 
 export async function refreshAuthStorageOAuthCredential(params: {
   authStorage: object;
-  storage: Pick<AuthStorageBackend, "withLock">;
+  storage: {
+    withLock<T>(fn: (current: string | undefined) => LockResult<T>): T | Promise<T>;
+  };
   providerId: OAuthProviderId;
   parse: (current: string | undefined) => AuthStorageData;
   commit: (data: AuthStorageData) => void;
@@ -76,9 +78,9 @@ export async function refreshAuthStorageOAuthCredential(params: {
     }),
     canRefresh: async () =>
       Boolean(provider) || (await canResolveAuthStoragePluginOAuthRefresh(params.providerId)),
-    commit: (data) => {
+    commit: async (data) => {
       const expected = params.parse(JSON.stringify(data));
-      const current = params.storage.withLock((raw) => {
+      const current = await params.storage.withLock((raw) => {
         const authoritative = params.parse(raw);
         if (!isDeepStrictEqual(authoritative[params.providerId], expected[params.providerId])) {
           throw new AuthStoragePersistenceError(

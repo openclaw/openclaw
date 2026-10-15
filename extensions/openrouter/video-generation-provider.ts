@@ -3,7 +3,7 @@ import {
   readGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  normalizeVideoGenerationDuration,
   selectSupportedVideoDuration,
   type GeneratedVideoAsset,
   type VideoGenerationProvider,
@@ -173,15 +174,12 @@ function resolveDurationSeconds(
   durationSeconds: number | undefined,
   supportedDurations: readonly number[] = SUPPORTED_DURATION_SECONDS,
 ): number | undefined {
-  if (typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds)) {
+  const rounded = normalizeVideoGenerationDuration({ durationSeconds });
+  if (rounded === undefined) {
     return undefined;
   }
   const effectiveDurations =
     supportedDurations.length > 0 ? supportedDurations : SUPPORTED_DURATION_SECONDS;
-  const rounded = Math.max(1, Math.round(durationSeconds));
-  if (durationSeconds === rounded && effectiveDurations.includes(rounded)) {
-    return rounded;
-  }
   return selectSupportedVideoDuration(rounded, effectiveDurations);
 }
 
@@ -348,7 +346,7 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
     label: "OpenRouter",
     defaultModel: DEFAULT_MODEL,
     models: [DEFAULT_MODEL],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "openrouter", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "openrouter", ...ctx }),
     resolveModelCapabilities: resolveOpenRouterVideoModelCapabilities,
     capabilities: {
       providerOptions: {

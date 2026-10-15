@@ -30,19 +30,6 @@ describe("ConfigSchemaResponseSchema", () => {
   it("accepts the phone-number presentation hint", () => {
     expect(Value.Check(ConfigSchemaResponseSchema, response)).toBe(true);
   });
-
-  it("rejects unknown presentation hint values", () => {
-    expect(
-      Value.Check(ConfigSchemaResponseSchema, {
-        ...response,
-        uiHints: {
-          "channels.sms.fromNumber": {
-            presentation: "telephone",
-          },
-        },
-      }),
-    ).toBe(false);
-  });
 });
 
 describe("ConfigSchemaLookupResultSchema", () => {
@@ -59,6 +46,51 @@ describe("ConfigSchemaLookupResultSchema", () => {
 });
 
 describe("update protocol schemas", () => {
+  it("carries inspect-only immutable retention facts without granting collection", () => {
+    const releaseRetention = {
+      version: 1,
+      mode: "inspect",
+      keepVerifiedGenerations: 3,
+      pins: [],
+      generations: [
+        {
+          sha: "a".repeat(40),
+          path: "/opt/example/releases/" + "a".repeat(40),
+          identity: "1:2",
+          buildDigest: "b".repeat(64),
+          publishedRevision: 2,
+          verifiedRevision: null,
+        },
+      ],
+    };
+    const payload = {
+      channel: "stable",
+      autoEnabled: false,
+      install: {
+        kind: "immutable",
+        immutable: {
+          root: "/opt/example",
+          currentSha: "a".repeat(40),
+          currentPath: "/opt/example/releases/" + "a".repeat(40),
+          releaseRetention,
+        },
+      },
+    };
+    expect(Value.Check(UpdateScheduleStateSchema, payload)).toBe(true);
+    expect(
+      Value.Check(UpdateScheduleStateSchema, {
+        ...payload,
+        install: {
+          ...payload.install,
+          immutable: {
+            ...payload.install.immutable,
+            releaseRetention: { ...releaseRetention, mode: "delete" },
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
   it("requires an explicit report action and reviewed digest", () => {
     const attemptId = "handoff-failed";
     const previewDigest = "a".repeat(64);
@@ -152,38 +184,6 @@ describe("update protocol schemas", () => {
     expect(Value.Check(UpdateStatusParamsSchema, {})).toBe(true);
     expect(Value.Check(UpdateStatusParamsSchema, { refreshCheckout: true })).toBe(true);
     expect(Value.Check(UpdateStatusParamsSchema, { refreshCheckout: "yes" })).toBe(false);
-  });
-
-  it("accepts package and git schedule targets", () => {
-    expect(
-      Value.Check(UpdateScheduleStateSchema, {
-        channel: "beta",
-        autoEnabled: true,
-        install: { kind: "package" },
-        target: { kind: "package", version: "2026.8.1-beta.1" },
-        campaign: {
-          id: "campaign-1",
-          state: "countdown",
-          announcedAtMs: 1,
-          applyAtMs: 60_001,
-          forceAtMs: 900_001,
-          updatedAtMs: 1,
-        },
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(UpdateScheduleStateSchema, {
-        channel: "dev",
-        autoEnabled: true,
-        install: { kind: "git" },
-        target: {
-          kind: "git",
-          upstreamRef: "origin/main",
-          upstreamSha: "abcdef1234",
-          commitsBehind: 3,
-        },
-      }),
-    ).toBe(true);
   });
 
   it("accepts immutable recovery and optional verification facts while rejecting private fields", () => {

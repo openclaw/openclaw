@@ -3,9 +3,12 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
+  DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
+  resolveMemoryDreamingPluginId,
 } from "../memory-host-sdk/dreaming.js";
+import { readMemorySearchManagerStatus } from "../memory-host-sdk/host/types.js";
 import {
   auditDreamingArtifacts,
   auditShortTermPromotionArtifacts,
@@ -13,6 +16,7 @@ import {
   repairShortTermPromotionArtifacts,
   type ShortTermAuditSummary,
 } from "../plugin-sdk/memory-core-bundled-runtime.js";
+import { loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
   getActiveMemorySearchManagerCore,
   resolveActiveMemoryBackendConfig,
@@ -38,7 +42,7 @@ async function resolveRuntimeMemoryWorkspaceDir(
     return undefined;
   }
   try {
-    return manager.status().workspaceDir?.trim();
+    return (await readMemorySearchManagerStatus(manager)).workspaceDir?.trim();
   } finally {
     await manager.close?.().catch(() => undefined);
   }
@@ -65,6 +69,7 @@ function buildMemoryArtifactIssueNote(
 async function runMemoryRecallHealth(
   cfg: OpenClawConfig,
   prompter?: DoctorPrompter,
+  deep = true,
 ): Promise<void> {
   const scopes = resolveMemoryDoctorAgentScopes(cfg);
   const labelAgents = scopes.length > 1;
@@ -75,22 +80,24 @@ async function runMemoryRecallHealth(
     const agentMessage = (message: string) =>
       formatMemoryDoctorAgentMessage(scope.agentId, labelAgents, message);
     const report = (message: string) => note(agentMessage(message), "Memory search");
-    const backend = resolveActiveMemoryBackendConfig({ cfg, agentId: scope.agentId });
-    if (backend?.backend === "provider-runtime") {
-      report(`Not applicable: ${backend.providerId} uses the provider runtime; see its health.`);
-      continue;
-    }
-    if (prompter) {
-      await maybeRepairWorkspaceMemoryHealth({
-        prompter,
-        scope: {
-          agentId: scope.agentId,
-          workspaceDir: scope.workspaceDir,
-          labelAgent: labelAgents,
-        },
-      });
-    }
     try {
+      if (!deep) {
+        continue;
+      }
+      const backend = resolveActiveMemoryBackendConfig({ cfg, agentId: scope.agentId });
+      if (backend?.backend === "provider-runtime") {
+        continue;
+      }
+      if (prompter) {
+        await maybeRepairWorkspaceMemoryHealth({
+          prompter,
+          scope: {
+            agentId: scope.agentId,
+            workspaceDir: scope.workspaceDir,
+            labelAgent: labelAgents,
+          },
+        });
+      }
       const workspaceDir = await resolveRuntimeMemoryWorkspaceDir(cfg, scope.agentId);
       if (!workspaceDir) {
         continue;
@@ -177,16 +184,25 @@ async function runMemoryRecallHealth(
       );
     } finally {
       if (dreaming) {
-        report(
-          `Dreaming: ${dreaming.enabled ? "enabled" : "disabled"} (cadence ${dreaming.frequency}).`,
-        );
+        const enabled =
+          dreaming.enabled &&
+          loadPluginRegistryHandle({
+            config: cfg,
+            workspaceDir: scope.workspaceDir,
+            loadModules: false,
+            onlyPluginIds: [resolveMemoryDreamingPluginId(cfg)],
+          }).plugins.some(
+            (plugin) =>
+              plugin.id === DEFAULT_MEMORY_DREAMING_PLUGIN_ID && plugin.status === "loaded",
+          );
+        report(`Dreaming: ${enabled ? "enabled" : "disabled"} (cadence ${dreaming.frequency}).`);
       }
     }
   }
 }
 
-export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void> {
-  return runMemoryRecallHealth(cfg);
+export async function noteMemoryRecallHealth(cfg: OpenClawConfig, deep = true): Promise<void> {
+  return runMemoryRecallHealth(cfg, undefined, deep);
 }
 
 export async function maybeRepairMemoryRecallHealth(params: {

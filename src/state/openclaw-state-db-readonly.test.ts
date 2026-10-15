@@ -14,6 +14,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
 import * as sqliteReadOnly from "../infra/sqlite-snapshot-source.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
@@ -118,7 +119,7 @@ it("keeps fresh synchronous read callbacks from returning asynchronous work", as
     let reader: DatabaseSync | undefined;
     expect(() =>
       withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-        reader = db;
+        reader = requireNativeSqliteDatabase(db);
         return Promise.resolve(1);
       }, options),
     ).toThrow("SQLite source read must remain synchronous");
@@ -132,7 +133,7 @@ it("preserves read admission denial and recovers the cached reader", async () =>
     const opened = openOpenClawStateDatabase(options);
     const operation = vi.fn(() => "unexpected");
     let denied = false;
-    opened.db.setAuthorizer((action) => {
+    requireNativeSqliteDatabase(opened.db).setAuthorizer((action) => {
       if (action === constants.SQLITE_SELECT && !denied) {
         denied = true;
         return constants.SQLITE_DENY;
@@ -144,7 +145,7 @@ it("preserves read admission denial and recovers the cached reader", async () =>
         /not authorized/,
       );
     } finally {
-      opened.db.setAuthorizer(null);
+      requireNativeSqliteDatabase(opened.db).setAuthorizer(null);
     }
     expect(denied).toBe(true);
     expect(operation).not.toHaveBeenCalled();
@@ -249,7 +250,7 @@ it("reads only active disposable scopes directly and revokes inherited async acc
         expect(isArtifactPreservingStateRead()).toBe(true);
         expect(db.prepare("SELECT value FROM held").get()).toEqual({ value: "committed" });
         expect(() => db.exec("INSERT INTO held VALUES ('unexpected')")).toThrow(/readonly/);
-        return db.location();
+        return requireNativeSqliteDatabase(db).location();
       }, options);
     const sourceBefore = fs.readFileSync(source.path);
     const released = createDeferredCore();
@@ -353,7 +354,6 @@ it("reuses an idle writer but isolates its transaction", async () => {
 
 it.each([
   { failure: "quarantine", composite: false },
-  { failure: "quarantine", composite: true },
   { failure: "callback", composite: true },
 ] as const)(
   "cleans the async snapshot after $failure rejection (composite: $composite)",

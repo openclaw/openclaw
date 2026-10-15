@@ -145,12 +145,15 @@ overflow summary.
 - `chat.abort` with a specific `runId` cancels that turn while it is still
   queued, if the requester is authorized (same ownership rules as active runs).
 - `chat.abort` for a session without `runId` cancels **authorized queued turns
-  first**, then aborts authorized active runs, including the session's active run
-  started without a Gateway chat controller (such as OpenAI-compatible HTTP
-  requests or channel replies). That order prevents queue drain
+  first**, then aborts authorized active runs, including controller-less runs
+  admitted or queued before their runner starts (such as OpenAI-compatible HTTP
+  requests), as well as active channel replies. That order prevents queue drain
   from promoting work into a half-stopped session.
 - Clearing the entire session queue without per-requester checks is not the
   stop path for multi-owner sessions.
+- A new prompt accepted after Stop keeps its own cancellation and queue custody.
+  If the stopped turn is still settling preparation, the new prompt waits for
+  that owner to finish before running; it does not inherit the earlier Stop.
 - Queued waits are not projected as active agent runs for `sessions.list` and
   do not own active-run timeout semantics; only the active phase does.
 - A queued request that expires or is cancelled before execution settles only
@@ -197,6 +200,14 @@ attempt's inbound and queue dedupe entries before ingress retries it. Messages
 already adopted or consumed keep duplicate suppression, so transport redelivery
 does not repeat their effects.
 
+Queued channel input is adopted only after the session owner accepts durable
+input and recovery custody. Preparation failures before acceptance keep ingress retryable;
+failures after acceptance produce a terminal error reply without replaying the
+input. Entering the session lane alone does not complete ingress.
+Repeated preparation errors stop renewing the waiting heartbeat, allowing the
+existing ingress watchdog to apply its retry and dead-letter policy. Normal
+capacity waits keep their heartbeat.
+
 ## Lanes and scope
 
 - Applies to auto-reply agent runs across all inbound channels that use the gateway reply pipeline (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, webchat, etc.).
@@ -210,11 +221,13 @@ does not repeat their effects.
 
 ## Background work
 
-Skill Workshop reviews and plugin background completions, including [dreaming](/concepts/dreaming), share a separate budget of **three concurrent runs**. Workshop reviews use at most one slot; each plugin can use up to three available slots. This keeps maintenance work out of foreground reply capacity while bounding its total concurrency. These limits are built in and need no configuration.
+Plugin background completions, including [dreaming](/concepts/dreaming), use the Gateway's `subagent` lane at background priority. Its concurrency follows `agents.defaults.subagents.maxConcurrent` across plugins and workspaces (default: `8`). Set it to `1` to run one completion at a time. Ordinary spawned sub-agent queues retain their per-spawning-session budgets.
+
+Skill Workshop reviews use a separate background budget, with at most one review running at a time.
 
 Schedulers that await background work do not occupy this budget themselves. Only the dispatched work holds a slot, through completion or cancellation cleanup, so a scheduler cannot block the child it is waiting for. Cancelled queued work is removed before it starts; Gateway restart or runtime retirement prevents stale completions from starting or returning results.
 
-The Control UI **System busyness** overlay and `diagnostics.lanes` report this work in one `background` row. Its active and queued counts include every owner; owner lanes are not counted again in the dynamic session-lane totals.
+The Control UI **System busyness** overlay and `diagnostics.lanes` report plugin completions in the `subagent` row and Workshop reviews in the `background` row. Background owner lanes are not counted again in the dynamic session-lane totals.
 
 ## Troubleshooting
 

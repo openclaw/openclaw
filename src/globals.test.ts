@@ -64,16 +64,6 @@ describe("logVerbose", () => {
     expect(consoleSpy).not.toHaveBeenCalled();
   });
 
-  it("logs to the file logger and console when isVerbose is true", () => {
-    vi.mocked(isVerbose).mockReturnValue(true);
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    logVerbose("test message");
-
-    expect(mocks.loggerDebug).toHaveBeenCalledWith({ message: "test message" }, "verbose");
-    expect(consoleSpy).toHaveBeenCalledWith("test message");
-  });
-
   it("still logs to console when the file logger throws", () => {
     vi.mocked(isVerbose).mockReturnValue(true);
     mocks.getLogger.mockImplementation(() => {

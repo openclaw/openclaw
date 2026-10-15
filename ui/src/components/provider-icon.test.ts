@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
+import { keyboardIconShapes, strokeIcon } from "./icons-tools.ts";
 import { icons } from "./icons.ts";
 import {
   compareCloudProfiles,
@@ -9,6 +10,37 @@ import {
   renderProviderBrandIcon,
   resolveCloudProfileIcon,
 } from "./provider-icon.ts";
+
+function svgGeometry(element: Element | null): unknown {
+  return element
+    ? {
+        tag: element.localName,
+        namespace: element.namespaceURI,
+        attributes: Object.fromEntries(
+          [...element.attributes]
+            .filter((attribute) => attribute.name !== "aria-hidden")
+            .map((attribute) => [attribute.name, attribute.value]),
+        ),
+        children: [...element.children].map(svgGeometry),
+      }
+    : null;
+}
+
+describe("retained Lit icon callers", () => {
+  it("keeps reusable registry values and custom stroked keyboard fragments", () => {
+    const first = document.createElement("div");
+    const second = document.createElement("div");
+    render(icons.copy, first);
+    render(icons.copy, second);
+    expect(first.querySelector("svg")).not.toBe(second.querySelector("svg"));
+    expect(first.querySelector("rect")?.getAttribute("width")).toBe("14");
+    render(strokeIcon(keyboardIconShapes["⌘"], "width: 1em"), first);
+    expect(first.querySelectorAll("svg")).toHaveLength(1);
+    expect(first.querySelector("svg")?.style.width).toBe("1em");
+    expect(first.querySelector("path")?.namespaceURI).toBe("http://www.w3.org/2000/svg");
+    expect(first.querySelector("svg")?.getAttribute("stroke-width")).toBe("2");
+  });
+});
 
 describe("model provider labels", () => {
   it.each([
@@ -80,7 +112,10 @@ describe("cloud provider presentation", () => {
       expected = document.createElement("div");
     render(resolveCloudProfileIcon({ providerId }).icon, actual);
     render(expectedIcon, expected);
-    expect(actual.querySelector("svg")?.outerHTML).toBe(expected.querySelector("svg")?.outerHTML);
+    expect(svgGeometry(actual.querySelector("svg"))).toEqual(
+      svgGeometry(expected.querySelector("svg")),
+    );
+    expect(actual.querySelector("svg")?.closest('[aria-hidden="true"]')).not.toBeNull();
     expect(actual.querySelector("[data-provider-icon]")).toBeNull();
   });
 });

@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { createHash } from "node:crypto";
+import assert from "node:assert/strict";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -8,9 +8,14 @@ import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { build, createLogger, type InlineConfig } from "vite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ControlUiAssetManifest } from "../../../src/gateway/control-ui-asset-manifest.ts";
 import { controlUiCodeSplitting } from "../../config/control-ui-chunking.ts";
 import controlUiViteConfig from "../../vite.config.ts";
+
+function readBuiltIdentity(html: string): { buildId: string } {
+  const encoded = /globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(.*?);<\/script>/u.exec(html)?.[1];
+  assert.ok(encoded, "built document must carry its artifact identity");
+  return JSON.parse(encoded);
+}
 
 describe("Control UI Vite build", () => {
   let root: string;
@@ -256,6 +261,48 @@ describe("Control UI Vite build", () => {
     expect(html).not.toContain(gateChunk.fileName);
   });
 
+  it("caches attachment workers offline without preloading them as document modules", async () => {
+    const config = createConfig();
+    const sidebar = fileURLToPath(new URL("../components/app-sidebar.tsx", import.meta.url));
+    const worker = path.join(root, "resize.js");
+    await fs.writeFile(worker, 'self.onmessage = () => self.postMessage("resized");');
+    await fs.writeFile(
+      path.join(root, "main.js"),
+      `globalThis.loadSidebar = () => import(${JSON.stringify(sidebar)});`,
+    );
+    config.plugins = [
+      {
+        name: "attachment-worker-fixture",
+        enforce: "pre",
+        resolveId: (id) => (id === sidebar ? id : null),
+        load: (id) =>
+          id === sidebar
+            ? `import url from ${JSON.stringify(`${worker}?worker&url`)}; export const resize = () => new Worker(url);`
+            : null,
+      },
+      ...(config.plugins ?? []),
+    ];
+    const built = await build(config);
+    if (Array.isArray(built) || !("output" in built)) {
+      throw new Error("Expected one production bundle");
+    }
+    const sidebarChunk = built.output.find(
+      (entry) => entry.type === "chunk" && entry.facadeModuleId === sidebar,
+    );
+    expect(sidebarChunk).toBeDefined();
+    const assets = await fs.readdir(path.join(outDir, "assets"));
+    const workerFile = assets.find((name) => /^resize-.*\.js$/u.test(name));
+    expect(workerFile).toBeDefined();
+    const serviceWorker = await fs.readFile(path.join(outDir, "sw.js"), "utf8");
+    const boot = JSON.parse(/const OFFLINE_BOOT = (.+);/u.exec(serviceWorker)![1]!) as {
+      assets: Array<{ path: string }>;
+    };
+    expect(boot.assets.map((asset) => asset.path)).toContain(`assets/${workerFile}`);
+    const html = await fs.readFile(path.join(outDir, "index.html"), "utf8");
+    expect(html).toContain(sidebarChunk!.fileName);
+    expect(html).not.toContain(workerFile);
+  });
+
   it.each(["unresolved import", "blocked output"])(
     "preserves the original %s diagnostic without finalizing the build",
     async (failure) => {
@@ -270,15 +317,13 @@ describe("Control UI Vite build", () => {
       const result = build(config);
       if (failure === "unresolved import") {
         await expect(result).rejects.toThrow(/Could not resolve.*missing-module\.js/u);
-        await expect(result).rejects.not.toThrow(/ENOENT|asset-manifest/u);
+        await expect(result).rejects.not.toThrow(/ENOENT/u);
         await expect(fs.stat(outDir)).rejects.toMatchObject({ code: "ENOENT" });
       } else {
         await expect(result).rejects.toThrow(/blocked/u);
-        await expect(result).rejects.not.toThrow(/scandir|asset-manifest/u);
+        await expect(result).rejects.not.toThrow(/scandir/u);
         expect(await fs.readFile(path.join(outDir, "blocked"), "utf8")).toBe("output obstruction");
-        for (const file of ["asset-manifest.json", "sw.js"]) {
-          await expect(fs.stat(path.join(outDir, file))).rejects.toMatchObject({ code: "ENOENT" });
-        }
+        await expect(fs.stat(path.join(outDir, "sw.js"))).rejects.toMatchObject({ code: "ENOENT" });
       }
       expect(info.mock.calls.flat().join("\n")).not.toMatch(/precompression complete|built in/u);
     },
@@ -311,7 +356,7 @@ describe("Control UI Vite build", () => {
         sidecars: emitted.filter((name) => /\.(br|gz)$/u.test(name)).length,
       });
       // The logger observes real disk writes while build() is still finalizing.
-      expect(fsSync.existsSync(path.join(outDir, "asset-manifest.json"))).toBe(false);
+      expect(fsSync.existsSync(path.join(outDir, "sw.js"))).toBe(false);
     });
     config.plugins = [
       ...(config.plugins ?? []),
@@ -349,7 +394,7 @@ describe("Control UI Vite build", () => {
       expect(entry.message).toContain(`${entry.assets} assets (${entry.sidecars} sidecars)`);
     }
     expect(activity.at(-1)?.message).toContain("precompression complete");
-    await expect(fs.stat(path.join(outDir, "asset-manifest.json"))).resolves.toBeDefined();
+    await expect(fs.stat(path.join(outDir, "sw.js"))).resolves.toBeDefined();
   });
 
   it.each([
@@ -388,19 +433,8 @@ describe("Control UI Vite build", () => {
       await expect(fs.stat(configuredOutDir)).rejects.toMatchObject({ code: "ENOENT" });
     }
 
-    const manifest: ControlUiAssetManifest = JSON.parse(
-      await fs.readFile(path.join(outDir, "asset-manifest.json"), "utf8"),
-    );
     const emitted = (await fs.readdir(path.join(outDir, "assets"))).toSorted();
     expect(emitted.some((name) => name.endsWith(".map"))).toBe(true);
-    expect(manifest.assets.map((entry) => entry.path).toSorted()).toEqual(
-      emitted.filter((name) => !name.endsWith(".map")).map((name) => `assets/${name}`),
-    );
-    for (const entry of manifest.assets) {
-      const source = await fs.readFile(path.join(outDir, entry.path));
-      expect(entry.size).toBe(source.byteLength);
-      expect(entry.sha256).toBe(createHash("sha256").update(source).digest("hex"));
-    }
 
     const scripts = emitted.filter((name) => name.endsWith(".js"));
     expect(scripts.length).toBeGreaterThan(1);
@@ -420,10 +454,10 @@ describe("Control UI Vite build", () => {
     }
     const serviceWorker = await fs.readFile(path.join(outDir, "sw.js"), "utf8");
     const embeddedBuildId = /const EMBEDDED_CACHE_VERSION = "([^"]+)"/u.exec(serviceWorker)?.[1];
-    const buildInfo = JSON.parse(config.define?.["globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO"]);
+    const html = await fs.readFile(path.join(outDir, "index.html"), "utf8");
+    const buildInfo = readBuiltIdentity(html);
     expect(embeddedBuildId).toBe(buildInfo.buildId);
 
-    const html = await fs.readFile(path.join(outDir, "index.html"), "utf8");
     const scriptTags = html.match(/<script\b[^>]*>/gu) ?? [];
     expect(scriptTags.length).toBeGreaterThan(0);
     for (const tag of scriptTags) {
@@ -471,31 +505,20 @@ describe("Control UI Vite build", () => {
       path.join(root, "index.html"),
       '<html><script type="module" src="./main.js"></script></html>',
     );
-    const buildInfo = JSON.parse(config.define?.["globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO"]);
+    let initialBuildId: string | undefined;
     const cacheIds: string[] = [];
     for (const title of ["First", "Second"]) {
       await fs.writeFile(path.join(publicDir, "favicon.svg"), `<svg><title>${title}</title></svg>`);
       await build(config);
       const html = await fs.readFile(path.join(outDir, "index.html"), "utf8");
+      initialBuildId ??= readBuiltIdentity(html).buildId;
       const cacheId = /data-openclaw-control-ui-build-id="([^"]+)"/u.exec(html)?.[1];
       expect(cacheId).toBeDefined();
       cacheIds.push(cacheId!);
       const worker = await fs.readFile(path.join(outDir, "sw.js"), "utf8");
-      expect(/const EMBEDDED_CACHE_VERSION = "([^"]+)"/u.exec(worker)?.[1]).toBe(buildInfo.buildId);
+      expect(/const EMBEDDED_CACHE_VERSION = "([^"]+)"/u.exec(worker)?.[1]).toBe(initialBuildId);
     }
     expect(cacheIds[0]).not.toBe(cacheIds[1]);
-  });
-
-  it("fails when a completed build emits outside the required assets directory", async () => {
-    const config = createConfig();
-    config.build = { ...config.build, assetsDir: "bundles" };
-
-    await expect(build(config)).rejects.toThrow(/ENOENT.*assets/u);
-    expect(await fs.readFile(path.join(outDir, "index.html"), "utf8")).toContain("bundles/");
-    expect((await fs.readdir(path.join(outDir, "bundles"))).length).toBeGreaterThan(0);
-    await expect(fs.stat(path.join(outDir, "asset-manifest.json"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
   });
 
   it("does not count an asset or report completion when its second sidecar write fails", async () => {
@@ -516,7 +539,7 @@ describe("Control UI Vite build", () => {
     const emitted = await fs.readdir(path.join(outDir, "assets"));
     expect(emitted.filter((name) => name.endsWith(".br"))).toHaveLength(1);
     expect(emitted.filter((name) => name.endsWith(".gz"))).toHaveLength(0);
-    await expect(fs.stat(path.join(outDir, "asset-manifest.json"))).rejects.toMatchObject({
+    await expect(fs.stat(path.join(outDir, "sw.js"))).rejects.toMatchObject({
       code: "ENOENT",
     });
   });

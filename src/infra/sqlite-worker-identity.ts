@@ -11,15 +11,15 @@ export type DatabaseFileIdentity = Readonly<{
 export type DatabasePathIdentity = DatabaseFileIdentity & Readonly<{ canonicalPath: string }>;
 
 // The physical host policy stays fixed across every admission in this process.
-const useDatabaseBirthtime = process.platform !== "linux";
+const useDatabaseBirthtime = process.platform !== "linux" && process.platform !== "android";
 
 export function databaseFileIdentityKey(file: Pick<BigIntStats, "dev" | "ino">): string {
   return `${file.dev}:${file.ino}`;
 }
 
 export function readDatabaseIdentityBirthtime(file: Pick<BigIntStats, "birthtimeNs">): string {
-  // Node does not expose Linux STATX_BTIME availability and can substitute ctime.
-  // Keep the unknown creation-time value stable across ordinary database writes.
+  // Node does not expose STATX_BTIME availability on Linux or Android (Termux) and can
+  // substitute ctime. Keep the unknown creation-time value stable across ordinary database writes.
   return useDatabaseBirthtime ? file.birthtimeNs.toString() : "0";
 }
 
@@ -102,6 +102,19 @@ function missingAncestorParent(ancestor: string, missing: string[], error: unkno
   return parent;
 }
 
+/** In-process owner key only; never rewrite a configured or persisted database locator. */
+export function resolveDatabasePathKey(databasePath: string): string {
+  let ancestor = path.resolve(databasePath);
+  const missing: string[] = [];
+  while (true) {
+    try {
+      return normalizeDatabasePath(path.join(realpathSync.native(ancestor), ...missing));
+    } catch (error) {
+      ancestor = missingAncestorParent(ancestor, missing, error);
+    }
+  }
+}
+
 /** Inspect a native-owner path without replacing its diagnostic for a non-file target. */
 export function inspectDatabasePathIdentitySync(
   databasePath: string,
@@ -119,21 +132,11 @@ export function inspectDatabasePathIdentitySync(
     if (!file.isFile()) {
       return undefined;
     }
-    const canonicalPath = realpathSync.native(resolvedPath);
+    const canonicalPath = resolveDatabasePathKey(resolvedPath);
     return existingIdentity(file, statSync(canonicalPath, { bigint: true }), canonicalPath);
   }
-  const missing: string[] = [];
-  let ancestor = resolvedPath;
-  while (true) {
-    try {
-      const canonicalPath = normalizeDatabasePath(
-        path.join(realpathSync.native(ancestor), ...missing),
-      );
-      return { key: `path:${canonicalPath}`, canonicalPath };
-    } catch (error) {
-      ancestor = missingAncestorParent(ancestor, missing, error);
-    }
-  }
+  const canonicalPath = resolveDatabasePathKey(resolvedPath);
+  return { key: `path:${canonicalPath}`, canonicalPath };
 }
 
 /** Capture identity before yielding; worker admission requires a regular file or absent path. */

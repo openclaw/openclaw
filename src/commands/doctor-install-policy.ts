@@ -29,7 +29,7 @@ async function collectInstallPolicyHealthLines(
     lines.push(`- ${issue.severity.toUpperCase()}: ${sanitizeTerminalText(issue.message)}`);
   }
   if (validation.issues.some((issue) => issue.severity === "error")) {
-    lines.push("- Installs and updates for covered targets will fail closed until this is fixed.");
+    lines.push("- Installs and updates for covered targets will be blocked until this is fixed.");
     return lines;
   }
 
@@ -73,7 +73,7 @@ async function collectInstallPolicyHealthLines(
   } finally {
     await fs.rm(probeDir, { recursive: true, force: true });
   }
-  lines.push("- Installs and updates for covered targets will fail closed until this is fixed.");
+  lines.push("- Installs and updates for covered targets will be blocked until this is fixed.");
   return lines;
 }
 

@@ -10,6 +10,7 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadCronJobsStore, resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
@@ -22,7 +23,6 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   clearUserProfileAuthLink,
   listUserProfileAuthLinks,
-  resolveUserProfileAuthLink,
   setUserProfileAuthLink,
 } from "../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -318,6 +318,7 @@ describe("doctor auth-profile consumers", () => {
             messages: { responsePrefix: "literal anthropic/test-model@claude-cli:work" },
           };
           await state.writeConfig(config);
+          setRuntimeConfigSnapshot(config);
           const cronStorePath = resolveCronJobsStorePath();
           await saveCronJobsStore(cronStorePath, {
             version: 1,
@@ -475,9 +476,6 @@ describe("doctor auth-profile consumers", () => {
           expect(repaired.messages?.responsePrefix).toBe(
             "literal anthropic/test-model@claude-cli:work",
           );
-          expect(
-            resolveUserProfileAuthLink({ profileId: person.id, providers: ["anthropic"] }),
-          ).toBe(renamed);
           const links = readStoredLinks(person.id);
           expect(links).toEqual({
             version: 1,

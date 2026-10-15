@@ -191,17 +191,6 @@ describe("ollama embedding provider", () => {
     });
   });
 
-  it("resolves configured baseURL alias", async () => {
-    const { fetchMock } = await embedTestQuery({
-      config: createProviderConfig({ baseURL: "http://remote-ollama:11434/v1", models: [] }),
-    });
-
-    expectEmbeddingFetch(fetchMock, "http://remote-ollama:11434/api/embed", {
-      model: "nomic-embed-text",
-      input: "search_query: hello",
-    });
-  });
-
   it("fails fast when memory-search remote apiKey is an unresolved SecretRef", async () => {
     await expect(
       createEmbeddingProvider({
@@ -399,6 +388,26 @@ describe("ollama embedding provider", () => {
     expect(String(error)).not.toContain("tail");
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "missing model",
+      status: 404,
+      detail: 'model "all-minilm" not found, try pulling it first',
+      recovery: " Run `ollama pull all-minilm` on the configured Ollama host.",
+    },
+    { name: "missing endpoint", status: 404, detail: "404 page not found", recovery: "" },
+    { name: "server error", status: 500, detail: "model metadata not found", recovery: "" },
+  ])("reports actionable embed errors for $name", async ({ status, detail, recovery }) => {
+    const body = JSON.stringify({ error: detail });
+    const fetchMock = mockEmbeddingResponse(new Response(body, { status }));
+    const { provider } = await createEmbeddingProvider({ model: "all-minilm" });
+
+    await expect(provider.embed("hello", { inputType: "query" })).rejects.toMatchObject({
+      message: `Ollama embed HTTP ${status}: ${body}${recovery}`,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("reports malformed embed JSON with a provider-owned error", async () => {

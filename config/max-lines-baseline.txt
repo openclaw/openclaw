@@ -1,10 +1,8 @@
 # Files currently allowed to exceed the oxlint max-lines budget.
 # Ratchet: this list may only shrink. Split files; never add entries.
 # Existing suppressions carry a TODO at the file site.
-extensions/acpx/src/codex-auth-bridge.ts
 extensions/acpx/src/runtime.ts
 extensions/active-memory/index.test.ts
-extensions/amazon-bedrock/index.test.ts
 extensions/amazon-bedrock/stream.runtime.ts
 extensions/anthropic/session-catalog.test.ts
 extensions/browser/src/browser-tool.test.ts
@@ -16,7 +14,6 @@ extensions/browser/src/browser/routes/agent.snapshot.ts
 extensions/codex/src/app-server/approval-bridge.ts
 extensions/codex/src/app-server/auth-bridge.test.ts
 extensions/codex/src/app-server/auth-bridge.ts
-extensions/codex/src/app-server/client.ts
 extensions/codex/src/app-server/compact.test.ts
 extensions/codex/src/app-server/computer-use.ts
 extensions/codex/src/app-server/config.test.ts
@@ -49,14 +46,11 @@ extensions/copilot/src/attempt.test.ts
 extensions/crabbox/src/crabbox-worker-provider.test.ts
 extensions/diagnostics-otel/src/service.test.ts
 extensions/discord/src/actions/runtime.test.ts
-extensions/discord/src/monitor.test.ts
 extensions/discord/src/monitor/message-handler.preflight.test.ts
 extensions/discord/src/monitor/message-handler.preflight.ts
 extensions/discord/src/monitor/model-picker.test.ts
 extensions/discord/src/monitor/native-command.model-picker.test.ts
 extensions/discord/src/monitor/native-command.plugin-dispatch.test.ts
-extensions/discord/src/outbound-adapter.test.ts
-extensions/discord/src/send.sends-basic-channel-messages.test.ts
 extensions/fal/image-generation-provider.ts
 extensions/feishu/src/bot.test.ts
 extensions/feishu/src/bot.ts
@@ -70,7 +64,6 @@ extensions/feishu/src/outbound.ts
 extensions/feishu/src/reply-dispatcher.test.ts
 extensions/feishu/src/reply-dispatcher.ts
 extensions/feishu/src/streaming-card.test.ts
-extensions/firecrawl/src/firecrawl-tools.test.ts
 extensions/github-copilot/index.test.ts
 extensions/google-meet/index.test.ts
 extensions/google/realtime-voice-provider.test.ts
@@ -109,7 +102,6 @@ extensions/memory-wiki/src/compile.ts
 extensions/memory-wiki/src/query.test.ts
 extensions/memory-wiki/src/query.ts
 extensions/microsoft-foundry/index.test.ts
-extensions/migrate-hermes/config.test.ts
 extensions/migrate-hermes/secrets.test.ts
 extensions/msteams/src/channel.ts
 extensions/mxc/test/mxc-backend.test.ts
@@ -166,21 +158,16 @@ extensions/telegram/src/bot.create-telegram-bot.test.ts
 extensions/telegram/src/bot.test.ts
 extensions/telegram/src/bot/delivery.replies.ts
 extensions/telegram/src/channel.ts
-extensions/telegram/src/draft-stream.test.ts
-extensions/telegram/src/draft-stream.ts
 extensions/telegram/src/message-cache.ts
 extensions/telegram/src/polling-session.test.ts
 extensions/telegram/src/webhook.test.ts
 extensions/tlon/src/monitor/index.ts
-extensions/voice-call/index.test.ts
-extensions/voice-call/src/media-stream.ts
 extensions/voice-call/src/webhook.test.ts
 extensions/voice-call/src/webhook.ts
 extensions/voice-call/src/webhook/realtime-handler.test.ts
 extensions/voice-call/src/webhook/realtime-handler.ts
 extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts
 extensions/whatsapp/src/connection-controller.ts
-extensions/workboard/browser/pages/workboard/view.test.ts
 extensions/workboard/src/store-core.ts
 extensions/workboard/src/store-normalizers.ts
 extensions/workboard/src/store.test.ts
@@ -192,7 +179,6 @@ packages/agent-core/src/agent-loop.test.ts
 packages/agent-core/src/agent-loop.ts
 packages/agent-core/src/harness/compaction/compaction.ts
 packages/ai/src/providers/anthropic.test.ts
-packages/ai/src/providers/mistral.ts
 packages/ai/src/providers/openai-chatgpt-responses.ts
 packages/ai/src/providers/openai-completions.test.ts
 packages/ai/src/providers/openai-responses-shared.test.ts
@@ -219,7 +205,6 @@ src/agents/bash-tools.exec-host-gateway.ts
 src/agents/bash-tools.exec-host-node.test.ts
 src/agents/bash-tools.exec-runtime.ts
 src/agents/btw.test.ts
-src/agents/btw.ts
 src/agents/cli-runner.reliability.test.ts
 src/agents/cli-runner.spawn.test.ts
 src/agents/cli-runner/execute.supervisor-capture.test.ts
@@ -240,12 +225,10 @@ src/agents/embedded-agent-runner/model.test.ts
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts
 src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts
 src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts
-src/agents/embedded-agent-runner/run/attempt.test.ts
 src/agents/embedded-agent-runner/runs.ts
 src/agents/embedded-agent-runner/thinking.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.ts
-src/agents/embedded-agent-runner/transcript-file-state.test.ts
 src/agents/embedded-agent-subscribe.handlers.tools.test.ts
 src/agents/harness/native-hook-relay.test.ts
 src/agents/harness/selection.test.ts
@@ -256,7 +239,6 @@ src/agents/model-selection-shared.ts
 src/agents/models.profiles.live.test.ts
 src/agents/openclaw-tools.session-status.test.ts
 src/agents/openclaw-tools.sessions.test.ts
-src/agents/session-transcript-repair.test.ts
 src/agents/sessions/extensions/runner.ts
 src/agents/sessions/extensions/types.ts
 src/agents/sessions/model-registry.ts
@@ -276,7 +258,6 @@ src/agents/tools/sessions-spawn-tool.test.ts
 src/agents/tools/sessions.test.ts
 src/agents/tools/video-generate-tool.test.ts
 src/agents/tools/web-fetch.ts
-src/agents/transcript-redact.test.ts
 src/agents/workspace.ts
 src/agents/worktrees/service.ts
 src/auto-reply/reply/agent-runner-memory.test.ts
@@ -284,7 +265,6 @@ src/auto-reply/reply/agent-runner-memory.ts
 src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts
 src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
 src/auto-reply/reply/commands-acp.test.ts
-src/auto-reply/reply/commands-status.test.ts
 src/auto-reply/reply/directive-handling.model.test.ts
 src/auto-reply/reply/dispatch-acp.test.ts
 src/auto-reply/reply/dispatch-acp.ts
@@ -305,8 +285,6 @@ src/auto-reply/reply/queue/drain.ts
 src/auto-reply/reply/reply-run-registry.test.ts
 src/auto-reply/reply/session.test.ts
 src/auto-reply/reply/session.ts
-src/auto-reply/status.test.ts
-src/channels/plugins/bundled.shape-guard.test.ts
 src/channels/plugins/outbound/interactive.test.ts
 src/channels/plugins/read-only.test.ts
 src/channels/plugins/setup-wizard-helpers.test.ts
@@ -319,13 +297,11 @@ src/cli/config-cli.test.ts
 src/cli/daemon-cli/status.gather.test.ts
 src/cli/devices-cli.runtime.ts
 src/cli/exec-approvals-cli.ts
-src/cli/gateway-cli/register.ts
 src/cli/gateway-cli/run-loop.test.ts
 src/cli/gateway-cli/run-loop.ts
 src/cli/gateway-cli/run.option-collisions.test.ts
 src/cli/gateway-cli/run.ts
 src/cli/mcp-cli.ts
-src/cli/plugins-authoring-command.ts
 src/cli/plugins-cli-test-helpers.ts
 src/cli/plugins-cli.runtime.ts
 src/cli/plugins-cli.update.test.ts
@@ -340,16 +316,12 @@ src/commands/daemon-install-helpers.test.ts
 src/commands/doctor-auth-flat-profiles.test.ts
 src/commands/doctor-auth-flat-profiles.ts
 src/commands/doctor-legacy-config.migrations.test.ts
-src/commands/doctor-memory-search.test.ts
 src/commands/doctor-session-sqlite.ts
 src/commands/doctor-state-integrity.ts
-src/commands/doctor-state-migrations.test.ts
 src/commands/doctor/repair-sequencing.test.ts
-src/commands/doctor/shared/codex-route-warnings.test.ts
 src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/missing-configured-plugin-install.test.ts
-src/commands/gateway-status.test.ts
 src/commands/models/auth.test.ts
 src/commands/models/auth.ts
 src/commands/models/list.probe.ts
@@ -363,12 +335,10 @@ src/config/io.write-prepare.ts
 src/config/mutate.test.ts
 src/config/mutate.ts
 src/config/schema.labels.ts
-src/config/schema.test.ts
 src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
 src/config/sessions/transcript.test.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
-src/cron/isolated-agent/run-executor.ts
 src/cron/isolated-agent/run.test-harness.ts
 src/daemon/launchd.test.ts
 src/daemon/schtasks.startup-fallback.test.ts
@@ -394,9 +364,7 @@ src/gateway/mcp-http.test.ts
 src/gateway/node-registry.test.ts
 src/gateway/node-registry.ts
 src/gateway/openai-http.test.ts
-src/gateway/openai-http.ts
 src/gateway/openresponses-http.test.ts
-src/gateway/openresponses-http.ts
 src/gateway/server-channels.test.ts
 src/gateway/server-channels.ts
 src/gateway/server-chat.agent-events.test.ts
@@ -411,11 +379,9 @@ src/gateway/server-methods/agent.media-and-routing.test-utils.ts
 src/gateway/server-methods/agent.reset-and-identity.test-utils.ts
 src/gateway/server-methods/agent.sessions-and-models.test-utils.ts
 src/gateway/server-methods/agents-mutate.test.ts
-src/gateway/server-methods/agents.ts
 src/gateway/server-methods/approval-shared.test.ts
 src/gateway/server-methods/chat.directive-tags.test.ts
 src/gateway/server-methods/config.ts
-src/gateway/server-methods/cron.ts
 src/gateway/server-methods/cron.validation.test.ts
 src/gateway/server-methods/models-auth-status.test.ts
 src/gateway/server-methods/models.test.ts
@@ -455,7 +421,6 @@ src/infra/diagnostic-events.ts
 src/infra/exec-approvals-allowlist.ts
 src/infra/exec-authorization-plan.ts
 src/infra/infra-runtime.test.ts
-src/infra/npm-managed-root.test.ts
 src/infra/npm-managed-root.ts
 src/infra/outbound/deliver.test.ts
 src/infra/outbound/delivery-queue-recovery.ts
@@ -474,7 +439,6 @@ src/logging/diagnostic-stability-bundle.ts
 src/logging/diagnostic-stability.ts
 src/logging/diagnostic.test.ts
 src/logging/diagnostic.ts
-src/logging/redact.test.ts
 src/logging/redact.ts
 src/media-understanding/apply.test.ts
 src/media-understanding/runner.entries.ts
@@ -484,7 +448,6 @@ src/node-host/invoke-system-run-plan.test.ts
 src/node-host/invoke-system-run.test.ts
 src/node-host/invoke-system-run.ts
 src/plugin-sdk/core.ts
-src/plugin-sdk/test-helpers/plugin-runtime-mock.ts
 src/plugin-sdk/test-helpers/provider-discovery-contract.ts
 src/plugin-sdk/test-helpers/provider-runtime-contract.ts
 src/plugins/channel-plugin-ids.test.ts
@@ -516,7 +479,6 @@ src/plugins/provider-runtime.ts
 src/plugins/schema-validator.test.ts
 src/plugins/sdk-alias.test.ts
 src/plugins/sdk-alias.ts
-src/plugins/setup-registry.ts
 src/plugins/tools.optional.test.ts
 src/plugins/uninstall.test.ts
 src/plugins/update.test.ts
@@ -547,7 +509,6 @@ src/tui/tui-event-handlers.test.ts
 src/tui/tui-pty-local.e2e.test.ts
 src/tui/tui-session-actions.test.ts
 src/tui/tui.ts
-src/web-search/runtime.test.ts
 src/wizard/setup.finalize.test.ts
 src/wizard/setup.finalize.ts
 src/wizard/setup.test.ts
@@ -556,8 +517,7 @@ ui/src/api/gateway.node.test.ts
 ui/src/lib/cron/index.test.ts
 ui/src/lib/cron/index.ts
 ui/src/lib/skills/index.test.ts
-ui/src/pages/agents/agents-page.ts
-ui/src/pages/agents/memory/view.ts
+ui/src/pages/agents/agents-page-state.ts
 ui/src/pages/chat/chat-gateway.test.ts
 ui/src/pages/chat/chat-responsive.browser.test.ts
 ui/src/pages/chat/chat-send.test.ts
@@ -568,10 +528,5 @@ ui/src/pages/chat/components/chat-message.test.ts
 ui/src/pages/chat/composer-persistence.ts
 ui/src/pages/chat/talk/gateway-relay.test.ts
 ui/src/pages/config/config-page.ts
-ui/src/pages/config/view.browser.test.ts
-ui/src/pages/cron/view.ts
 ui/src/pages/sessions/sessions-page.ts
-ui/src/pages/sessions/view.ts
-ui/src/pages/usage/view-overview.ts
-ui/src/pages/usage/view.ts
 ui/src/test-helpers/control-ui-e2e.ts

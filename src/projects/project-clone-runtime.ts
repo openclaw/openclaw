@@ -179,7 +179,7 @@ export async function refreshProjectCheckout(
   input: { target: string; url: string },
   options: ProjectCloneOptions = {},
 ): Promise<void> {
-  const [objectPath, objectFormatResult, initialRefs] = await Promise.all([
+  const [objectPath, objectFormatResult, initialRefs, filterResult] = await Promise.all([
     runProjectCheckoutGit(input, options, [
       "rev-parse",
       "--path-format=absolute",
@@ -188,7 +188,13 @@ export async function refreshProjectCheckout(
     ]),
     runProjectCheckoutGit(input, options, ["rev-parse", "--show-object-format"]),
     readProjectRemoteRefs(input, options),
+    runProjectCheckoutGit(input, options, ["config", "--get", "remote.origin.partialclonefilter"]),
   ]);
+  // The temporary repository does not inherit the managed clone's origin filter.
+  const filter =
+    filterResult.code === 1 && filterResult.termination === "exit"
+      ? ""
+      : requireGitCommandOutput("git config remote.origin.partialclonefilter", filterResult).trim();
   let currentRefs = initialRefs;
   if (objectPath.code !== 0 || objectPath.termination !== "exit") {
     throw new ProjectCloneError(
@@ -274,6 +280,7 @@ export async function refreshProjectCheckout(
         "--no-auto-maintenance",
         "--no-recurse-submodules",
         "--prune",
+        ...(filter ? [`--filter=${filter}`] : []),
         "--",
         input.url,
         "+refs/heads/*:refs/remotes/origin/*",
@@ -389,8 +396,17 @@ export async function ensureProjectCheckoutCommit(
     throw new ProjectCloneError("clone_failed", "The repository commit is invalid.");
   }
   const command = (args: string[]) => runProjectCheckoutGit(input, options, args);
-  const present = await command(["cat-file", "-e", `${input.commit}^{commit}`]);
-  if (present.code === 0 && present.termination === "exit") {
+  // --missing disables lazy fetching before revision lookup, including on older
+  // Git. The commit graph cannot stand in for a physically present commit.
+  const present = await command([
+    "-c",
+    "core.commitGraph=false",
+    "rev-list",
+    "--missing=allow-any",
+    "--no-walk",
+    `${input.commit}^{commit}`,
+  ]);
+  if (present.code === 0 && present.termination === "exit" && present.stdout.trim()) {
     return;
   }
   const fetch = () =>

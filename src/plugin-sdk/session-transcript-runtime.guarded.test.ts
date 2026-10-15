@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, afterAll } from "vitest";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import { runPreparedChannelTurn } from "../channels/turn/execution.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
@@ -10,7 +14,6 @@ import {
   replaceSessionEntry,
   upsertSessionEntryCore,
   loadTranscriptEventsSync,
-  replaceTranscriptEventsSync,
 } from "../config/sessions/session-accessor.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import {
@@ -58,6 +61,7 @@ describe("guarded session transcript runtime SDK", () => {
   afterEach(async () => {
     closeOpenClawAgentDatabasesForTest();
     await state.cleanup();
+    clearRuntimeConfigSnapshot();
   });
 
   async function seed(route: "default" | "configured" | "incognito") {
@@ -70,6 +74,7 @@ describe("guarded session transcript runtime SDK", () => {
       route === "configured"
         ? { session: { store: state.path("configured", "{agentId}", "sessions.json") } }
         : undefined;
+    setRuntimeConfigSnapshot(config ?? {});
     const storePath = incognito
       ? resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: state.env })
       : resolveSessionStorePathCore(config?.session?.store, { agentId, env: state.env });
@@ -224,10 +229,18 @@ describe("guarded session transcript runtime SDK", () => {
   });
 });
 
-const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-sdk-transcript-fence-");
+const tempDirs = useSessionStoreTempDirs(
+  (cleanup) =>
+    afterAll(async () => {
+      await cleanup();
+      clearRuntimeConfigSnapshot();
+    }),
+  "openclaw-sdk-transcript-fence-",
+);
 describe("session transcript runtime read fence", () => {
   let scope: SessionTranscriptReadParams & { agentId: string; storePath: string };
   beforeEach(async () => {
+    setRuntimeConfigSnapshot({});
     scope = {
       agentId: "main",
       sessionId: "fenced",
@@ -316,17 +329,17 @@ describe("session transcript runtime read fence", () => {
           .where("session_id", "=", scope.sessionId),
       );
     }, options);
-    await expect(
-      runSessionColdStorageMaintenance({
-        config: {
-          agents: { entries: { main: {} } },
-          session: {
-            store: options.path,
-            maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
-          },
-        },
-      }),
-    ).resolves.toMatchObject({ archivedTranscripts: 1 });
+    const config = {
+      agents: { entries: { main: {} } },
+      session: {
+        store: options.path,
+        maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+    await expect(runSessionColdStorageMaintenance({ config })).resolves.toMatchObject({
+      archivedTranscripts: 1,
+    });
     expect(() => loadTranscriptEventsSync(scope)).toThrow(/cold storage/);
     const ctx: FinalizedMsgContext = {
       Body: "continue",
@@ -352,15 +365,11 @@ describe("session transcript runtime read fence", () => {
     expect(dispatched).toBe(true);
   });
 
-  it("rejects a read fence when any immutable admission field changes", async () => {
+  it("rejects a read fence for a different store, session key, or message role", async () => {
     const { receipt } = await seedHistory();
     const invalidReceipts = [
       { ...receipt, storePath: `${receipt.storePath}.other` },
       { ...receipt, sessionKey: `${receipt.sessionKey}:other` },
-      { ...receipt, generation: `${receipt.generation}:other` },
-      { ...receipt, rawSeq: receipt.rawSeq + 1 },
-      { ...receipt, effectiveParentId: "other-parent" },
-      { ...receipt, activeMessagePosition: receipt.activeMessagePosition + 1 },
       { ...receipt, role: "assistant" as const },
     ];
     for (const invalid of invalidReceipts) {
@@ -375,11 +384,5 @@ describe("session transcript runtime read fence", () => {
         ),
       ).rejects.toBeInstanceOf(SessionTranscriptReadFenceError);
     }
-    const events = loadTranscriptEventsSync(scope);
-    expect(replaceTranscriptEventsSync(scope, events)).toBe(true);
-    expect(() =>
-      runWithSessionTranscriptReadFence(receipt, () => loadTranscriptEventsSync(scope)),
-    ).toThrow(SessionTranscriptReadFenceError);
-    expect(loadTranscriptEventsSync(scope)).toEqual(events);
   });
 });

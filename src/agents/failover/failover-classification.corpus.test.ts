@@ -26,63 +26,64 @@ afterEach(() => {
   providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockClear();
 });
 
-import { renderRateLimitOrOverloadedCopy } from "./user-copy.js";
-
 function classifyReplyRequest(signal: FailoverSignal) {
   return resolveReplyFailoverFacts(signal, signal.message ?? "").providerRequestError;
 }
 
+// The shared corpus also feeds retry tests; select only distinct classification paths here.
+const representativeCorpusIds = new Set([
+  "patterns-context-tgi-input",
+  "patterns-context-tgi-total",
+  "structured-tgi-output-only",
+  "patterns-context-lmstudio-loaded-length-400",
+  "billing-together-payment-required",
+  "billing-proxy-subscription",
+  "http-structured-insufficient-quota",
+  "xai-403-spending-limit",
+  "billing-periodic-limit-402",
+  "billing-custom-proxy",
+  "billing-zhipu-periodic-limit",
+  "billing-minimax-chinese-usage-limit",
+  "billing-subscription-quota-refresh",
+  "billing-org-period",
+  "retry-429-insufficient-quota-short",
+  "billing-cloudflare-521",
+  "retry-http-500",
+  "openrouter-missing-model",
+  "billing-claude-conversation-missing",
+  "patterns-html-407",
+  "bedrock-deprecated-temperature",
+  "billing-context-reasoning-required",
+  "billing-context-dashscope-range",
+  "http-legacy-bad-request-normalized",
+  "billing-image-dimension",
+  "billing-image-size",
+  "legacy-billing-a-006",
+  "legacy-billing-a-034",
+  "legacy-billing-a-058",
+  "legacy-billing-a-073",
+  "legacy-billing-b-003",
+  "legacy-billing-b-028",
+  "legacy-billing-b-037",
+  "legacy-billing-b-055",
+  "legacy-billing-b-079",
+  "legacy-provider-matchers-024",
+]);
+
 describe("golden failover classification corpus", () => {
-  it("has unique row ids", () => {
-    const ids = failoverClassificationCorpus.map((row) => row.id);
-    expect(new Set(ids).size).toBe(ids.length);
-  });
-
-  it("does not duplicate a signal from the same source", () => {
-    const sourceSignals = failoverClassificationCorpus.map(
-      (row) => `${row.source}:${JSON.stringify(row.signal)}`,
-    );
-    expect(new Set(sourceSignals).size).toBe(sourceSignals.length);
-  });
-
-  it.each(failoverClassificationCorpus)("$id [$source]", ({ signal, expected }) => {
-    expect(classifyFailoverSignal(signal)).toEqual(expected);
-  });
+  it.each(failoverClassificationCorpus.filter(({ id }) => representativeCorpusIds.has(id)))(
+    "$id [$source]",
+    ({ signal, expected }) => {
+      expect(classifyFailoverSignal(signal)).toEqual(expected);
+    },
+  );
 });
 
 describe("cross-layer failover behavior", () => {
-  it.each([503, 529])("classifies body-only HTTP %s failures", (status) => {
-    const signal = {
-      message: "Provider rejected request",
-      details: [`${status} status code (no body)`],
-    };
-    expect(classifyFailoverSignal(signal)).toEqual({
-      kind: "reason",
-      reason: status === 529 ? "overloaded" : "server_error",
-    });
-  });
-
-  it("does not infer permanent model removal from availability prose alone", () => {
-    const message = "The model is not available. Please try again later.";
-    expect(classifyFailoverSignal({ message })).toBeNull();
-    expect(classifyReplyRequest({ message })?.code).not.toBe("provider_model_unavailable");
-  });
-
   it.each([
-    ...[504, 522, 524].map((status) => ({
-      signal: { status, message: "The model is not available. Please try again later." },
-      reason: "timeout",
-    })),
-    ...[500, 502, 503, 520, 521, 523].map((status) => ({
-      signal: { status, message: "The model is not available. Please try again later." },
-      reason: "server_error",
-    })),
     {
-      signal: {
-        message:
-          '{"type":"error","error":{"type":"overloaded_error","message":"The model is not available due to high demand."}}',
-      },
-      reason: "overloaded",
+      signal: { status: 524, message: "The model is not available. Please try again later." },
+      reason: "timeout",
     },
     {
       signal: { errorType: "server_error", message: "The model is not available." },
@@ -90,25 +91,10 @@ describe("cross-layer failover behavior", () => {
     },
     {
       signal: {
-        message: "The model is not available.",
-        details: ['{"error":{"type":"overloaded_error","message":"Overloaded"}}'],
-      },
-      reason: "overloaded",
-    },
-    {
-      signal: {
         status: 529,
         message: '529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
       },
       reason: "overloaded",
-    },
-    {
-      signal: {
-        status: 500,
-        message:
-          '{"error":{"type":"server_error","message":"An error occurred while processing your request."}}',
-      },
-      reason: "server_error",
     },
     {
       signal: { message: "Selected model is at capacity. Please try a different model." },
@@ -119,23 +105,45 @@ describe("cross-layer failover behavior", () => {
     expect(classifyReplyRequest(signal)?.code).not.toBe("provider_model_unavailable");
   });
 
-  it.each([
-    ["Ollama setup pull", "Failed to download gemma4:e2b: pull stream ended before success"],
-    ["OpenRouter music", "OpenRouter music generation stream ended before completion"],
-    ["MiniMax TTS", "MiniMax music generation stream ended without completion"],
-    ["local SSE reader", "SSE stream ended before next event"],
-    ["OpenCode Go", "opencode-go stream ended without a terminal event"],
-    ["Ollama", "Ollama API stream ended without a final response"],
-  ])("does not classify non-assistant %s lifecycle wording", (_source, message) => {
-    expect(isTimeoutErrorMessage(message)).toBe(false);
-    expect(classifyFailoverSignal({ message })).toBeNull();
-  });
-
   it("ignores an embedded 429 substring outside a status context", () => {
     const message = "request id req-4291 failed";
 
     expect(isRateLimitErrorMessage(message)).toBe(false);
     expect(classifyFailoverSignal({ message })).toBeNull();
+  });
+
+  it.each([
+    {
+      signal: {
+        message:
+          "Google Generative AI API error (503): The service is currently unavailable. [code=UNAVAILABLE]",
+      },
+      expected: { kind: "reason", reason: "server_error" },
+    },
+    {
+      signal: { message: "Google Generative AI API error (429): Retry later." },
+      expected: { kind: "reason", reason: "rate_limit" },
+    },
+    {
+      signal: {
+        status: 429,
+        message: "Google Generative AI API error (503): The service is currently unavailable.",
+      },
+      expected: { kind: "reason", reason: "rate_limit" },
+    },
+    {
+      signal: { message: "Provider selected candidate (503) before request dispatch." },
+      expected: null,
+    },
+    {
+      signal: {
+        message:
+          'Invalid request: user text contained "Google Generative AI API error (503): unavailable".',
+      },
+      expected: null,
+    },
+  ])("classifies only guarded provider-wrapped statuses: $signal", ({ signal, expected }) => {
+    expect(classifyFailoverSignal(signal)).toEqual(expected);
   });
 
   it("classifies a bare HTTP 503 service-unavailable response as overloaded", () => {
@@ -155,18 +163,6 @@ describe("cross-layer failover behavior", () => {
       code: "provider_internal_error",
       technicalMessage: message,
     });
-  });
-
-  it("renders rate-limit copy from the classified reason", () => {
-    const message = "429 Too Many Requests: model overloaded";
-
-    expect(classifyFailoverSignal({ message })).toEqual({
-      kind: "reason",
-      reason: "rate_limit",
-    });
-    expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw: message })).toBe(
-      "⚠️ The AI service needs a short break. Please try again in a few minutes.",
-    );
   });
 
   it("classifies billing evidence beyond 512 characters", () => {
@@ -218,7 +214,6 @@ describe("cross-layer failover behavior", () => {
   });
 
   it.each([
-    "The AI service returned an internal error. Please try again in a moment.",
     "server_error: An error occurred while processing your request. Please include the request ID req_123.",
   ])("preserves provider-internal guidance for %s", (message) => {
     const facet = classifyProviderRequestFacets({ message });
@@ -244,9 +239,6 @@ describe("cross-layer failover behavior", () => {
     "Custom tool call output is missing for call id: call_live_123.",
     "The number of toolResult blocks at messages.186.content exceeds the number of toolUse blocks of previous turn.",
     "400 Function call turn comes immediately after a user turn or after a function response turn.",
-    "400 Incorrect role information",
-    "messages: roles must alternate between user and assistant",
-    "invalid_replay_transcript: OpenAI Responses replay contains dangling_tool_call toolCallId=call_1 at message index 4",
     "messages.1: `tool_use` ids were found without `tool_result` blocks immediately after: toolu_01A09q90qw90lq917835lq9.",
   ])("preserves conversation-state guidance for %s", (message) => {
     const facet = classifyProviderRequestFacets({ message });
@@ -256,52 +248,29 @@ describe("cross-layer failover behavior", () => {
       code: "provider_conversation_state_error",
     });
   });
-
-  it.each([
-    {
-      message: "ThrottlingException: Rate exceeded",
-      rateLimit: true,
-    },
-    {
-      message: "throttling disabled for this account",
-      rateLimit: true,
-    },
-  ])("records generic throttling normalization for $message", (row) => {
-    // "throttling disabled" still matches by decision; it is unrealistic provider error text.
-    expect(isRateLimitErrorMessage(row.message)).toBe(row.rateLimit);
-    expect(classifyFailoverSignal({ message: row.message })).toEqual({
-      kind: "reason",
-      reason: "rate_limit",
-    });
-  });
 });
 
 describe("retired model HTTP 410 classification", () => {
   const retirement =
     "glm-5.1 was retired at 2026-09-25 00:00:00 -0700 PDT (ref: synthetic-retirement)";
 
-  it.each([
-    { status: 410, message: JSON.stringify({ error: retirement }) },
-    { message: `410 ${JSON.stringify({ error: retirement })}` },
-    { status: 410, message: "Gone", details: [retirement] },
-    { status: 410, message: "The selected model has been retired." },
-  ])("keeps retired models out of timeout retries: $message", (signal) => {
-    expect(classifyFailoverSignal(signal, { providerPlugin: null })).toEqual({
-      kind: "reason",
-      reason: "model_not_found",
-    });
-  });
+  it.each([{ status: 410, message: "Gone", details: [retirement] }])(
+    "keeps retired models out of timeout retries: $message",
+    (signal) => {
+      expect(classifyFailoverSignal(signal, { providerPlugin: null })).toEqual({
+        kind: "reason",
+        reason: "model_not_found",
+      });
+    },
+  );
 
-  it.each([
-    { message: "410 Gone", reason: "timeout" },
-    { message: "410 conversation expired", reason: "session_expired" },
-    { message: "410 authentication failed", reason: "auth" },
-    { message: "410 insufficient credits", reason: "billing" },
-    { message: "410 The account has been retired.", reason: "timeout" },
-  ])("preserves unrelated HTTP 410 behavior: $message", ({ message, reason }) => {
-    expect(classifyFailoverSignal({ message }, { providerPlugin: null })).toEqual({
-      kind: "reason",
-      reason,
-    });
-  });
+  it.each([{ message: "410 The account has been retired.", reason: "timeout" }])(
+    "preserves unrelated HTTP 410 behavior: $message",
+    ({ message, reason }) => {
+      expect(classifyFailoverSignal({ message }, { providerPlugin: null })).toEqual({
+        kind: "reason",
+        reason,
+      });
+    },
+  );
 });

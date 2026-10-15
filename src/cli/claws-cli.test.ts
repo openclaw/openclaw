@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { persistClawInstallRecord, type ClawInstallStatus } from "../claws/provenance.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
+import { ExitError } from "../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import * as cliTestHelpers from "./claws-cli.test-helpers.js";
 
@@ -55,6 +56,10 @@ vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
+  captureRuntimeConfigAsyncReader:
+    (...args: Parameters<typeof mocks.loadConfig>) =>
+    async () =>
+      mocks.loadConfig(...args),
 }));
 
 vi.mock("../config/mcp-config.js", async () => ({
@@ -876,15 +881,27 @@ describe("claws cli", () => {
         agentRemoved: status === "complete",
         ...(status === "partial" ? { error } : {}),
       });
-      await runCli([
-        "claws",
-        "remove",
-        "demo-agent",
-        "--yes",
-        "--plan-integrity",
-        "sha256:remove-plan",
-        ...(json ? ["--json"] : []),
-      ]);
+      await mocks.runtime.exit.withImplementation(
+        (code) => {
+          throw new ExitError(code);
+        },
+        async () => {
+          const command = runCli([
+            "claws",
+            "remove",
+            "demo-agent",
+            "--yes",
+            "--plan-integrity",
+            "sha256:remove-plan",
+            ...(json ? ["--json"] : []),
+          ]);
+          if (status === "partial") {
+            await expect(command).rejects.toEqual(new ExitError(1));
+          } else {
+            await command;
+          }
+        },
+      );
 
       expect(mocks.applyClawRemovePlan).toHaveBeenCalledWith(
         expect.objectContaining({ planIntegrity: "sha256:remove-plan" }),
@@ -894,6 +911,7 @@ describe("claws cli", () => {
         }),
       );
       if (json) {
+        expect(mocks.logs).toHaveLength(1);
         expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
           schemaVersion: "openclaw.clawRemoveResult.v1",
           status,
@@ -906,7 +924,7 @@ describe("claws cli", () => {
         expect(mocks.logs.filter((line) => line === `Warning: ${warnings[0]}`)).toHaveLength(1);
         expect(mocks.logs).toContain("Plugin runtime changed in Gateway generation 3.");
         if (status === "partial") {
-          expect(mocks.errors).toContain(error.message);
+          expect(mocks.errors).toEqual([error.message]);
           expect(mocks.logs).not.toContain("Removed agent: demo-agent");
         }
       }
@@ -915,16 +933,6 @@ describe("claws cli", () => {
       }
     },
   );
-
-  it("requires the exact dry-run identity with remove consent", async () => {
-    await runCli(["claws", "remove", "demo-agent", "--yes", "--json"]);
-
-    expect(mocks.buildClawRemovePlan).not.toHaveBeenCalled();
-    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
-      schemaVersion: "openclaw.clawRemovePlan.v1",
-      error: { code: "plan_integrity_required" },
-    });
-  });
 
   it("binds selected referenced cleanup and its conflict override into the plan", async () => {
     await runCli([
@@ -953,22 +961,47 @@ describe("claws cli", () => {
     expect(mocks.applyClawRemovePlan).not.toHaveBeenCalled();
   });
 
-  it("rejects ambiguous referenced cleanup modes", async () => {
-    await runCli([
-      "claws",
-      "remove",
-      "demo-agent",
-      "--dry-run",
-      "--remove-unused",
-      "--remove-referenced",
-      "plugin:@acme/audit@1.0.0",
-      "--json",
-    ]);
+  it.each([
+    {
+      name: "ambiguous referenced cleanup modes",
+      flags: ["--remove-unused", "--remove-referenced", "plugin:@acme/audit@1.0.0"],
+      message: "Choose either --remove-unused or --remove-referenced, not both.",
+    },
+    {
+      name: "a conflict override without a selected resource",
+      flags: ["--force-referenced"],
+      message: "--force-referenced requires at least one --remove-referenced selector.",
+    },
+  ])("rejects $name with text and JSON diagnostics", async ({ flags, message }) => {
+    for (const json of [false, true]) {
+      mocks.logs.length = 0;
+      mocks.errors.length = 0;
+      await runCli([
+        "claws",
+        "remove",
+        "demo-agent",
+        "--dry-run",
+        ...flags,
+        ...(json ? ["--json"] : []),
+      ]);
 
-    expect(mocks.buildClawRemovePlan).not.toHaveBeenCalled();
-    expect(mocks.errors).toContain(
-      "Choose either --remove-unused or --remove-referenced, not both.",
-    );
+      expect(mocks.buildClawRemovePlan).not.toHaveBeenCalled();
+      expect(mocks.applyClawRemovePlan).not.toHaveBeenCalled();
+      expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+      if (json) {
+        expect(mocks.logs).toHaveLength(1);
+        expect(JSON.parse(mocks.logs[0] ?? "{}")).toEqual({
+          schemaVersion: "openclaw.clawRemovePlan.v1",
+          stability: "experimental",
+          ok: false,
+          error: { code: "invalid_cleanup_options", message },
+        });
+        expect(mocks.errors).toEqual([]);
+      } else {
+        expect(mocks.logs).toEqual([]);
+        expect(mocks.errors).toEqual([message]);
+      }
+    }
   });
 
   it("fails closed when remove has neither preview nor consent", async () => {

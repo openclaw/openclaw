@@ -10,6 +10,7 @@ export {
   assertOkOrThrowHttpError,
   assertOkOrThrowProviderError,
   assertProviderBinaryResponseContent,
+  createProviderCredentialMatcher,
   createProviderHttpError,
   ProviderHttpError,
   extractProviderErrorDetail,
@@ -52,6 +53,11 @@ export {
   waitProviderOperationPollInterval,
 } from "../media-understanding/shared.js";
 export { openProviderWebSocket } from "../infra/net/provider-websocket.js";
+export {
+  runHttpTlsPreflight,
+  type HttpTlsPreflightOptions,
+  type HttpTlsPreflightResult,
+} from "../infra/http-tls-preflight.js";
 export type {
   ProviderOperationDeadline,
   ProviderOperationTimeoutMs,
@@ -85,6 +91,7 @@ export type {
   ProviderRequestTransportOverrides,
 } from "../agents/provider-request-config.types.js";
 export { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
+export { resolveProviderTransportSsrFPolicy } from "../agents/provider-network-policy.js";
 export {
   resolveProviderEndpoint,
   resolveProviderRequestCapabilities,

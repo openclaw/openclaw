@@ -118,22 +118,38 @@ describe("trusted-proxy pairing setup", () => {
       accessDowngraded: false,
     },
     {
+      name: "keeps the proxy label with an ambient local password",
+      url: "wss://gateway.example.test",
+      env: { OPENCLAW_GATEWAY_PASSWORD: "synthetic-local-password" },
+      profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      access: "full",
+      accessDowngraded: false,
+    },
+    {
+      name: "keeps the proxy label with a configured local password",
+      url: "wss://gateway.example.test",
+      password: "synthetic-local-password",
+      profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      access: "full",
+      accessDowngraded: false,
+    },
+    {
       name: "keeps plaintext LAN handoff limited",
       url: "ws://192.168.1.20:18789",
       profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
       access: "limited",
       accessDowngraded: true,
     },
-  ])("$name", async ({ url, profile, access, accessDowngraded }) => {
+  ])("$name", async ({ url, env = {}, password, profile, access, accessDowngraded }) => {
     const result = await resolvePairingSetupFromConfig(
       {
         gateway: {
           bind: "custom",
           customBindHost: "127.0.0.1",
-          auth: { mode: "trusted-proxy" },
+          auth: { mode: "trusted-proxy", ...(password ? { password } : {}) },
         },
       },
-      { env: {}, publicUrl: url },
+      { env, publicUrl: url },
     );
     expect(result).toMatchObject({
       ok: true,
@@ -151,6 +167,8 @@ describe("trusted-proxy pairing setup", () => {
     });
     if (result.ok) {
       expect(result.payload).not.toHaveProperty("setupId");
+      expect(result.payload).not.toHaveProperty("token");
+      expect(result.payload).not.toHaveProperty("password");
     }
   });
 });

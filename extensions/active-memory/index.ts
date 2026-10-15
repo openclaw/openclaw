@@ -90,9 +90,7 @@ export default definePluginEntry({
     warnDeprecatedModelFallbackPolicy(api.pluginConfig);
     const refreshLiveConfigFromRuntime = () => {
       const livePluginConfig = resolveLivePluginConfigObject(
-        api.runtime.config?.current
-          ? () => api.runtime.config.current() as OpenClawConfig
-          : undefined,
+        () => api.runtime.config.current() as OpenClawConfig,
         "active-memory",
         api.pluginConfig as Record<string, unknown>,
       );
@@ -235,18 +233,19 @@ export default definePluginEntry({
                 modelId: ctx.modelId,
               })
             : { provider: ctx.modelProviderId, model: ctx.modelId }) ?? {};
-        const cliDispatchEligibility = api.runtime.agent.resolveCliBackendDispatchEligibility({
-          provider: timeoutModelRef.provider,
-          model: timeoutModelRef.model,
-          config: liveConfig,
-          ...(timeoutAgentId
-            ? {
-                agentId: timeoutAgentId,
-                agentDir: resolveAgentDir(liveConfig, timeoutAgentId),
-                workspaceDir: resolveAgentWorkspaceDir(liveConfig, timeoutAgentId),
-              }
-            : {}),
-        });
+        const cliDispatchEligibility =
+          await api.runtime.agent.resolveCliBackendDispatchEligibilityAsync({
+            provider: timeoutModelRef.provider,
+            model: timeoutModelRef.model,
+            config: liveConfig,
+            ...(timeoutAgentId
+              ? {
+                  agentId: timeoutAgentId,
+                  agentDir: resolveAgentDir(liveConfig, timeoutAgentId),
+                  workspaceDir: resolveAgentWorkspaceDir(liveConfig, timeoutAgentId),
+                }
+              : {}),
+          });
         const invocationConfig = applyCliRuntimeRecallTimeoutDefault(
           config,
           cliDispatchEligibility !== undefined,
@@ -508,7 +507,7 @@ export default definePluginEntry({
             const productRecallAllowed = Boolean(productRecallToolName);
             if (productRecallEligible && !productRecallAllowed) {
               api.logger.warn?.(
-                `active-memory: ${deterministicRecallToolName ?? "the provider's deterministic recall tool"} is unavailable; skipping Remember across conversations private transcript recall`,
+                `active-memory: ${deterministicRecallToolName ?? "the provider's direct recall tool"} is unavailable; skipping Remember across conversations private transcript recall`,
               );
             }
             if (!activeMemoryAllowed && !productRecallAllowed) {

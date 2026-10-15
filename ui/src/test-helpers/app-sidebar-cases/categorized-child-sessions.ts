@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createGateway, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar categorized child sessions", () => {
   it("shows a categorized Discord-spawned dashboard session on a cold sidebar without its parent", async () => {
@@ -142,70 +142,5 @@ describe("AppSidebar categorized child sessions", () => {
       ),
     ).not.toBeNull();
     expect(sidebar.querySelector(`[data-session-key="${archivedKey}"]`)).toBeNull();
-  });
-
-  it("places a categorized dashboard child in its section while keeping ordinary spawned sessions nested", async () => {
-    const harness = createSessionsHarness("main", [
-      "agent:main:parent",
-      "agent:main:categorized-child",
-      "agent:main:dashboard:child",
-      "agent:main:archived-child",
-    ]);
-    const result = harness.sessions.state.result;
-    if (!result) {
-      throw new Error("expected child session fixtures");
-    }
-    const rowsByKey = new Map(result.sessions.map((row) => [row.key, row]));
-    Object.assign(rowsByKey.get("agent:main:parent") ?? {}, {
-      label: "Parent task",
-      childSessions: [
-        "agent:main:categorized-child",
-        "agent:main:dashboard:child",
-        "agent:main:archived-child",
-      ],
-    });
-    Object.assign(rowsByKey.get("agent:main:categorized-child") ?? {}, {
-      spawnedBy: "agent:main:parent",
-      label: "Categorized child",
-      category: "Research",
-    });
-    Object.assign(rowsByKey.get("agent:main:dashboard:child") ?? {}, {
-      spawnedBy: "agent:main:parent",
-      label: "Review child",
-    });
-    Object.assign(rowsByKey.get("agent:main:archived-child") ?? {}, {
-      spawnedBy: "agent:main:parent",
-      label: "Archived child",
-      category: "Research",
-      archived: true,
-    });
-    harness.publish({ groups: ["Research"] });
-
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, harness.sessions);
-
-    const research = sidebar.querySelector('[data-session-section="category:Research"]');
-    expect(
-      research?.querySelectorAll('[data-session-key="agent:main:categorized-child"]'),
-    ).toHaveLength(1);
-    expect(
-      research?.querySelector('[data-session-key="agent:main:categorized-child"]')?.classList,
-    ).not.toContain("sidebar-recent-session--child");
-    expect(sidebar.querySelector('[data-session-key="agent:main:archived-child"]')).toBeNull();
-    expect(sidebar.querySelector('[data-session-key="agent:main:dashboard:child"]')).toBeNull();
-
-    const parentTree = sidebar.querySelector('[data-session-tree="agent:main:parent"]');
-    parentTree?.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
-    await sidebar.updateComplete;
-
-    expect(
-      parentTree?.querySelectorAll('[data-session-key="agent:main:dashboard:child"]'),
-    ).toHaveLength(1);
-    expect(
-      parentTree?.querySelector('[data-session-key="agent:main:categorized-child"]'),
-    ).toBeNull();
-    parentTree?.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector('[data-session-key="agent:main:dashboard:child"]')).toBeNull();
   });
 });

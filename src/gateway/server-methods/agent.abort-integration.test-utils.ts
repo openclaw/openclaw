@@ -34,6 +34,7 @@ import {
   describe1AfterEach1,
   prime,
 } from "./agent.test-harness.js";
+import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -57,8 +58,7 @@ describe("gateway agent handler chat.abort integration", () => {
 
   it("registers an abort controller into chatAbortControllers for an agent run", async () => {
     prime();
-    const pending = new Promise(() => {});
-    mocks.agentCommand.mockReturnValueOnce(pending);
+    mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
 
     const context = makeContext();
     const runId = "idem-abort-register";
@@ -356,7 +356,7 @@ describe("gateway agent handler chat.abort integration", () => {
     };
     mocks.loadSessionEntry.mockReturnValue({
       cfg: mocks.loadConfigReturn,
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "global-work-session-id",
         updatedAt: Date.now(),
@@ -700,7 +700,7 @@ describe("gateway agent handler chat.abort integration", () => {
     let deleted = false;
     mocks.loadSessionEntry.mockImplementation(() => ({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: deleted ? undefined : persistedEntry,
       canonicalKey: sessionKey,
     }));
@@ -770,7 +770,7 @@ describe("gateway agent handler chat.abort integration", () => {
     let currentEntry = persistedEntry;
     mocks.loadSessionEntry.mockImplementation(() => ({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: currentEntry,
       canonicalKey: sessionKey,
     }));
@@ -832,7 +832,7 @@ describe("gateway agent handler chat.abort integration", () => {
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
       agentId: "work",
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "work-global-session-id",
         updatedAt: Date.now(),
@@ -955,7 +955,7 @@ describe("gateway agent handler chat.abort integration", () => {
     mocks.resolveVoiceWakeRouteByTrigger.mockReturnValue({ sessionKey: "agent:main:voice" });
     mocks.loadSessionEntry.mockImplementation((sessionKey: string) => ({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: sessionKey === "agent:main:voice" ? "voice-session-id" : "main-session-id",
         updatedAt: Date.now(),
@@ -1043,7 +1043,7 @@ describe("gateway agent handler chat.abort integration", () => {
     mocks.resolveVoiceWakeRouteByTrigger.mockReturnValue({ sessionKey: "agent:main:voice" });
     mocks.loadSessionEntry.mockImplementation((sessionKey: string) => ({
       cfg: {},
-      storePath: "/tmp/sessions.json",
+      storePath: getAgentTestStorePath(),
       entry: {
         sessionId: sessionKey === "agent:main:voice" ? "voice-session-id" : "main-session-id",
         updatedAt: Date.now(),
@@ -1652,7 +1652,7 @@ describe("gateway agent handler chat.abort integration", () => {
     let releaseMutation = () => {};
     const { promise: mutationStarted, resolve: markMutationStarted } = createDeferred();
     const mutation = runExclusiveSessionLifecycleMutation("drain", {
-      scope: "/tmp/sessions.json",
+      scope: getAgentTestStorePath(),
       identities: [sessionKey, sessionId],
       run: async () => {
         markMutationStarted();

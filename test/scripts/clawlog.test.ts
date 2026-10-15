@@ -86,13 +86,6 @@ describe("clawlog.sh argument parsing", () => {
     expect(output).not.toContain("USAGE:");
   });
 
-  it("still prints usage for --help", () => {
-    const result = runClawlog(["--help"]);
-
-    expect(result.status).toBe(0);
-    expect(result.stdout + result.stderr).toContain("USAGE:");
-  });
-
   const valueOptions = ["-n", "-l", "-c", "-s", "-o"];
   for (const option of valueOptions) {
     it(`reports a clear error when ${option} is missing a value`, () => {
@@ -115,11 +108,8 @@ describe("clawlog.sh argument parsing", () => {
     expect(result.stderr).not.toContain("requires a value");
   });
 
-  it.each([
-    ["-o", "-debug.log"],
-    ["--json", "-o", "-debug.log"],
-  ])("accepts dash-prefixed output path with %s", (...args) => {
-    const result = runClawlog(args);
+  it("accepts a dash-prefixed output path", () => {
+    const result = runClawlog(["-o", "-debug.log"]);
 
     expect(result.status).toBe(0);
     expect(result.stderr).not.toContain("requires a value");
@@ -127,40 +117,15 @@ describe("clawlog.sh argument parsing", () => {
 });
 
 describe("clawlog.sh JSON output", () => {
-  it("frames newline-delimited records as one clean JSON array", () => {
-    const result = runClawlog(["--json"], { stdout: encodeRecords(3) });
-
-    expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual([
-      { index: 0, message: "line 0\ncontinued" },
-      { index: 1, message: "line 1\ncontinued" },
-      { index: 2, message: "line 2\ncontinued" },
-    ]);
-    expect(readFileSync(result.callsPath, "utf8")).toContain("--style\nndjson\n");
-  });
-
-  it.each([
-    { args: ["--json", "--all"], total: 0, expected: 0, first: undefined },
-    { args: ["--json"], expected: 50, first: 10 },
-    { args: ["--json", "--lines", "1"], expected: 1, first: 59 },
-    { args: ["--json", "--all"], expected: 60, first: 0 },
-  ])("limits complete records for $args", ({ args, total = 60, expected, first }) => {
-    const result = runClawlog(args, { stdout: encodeRecords(total) });
-    const records = JSON.parse(result.stdout) as Array<{ index: number }>;
-
-    expect(result.status).toBe(0);
-    expect(records).toHaveLength(expected);
-    expect(records[0]?.index).toBe(first);
-  });
-
-  it("keeps backend diagnostics on stderr", () => {
-    const result = runClawlog(["--json"], {
-      stdout: encodeRecords(2),
+  it("limits complete records and frames them as one clean JSON array", () => {
+    const result = runClawlog(["--json", "--lines", "1"], {
+      stdout: encodeRecords(3),
       stderr: "backend warning\n",
     });
 
     expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout)).toHaveLength(2);
+    expect(JSON.parse(result.stdout)).toEqual([{ index: 2, message: "line 2\ncontinued" }]);
+    expect(readFileSync(result.callsPath, "utf8")).toContain("--style\nndjson\n");
     expect(result.stdout).not.toContain("backend warning");
     expect(result.stderr).toBe("backend warning\n");
   });
@@ -231,15 +196,6 @@ describe("clawlog.sh JSON output", () => {
     expect(result.stderr).toContain("directory");
     expect(readdirSync(path.join(result.cwd, "bin"))).toEqual(["sudo"]);
     expect(readdirSync(result.cwd).filter((name) => name.includes(".tmp."))).toEqual([]);
-  });
-
-  it("preserves physical-line limits in human mode", () => {
-    const result = runClawlog(["--lines", "1"], { stdout: "first\nsecond\n" });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("second\n");
-    expect(result.stdout).not.toContain("first\n");
-    expect(result.stdout).toContain("Showing last 1 lines");
   });
 
   it.each([

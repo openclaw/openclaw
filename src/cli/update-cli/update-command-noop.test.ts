@@ -9,12 +9,8 @@ const boundary = vi.hoisted(() => ({
 vi.mock("./update-command-database-context.js", () => ({
   inspectUpdateDatabaseContexts: boundary.contexts,
 }));
-vi.mock("./update-command-managed-context.js", () => ({
-  revalidateUpdateDatabaseContext: async (
-    context: Parameters<
-      typeof import("./update-command-managed-context.js").revalidateUpdateDatabaseContext
-    >[0],
-  ) => context,
+vi.mock("./update-command-managed-context.js", async (original) => ({
+  ...(await original<typeof import("./update-command-managed-context.js")>()),
   captureOwnedManagedUpdateContext: async () => undefined,
 }));
 vi.mock("./update-command-runtime-preflight.js", async (original) => ({
@@ -27,8 +23,8 @@ vi.mock("./update-command-runtime-preflight.js", async (original) => ({
 vi.mock("./update-command-plugin-preflight.js", () => ({
   preflightConfiguredNpmPluginTargets: async () => [],
 }));
-vi.mock("../../state/openclaw-state-ownership.js", async (original) => ({
-  ...(await original<typeof import("../../state/openclaw-state-ownership.js")>()),
+vi.mock("../../state/openclaw-state-ownership-preflight.js", async (original) => ({
+  ...(await original<typeof import("../../state/openclaw-state-ownership-preflight.js")>()),
   assertOpenClawStateWriteAllowedAtPath: async () => {},
 }));
 vi.mock("./update-command-service.js", async () => {

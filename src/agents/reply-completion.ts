@@ -6,6 +6,10 @@ export type ReplyDeliveryState = "delivered" | "pending" | "missing";
 export type ReplyDeliveryObserver = (
   minimumAssistantMessageIndex?: number,
 ) => Promise<ReplyDeliveryState>;
+export type ReplyDeliveryFactsObserver = (minimumAssistantMessageIndex?: number) => Promise<{
+  source: ReplyDeliveryState;
+  terminal: ReplyDeliveryState;
+}>;
 type ReplyCompletionEvidence = "ready" | "delivered" | "pending" | "blocked" | "empty";
 
 /** Model output cannot waive a required reply. Only the input owner selects expectation. */

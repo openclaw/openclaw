@@ -59,7 +59,7 @@ export function isPreDispatchToolCallRejectionMessage(errorMessage?: string): bo
   return errorMessage !== undefined && PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES.has(errorMessage);
 }
 const PERIODIC_USAGE_LIMIT_RE =
-  /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b/i;
+  /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b|已达到 Token Plan 用量上限|(?:配额|额度)已用尽/i;
 
 const HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS = [
   /api[_ ]?key[_ ]?(?:revoked|deactivated|deleted)/i,
@@ -79,6 +79,11 @@ const AMBIGUOUS_AUTH_ERROR_PATTERNS = [
   "permission_error",
 ] as const satisfies readonly ErrorPattern[];
 
+// Diagnostic counts and identifiers can equal 401/403 without an authentication failure.
+// Require a leading status, HTTP/status context, or a structured status/code field.
+const AUTH_HTTP_STATUS_RE =
+  /^\s*(?:401|403)\b|\b(?:http(?:[ _-]?status)?|status(?:[ _-]?code)?|response(?:[ _-]?code)?|error(?:[ _-]?code)?)\b[\s:=#"'(]{0,6}(?:401|403)\b|["'](?:status|code)["']\s*:\s*["']?(?:401|403)\b/i;
+
 const COMMON_AUTH_ERROR_PATTERNS = [
   "incorrect api key",
   "invalid token",
@@ -92,8 +97,7 @@ const COMMON_AUTH_ERROR_PATTERNS = [
   "insufficient permission",
   /missing scopes?:/i,
   "expired",
-  /\b401\b/,
-  /\b403\b/,
+  AUTH_HTTP_STATUS_RE,
   "no credentials found",
   "no api key found",
   /\bfailed to (?:extract|parse|validate|decode)\b.*\btoken\b/,

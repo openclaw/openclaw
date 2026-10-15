@@ -2,6 +2,7 @@ import path from "node:path";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi, type Mock } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import { CODEX_INTERACTIVE_THREAD_SOURCE_KINDS } from "./app-server/protocol.js";
@@ -29,7 +30,7 @@ describe("native Codex thread tool", () => {
     });
   }
 
-  function createTool(params?: {
+  async function createTool(params?: {
     owner?: boolean;
     homeScope?: "agent" | "user";
     omitHomeScope?: boolean;
@@ -51,15 +52,19 @@ describe("native Codex thread tool", () => {
       sessionId: params?.sessionId === null ? undefined : (params?.sessionId ?? "session-id"),
       senderIsOwner: params?.owner ?? true,
     };
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath: path.join(fixture.root, "sessions", "sessions.json"),
+      sessionKey: context.sessionKey!,
+      entry: {
+        sessionId: "session-id",
+        updatedAt: 1,
+        modelSelectionLocked: params?.modelSelectionLocked,
+      },
+    });
     const runtime = createPluginRuntimeMock({
       agent: {
         session: {
-          getSessionEntry: () => ({
-            sessionId: "session-id",
-            sessionFile: fixture.sessionFile,
-            updatedAt: Date.now(),
-            modelSelectionLocked: params?.modelSelectionLocked,
-          }),
           resolveStorePath: () => path.join(fixture.root, "sessions", "sessions.json"),
         },
       },
@@ -91,11 +96,11 @@ describe("native Codex thread tool", () => {
   }
 
   it("materializes only for owner turns with user-home or supervision access", () =>
-    withFixture(() => {
-      expect(createTool()).not.toBeNull();
-      expect(createTool({ owner: false })).toBeNull();
-      expect(createTool({ homeScope: "agent" })).toBeNull();
-      expect(createTool({ omitHomeScope: true, supervision: true })).not.toBeNull();
+    withFixture(async () => {
+      expect(await createTool()).not.toBeNull();
+      expect(await createTool({ owner: false })).toBeNull();
+      expect(await createTool({ homeScope: "agent" })).toBeNull();
+      expect(await createTool({ omitHomeScope: true, supervision: true })).not.toBeNull();
     }));
 
   it("routes a private supervised binding through the supervision connection with native auth", () =>
@@ -113,7 +118,7 @@ describe("native Codex thread tool", () => {
         historyCoveredThrough: new Date().toISOString(),
       });
       const request = vi.fn(async () => ({ data: [] }));
-      const tool = createTool({
+      const tool = await createTool({
         omitHomeScope: true,
         supervision: true,
         request,
@@ -137,7 +142,7 @@ describe("native Codex thread tool", () => {
     withFixture(async () => {
       const response = { data: [{ id: "thread-1", status: { type: "idle" } }] };
       const request = vi.fn(async () => response);
-      const tool = createTool({ request, modelSelectionLocked: true });
+      const tool = await createTool({ request, modelSelectionLocked: true });
 
       const result = await tool?.execute("call-1", {
         action: "list",
@@ -193,7 +198,7 @@ describe("native Codex thread tool", () => {
               },
             },
       );
-      const tool = createTool({ omitHomeScope: true, supervision: true, request });
+      const tool = await createTool({ omitHomeScope: true, supervision: true, request });
 
       const listed = await tool?.execute("call-safe-list", { action: "list" });
       const read = await tool?.execute("call-safe-read", {
@@ -225,7 +230,7 @@ describe("native Codex thread tool", () => {
   ])("requires raw-transcript permission for $action", ({ params, error }) =>
     withFixture(async () => {
       const request = vi.fn();
-      const tool = createTool({ omitHomeScope: true, supervision: true, request });
+      const tool = await createTool({ omitHomeScope: true, supervision: true, request });
       await expect(tool?.execute("call-blocked-transcript", params)).rejects.toThrow(error);
       expect(request).not.toHaveBeenCalled();
     }),
@@ -241,7 +246,7 @@ describe("native Codex thread tool", () => {
         },
       };
       const request = vi.fn(async () => response);
-      const tool = createTool({
+      const tool = await createTool({
         omitHomeScope: true,
         supervision: true,
         allowRawTranscripts: true,
@@ -272,7 +277,7 @@ describe("native Codex thread tool", () => {
   ])("blocks supervised $action without write-control permission", ({ params }) =>
     withFixture(async () => {
       const request = vi.fn();
-      const tool = createTool({ omitHomeScope: true, supervision: true, request });
+      const tool = await createTool({ omitHomeScope: true, supervision: true, request });
 
       await expect(tool?.execute("call-blocked-write", params)).rejects.toThrow(
         "Codex native thread mutations are disabled",
@@ -288,7 +293,7 @@ describe("native Codex thread tool", () => {
           ? { thread: { id: "other-thread", status: { type: "idle" } } }
           : {},
       );
-      const tool = createTool({
+      const tool = await createTool({
         omitHomeScope: true,
         supervision: true,
         allowWriteControls: true,
@@ -322,7 +327,7 @@ describe("native Codex thread tool", () => {
           turns: [{ id: "turn-1", items: [] }],
         },
       }));
-      const tool = createTool({
+      const tool = await createTool({
         omitHomeScope: true,
         supervision: true,
         allowWriteControls: true,
@@ -366,7 +371,7 @@ describe("native Codex thread tool", () => {
           turns: [{ id: "turn-1", items: [] }],
         },
       }));
-      const tool = createTool({
+      const tool = await createTool({
         omitHomeScope: true,
         supervision: true,
         allowWriteControls: true,
@@ -405,7 +410,7 @@ describe("native Codex thread tool", () => {
               modelProvider: "openai",
             },
       );
-      const tool = createTool({ request, sessionId: null });
+      const tool = await createTool({ request, sessionId: null });
 
       const result = await tool?.execute("call-2", {
         action: "fork",
@@ -465,7 +470,7 @@ describe("native Codex thread tool", () => {
         cwd: "/tmp/project",
       });
       const request = vi.fn(async () => response);
-      const tool = createTool({ request });
+      const tool = await createTool({ request });
 
       await expect(
         tool?.execute("call-unsafe-fork", {
@@ -501,7 +506,7 @@ describe("native Codex thread tool", () => {
         .mockResolvedValueOnce(false);
       try {
         await expect(
-          createTool({ request })?.execute("call-conflict", {
+          (await createTool({ request }))?.execute("call-conflict", {
             action: "fork",
             thread_id: "source-thread",
           }),
@@ -520,7 +525,7 @@ describe("native Codex thread tool", () => {
           cwd: "/tmp/project",
         });
         const request = vi.fn();
-        const tool = createTool({ request, modelSelectionLocked: true });
+        const tool = await createTool({ request, modelSelectionLocked: true });
         await expect(tool?.execute("call-locked-mutation", params)).rejects.toThrow(
           MODEL_SELECTION_LOCKED_MESSAGE,
         );
@@ -556,7 +561,7 @@ describe("native Codex thread tool", () => {
         historyCoveredThrough: new Date().toISOString(),
       });
       const request = vi.fn();
-      const tool = createTool({
+      const tool = await createTool({
         omitHomeScope: true,
         supervision: true,
         allowWriteControls: true,
@@ -575,7 +580,7 @@ describe("native Codex thread tool", () => {
     withFixture(async () => {
       let pluginConfig: unknown = { appServer: { homeScope: "user" } };
       const request = vi.fn();
-      const tool = createTool({ request, getPluginConfig: () => pluginConfig });
+      const tool = await createTool({ request, getPluginConfig: () => pluginConfig });
       pluginConfig = { supervision: { enabled: true, allowWriteControls: true } };
 
       await expect(
@@ -585,6 +590,37 @@ describe("native Codex thread tool", () => {
         }),
       ).rejects.toThrow("Supervised Codex forks must stay detached");
       expect(request).not.toHaveBeenCalled();
+    }));
+
+  it("rejects an attached fork when the session lock changes during its native read", () =>
+    withFixture(async () => {
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const request = vi.fn(async (_config, method: string) => {
+        if (method === CODEX_CONTROL_METHODS.readThread) {
+          entered.resolve();
+          await release.promise;
+          return { thread: { id: "source-thread", status: { type: "idle" } } };
+        }
+        throw new Error("Fork must not be dispatched after the session lock changes");
+      });
+      const tool = await createTool({ request });
+      const running = expect(
+        tool?.execute("changed-lock", { action: "fork", thread_id: "source-thread" }),
+      ).rejects.toThrow("ownership changed");
+      await entered.promise;
+      try {
+        await upsertSessionEntry({
+          agentId: "main",
+          storePath: path.join(fixture.root, "sessions", "sessions.json"),
+          sessionKey: "agent:main:telegram:direct:owner",
+          entry: { sessionId: "session-id", updatedAt: 2, modelSelectionLocked: true },
+        });
+      } finally {
+        release.resolve();
+      }
+      await running;
+      expect(request).toHaveBeenCalledOnce();
     }));
 
   it("refuses to archive an active bound thread", () =>
@@ -599,7 +635,7 @@ describe("native Codex thread tool", () => {
         }
         return {};
       });
-      const tool = createTool({ request });
+      const tool = await createTool({ request });
 
       await expect(
         tool?.execute("call-3", {
@@ -631,7 +667,7 @@ describe("native Codex thread tool", () => {
         }
         return {};
       });
-      const tool = createTool({ request });
+      const tool = await createTool({ request });
 
       await tool?.execute("call-4", {
         action: "archive",
@@ -667,7 +703,7 @@ describe("native Codex thread tool", () => {
         cwd: "/tmp/project",
       });
       const request = vi.fn(async () => response);
-      const tool = createTool({ request });
+      const tool = await createTool({ request });
 
       await expect(
         tool?.execute("call-unsafe-archive", {
@@ -698,7 +734,7 @@ describe("native Codex thread tool", () => {
         }
         return method === CODEX_CONTROL_METHODS.listThreads ? { data: [] } : {};
       });
-      const tool = createTool({ request });
+      const tool = await createTool({ request });
       if (!tool) {
         throw new Error("expected the owner native thread tool");
       }
@@ -745,7 +781,7 @@ describe("native Codex thread tool", () => {
         },
       };
       const request = vi.fn(async () => ({}));
-      const tool = createTool({ bindingStore, request, modelSelectionLocked: true });
+      const tool = await createTool({ bindingStore, request, modelSelectionLocked: true });
 
       await expect(
         tool?.execute("call-raced-locked-archive", {
@@ -776,7 +812,7 @@ describe("native Codex thread tool", () => {
           ? { thread: { id: "other-thread", status: { type: "idle" } } }
           : {},
       );
-      const tool = createTool({ request });
+      const tool = await createTool({ request });
 
       await expect(
         tool?.execute("call-owned-archive", {
@@ -825,7 +861,7 @@ describe("native Codex thread tool", () => {
           }
           return {};
         });
-        const tool = createTool({ request });
+        const tool = await createTool({ request });
 
         await expect(
           tool?.execute("call-descendant-owned-archive", {
@@ -868,7 +904,7 @@ describe("native Codex thread tool", () => {
         }
         return {};
       });
-      const tool = createTool({ request });
+      const tool = await createTool({ request });
 
       await expect(
         tool?.execute("call-descendant-error-archive", {

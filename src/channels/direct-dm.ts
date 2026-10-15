@@ -6,6 +6,7 @@ import {
   type OutboundReplyPayload,
 } from "../plugin-sdk/reply-payload.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { buildChannelInboundEventContext } from "./inbound-event/context.js";
 import {
@@ -60,6 +61,8 @@ type DispatchInboundDirectDmParams = {
   channelRuntime?: { inbound?: { buildContext?: unknown } };
   /** Set only after the channel's sender/pairing guard admits this event. */
   inboundAccessAuthorized?: boolean;
+  /** Recheck channel-owned live authority after preparation and at effect initiation. */
+  assertAuthority?: () => void;
   bodyForAgent?: string;
   commandBody?: string;
   provider?: string;
@@ -179,6 +182,7 @@ function buildDirectDmTurnPlan(
     accountId: route.accountId ?? params.accountId,
     route: { agentId: route.agentId, sessionKey: route.sessionKey },
     ctxPayload,
+    assertAuthority: params.assertAuthority,
     record: {
       onRecordError: params.onRecordError,
     },
@@ -196,7 +200,7 @@ function buildDirectDmTurnPlan(
   };
 }
 
-/** @deprecated Use dispatchInboundDirectDm. Retained for released SDK runtime callbacks until the next major. */
+/** @deprecated Use dispatchInboundDirectDm. Final compatibility day: 2026-12-31. */
 export async function dispatchInboundDirectDmWithRuntime(
   params: Omit<DispatchInboundDirectDmParams, "resolveChannelIngress"> & {
     runtime: PluginRuntime;
@@ -206,6 +210,11 @@ export async function dispatchInboundDirectDmWithRuntime(
   storePath: string;
   ctxPayload: FinalizedMsgContext;
 }> {
+  warnPluginSdkDeprecation({
+    family: "channel-inbound-envelope",
+    method: "dispatchInboundDirectDmWithRuntime",
+    replacement: "dispatchInboundDirectDm",
+  });
   const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: params.cfg,
     channel: params.channel,

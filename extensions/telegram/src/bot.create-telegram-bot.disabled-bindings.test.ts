@@ -180,7 +180,7 @@ describe("Telegram startup with disabled thread bindings", () => {
       telegramDeps: {
         ...defaultTelegramBotDeps,
         getRuntimeConfig: () => cfg,
-        syncTelegramMenuCommands: () => {},
+        syncTelegramMenuCommands: async () => {},
       },
       // Keep startup, inbound assembly, core gather, and delivery real; isolate model execution.
       dispatchReplyFromConfig: (params) => dispatchInboundMessage({ ...params, replyResolver }),

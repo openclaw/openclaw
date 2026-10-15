@@ -15,6 +15,9 @@ import {
   createGatewayClient,
   createPanel,
   desktopEnvironment,
+  mountPanel,
+  unmountPanel,
+  updatePanel,
 } from "./desktop-panel.test-support.ts";
 import { AudioContextMock } from "./desktop-pcm-queue.test-support.ts";
 
@@ -54,15 +57,17 @@ describe("desktop panel audio wiring", () => {
       return handle;
     });
     const panel = createPanel();
-    panel.client = createGatewayClient(request).client;
-    panel.available = true;
-    panel.embedded = !documentMode;
-    panel.presented = true;
-    panel.documentMode = documentMode;
-    panel.sessionKey = "main";
-    panel.requestedSource = desktopEnvironment.id;
-    panel.desktopClientFactory = () => ({ connect });
-    document.body.append(panel);
+    updatePanel(panel, {
+      client: createGatewayClient(request).client,
+      available: true,
+      embedded: !documentMode,
+      presented: true,
+      documentMode,
+      sessionKey: "main",
+      requestedSource: desktopEnvironment.id,
+      desktopClientFactory: () => ({ connect }),
+    });
+    mountPanel(panel);
     await panel.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
     if (!observation) {
@@ -117,11 +122,11 @@ describe("desktop panel audio wiring", () => {
       expect(tooltip()?.hasAttribute("open-on-click")).toBe(true);
       expect(panel.renderRoot.querySelector("[role='alert']")).toBeNull();
       button.focus();
-      expect(panel.shadowRoot?.activeElement).toBe(button);
+      expect(panel.ownerDocument.activeElement).toBe(button);
       button.click();
-      panel.presented = false;
+      updatePanel(panel, { presented: false });
       await panel.updateComplete;
-      panel.presented = true;
+      updatePanel(panel, { presented: true });
       await panel.updateComplete;
       expect(tooltip()?.content).toContain("restart the managed desktop");
       expect(panel.renderRoot.querySelector("[role='alert']")).toBeNull();
@@ -163,12 +168,12 @@ describe("desktop panel audio wiring", () => {
       } else {
         clickPanelButton(panel, "[aria-label='Unmute desktop audio']");
         await panel.updateComplete;
-        panel.presented = false;
+        updatePanel(panel, { presented: false });
         await panel.updateComplete;
         expect(AudioSocketMock.instances[0]!.close).toHaveBeenCalledOnce();
         expect(AudioContextMock.instances[0]!.close).toHaveBeenCalledOnce();
         expect(handle.disconnect).not.toHaveBeenCalled();
-        panel.presented = true;
+        updatePanel(panel, { presented: true });
       }
       await panel.updateComplete;
       expect(connect).toHaveBeenCalledOnce();
@@ -199,11 +204,11 @@ describe("desktop panel audio wiring", () => {
       clickPanelButton(panel, "[aria-label='Unmute desktop audio']");
       await panel.updateComplete;
       if (reason === "source") {
-        panel.requestedSource = "other";
+        updatePanel(panel, { requestedSource: "other" });
       } else if (reason === "disconnect") {
         clickPanelButton(panel, "[aria-label='Disconnect']");
       } else if (reason === "unmount") {
-        panel.remove();
+        unmountPanel(panel);
       } else {
         vi.spyOn(document, "hidden", "get").mockReturnValue(true);
         document.dispatchEvent(new Event("visibilitychange"));
@@ -218,11 +223,11 @@ describe("desktop panel audio wiring", () => {
   it("checks current visibility at click time before the next render", async () => {
     const { panel } = await setup();
     const button = panel.renderRoot.querySelector<HTMLButtonElement>(".desktop-audio-button")!;
-    panel.presented = false;
+    updatePanel(panel, { presented: false });
     button.click();
     expect(AudioContextMock.instances).toHaveLength(0);
     // The event closure must also observe current document visibility.
-    panel.presented = true;
+    updatePanel(panel, { presented: true });
     vi.spyOn(document, "hidden", "get").mockReturnValue(true);
     button.click();
     expect(AudioContextMock.instances).toHaveLength(0);

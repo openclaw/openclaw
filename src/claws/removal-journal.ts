@@ -6,7 +6,6 @@ import {
   prepareAgentSessionStoreDeletionSafety,
 } from "../agents/agent-delete-session-store-safety.targets.js";
 import { captureActiveCronJobAgentDeletion } from "../cron/active-jobs.js";
-import { withCronReceiptAuthorityMutation } from "../cron/store/receipt-authority-owner.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import type {
@@ -23,7 +22,7 @@ import {
   type ClawRemovalJournalWorkerInput,
 } from "./removal-journal-contract.js";
 
-/** Only the serving Cron owner publishes a journal mutation; native settlement precedes its reply. */
+/** Native settlement precedes the journal mutation's publication and reply. */
 export async function mutateClawRemovalJournal(
   input: Omit<ClawRemovalJournalWorkerInput, "nonce" | "sessionStoreSafety">,
   assertRequestCurrent: () => void,
@@ -59,89 +58,81 @@ export async function mutateClawRemovalJournal(
       identityKey: context.admission.identity.key,
     },
   );
-  return withCronReceiptAuthorityMutation(context, async (mutation) => {
-    const assertCurrent = () => {
-      assertSourceCurrent();
-      mutation.assertCurrent();
-      assertRequestCurrent();
-      if (command.sessionStoreSafety) {
-        assertAgentSessionStoreDeletionTargetsCurrent(command.sessionStoreSafety.targets);
-      }
-    };
-    let native: SqliteWorkerNativeSettlementOwner | undefined;
-    let settlement: Promise<SqliteWorkerOperationSettlement> | undefined;
-    let failure: unknown;
-    try {
-      await runOpenClawStateWorkerOperation(
-        mutation.context,
-        async (scope) => {
-          const reply = await scope.execute({
-            type: "clawProvenance.removalJournal",
-            input: command,
-          });
-          if (reply.nonce !== command.nonce) {
-            throw new Error("Claw journal mutation returned a different operation nonce");
-          }
-        },
-        {
-          assertCurrent,
-          createAdmission(retained) {
-            settlement = retained.settled;
-            let phase: "transaction" | "commit" | "settling" = "transaction";
-            const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-              assertCurrent();
-              if (
-                !isRecord(request.facts) ||
-                request.facts.nonce !== command.nonce ||
-                request.stage !== phase
-              ) {
-                throw new Error("Claw journal mutation lost its transaction owner");
-              }
-              if (!grant()) {
-                throw new Error("Claw journal mutation admission expired");
-              }
-              phase = phase === "transaction" ? "commit" : "settling";
-            }, mutation.attachment);
-            native = admission;
-            mutation.observe(admission, retained);
-            return { admission, nativeLocations: [context.admission.databasePath] };
-          },
-        },
-      );
-    } catch (error) {
-      failure = error;
+  const assertCurrent = () => {
+    assertSourceCurrent();
+    assertRequestCurrent();
+    if (command.sessionStoreSafety) {
+      assertAgentSessionStoreDeletionTargetsCurrent(command.sessionStoreSafety.targets);
     }
-    const settled = await settlement;
-    const facts = native?.committed?.facts;
-    if (isRecord(facts) && facts.nonce === command.nonce) {
-      const result = clawRemovalJournalResultSchema.parse({ ok: true, journal: facts.journal });
-      if (input.request.phase === "begin") {
-        invalidatePreparation();
-        cancel();
-      }
-      try {
-        (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
-        sessionChanges.emit({ all: true, scope: "stores" });
-      } catch (error) {
-        if (!isStateDatabaseReadAdmissionInvalidatedError(error)) {
-          throw error;
+  };
+  let native: SqliteWorkerNativeSettlementOwner | undefined;
+  let settlement: Promise<SqliteWorkerOperationSettlement> | undefined;
+  let failure: unknown;
+  try {
+    await runOpenClawStateWorkerOperation(
+      context,
+      async (scope) => {
+        const reply = await scope.execute({
+          type: "clawProvenance.removalJournal",
+          input: command,
+        });
+        if (reply.nonce !== command.nonce) {
+          throw new Error("Claw journal mutation returned a different operation nonce");
         }
+      },
+      {
+        assertCurrent,
+        createAdmission(retained) {
+          settlement = retained.settled;
+          let phase: "transaction" | "commit" | "settling" = "transaction";
+          const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+            assertCurrent();
+            if (
+              !isRecord(request.facts) ||
+              request.facts.nonce !== command.nonce ||
+              request.stage !== phase
+            ) {
+              throw new Error("Claw journal mutation lost its transaction owner");
+            }
+            if (!grant()) {
+              throw new Error("Claw journal mutation admission expired");
+            }
+            phase = phase === "transaction" ? "commit" : "settling";
+          });
+          native = admission;
+          return { admission, nativeLocations: [context.admission.databasePath] };
+        },
+      },
+    );
+  } catch (error) {
+    failure = error;
+  }
+  const settled = await settlement;
+  const facts = native?.committed?.facts;
+  if (isRecord(facts) && facts.nonce === command.nonce) {
+    const result = clawRemovalJournalResultSchema.parse({ ok: true, journal: facts.journal });
+    if (input.request.phase === "begin") {
+      invalidatePreparation();
+      cancel();
+    }
+    try {
+      (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
+      sessionChanges.emit({ all: true, scope: "stores" });
+    } catch (error) {
+      if (!isStateDatabaseReadAdmissionInvalidatedError(error)) {
+        throw error;
       }
-      return result;
     }
-    if (
-      native?.committed ||
-      settled?.kind === "unknown" ||
-      native?.settlement?.kind === "unknown"
-    ) {
-      throw new SqliteWorkerError(
-        "Claw journal mutation has an unknown durable outcome; inspect claws status before retrying.",
-        "outcome-unknown",
-      );
-    }
-    return {
-      ok: false as const,
-      error: failure instanceof Error ? failure.message : "Claw journal mutation did not commit.",
-    };
-  });
+    return result;
+  }
+  if (native?.committed || settled?.kind === "unknown" || native?.settlement?.kind === "unknown") {
+    throw new SqliteWorkerError(
+      "Claw journal mutation has an unknown durable outcome; inspect claws status before retrying.",
+      "outcome-unknown",
+    );
+  }
+  return {
+    ok: false as const,
+    error: failure instanceof Error ? failure.message : "Claw journal mutation did not commit.",
+  };
 }

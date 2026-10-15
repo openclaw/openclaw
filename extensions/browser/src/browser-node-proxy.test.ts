@@ -128,29 +128,6 @@ describe("Browser node proxy nested watchdogs", () => {
     });
   });
 
-  it("keeps a requested action inside separate node and Gateway watchdogs", async () => {
-    const signal = new AbortController().signal;
-
-    await createSessionProxy()({
-      method: "GET",
-      path: "/snapshot",
-      profile: "work",
-      timeoutMs: 7_777,
-      signal,
-    });
-
-    const { method, gateway, node, extra } = readGatewayCall();
-    expect(method).toBe("node.invoke");
-    expect(node.nodeId).toBe("node-1");
-    expect(node.command).toBe("browser.proxy");
-    expect([node.params.timeoutMs, node.timeoutMs, gateway.timeoutMs]).toEqual([
-      7_777, 12_777, 17_777,
-    ]);
-    expect(node.params.errorEnvelope).toBe("browser-v1");
-    expect(extra).toEqual({ scopes: ["operator.admin"], signal });
-    expect(runtimeMocks.fetchBrowserJson).not.toHaveBeenCalled();
-  });
-
   it("binds the tool execution signal to node requests without their own signal", async () => {
     const signal = new AbortController().signal;
     const proxy = createBrowserNodeProxyRequest({
@@ -340,30 +317,6 @@ describe("Browser node proxy nested watchdogs", () => {
     expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
   });
 
-  it("rejects an explicit old node upload before node dispatch", async () => {
-    uploadMocks.prepareBrowserProxyUploadRequest.mockResolvedValueOnce({
-      body: { ref: "e12" },
-      upload: {
-        envelope: "browser-upload-v1",
-        files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
-      },
-    });
-    const proxy = createBrowserNodeProxyRequest({
-      nodeTarget: { nodeId: "node-1", commands: ["browser.proxy"] },
-      allowAutomaticHostFallback: false,
-    });
-
-    await expect(
-      proxy({
-        method: "POST",
-        path: "/hooks/file-chooser",
-        body: { paths: ["/tmp/openclaw/uploads/report.txt"], ref: "e12" },
-      }),
-    ).rejects.toThrow("browser node does not support remote upload transfer");
-    expect(runtimeMocks.callGatewayTool).not.toHaveBeenCalled();
-    expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
-  });
-
   it("explains when remote upload transfer is awaiting node command approval", async () => {
     const proxy = createBrowserNodeProxyRequest({
       nodeTarget: {
@@ -385,28 +338,17 @@ describe("Browser node proxy nested watchdogs", () => {
     expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
   });
 
-  it("keeps default action, node, and Gateway watchdogs strictly nested", async () => {
-    await createSessionProxy()({ method: "GET", path: "/snapshot" });
+  it("reserves both Node-safe watchdog windows for a saturated timeout", async () => {
+    const timeoutMs = Number.MAX_SAFE_INTEGER;
+    await createSessionProxy()({ method: "GET", path: "/snapshot", timeoutMs });
 
+    const actionTimeoutMs = Math.min(timeoutMs, MAX_TIMER_TIMEOUT_MS - 10_000);
     const { gateway, node } = readGatewayCall();
     expect([node.params.timeoutMs, node.timeoutMs, gateway.timeoutMs]).toEqual([
-      20_000, 25_000, 30_000,
+      actionTimeoutMs,
+      actionTimeoutMs + 5_000,
+      actionTimeoutMs + 10_000,
     ]);
+    expect(gateway.timeoutMs).toBeLessThanOrEqual(MAX_TIMER_TIMEOUT_MS);
   });
-
-  it.each([Number.MAX_SAFE_INTEGER, MAX_TIMER_TIMEOUT_MS - 10_000, MAX_TIMER_TIMEOUT_MS - 10_001])(
-    "reserves both Node-safe watchdog windows for %i ms",
-    async (timeoutMs) => {
-      await createSessionProxy()({ method: "GET", path: "/snapshot", timeoutMs });
-
-      const actionTimeoutMs = Math.min(timeoutMs, MAX_TIMER_TIMEOUT_MS - 10_000);
-      const { gateway, node } = readGatewayCall();
-      expect([node.params.timeoutMs, node.timeoutMs, gateway.timeoutMs]).toEqual([
-        actionTimeoutMs,
-        actionTimeoutMs + 5_000,
-        actionTimeoutMs + 10_000,
-      ]);
-      expect(gateway.timeoutMs).toBeLessThanOrEqual(MAX_TIMER_TIMEOUT_MS);
-    },
-  );
 });

@@ -8,11 +8,11 @@ import {
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
+import { hasSameSecretReloadContract } from "../secrets/runtime-source-contract.js";
 import {
   getActiveSecretsRuntimeSnapshotState,
   getActiveSecretsRuntimeSnapshotRevisionState,
-  hasActiveSecretsRuntimeSnapshotLineage,
-  hasSameSecretReloadContract,
+  getActiveSecretsRuntimeSnapshotLineageRevisionState,
   restoreSecretsRuntimeSourceSnapshotIfLineageCurrent,
   setSecretsRuntimeSourceSnapshotIfCurrent,
 } from "../secrets/runtime-state.js";
@@ -84,6 +84,7 @@ export function createManagedReloadSecretHandlers(options: {
   prepareRuntimeCandidate: PrepareRuntimeCandidate;
   tryPrepareRuntimeSecrets: TryPrepareRuntimeSecrets;
   applyHotReload: ReturnType<typeof createGatewayReloadHandlers>["applyHotReload"];
+  hasPendingModelRuntimeReload: () => boolean;
 }) {
   const { params, prepareRuntimeCandidate, tryPrepareRuntimeSecrets, applyHotReload } = options;
   const prepareRestartRuntimeConfig = (
@@ -114,12 +115,17 @@ export function createManagedReloadSecretHandlers(options: {
     transactionOwnership,
     sourceConfig,
   ) => {
+    if (options.hasPendingModelRuntimeReload()) {
+      await onHotReload(buildGatewayReloadPlan([]), nextConfig, transactionOwnership, sourceConfig);
+      return { rollback: async () => {} };
+    }
     for (;;) {
       await transactionOwnership.checkpoint();
       assertReloadPublicationCurrent(transactionOwnership.isCurrent(), false);
       const previousRuntimeSourceConfig = getRuntimeConfigSourceSnapshot();
       const previousSecretsSnapshot = getActiveSecretsRuntimeSnapshotState();
       const previousSecretsRevision = getActiveSecretsRuntimeSnapshotRevisionState();
+      const previousSecretsLineage = getActiveSecretsRuntimeSnapshotLineageRevisionState();
       const previousRuntimeMetadata = getRuntimeConfigSnapshotMetadata();
       const nextSecretsSourceConfig = prepareRuntimeCandidate(
         nextConfig,
@@ -189,11 +195,12 @@ export function createManagedReloadSecretHandlers(options: {
       if (!previousRuntimeMetadata || !transactionOwnership.isCurrent()) {
         throw new GatewayConfigReloadSupersededError();
       }
-      if (getRuntimeConfigSnapshotMetadata()?.revision !== previousRuntimeMetadata.revision) {
-        if (hasActiveSecretsRuntimeSnapshotLineage(previousSecretsRevision)) {
-          continue;
-        }
+      // Equal config values can still replace the secrets activation owner.
+      if (getActiveSecretsRuntimeSnapshotLineageRevisionState() !== previousSecretsLineage) {
         throw new GatewayConfigReloadSupersededError();
+      }
+      if (getRuntimeConfigSnapshotMetadata()?.revision !== previousRuntimeMetadata.revision) {
+        continue;
       }
       if (
         !preparation ||
@@ -375,6 +382,7 @@ export function createManagedReloadSecretHandlers(options: {
       try {
         const publication: GatewayHotReloadPublication = {
           isCurrent: transactionOwnership.isCurrent,
+          hasNewerConfig: transactionOwnership.hasNewerConfig,
           checkpoint: transactionOwnership.checkpoint,
           assertInvokerOwned: transactionOwnership.assertInvokerOwned,
           ...(transactionOwnership.runtimeEnv
@@ -463,6 +471,7 @@ export function createManagedReloadSecretHandlers(options: {
         };
         if (
           isNoopGatewayReloadPlan(plan) &&
+          !options.hasPendingModelRuntimeReload() &&
           !doesReloadAffectProviderAuth(plan, previousRuntimeConfig, prepared.config)
         ) {
           // Neutral commits retain the prepared generation; model/auth changes

@@ -167,10 +167,6 @@ vi.mock("./session-updates.js", () => ({
   incrementCompactionCount: async () => undefined,
 }));
 
-vi.mock("./session-usage.js", () => ({
-  persistSessionUsageUpdate: async () => undefined,
-}));
-
 vi.mock("./agent-runner-memory.js", () => ({
   runMemoryFlushIfNeeded: async ({ sessionEntry }: { sessionEntry?: unknown }) => ({
     sessionEntry,
@@ -220,13 +216,13 @@ function createMediaFollowupRun(overrides: Parameters<typeof createMockFollowupR
   return followupRun;
 }
 
-function makeRunReplyAgentParams(
+async function makeRunReplyAgentParams(
   overrides: Partial<Parameters<typeof runReplyAgent>[0]> & {
     provider?: string;
     prompt?: string;
     workspaceDir?: string;
   } = {},
-): Parameters<typeof runReplyAgent>[0] {
+): Promise<Parameters<typeof runReplyAgent>[0]> {
   const provider = overrides.provider ?? "whatsapp";
   const prompt = overrides.prompt ?? "generate chart";
   const runWorkspaceDir = overrides.workspaceDir ?? testWorkspaceDir;
@@ -257,7 +253,7 @@ function makeRunReplyAgentParams(
     }
   }
   if (overrides.isActive === true && !overrides.replyOperation) {
-    replyOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
+    await replyOperation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
   }
   if (overrides.isActive === true) {
     replyOperation.attachBackend({

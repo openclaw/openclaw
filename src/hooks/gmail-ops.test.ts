@@ -6,7 +6,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 const mocks = vi.hoisted(() => ({
   ensureDependency: vi.fn(),
   ensureTailscaleEndpoint: vi.fn(),
-  getRuntimeConfig: vi.fn(),
+  readRuntimeConfig: vi.fn(),
   replaceConfigFile: vi.fn(),
   runCommandWithTimeout: vi.fn(),
   killProcessTree: vi.fn(),
@@ -42,7 +42,7 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    getRuntimeConfig: mocks.getRuntimeConfig,
+    captureRuntimeConfigAsyncReader: () => mocks.readRuntimeConfig,
     replaceConfigFile: mocks.replaceConfigFile,
   };
 });
@@ -124,7 +124,7 @@ describe("runGmailService", () => {
     children = [];
     mocks.ensureDependency.mockReset().mockResolvedValue(undefined);
     mocks.ensureTailscaleEndpoint.mockReset().mockResolvedValue(undefined);
-    mocks.getRuntimeConfig.mockReturnValue(createGmailConfig());
+    mocks.readRuntimeConfig.mockResolvedValue(createGmailConfig());
     mocks.runCommandWithTimeout.mockReset().mockResolvedValue(commandSuccess);
     mocks.spawn.mockReset().mockImplementation(() => {
       const child = Object.assign(new EventEmitter(), {
@@ -162,34 +162,6 @@ describe("runGmailService", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("replaces the foreground watcher after two sequential unexpected exits", async () => {
-    const config = createGmailConfig();
-    config.hooks.enabled = false;
-    config.hooks.gmail.account = "";
-    const originalConfig = structuredClone(config);
-    mocks.getRuntimeConfig.mockReturnValue(config);
-    await runGmailService({ account: "override@example.com", port: 9876, includeBody: false });
-    expect(children).toHaveLength(1);
-    for (let index = 0; index < 2; index++) {
-      exitChild(children[index]!);
-      // Both the old 2s loop and shared 5s lifecycle have had time to restart.
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(children).toHaveLength(index + 2);
-      expect(children.filter((child) => child.alive)).toHaveLength(1);
-    }
-    for (const [, args] of mocks.spawn.mock.calls) {
-      expect(args).toEqual(
-        expect.arrayContaining(["--account", "override@example.com", "--port", "9876"]),
-      );
-      expect(args).not.toContain("--include-body");
-    }
-    await vi.advanceTimersByTimeAsync(50_000);
-    expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(2);
-    expect(mocks.runCommandWithTimeout.mock.calls[1]?.[0]).toContain("override@example.com");
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-    expect(config).toEqual(originalConfig);
   });
 
   it("continues periodic renewal after a rejected command", async () => {

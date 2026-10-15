@@ -62,6 +62,7 @@ import {
   loadRequesterSessionEntry,
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
+  withSubagentRequesterDelivery,
 } from "./subagent-announce-delivery.runtime.js";
 import { createDirectAnnounceResponseClassifier } from "./subagent-announce-direct-response.js";
 import {
@@ -102,6 +103,7 @@ export type SubagentAnnounceDirectParams = {
   requesterIsSubagent: boolean;
   createUserTurnTranscriptRecorder?: (sessionId: string) => UserTurnTranscriptRecorder;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
+  onDeliveryError?: (error: unknown) => void;
   signal?: AbortSignal;
   onExecutionStarted?: () => void;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
@@ -121,6 +123,16 @@ function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
 export async function sendSubagentAnnounceDirectly(
   params: SubagentAnnounceDirectParams,
 ): Promise<SubagentAnnounceDeliveryResult> {
+  return withSubagentRequesterDelivery(
+    params.targetRequesterSessionKey,
+    params,
+    sendSubagentAnnounceDirectlyBound,
+  );
+}
+
+async function sendSubagentAnnounceDirectlyBound(
+  params: Parameters<typeof sendSubagentAnnounceDirectly>[0],
+): ReturnType<typeof sendSubagentAnnounceDirectly> {
   if (params.signal?.aborted) {
     return { delivered: false, path: "none" };
   }
@@ -144,7 +156,7 @@ export async function sendSubagentAnnounceDirectly(
     const sessionOnlyOrigin = effectiveDirectOrigin?.channel
       ? effectiveDirectOrigin
       : requesterSessionOrigin;
-    const requester = loadRequesterSessionEntry(
+    const requester = await loadRequesterSessionEntry(
       params.targetRequesterSessionKey,
       params.requesterAgentId,
     );
@@ -216,8 +228,8 @@ export async function sendSubagentAnnounceDirectly(
       params.targetRequesterSessionKey,
       requester,
     );
-    // Private findings bind to the requester incarnation that produced them,
-    // including a deliverable settle continuation that is no longer parentOnly.
+    // Settlement and private findings bind to the captured requester incarnation,
+    // including a visible continuation after the spawning turn has yielded.
     const requesterSessionBound =
       parentOnly ||
       (sourceToolId === "subagent_settle" && params.completionRequesterSessionId !== undefined);
@@ -231,7 +243,7 @@ export async function sendSubagentAnnounceDirectly(
         delivered: false,
         path: "none",
         reason: "completion_handoff_unavailable",
-        error: "private completion requester session is unavailable or replaced",
+        error: "completion requester session is unavailable or replaced",
         terminal: true,
         disposition: "intentional_non_delivery",
       };
@@ -294,6 +306,7 @@ export async function sendSubagentAnnounceDirectly(
         agentResult,
         signal: params.signal,
         onDeliveryResult: params.onDeliveryResult,
+        onDeliveryError: params.onDeliveryError,
         isSourceSessionEffectsAllowed: isCompletionDeliveryAllowed,
       });
     // A private settle turn never delivers; automatic only keeps a tool-only mode from
@@ -377,7 +390,7 @@ export async function sendSubagentAnnounceDirectly(
       isCronRunSessionKey(canonicalRequesterSessionKey) &&
       !resolveRequesterSessionActivity(
         params.targetRequesterSessionKey,
-        loadRequesterSessionEntry(params.targetRequesterSessionKey, params.requesterAgentId),
+        await loadRequesterSessionEntry(params.targetRequesterSessionKey, params.requesterAgentId),
       ).isActive &&
       !agentMediatedCompletion
     ) {
@@ -462,6 +475,12 @@ export async function sendSubagentAnnounceDirectly(
               }
               return await runAnnounceAgentCall({
                 agentParams: directAgentParams,
+                // Individual result delivery and an owed public synthesis remain
+                // required; optional settle intake may complete without repeating it.
+                replyExpectation:
+                  params.expectsCompletionMessage || params.requireVisibleReply
+                    ? "required"
+                    : "optional",
                 // A resumed parent has no inbound channel dispatcher to keep activity visible.
                 typing:
                   sourceToolId === "subagent_settle" &&
@@ -548,6 +567,7 @@ export async function sendSubagentAnnounceDirectly(
           return textDelivery;
         }
       }
+      params.onDeliveryError?.(err);
       directFailure = {
         delivered: false,
         path: "direct",
@@ -640,6 +660,7 @@ export async function sendSubagentAnnounceDirectly(
       ? settledRecovery.delivery
       : classifyResponse({ status: "ok", result: settledRecovery.result });
   } catch (err) {
+    params.onDeliveryError?.(err);
     const disposition = hasAnnounceSendEvidence(err)
       ? "ambiguous"
       : isPermanentAnnounceDeliveryError(err)

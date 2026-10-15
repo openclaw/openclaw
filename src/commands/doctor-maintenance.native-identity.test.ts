@@ -19,7 +19,8 @@ const native = vi.hoisted(() => ({
   open: vi.fn<typeof import("../daemon/systemd-peer-native.js").openSystemdBroker>(),
 }));
 // The manager identity fixture runs Doctor outside its synthetic Gateway's service.
-vi.mock("../daemon/service-process-membership.js", () => ({
+vi.mock("../daemon/service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service-process-membership.js")>()),
   inspectServiceProcessMembershipSync: () => "outside",
 }));
 vi.mock("../gateway/call.js", async (original) => {

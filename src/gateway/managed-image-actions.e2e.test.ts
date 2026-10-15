@@ -2,14 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
-import {
-  replaceSessionEntry,
-  replaceTranscriptEvents,
-} from "../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   publishEncodedSessionTranscriptArchive,
   resolveSqliteTranscriptArchivePath,
 } from "../config/sessions/session-accessor.sqlite-archive-artifact.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { readImageProbeFromHeader } from "../media/image-ops.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -407,12 +405,14 @@ describe("managed image actions Gateway E2E", () => {
           thumbnailUrl.pathname = thumbnailUrl.pathname.replace(/\/full$/u, "/thumbnail");
           const thumbnail = await fetch(thumbnailUrl);
           expect(thumbnail.status).toBe(200);
-          expect(thumbnail.headers.get("content-type")).toBe("image/png");
+          expect(thumbnail.headers.get("content-type")).toBe("image/webp");
           const thumbnailBytes = Buffer.from(await thumbnail.arrayBuffer());
           expect(readImageProbeFromHeader(thumbnailBytes)).toMatchObject({
-            width: 1200,
-            height: 336,
+            format: "webp",
+            width: 960,
+            height: 269,
           });
+          expect(thumbnailBytes.byteLength).toBeLessThanOrEqual(256 * 1024);
 
           const authenticated = await fetch(new URL(imageUrl, fullUrl), {
             headers: { Authorization: `Bearer ${GATEWAY_TOKEN}` },

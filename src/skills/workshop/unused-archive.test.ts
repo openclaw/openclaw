@@ -57,6 +57,7 @@ async function recordUse(name: string, ts: number) {
 
 beforeEach(async () => {
   state = await createOpenClawTestState({ layout: "state-only" });
+  setRuntimeConfigSnapshot(openclawAgent);
   stopTracking = registerSkillUsageTracking();
 });
 

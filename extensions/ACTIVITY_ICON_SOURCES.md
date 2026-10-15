@@ -51,6 +51,7 @@ The following defaults reuse the corresponding files in [`ui/public/provider-ico
 | `minimax`               | `ProviderIcon-minimax.svg`     |
 | `mistral`               | `ProviderIcon-mistral.svg`     |
 | `moonshot`              | `ProviderIcon-kimi.svg`        |
+| `muse`                  | `ProviderIcon-meta.svg`        |
 | `novita`                | `ProviderIcon-novita.svg`      |
 | `nvidia`                | `ProviderIcon-nvidia.svg`      |
 | `ollama`                | `ProviderIcon-ollama.svg`      |
@@ -130,8 +131,8 @@ Other defaults are OpenClaw functional glyphs drawn for the 24-unit activity gri
 
 | Capability              | Plugins                                                                                                          |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Agent or task flow      | `a2a`, `acpx`, `llm-task`, `raft`, `reef`                                                                        |
-| Connections and sharing | `admin-http-rpc`, `beam`, `bonjour`, `device-pair`, `session-share`                                              |
+| Agent or task flow      | `a2a`, `acpx`, `advisor`, `llm-task`, `mcp-events`, `raft`, `reef`                                               |
+| Connections and sharing | `admin-http-rpc`, `beam`, `bonjour`, `device-pair`, `mcp-relay`, `session-share`                                 |
 | Chat and meetings       | `buzz`, `clickclack`, `feishu`, `irc`, `nostr`, `sms`, `synology-chat`, `tlon`, `zoom-meetings`                  |
 | Files and knowledge     | `document-extract`, `file-transfer`, `imap`, `logbook`, `memory-wiki`, `oc-path`, `web-readability`, `workboard` |
 | Compute and location    | `crabbox`, `cua-computer`, `geolocation`, `gmi`, `radius`, `sglang`                                              |

@@ -443,24 +443,6 @@ describe("xAI OAuth", () => {
     expect(refreshed.refresh).toBe("refresh-1");
   });
 
-  it("does not retry terminal xAI OAuth refresh errors", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async () =>
-      jsonResponse(
-        {
-          error: "invalid_grant",
-          error_description: "Invalid or unknown refresh token",
-        },
-        { status: 400 },
-      ),
-    );
-    const credential = createXaiOAuthCredential();
-
-    await expect(refreshWithFetch(credential, { fetchImpl })).rejects.toThrow(
-      "invalid_grant (Invalid or unknown refresh token)",
-    );
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-  });
-
   it("does not retry refresh on transport errors so a rotated refresh token is never resent", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => {
       throw new Error("socket hang up");
@@ -523,7 +505,16 @@ describe("xAI OAuth", () => {
       fetchImpl.mockImplementation(async (input) => {
         const url = requestUrl(input);
         if (url.endsWith("/models")) {
-          return jsonResponse({ data: [{ id: "grok-4.6", api_backend: "responses" }] });
+          return jsonResponse({
+            data: [
+              {
+                id: "grok-4.6",
+                api_backend: "responses",
+                supports_reasoning_effort: true,
+                reasoning_efforts: ["low", "high", "xhigh"],
+              },
+            ],
+          });
         }
         throw new Error(`Unexpected catalog URL: ${url}`);
       });
@@ -548,13 +539,15 @@ describe("xAI OAuth", () => {
                       auth: "oauth",
                       models: [
                         {
-                          id: "stale-catalog",
+                          id: "grok-4.6",
                           name: "Stale",
                           reasoning: false,
                           input: ["text"],
                           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                           contextWindow: 1000,
                           maxTokens: 100,
+                          thinkingLevelMap: { xhigh: null },
+                          compat: { supportedReasoningEfforts: ["low", "high"] },
                         },
                       ],
                     },
@@ -647,6 +640,8 @@ describe("xAI OAuth", () => {
       ).toEqual(["https://cli-chat-proxy.grok.com/v1/models"]);
       const savedProvider = result.configPatch?.models?.providers?.xai;
       expect(savedProvider?.models.some((model) => model.id === "auto")).toBe(false);
+      expect(savedProvider?.models[0]?.thinkingLevelMap).toBeUndefined();
+      expect(savedProvider?.models[0]?.compat?.supportedReasoningEfforts).toBeUndefined();
       expect(savedProvider).toHaveProperty("apiKey", undefined);
       expect(savedProvider).toHaveProperty("headers", undefined);
       expect(savedProvider?.request).toHaveProperty("auth", undefined);

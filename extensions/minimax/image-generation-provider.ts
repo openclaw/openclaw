@@ -4,8 +4,8 @@ import {
 } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
+import type { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
@@ -81,7 +81,7 @@ export function buildMinimaxImageGenerationProvider(
     label: "MiniMax",
     defaultModel: DEFAULT_MODEL,
     models: [DEFAULT_MODEL],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: providerId, ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: providerId, ...ctx }),
     capabilities: {
       generate: {
         maxCount: MINIMAX_MAX_IMAGE_RESULTS,
@@ -102,26 +102,17 @@ export function buildMinimaxImageGenerationProvider(
       },
     },
     async generateImage(req) {
-      const auth = await resolveApiKeyForProvider({
-        provider: providerId,
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("MiniMax API key missing");
-      }
-
       const baseUrl = resolveMinimaxImageBaseUrl(req.cfg, providerId);
       const {
         baseUrl: resolvedBaseUrl,
         allowPrivateNetwork,
         headers,
         dispatcherPolicy,
-      } = resolveMinimaxMediaRequestConfig({
+      } = await resolveMinimaxMediaRequestConfig({
         cfg: req.cfg,
         providerId,
-        apiKey: auth.apiKey,
+        agentDir: req.agentDir,
+        authStore: req.authStore,
         baseUrl,
         capability: "image",
       });

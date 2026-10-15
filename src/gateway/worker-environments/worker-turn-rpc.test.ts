@@ -24,7 +24,7 @@ import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
 type WorkerEnvironmentServiceOptions = support.WorkerEnvironmentServiceOptions;
 
 describe("worker environment service", () => {
-  support.setupWorkerEnvironmentServiceSuite({ reuseReadWorkers: true });
+  support.setupWorkerEnvironmentServiceSuite();
 
   it("admits only a gateway-preclaimed worker placement and fences later requests", async () => {
     const environmentId = "worker-placement-fence";
@@ -290,7 +290,7 @@ describe("worker environment service", () => {
         database: support.testState.stateDb,
       });
       const gate = createWorkerSessionPlacementGate(restartedStore, {
-        rejectExistingWorkerClaims: source === "inherited",
+        recoveryPlacements: source === "inherited" ? await restartedStore.listAsync() : [],
       });
       if (source === "revoked") {
         gate.fenceWorkerTurnForRecovery(claim);

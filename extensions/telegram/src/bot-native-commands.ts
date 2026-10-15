@@ -16,7 +16,6 @@ import type { TelegramCommandExecutorParams } from "./bot-native-command-dispatc
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
-  syncTelegramMenuCommands as syncTelegramMenuCommandsRuntime,
   type TelegramMenuCommand,
 } from "./bot-native-command-menu.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
@@ -46,7 +45,7 @@ type RegisterTelegramNativeCommandsParams = Omit<
   shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
 };
 
-export const registerTelegramNativeCommands = ({
+export const registerTelegramNativeCommands = async ({
   cfg,
   telegramCfg,
   nativeEnabled,
@@ -54,10 +53,10 @@ export const registerTelegramNativeCommands = ({
   shouldSkipUpdate,
   telegramDeps = defaultTelegramNativeCommandDeps,
   ...executorParams
-}: RegisterTelegramNativeCommandsParams): {
+}: RegisterTelegramNativeCommandsParams): Promise<{
   nativeCommandNames: ReadonlyMap<string, string>;
   nativeCommandCallbackDispatcher?: TelegramNativeCommandCallbackDispatcher;
-} => {
+}> => {
   const { bot, runtime, accountId, opts } = executorParams;
   const boundRoute =
     nativeEnabled && nativeSkillsEnabled
@@ -70,7 +69,7 @@ export const registerTelegramNativeCommands = ({
   }
   const skillCommands =
     nativeEnabled && nativeSkillsEnabled && boundRoute
-      ? telegramDeps.listSkillCommandsForAgents({ cfg, agentIds: [boundRoute.agentId] })
+      ? await telegramDeps.prepareSkillCommandsForAgents({ cfg, agentIds: [boundRoute.agentId] })
       : [];
   const pluginCommandRuntime = createPluginCommandRuntime();
   const pluginCommandSpecs = pluginCommandRuntime.listNativeCandidates("telegram");
@@ -182,10 +181,8 @@ export const registerTelegramNativeCommands = ({
       `Telegram menu text still exceeded the conservative ${maxTotalChars}-character payload budget after shortening descriptions; registering first ${commandsToRegister.length} commands.`,
     );
   }
-  const syncTelegramMenuCommands =
-    telegramDeps.syncTelegramMenuCommands ?? syncTelegramMenuCommandsRuntime;
   // Telegram only limits menu entries; hidden commands remain callable.
-  syncTelegramMenuCommands({
+  void telegramDeps.syncTelegramMenuCommands({
     bot,
     runtime,
     commandsToRegister,

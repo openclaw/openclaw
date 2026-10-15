@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
 import {
@@ -53,6 +54,7 @@ const GITHUB_API_VERSION = "2022-11-28";
 const GITHUB_API_MAX_REDIRECTS = 3;
 const GITHUB_QUOTA_CACHE_LIMIT = 200;
 const GITHUB_QUOTA_RETRY_MS = 60_000;
+const log = createSubsystemLogger("github/http");
 
 // Normal Gateway callers share global fetch; injected transports own separate
 // API environments and release their cooldown state with that transport.
@@ -266,13 +268,14 @@ export async function fetchGitHubApi(
   fetchImpl: typeof fetch,
   token?: string,
   beforeRedirect?: (url: URL) => Promise<void>,
-  identity?: { revalidate: () => Promise<void>; assertSelected: () => void },
+  identity?: { revalidate: () => Promise<void>; assertSelected: () => void; signal?: AbortSignal },
   etag?: string,
   callerSignal?: AbortSignal,
   graphql?: { query: string; variables: Record<string, string> },
   apiBaseUrl = GITHUB_API_BASE_URL,
 ): Promise<Response> {
   callerSignal?.throwIfAborted();
+  identity?.signal?.throwIfAborted();
   const baseUrl = resolveGitHubApiBaseUrl(apiBaseUrl);
   const apiBase = new URL(baseUrl);
   const graphqlUrl = githubGraphqlUrl(baseUrl);
@@ -289,15 +292,23 @@ export async function fetchGitHubApi(
   transportCooldowns.set(fetchImpl, cooldowns);
 
   const timeout = AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS);
-  const signal = callerSignal ? AbortSignal.any([timeout, callerSignal]) : timeout;
+  const signal = AbortSignal.any(
+    [timeout, callerSignal, identity?.signal].filter(
+      (candidate): candidate is AbortSignal => candidate !== undefined,
+    ),
+  );
   for (let redirects = 0; ; redirects += 1) {
+    const startedAt = performance.now();
     // Recheck every dispatch, including redirects and auxiliary metadata reads.
     // Selection must still be current after the asynchronous credential read.
     if (identity) {
       await identity.revalidate();
       identity.assertSelected();
     }
+    const authorizedAt = performance.now();
+    const authMs = Math.round(authorizedAt - startedAt);
     callerSignal?.throwIfAborted();
+    identity?.signal?.throwIfAborted();
     const resource = githubApiResource(url, baseUrl, graphqlUrl);
     const sharedCooldown = activeGitHubCooldown(cooldowns, `${credentialScope}:*`);
     const resourceCooldown = activeGitHubCooldown(cooldowns, `${credentialScope}:${resource}`);
@@ -319,8 +330,21 @@ export async function fetchGitHubApi(
         ...(graphql ? { method: "POST", body: JSON.stringify(graphql) } : {}),
         redirect: "manual",
         signal,
+      }).finally(() => {
+        const finishedAt = performance.now();
+        if (authMs + finishedAt - authorizedAt >= 500) {
+          log.debug("Slow GitHub API request", {
+            authMs,
+            networkMs: Math.round(finishedAt - authorizedAt),
+            resource,
+            aborted: signal.aborted,
+          });
+        }
       });
     } catch (error) {
+      // Invocation cancellation is not a cacheable upstream failure.
+      identity?.signal?.throwIfAborted();
+      identity?.assertSelected();
       const timedOut = signal.aborted || (error instanceof Error && error.name === "TimeoutError");
       throw new ControlUiGitHubTransportError(
         timedOut ? "GitHub request timed out" : "Could not reach GitHub",

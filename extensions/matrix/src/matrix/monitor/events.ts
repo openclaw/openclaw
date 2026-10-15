@@ -13,7 +13,7 @@ import type { MatrixVerificationSummary } from "../sdk/verification-manager.js";
 import type { createDirectRoomTracker } from "./direct.js";
 import type { createMatrixRoomInfoResolver } from "./room-info.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
-import { resolveMatrixInboundRoute } from "./route.js";
+import { resolveMatrixInboundRouteAsync } from "./route.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 import { createMatrixVerificationEventRouter } from "./verification-events.js";
@@ -159,9 +159,6 @@ async function resolveMatrixSelfUserId(
   client: MatrixClient,
   logVerboseMessage: (message: string) => void,
 ): Promise<string | null> {
-  if (typeof client.getUserId !== "function") {
-    return null;
-  }
   try {
     return (await client.getUserId()) ?? null;
   } catch (err) {
@@ -395,14 +392,16 @@ export function registerMatrixMonitorEvents(params: {
         accountId: auth.accountId,
         conversationId: roomId,
         deliverTo: `room:${roomId}`,
-        route: resolveMatrixInboundRoute({
-          cfg,
-          accountId: auth.accountId,
-          roomId,
-          senderId: auth.userId,
-          isDirectMessage: false,
-          resolveAgentRoute,
-        }).route,
+        route: (
+          await resolveMatrixInboundRouteAsync({
+            cfg,
+            accountId: auth.accountId,
+            roomId,
+            senderId: auth.userId,
+            isDirectMessage: false,
+            resolveAgentRoute,
+          })
+        ).route,
         roomAllowed,
         resolveRoomContext: async ({ messageLimit }) => {
           const info = await getMatrixRoomInfo(roomId, options);

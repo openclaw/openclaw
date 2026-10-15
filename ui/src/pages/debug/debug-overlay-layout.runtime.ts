@@ -25,10 +25,6 @@ function readPosition(): Position | undefined {
   return undefined;
 }
 
-function sameBox(a: DOMRect, b: DOMRect | undefined): boolean {
-  return a.x === b?.x && a.y === b.y && a.width === b.width && a.height === b.height;
-}
-
 export class DebugOverlayLayout {
   constructor(private readonly element: HTMLElement) {}
   private mode?: Mode;
@@ -36,7 +32,6 @@ export class DebugOverlayLayout {
   private frame = 0;
   private transitionFrom?: DOMRect;
   private animation?: Animation;
-  private animationTarget?: DOMRect;
   private observer?: ResizeObserver;
   private drag?: {
     id: number;
@@ -56,7 +51,7 @@ export class DebugOverlayLayout {
     if (this.frame) {
       return;
     }
-    // This directive precedes the class binding: capture the old box above, then
+    // The mode memo precedes the class binding: capture the old box above, then
     // coalesce loading/live updates without losing the pending transition.
     this.frame = requestAnimationFrame(() => {
       this.frame = 0;
@@ -64,17 +59,8 @@ export class DebugOverlayLayout {
         return;
       }
       this.connect();
-      const running = this.animation;
-      if (running) {
-        // Unrelated shell renders repeat the mode mid-flight and must not restart it;
-        // retarget only when the committed body moved the settled box (e.g. loading
-        // content swapped for live content).
-        const current = element.getBoundingClientRect();
-        const target = this.measureSettled(running);
-        if (!sameBox(target, this.animationTarget)) {
-          this.cancelAnimation();
-          this.animate(current, target);
-        }
+      if (this.animation) {
+        // Body-size changes during the 160ms transition settle at its finish.
         return;
       }
       this.place();
@@ -99,7 +85,6 @@ export class DebugOverlayLayout {
       bottom: "auto",
       maxHeight: "none",
     });
-    this.animationTarget = after;
     const animation = this.element.animate([keyframe(before), keyframe(after)], {
       duration: 160,
       easing: "cubic-bezier(0.2, 0, 0, 1)",
@@ -109,23 +94,6 @@ export class DebugOverlayLayout {
       this.animation = undefined;
       this.place();
     };
-  }
-
-  // The running effect overrides the frame box; lift it so placement and measurement
-  // see the settled layout. Synchronous, so no frame is painted without it.
-  private measureSettled(animation: Animation): DOMRect {
-    const effect = animation.effect instanceof KeyframeEffect ? animation.effect : undefined;
-    if (effect) {
-      effect.target = null;
-    }
-    try {
-      this.place();
-      return this.element.getBoundingClientRect();
-    } finally {
-      if (effect) {
-        effect.target = this.element;
-      }
-    }
   }
 
   private connect(): void {
@@ -312,10 +280,5 @@ export class DebugOverlayLayout {
     element?.removeEventListener("keydown", this.keyDown);
     window.removeEventListener("resize", this.resize);
     window.removeEventListener("blur", this.cancelDrag);
-  }
-
-  reconnect(): void {
-    this.connect();
-    this.place();
   }
 }

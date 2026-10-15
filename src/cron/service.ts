@@ -1,16 +1,18 @@
 /** Stateful CronService facade around the locked service operation helpers. */
+import type { CronEventRunOptions } from "./event-source.js";
 import type {
   CronServiceContract,
   CronServiceRunOptions,
   CronServiceRunResult,
 } from "./service-contract.js";
 import type { CronListPageOptions } from "./service/list-page-types.js";
+import * as eventOps from "./service/ops-event.js";
 import * as lifecycleOps from "./service/ops-lifecycle.js";
 import * as mutationOps from "./service/ops-mutations.js";
 import * as readOps from "./service/ops-read.js";
-import type { OnExitRunOptions } from "./service/ops-run-preparation.js";
 import * as runOps from "./service/ops-run.js";
 import * as streamOps from "./service/ops-stream.js";
+import type { OnExitRunOptions } from "./service/run-options.js";
 import {
   type CronAddOptions,
   type CronServiceDeps,
@@ -36,6 +38,9 @@ export class CronService implements CronServiceContract {
   }
 
   async start() {
+    if (this.state.schedulerStarted && !this.state.stopped) {
+      return;
+    }
     const generation = this.state.lifecycleGeneration;
     const pending = this.startState;
     if (pending) {
@@ -65,7 +70,6 @@ export class CronService implements CronServiceContract {
 
   private async startOnce(generation: number) {
     this.startInProgress += 1;
-    this.state.schedulerStarted = false;
     try {
       const start = () => lifecycleOps.start(this.state);
       await (this.state.deps.runSchedulerOwned
@@ -100,6 +104,14 @@ export class CronService implements CronServiceContract {
 
   getSuspensionBlockerCount() {
     return this.startInProgress;
+  }
+
+  async readEventSources(source: string) {
+    return await eventOps.readEventSources(this.state, source);
+  }
+
+  async runEvent(id: string, opts: CronEventRunOptions) {
+    return await eventOps.runEvent(this.state, id, opts);
   }
 
   async status() {
@@ -259,7 +271,13 @@ export class CronService implements CronServiceContract {
       : this.state.deps.defaultAgentId;
   }
 
-  wake(opts: { mode: CronWakeMode; text: string; sessionKey?: string; agentId?: string }) {
+  wake(opts: {
+    mode: CronWakeMode;
+    text: string;
+    sessionKey?: string;
+    agentId?: string;
+    commitGuard?: () => void;
+  }) {
     return runOps.wakeNow(this.state, opts);
   }
 }

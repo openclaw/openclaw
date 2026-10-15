@@ -76,30 +76,17 @@ export function createCodexSessionCatalogControl(params: {
     resolveRuntimeOptions,
     ...(params.env ? { env: params.env } : {}),
   });
-  const requestOptionsByConfig = new WeakMap<
-    OpenClawConfig,
-    { config: OpenClawConfig; byAgent: Map<string, CodexCatalogRequestOptions> }
-  >();
   const indexes = new Map<string, CodexCatalogIndex>();
-  const retiringState = new Map<string, Promise<void>>();
   const directHomes = new Map<string, Promise<string>>();
   const residentRequests = new Set<Promise<CodexCatalogIndex>>();
-  let generation = params.getRuntimeConfig();
-  let residentEpoch = 0;
+  let generation = params.config;
   let closed = false;
   let runBackground = (run: () => Promise<void>) => run();
   let retiring: Promise<void> | undefined;
   const retireIndexes = (): Promise<void> => {
-    residentEpoch++;
     const closing: Promise<void>[] = [];
-    for (const [homeId, index] of indexes) {
-      const writes = index.retire().finally(() => {
-        if (retiringState.get(homeId) === writes) {
-          retiringState.delete(homeId);
-        }
-      });
-      retiringState.set(homeId, writes);
-      closing.push(writes, index.close());
+    for (const index of indexes.values()) {
+      closing.push(index.close());
     }
     indexes.clear();
     directHomes.clear();
@@ -123,7 +110,6 @@ export function createCodexSessionCatalogControl(params: {
       generation = config;
       void retireIndexes();
     }
-    const epoch = residentEpoch;
     const runtime =
       source?.appServer ?? resolveRuntimeOptions({ pluginConfig: params.getPluginConfig() });
     const requestOptions = resolveRequestOptions(runtime.start, agentId, source);
@@ -138,12 +124,6 @@ export function createCodexSessionCatalogControl(params: {
       directHomes.set(key, home);
     }
     const homeId = await home;
-    // Only already-admitted writes can affect the replacement's snapshot.
-    // Retired native reads remain owned by stop(), without delaying this list.
-    await retiringState.get(homeId);
-    if (closed || generation !== config || residentEpoch !== epoch) {
-      throw new Error("Codex catalog configuration changed");
-    }
     let index = indexes.get(homeId);
     if (!index) {
       const [
@@ -153,9 +133,8 @@ export function createCodexSessionCatalogControl(params: {
         import("./session-catalog-index.js"),
         import("./session-catalog-projection.js"),
       ]);
-      source?.assertCurrent();
-      if (closed || generation !== config || residentEpoch !== epoch) {
-        throw new Error("Codex catalog configuration changed");
+      if (closed) {
+        throw new Error("Codex resident catalog is closed");
       }
       index = indexes.get(homeId);
       if (index) {
@@ -197,12 +176,12 @@ export function createCodexSessionCatalogControl(params: {
           }
         },
         assertCurrent: () => {
-          source?.assertCurrent();
-          if (closed || params.getRuntimeConfig() !== config || residentEpoch !== epoch) {
-            throw new Error("Codex catalog configuration changed");
+          if (closed) {
+            throw new Error("Codex resident catalog is closed");
           }
         },
         readNative: async (query, remainingRows, foreground) => {
+          source?.assertCurrent();
           const requests = createRequestSnapshot(
             agentId,
             source,
@@ -214,6 +193,7 @@ export function createCodexSessionCatalogControl(params: {
                 }
               : undefined,
             Math.min(64, remainingRows),
+            requestOptions,
           );
           const attempt = foreground
             ? requests.beginList(foreground)
@@ -295,36 +275,13 @@ export function createCodexSessionCatalogControl(params: {
   ): CodexCatalogRequestOptions => {
     source?.assertCurrent();
     const runtimeConfig = params.getRuntimeConfig();
-    const agentDir =
-      source?.agentDir ?? (agentId ? resolveAgentDir(runtimeConfig ?? {}, agentId) : undefined);
-    const resolvedStartOptions = source?.appServer.start ?? startOptions;
-    if (!runtimeConfig) {
-      return {
-        agentDir,
-        config: undefined,
-        startOptions: structuredClone(resolvedStartOptions),
-      };
-    }
-    let snapshot = requestOptionsByConfig.get(runtimeConfig);
-    const cacheKey = `${agentId ?? ""}\0${source?.sourceHomeId ?? ""}`;
-    const cached = snapshot?.byAgent.get(cacheKey);
-    if (cached) {
-      // Plugin start options derive from this same immutable config snapshot. Config reload changes
-      // object identity; re-cloning on every poll only adds CPU and allocation to the catalog path.
-      return cached;
-    }
-    if (!snapshot) {
-      // The fleet-sized config belongs to the generation, not each agent/home connection.
-      snapshot = { config: structuredClone(runtimeConfig), byAgent: new Map() };
-      requestOptionsByConfig.set(runtimeConfig, snapshot);
-    }
-    const resolved = {
-      agentDir,
-      config: snapshot.config,
-      startOptions: structuredClone(resolvedStartOptions),
+    // Keep owner-published config and prepared connection facts without copying them.
+    return {
+      agentDir:
+        source?.agentDir ?? (agentId ? resolveAgentDir(runtimeConfig ?? {}, agentId) : undefined),
+      config: runtimeConfig,
+      startOptions: source?.appServer.start ?? startOptions,
     };
-    snapshot.byAgent.set(cacheKey, resolved);
-    return resolved;
   };
   const createRequestSnapshot = (
     agentId: string | undefined,
@@ -332,10 +289,12 @@ export function createCodexSessionCatalogControl(params: {
     catalogPreview?: true,
     catalogPreviewCache?: CodexCatalogPreviewCache,
     catalogRows?: number,
+    preparedRequestOptions?: CodexCatalogRequestOptions,
   ): CodexSessionCatalogRequestSnapshot => {
     const pluginConfig = params.getPluginConfig();
     const runtime = source?.appServer ?? resolveRuntimeOptions({ pluginConfig });
-    const requestOptions = resolveRequestOptions(runtime.start, agentId, source);
+    const requestOptions =
+      preparedRequestOptions ?? resolveRequestOptions(runtime.start, agentId, source);
     return createCodexCatalogRequestSnapshot(
       runtime.requestTimeoutMs,
       async (method, requestParams, timeoutMs, assertCurrent, observation) => {

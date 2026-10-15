@@ -57,6 +57,8 @@ export type EmbeddingProvider = {
   model: string;
   dimensions?: number;
   maxInputTokens?: number;
+  /** Positive safe integer cap for memory embedding requests; omit when the endpoint limit is unknown. */
+  maxInputsPerRequest?: number;
   embed: (input: EmbeddingInput, options?: EmbeddingProviderCallOptions) => Promise<number[]>;
   embedBatch: (
     inputs: EmbeddingInput[],

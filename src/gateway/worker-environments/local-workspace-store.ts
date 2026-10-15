@@ -63,6 +63,7 @@ export function withLocalWorkspaceStore<T>(
   params: {
     worktreeId: string;
     env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
     assertCurrent?: () => void;
     workerAuthority?: WorktreeWorkerAuthority;
     requireAbsent?: boolean;
@@ -84,6 +85,7 @@ export function withLocalWorkspaceStore<T>(
         key: params.worktreeId,
         leaseMs: 60_000,
         waitMs: 600_000,
+        signal: params.signal,
         leaseLabel: "local sandbox workspace",
         operationLabel: "workspace.local-reconciliation",
       },
@@ -92,7 +94,6 @@ export function withLocalWorkspaceStore<T>(
         const leases = [...(inherited?.leases ?? []), lease];
         return withOpenClawStateLeasesWorkerAdmission(leases, context, async (authority) => {
           let active = true;
-          let pending = false;
           const assertHost = () => {
             captured.admission.assertCurrent();
             authority.assertCurrent();
@@ -105,9 +106,6 @@ export function withLocalWorkspaceStore<T>(
           };
           const assertCurrent = () => {
             assertHost();
-            if (pending) {
-              throw new Error("Local workspace publication has not settled");
-            }
             params.assertCurrent?.();
           };
           try {
@@ -154,7 +152,6 @@ export function withLocalWorkspaceStore<T>(
                     assertHost();
                     guard.assertCurrent?.();
                   };
-                  pending = true;
                   try {
                     const acknowledged = await withOpenClawStateLeasesWorkerAdmission(
                       leases,
@@ -222,8 +219,6 @@ export function withLocalWorkspaceStore<T>(
                       retainWorktreeRunEndFailure(error);
                       throw error;
                     }
-                  } finally {
-                    pending = false;
                   }
                 };
                 return await run({
@@ -240,9 +235,6 @@ export function withLocalWorkspaceStore<T>(
                   },
                   get: () => {
                     assertHost();
-                    if (pending) {
-                      throw new Error("Local workspace publication has not settled");
-                    }
                     return row;
                   },
                   create: async (value, guard) => {

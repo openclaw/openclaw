@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   assertOkOrThrowProviderError,
   assertOkOrThrowHttpError,
+  createProviderCredentialMatcher,
+  createProviderErrorTextRedactor,
   createProviderHttpError,
   extractProviderErrorDetail,
   extractProviderRequestId,
@@ -36,6 +38,53 @@ function createStreamingResponse(contentType: string, byte = 97) {
 }
 
 describe("provider error utils", () => {
+  it("matches only active credential values, including the redaction marker itself", () => {
+    const empty = createProviderCredentialMatcher({
+      headers: new Headers({ Accept: "application/json" }),
+      defaultAuthHeader: "Authorization",
+    });
+    expect(empty("Bearer demo application/json")).toBe(false);
+    const active = createProviderCredentialMatcher({
+      headers: new Headers({ Authorization: "Bearer ***" }),
+      defaultAuthHeader: "Authorization",
+      defaultAuthPrefix: "Bearer ",
+    });
+    expect(active("***")).toBe(true);
+    expect(active("Bearer demo")).toBe(false);
+    const basic = createProviderCredentialMatcher({
+      headers: new Headers({
+        Authorization: "Basic " + Buffer.from("fixture-user:fixture-password").toString("base64"),
+      }),
+      defaultAuthHeader: "Authorization",
+    });
+    expect(basic("fixture-password")).toBe(true);
+  });
+  it("matches the active values of configured headers without matching transport defaults", () => {
+    const matches = createProviderCredentialMatcher({
+      headers: new Headers({
+        Accept: "application/json",
+        "X-API-Key": "active-key",
+        "X-Request-Key": "request-key",
+      }),
+      configuredHeaderNames: ["X-API-Key"],
+      request: { headers: { "X-Request-Key": "overridden-key" } },
+      defaultAuthHeader: "Authorization",
+    });
+    expect(matches("active-key")).toBe(true);
+    expect(matches("request-key")).toBe(true);
+    expect(matches("overridden-key application/json Bearer demo")).toBe(false);
+  });
+  it("redacts canonical JSON and URL encodings after removing a custom auth prefix", () => {
+    const value = 'synthetic-"quoted-token';
+    const redact = createProviderErrorTextRedactor({
+      headers: new Headers({ "X-Server-Key": "Token " + value }),
+      request: { auth: { mode: "header", headerName: "X-Server-Key", prefix: "Token ", value } },
+      defaultAuthHeader: "Authorization",
+    });
+    expect(redact(JSON.stringify({ model: value }))).toBe('{"model":"***"}');
+    expect(redact(encodeURIComponent(value))).toBe("***");
+    expect(redact(value.slice(0, -3), { truncated: true })).toBe("***");
+  });
   it.each([
     ["string", "provider failure", undefined],
     ["empty object", {}, undefined],

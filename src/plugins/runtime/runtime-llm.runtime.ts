@@ -331,26 +331,6 @@ function resolveAuthorityModelPolicy(
   });
 }
 
-function assertAllowedAuthProfileOverride(params: {
-  authProfileId: string | undefined;
-  authorityPolicy: RuntimeLlmPolicy | undefined;
-  pluginPolicy: RuntimeLlmPolicy | undefined;
-}): void {
-  if (!params.authProfileId) {
-    return;
-  }
-  if (
-    params.authorityPolicy?.allowAuthProfileOverride === true ||
-    params.pluginPolicy?.allowAuthProfileOverride === true
-  ) {
-    return;
-  }
-  throw completionError(
-    "LLM_COMPLETION_NOT_AUTHORIZED",
-    "Plugin LLM completion cannot override the auth profile. Enable plugins.entries.<id>.llm.allowAuthProfileOverride to authorize it.",
-  );
-}
-
 function assertModelAllowed(params: {
   kind: "override" | "completion";
   resolvedModelRef: string | null;
@@ -385,36 +365,6 @@ function assertModelAllowed(params: {
   }
 }
 
-function assertAllowedModelOverride(params: {
-  resolvedModelRef: string | null;
-  pluginPolicyId: string | undefined;
-  authorityPolicy: RuntimeLlmPolicy | undefined;
-  pluginPolicy: RuntimeLlmPolicy | undefined;
-}): void {
-  if (
-    params.authorityPolicy?.allowModelOverride !== true &&
-    params.pluginPolicy?.allowModelOverride !== true
-  ) {
-    throw completionError(
-      "LLM_COMPLETION_NOT_AUTHORIZED",
-      "Plugin LLM completion cannot override the target model.",
-    );
-  }
-  // Host and operator policy are independent trust boundaries. When both
-  // configure a restriction, an override must satisfy their intersection.
-  assertModelAllowed({
-    kind: "override",
-    resolvedModelRef: params.resolvedModelRef,
-    policy: params.authorityPolicy,
-  });
-  assertModelAllowed({
-    kind: "override",
-    resolvedModelRef: params.resolvedModelRef,
-    policy: params.pluginPolicy,
-    policyOwnerPluginId: params.pluginPolicyId,
-  });
-}
-
 export function createRuntimeLlm(
   options: CreateRuntimeLlmOptions = {},
 ): Pick<PluginRuntimeCore["llm"], "complete"> {
@@ -444,9 +394,11 @@ export function createRuntimeLlm(
           completeWithPreparedSimpleCompletionModel,
           resolveSimpleCompletionSelectionForAgent,
         },
+        { completeWithAuthProfileFailover },
         cfg,
       ] = await Promise.all([
         import("../../agents/simple-completion-runtime.js"),
+        import("../../agents/simple-completion-profile-failover.js"),
         Promise.resolve(resolveRuntimeConfig(options)),
       ]);
       const pluginPolicyId =
@@ -457,6 +409,18 @@ export function createRuntimeLlm(
         : undefined;
       const pluginPolicy = pluginLlmConfig ? buildPolicyFromEntry(pluginLlmConfig) : undefined;
       const authorityPolicy = resolveAuthorityModelPolicy(options.authority);
+      const policies = [
+        { policy: authorityPolicy },
+        { policy: pluginPolicy, policyOwnerPluginId: pluginPolicyId },
+      ];
+      const assertOverrideAllowed = (
+        permission: "allowModelOverride" | "allowAuthProfileOverride",
+        message: string,
+      ) => {
+        if (!policies.some(({ policy }) => policy?.[permission] === true)) {
+          throw completionError("LLM_COMPLETION_NOT_AUTHORIZED", message);
+        }
+      };
       const preferredProfile = normalizeOptionalString(options.authority?.preferredProfile);
       const audit = {
         caller,
@@ -489,20 +453,20 @@ export function createRuntimeLlm(
       assertCurrent();
       source.assertModelAllowed(normalizedSelection);
       const resolvedModelRef = modelKey(normalizedSelection.provider, normalizedSelection.model);
-      assertModelAllowed({ kind: "completion", resolvedModelRef, policy: authorityPolicy });
-      assertModelAllowed({
-        kind: "completion",
-        resolvedModelRef,
-        policy: pluginPolicy,
-        policyOwnerPluginId: pluginPolicyId,
-      });
-      if (requestedModel) {
-        assertAllowedModelOverride({
-          resolvedModelRef,
-          pluginPolicyId,
-          authorityPolicy,
-          pluginPolicy,
-        });
+      // Host and operator restrictions intersect, with completion policy checked first.
+      for (const kind of ["completion", "override"] as const) {
+        if (kind === "override") {
+          if (!requestedModel) {
+            break;
+          }
+          assertOverrideAllowed(
+            "allowModelOverride",
+            "Plugin LLM completion cannot override the target model.",
+          );
+        }
+        for (const policy of policies) {
+          assertModelAllowed({ kind, resolvedModelRef, ...policy });
+        }
       }
 
       const isolatedRequest = isIsolatedAgentRuntimeRequest(params);
@@ -520,11 +484,12 @@ export function createRuntimeLlm(
       if (isolatedRequest) {
         // Direct completions preserve the shipped model@profile contract under model
         // override authority. Isolated credential routing requires separate authority.
-        assertAllowedAuthProfileOverride({
-          authProfileId: executionProfile ?? requestedModelProfile,
-          authorityPolicy,
-          pluginPolicy,
-        });
+        if (executionProfile ?? requestedModelProfile) {
+          assertOverrideAllowed(
+            "allowAuthProfileOverride",
+            "Plugin LLM completion cannot override the auth profile. Enable plugins.entries.<id>.llm.allowAuthProfileOverride to authorize it.",
+          );
+        }
         const result = await runIsolatedAgentRuntimeCompletion({
           request: requestSignal === params.signal ? params : { ...params, signal: requestSignal },
           cfg,
@@ -576,6 +541,7 @@ export function createRuntimeLlm(
           agentId,
           modelRef: params.model,
           preferredProfile,
+          profileFailover: true,
           ...(requestedModelProfile ? { bindAuthOwner: true } : {}),
           allowBundledStaticCatalogFallback: true,
           allowMissingApiKeyModes: ["aws-sdk"],
@@ -600,67 +566,81 @@ export function createRuntimeLlm(
           throw new Error(`Plugin LLM completion failed: ${preparation.error}`);
         }
         await using prepared = preparation;
-        const modelExecution = source.bindModelExecution(
-          preparedLogicalModel ?? {
-            provider: prepared.selection.provider,
-            model: prepared.selection.modelId,
-          },
-        );
-        const modelSignal = modelExecution
-          ? requestSignal
-            ? AbortSignal.any([requestSignal, modelExecution.signal])
-            : modelExecution.signal
-          : requestSignal;
-        const assertPreparedCurrent = () => {
-          assertCurrent();
-          modelExecution?.assertCurrent();
-        };
-        assertPreparedCurrent();
+        let assertPreparedCurrent = assertCurrent;
 
         const work = new AsyncWorkScope();
         try {
           callerResult.resolve(
             await work.track(async () => {
-              if (params.requiredAuthMode && prepared.auth.mode !== params.requiredAuthMode) {
-                throw completionError(
-                  "LLM_COMPLETION_NOT_AUTHORIZED",
-                  "Plugin LLM completion selected a credential with the wrong authentication mode.",
-                );
-              }
-              if (requestedModelProfile && prepared.auth.profileId !== requestedModelProfile) {
-                throw completionError(
-                  "LLM_COMPLETION_NOT_AUTHORIZED",
-                  "Plugin LLM completion selected a different authentication profile.",
-                );
-              }
-
-              const context = {
-                systemPrompt: buildSystemPrompt(params),
-                messages: buildMessages({
-                  request: params,
-                  provider: prepared.model.provider,
-                  model: prepared.model.id,
-                  api: prepared.model.api,
-                }),
-              };
-
-              const result = await completeWithPreparedSimpleCompletionModel({
-                assertCurrent: assertPreparedCurrent,
-                model: prepared.model,
-                auth: prepared.auth,
+              const result = await completeWithAuthProfileFailover({
+                prepared,
                 cfg,
-                context,
-                options: {
-                  maxTokens: asFiniteNumber(params.maxTokens),
-                  temperature: asFiniteNumber(params.temperature),
-                  ...(params.responseFormat !== undefined
-                    ? { responseFormat: params.responseFormat }
-                    : {}),
-                  ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
-                  signal: modelSignal,
+                agentDir: prepared.selection.agentDir,
+                signal: requestSignal,
+                assertCurrent: () => assertPreparedCurrent(),
+                warn: (message) => logger.warn(message),
+                complete: async (current) => {
+                  const modelExecution = source.bindModelExecution(
+                    preparedLogicalModel ?? {
+                      provider: prepared.selection.provider,
+                      model: prepared.selection.modelId,
+                    },
+                  );
+                  const modelSignal = modelExecution
+                    ? requestSignal
+                      ? AbortSignal.any([requestSignal, modelExecution.signal])
+                      : modelExecution.signal
+                    : requestSignal;
+                  assertPreparedCurrent = () => {
+                    assertCurrent();
+                    modelExecution?.assertCurrent();
+                  };
+                  assertPreparedCurrent();
+
+                  if (params.requiredAuthMode && current.auth.mode !== params.requiredAuthMode) {
+                    throw completionError(
+                      "LLM_COMPLETION_NOT_AUTHORIZED",
+                      "Plugin LLM completion selected a credential with the wrong authentication mode.",
+                    );
+                  }
+                  if (requestedModelProfile && current.auth.profileId !== requestedModelProfile) {
+                    throw completionError(
+                      "LLM_COMPLETION_NOT_AUTHORIZED",
+                      "Plugin LLM completion selected a different authentication profile.",
+                    );
+                  }
+
+                  const context = {
+                    systemPrompt: buildSystemPrompt(params),
+                    messages: buildMessages({
+                      request: params,
+                      provider: current.model.provider,
+                      model: current.model.id,
+                      api: current.model.api,
+                    }),
+                  };
+
+                  const completion = await completeWithPreparedSimpleCompletionModel({
+                    assertCurrent: assertPreparedCurrent,
+                    model: current.model,
+                    auth: current.auth,
+                    cfg,
+                    context,
+                    options: {
+                      maxTokens: asFiniteNumber(params.maxTokens),
+                      temperature: asFiniteNumber(params.temperature),
+                      ...(params.responseFormat !== undefined
+                        ? { responseFormat: params.responseFormat }
+                        : {}),
+                      ...(params.reasoning !== undefined ? { reasoning: params.reasoning } : {}),
+                      signal: modelSignal,
+                    },
+                  });
+                  assertPreparedCurrent();
+
+                  return completion;
                 },
               });
-              assertPreparedCurrent();
 
               const text = result.content
                 .filter((c): c is { type: "text"; text: string } => c.type === "text")

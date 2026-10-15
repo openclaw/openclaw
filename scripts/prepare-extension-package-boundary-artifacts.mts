@@ -30,6 +30,7 @@ import {
   ensureRepoNodeModulesLink,
   isConstrainedCiCheckHost,
   isLocalCheckEnabled,
+  resolveCheckMemoryCapacityBytes,
   resolveLocalCheckEnv,
 } from "./lib/local-check-runtime.mts";
 import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
@@ -37,7 +38,8 @@ import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { resolveTsgoTimeoutMs } from "./run-tsgo.mts";
-const repoRoot = resolveRepoRoot(import.meta.url);
+// Native compiler output uses long Windows paths even when Node entered through an 8.3 alias.
+const repoRoot = fs.realpathSync.native(resolveRepoRoot(import.meta.url));
 const DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS = 1_000;
 type NodeStepParams = {
   bin?: string;
@@ -212,18 +214,59 @@ export async function runNodeStepsInParallel(steps: NodeStep[]) {
   }
 }
 
-function canPairCiDeclarations(env: NodeJS.ProcessEnv) {
+type DeclarationHost = Parameters<typeof isConstrainedCiCheckHost>[0];
+
+function readDeclarationHost(): DeclarationHost {
+  return {
+    logicalCpuCount: os.availableParallelism(),
+    totalMemoryBytes: os.totalmem(),
+    memoryCapacityBytes: readProcessMemoryCapacity({}).capacityBytes,
+  };
+}
+
+function ownsCiHost(env: NodeJS.ProcessEnv) {
   return (
-    process.platform === "linux" &&
     (env.CI === "true" || env.GITHUB_ACTIONS === "true") &&
     !env.OPENCLAW_LOCAL_CHECK?.trim() &&
-    !env.OPENCLAW_LOCAL_CHECK_MODE?.trim() &&
-    !isConstrainedCiCheckHost({
-      logicalCpuCount: os.availableParallelism(),
-      totalMemoryBytes: os.totalmem(),
-      memoryCapacityBytes: readProcessMemoryCapacity({}).capacityBytes,
-    })
+    !env.OPENCLAW_LOCAL_CHECK_MODE?.trim()
   );
+}
+
+function canPairCiDeclarations(env: NodeJS.ProcessEnv, host = readDeclarationHost()) {
+  return process.platform === "linux" && ownsCiHost(env) && !isConstrainedCiCheckHost(host);
+}
+
+/** Sizes the native compiler's Go runtime for how many declaration owners share the host. */
+export function resolveDeclarationCompilerEnv(
+  env: NodeJS.ProcessEnv,
+  host: DeclarationHost = readDeclarationHost(),
+) {
+  const paired = canPairCiDeclarations(env, host);
+  const memoryCapacityBytes = resolveCheckMemoryCapacityBytes(host);
+  let policyEnv = paired ? { ...env, OPENCLAW_LOCAL_CHECK: "0" } : env;
+  if (ownsCiHost(env) && isConstrainedCiCheckHost(host) && memoryCapacityBytes > 0) {
+    // Owners run one at a time here. Laptop GC limits held the 13k-file SDK to
+    // 220s instead of 135s on 4 CPUs/15 GiB (peak RSS 5.5 vs 8.2 GB).
+    policyEnv = {
+      ...env,
+      GOMAXPROCS: env.GOMAXPROCS?.trim() || String(host.logicalCpuCount),
+      GOGC: env.GOGC?.trim() || "100",
+      GOMEMLIMIT:
+        env.GOMEMLIMIT?.trim() || `${Math.floor((memoryCapacityBytes * 0.75) / 1024 ** 2)}MiB`,
+    };
+  }
+  const { env: compilerEnv } = applyLocalTsgoPolicy([], policyEnv, {
+    logicalCpuCount: host.logicalCpuCount,
+    totalMemoryBytes: host.totalMemoryBytes,
+  });
+  if (paired) {
+    // Two children share at least eight CPUs and 24 GiB; avoid laptop GC limits.
+    compilerEnv.GOMAXPROCS = String(
+      Math.min(4, parsePositiveInt(env.GOMAXPROCS?.trim() || "4", "GOMAXPROCS")),
+    );
+    compilerEnv.GOMEMLIMIT ||= "8GiB";
+  }
+  return compilerEnv;
 }
 
 /**
@@ -266,23 +309,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
       `selected preparation: ${preparation.sdkRoots.length} SDK roots; plugin producers: ${preparation.pluginIds.join(", ") || "none"}\n`,
     );
   }
-  const env = resolveLocalCheckEnv(process.env);
-  const paired = canPairCiDeclarations(env);
-  const { env: compilerEnv } = applyLocalTsgoPolicy(
-    [],
-    paired ? { ...env, OPENCLAW_LOCAL_CHECK: "0" } : env,
-    {
-      logicalCpuCount: os.availableParallelism(),
-      totalMemoryBytes: os.totalmem(),
-    },
-  );
-  if (paired) {
-    // Two children share at least eight CPUs and 24 GiB; avoid laptop GC limits.
-    compilerEnv.GOMAXPROCS = String(
-      Math.min(4, parsePositiveInt(env.GOMAXPROCS?.trim() || "4", "GOMAXPROCS")),
-    );
-    compilerEnv.GOMEMLIMIT ||= "8GiB";
-  }
+  const compilerEnv = resolveDeclarationCompilerEnv(resolveLocalCheckEnv(process.env));
   const compilerTimeoutMs = resolveTsgoTimeoutMs(compilerEnv);
   const sharedSdk = process.env.OPENCLAW_CI_SHARED_SDK === "1";
   const sdk = sdkBoundaryUnit(sharedSdk ? undefined : preparation?.sdkRoots);
@@ -346,12 +373,11 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         // Output directories stay intact until a successful complete inventory exists.
         fs.rmSync(resolve(repoRoot, inputReceipt), { force: true });
         const outputs = new Set<string>();
-        return Object.assign(unit, { recordPath, inputReceipt, args, outputs, startedAt: 0 });
+        return Object.assign(unit, { recordPath, inputReceipt, args, outputs });
       })
       .filter((unit) => unit !== null);
     await runNodeSteps(
       pending.map((unit) => {
-        unit.startedAt = Date.now();
         return {
           label: `${unit.id} boundary dts`,
           args: unit.args,
@@ -388,8 +414,6 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         unit.args,
         unit.inputReceipt,
         outputs,
-        before,
-        unit.startedAt,
         unit.outputRoot,
       );
       return Object.assign(unit, { record });

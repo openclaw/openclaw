@@ -1,9 +1,10 @@
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { buildChatApiAttachments } from "../pages/chat/attachment-api.ts";
 import { releaseChatAttachmentPayloads } from "../pages/chat/attachment-payload-store.ts";
-import { renderAttachmentPreview } from "../pages/chat/components/chat-attachments.ts";
+import { AttachmentPreview } from "../pages/chat/components/chat-attachments.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import type { ChatAttachment } from "./chat/chat-types.ts";
 import { mcpAppMessageInput } from "./mcp-app-message.ts";
 
@@ -45,7 +46,9 @@ describe("app message content handoff", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const onAttachmentsChange = vi.fn();
-    render(renderAttachmentPreview({ attachments, onAttachmentsChange }), container);
+    mountSolid(() => createComponent(AttachmentPreview, { attachments, onAttachmentsChange }), {
+      container,
+    });
     const remove = container.querySelector<HTMLButtonElement>(".chat-attachment-remove");
     expect(remove?.getAttribute("aria-label")).toContain("Part dimensions");
     remove!.click();

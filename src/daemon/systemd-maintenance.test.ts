@@ -117,6 +117,7 @@ it.each([false, true])(
 
 it.each([
   "refresh",
+  "repairable",
   "offline",
   "reload-failed",
   "reload-unsettled",
@@ -141,6 +142,9 @@ it.each([
     scenario.startsWith("current-") ? "TimeoutStopSec=330" : "TimeoutStopSec=30",
   );
   await fs.writeFile(f.sourcePath, original);
+  if (scenario === "repairable") {
+    await fs.chmod(f.sourcePath, 0o664);
+  }
   await fs.writeFile(`${f.sourcePath}.bak`, "previous backup\n", { mode: 0o600 });
   const dropIn = `${f.sourcePath}.d/operator.conf`;
   const unsafeOverride = scenario.includes("override");
@@ -208,6 +212,9 @@ it.each([
     expect(await prepare()).toBe(refreshRequired);
     expect(managerTimeout).toBe(unsafeOverride ? 30 : GATEWAY_SERVICE_STOP_TIMEOUT_MS / 1_000);
     expect(reloads).toBe(refreshRequired ? 1 : 0);
+    if (scenario === "repairable") {
+      expect((await fs.stat(f.sourcePath)).mode & 0o777).toBe(0o600);
+    }
     if (refreshRequired) {
       expect(operations).toContain("reload");
       expect(warnings.join(" ")).toContain(

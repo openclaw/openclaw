@@ -53,6 +53,7 @@ import {
   type NodeTestShard,
   type RuntimeTestSelection,
 } from "./ci-node-test-plan.mts";
+import { NODE_WORKER_E2E_TEST_FILES } from "./ci-node-worker-e2e-inventory.mts";
 import { resolvePolicyTestTargets } from "./ci-policy-test-watch.mts";
 import {
   isCiProofTestFile,
@@ -80,6 +81,10 @@ import {
   estimateVitestToolingFileSeconds,
   VITEST_PRETEST_BUILD_SECONDS,
 } from "./vitest-shard-metadata.mts";
+
+// The manifest protocol also reads this policy from historical target planners.
+export { hasQaSmokeAffectingChange } from "./ci-qa-smoke-scope.mts";
+export { isCiDocumentationPath } from "../ci-changed-scope.mjs";
 
 type ChangedNodeTestShard = NodeTestShard & {
   targets?: string[];
@@ -243,22 +248,6 @@ export function hasBuildArtifactAffectingChange(changedPaths: string[]) {
   );
 }
 
-// QA-owned surfaces that keep the smoke lane on PRs and main: the qa-lab
-// harness and scenario data, the two channels the smoke profile drives
-// (matrix, telegram), the packaged-CLI docker packaging scripts, and the QA
-// lane's own orchestration (this planner, the CI workflow, composite
-// actions) — changes to the gate must not be able to skip the gated lane.
-const QA_SMOKE_SURFACE_RE =
-  /^(?:extensions\/(?:matrix|qa-lab|telegram)|qa)\/|^scripts\/(?:build-all\.mts|package-openclaw-for-docker\.mts)$|^scripts\/lib\/ci-changed-node-test-plan\.mts$|^\.github\/(?:workflows\/ci\.yml$|actions\/)/u;
-
-/**
- * Broad runtime changes deliberately wait for manual/release validation;
- * automatic PR and main runs select the same QA-owned surfaces.
- */
-export function hasQaSmokeAffectingChange(changedPaths: string[]) {
-  return changedPaths.some((changedPath) => QA_SMOKE_SURFACE_RE.test(changedPath));
-}
-
 // UI artifacts and their own build/performance policy retain explicit ownership;
 // workspace packages use their direct UI import edges instead of a global fallback.
 const CONTROL_UI_PERFORMANCE_SURFACE_RE =
@@ -268,7 +257,9 @@ export function hasControlUiPerformanceAffectingChange(
   changedPaths: string[],
   options: CwdOptions = {},
 ) {
-  const sources = changedPaths.filter((file) => !isTestOnlyPath(file));
+  const sources = changedPaths.filter(
+    (file) => !isTestOnlyPath(file) && !isDocumentationPath(file),
+  );
   if (sources.some((file) => CONTROL_UI_PERFORMANCE_SURFACE_RE.test(file))) {
     return true;
   }
@@ -306,10 +297,11 @@ const GLOBAL_NODE_TEST_INPUT_RE =
  */
 export function hasPromptSnapshotAffectingChange(changedPaths: string[], options: CwdOptions = {}) {
   const cwd = options.cwd ?? process.cwd();
-  if (changedPaths.some((changedPath) => PROMPT_SNAPSHOT_SURFACE_RE.test(changedPath))) {
+  const relevantPaths = changedPaths.filter((changedPath) => !isDocumentationPath(changedPath));
+  if (relevantPaths.some((changedPath) => PROMPT_SNAPSHOT_SURFACE_RE.test(changedPath))) {
     return true;
   }
-  const sourcePaths = changedPaths.filter(
+  const sourcePaths = relevantPaths.filter(
     (changedPath) => changedPath.startsWith("src/") && !isTestFileTarget(changedPath),
   );
   if (sourcePaths.length === 0) {
@@ -705,6 +697,18 @@ function createChangedTargetShards(
     }
     return shard;
   });
+}
+
+/** Balance slow process proofs while reserving both rows inside the existing matrix cap. */
+export function createNodeWorkerE2eTestShards() {
+  return createChangedTargetShards(
+    resolvePreciseChangedTargets(NODE_WORKER_E2E_TEST_FILES, process.cwd()),
+    {
+      checkName: "checks-node-worker-e2e",
+      shardName: "node-worker-e2e",
+    },
+    2,
+  ).map((shard) => Object.assign(shard, { planConcurrency: 1 }));
 }
 
 /** Narrow canonical envelopes without changing their workers, routing, or isolation. */

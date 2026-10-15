@@ -1,5 +1,6 @@
 import { noteBackupDoctorHint } from "../commands/backup-health.js";
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
+import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import {
@@ -83,7 +84,9 @@ export async function runReleaseConfiguredPluginInstallsHealth(
       ctx.cfg.meta?.lastTouchedVersion ||
       VERSION
     : VERSION;
-  ctx.cfg = { ...ctx.cfg, meta: { ...ctx.cfg.meta, lastTouchedVersion } };
+  const config = { ...ctx.cfg, meta: { ...ctx.cfg.meta, lastTouchedVersion } };
+  copyConfigResolutionFactsThroughRewrite(ctx.cfg, config);
+  ctx.cfg = config;
   writeConfigMachineState("config.lastTouchedAt", new Date().toISOString());
 }
 
@@ -141,6 +144,9 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
       ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
       : {}),
     env: ctx.env ?? process.env,
+    ...(!ctx.prompter.shouldRepair && ctx.configResult.providerRenames?.length
+      ? { providerRenames: ctx.configResult.providerRenames }
+      : {}),
     shouldRepair: ctx.prompter.shouldRepair,
     ...(ctx.configResult.blockedCodexModelIdentities?.length
       ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
@@ -209,7 +215,8 @@ export async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): P
 
 export async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyRuntimeFiles } = await import("../commands/doctor-usage-cost-cache.js");
-  await maybeRepairLegacyRuntimeFiles(ctx.prompter.shouldRepair, ctx.env);
+  const warnings = await maybeRepairLegacyRuntimeFiles(ctx.prompter.shouldRepair, ctx.env);
+  recordDoctorHealthWarnings(ctx, [], warnings);
 }
 
 export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -221,6 +228,16 @@ export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise
     options: ctx.options,
     prompter: ctx.prompter,
   });
+  const { maybeRepairCronInferenceBindings } =
+    await import("../commands/doctor/cron/inference-binding-migration.js");
+  const inference = await maybeRepairCronInferenceBindings({
+    cfg: ctx.cfg,
+    env: ctx.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+  const { note } = await import("../../packages/terminal-core/src/note.js");
+  noteDoctorRepairResult(inference, note);
+  recordDoctorHealthWarnings(ctx, [], inference.warnings);
 }
 
 export async function runSandboxHealth(ctx: DoctorHealthFlowContext): Promise<void> {

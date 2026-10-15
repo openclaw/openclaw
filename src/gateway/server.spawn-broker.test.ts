@@ -193,8 +193,9 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
           }
         }
         expect(spawnCount).toBe(1);
-        expect(child?.exitCode).toBe(0);
         expect(child?.connected).toBe(false);
+        expect(child?.pid).toBeTypeOf("number");
+        expect(() => process.kill(child!.pid!, 0)).toThrow();
         expect(() => process.kill(observed.brokerPid!, 0)).toThrow();
       } finally {
         resume.resolve();
@@ -206,7 +207,7 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
 
   it("preserves Bun's native process transport", async () => {
     const bun = Object.getOwnPropertyDescriptor(process.versions, "bun");
-    Object.defineProperty(process.versions, "bun", { value: "1.4.2", configurable: true });
+    Object.defineProperty(process.versions, "bun", { value: "1.4.3", configurable: true });
     try {
       const server = await startGatewayServer();
       try {

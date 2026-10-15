@@ -28,7 +28,10 @@ export function planSessionEntryMaintenance(params: {
   forceMaintenance?: boolean;
   readPreserveKeys: () => ReadonlySet<string> | undefined;
   log?: boolean;
-  readAgeCandidates: (minimumAgeMs: number | null) => Record<string, SessionEntry>;
+  readAgeCandidates: (
+    minimumAgeMs: number | null,
+    modelRunPruneAfterMs: number | null,
+  ) => Record<string, SessionEntry>;
   readCapCandidates: (
     remainingUnarchivedCount: number,
   ) => { store: Record<string, SessionEntry>; maxEntries: number } | undefined;
@@ -47,6 +50,7 @@ export function planSessionEntryMaintenance(params: {
   ].filter((age): age is number => age != null && age > 0);
   const store = params.readAgeCandidates(
     candidateAges.length > 0 ? Math.min(...candidateAges) : null,
+    runModelRunPrune ? params.maintenance.modelRunPruneAfterMs : null,
   );
   let remainingUnarchivedCount = params.initialUnarchivedCount;
   const counts = { archived: 0, capArchived: 0, modelRunPruned: 0, pruned: 0, capped: 0 };

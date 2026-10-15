@@ -1,8 +1,8 @@
 import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
-import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import {
-  createChannelApproverDmTargetResolver,
-  createChannelNativeOriginTargetResolver,
+  createChannelApproverDmTargetResolverAsync,
+  createChannelNativeOriginTargetResolverAsync,
   resolveApprovalRequestSessionConversation,
   type ExecApprovalSessionTarget,
 } from "openclaw/plugin-sdk/approval-native-runtime";
@@ -18,14 +18,6 @@ import {
   isDiscordExecApprovalApprover,
   isDiscordExecApprovalClientEnabled,
 } from "./exec-approvals.js";
-
-function shouldHandleCapabilityRequest({
-  cfg,
-  accountId,
-  request,
-}: Parameters<typeof shouldHandleDiscordApprovalRequest>[0]) {
-  return shouldHandleDiscordApprovalRequest({ cfg, accountId, request });
-}
 
 function extractDiscordSessionKind(sessionKey?: string | null): "channel" | "group" | "dm" | null {
   if (!sessionKey) {
@@ -94,9 +86,9 @@ function createDiscordOriginTargetResolver() {
         }
       : null;
   };
-  return createChannelNativeOriginTargetResolver({
+  return createChannelNativeOriginTargetResolverAsync({
     channel: "discord",
-    shouldHandleRequest: shouldHandleCapabilityRequest,
+    shouldHandleRequest: shouldHandleDiscordApprovalRequest,
     resolveTurnSourceTarget: (request) => {
       const sessionConversation = resolveConversation(request);
       const sessionKind = extractDiscordSessionKind(
@@ -144,17 +136,17 @@ function createDiscordApprovalCapability() {
     resolveNativeDeliveryMode: ({ cfg, accountId }) =>
       resolveDiscordAccount({ cfg, accountId }).config.execApprovals?.target ?? "dm",
     resolveOriginTarget: createDiscordOriginTargetResolver(),
-    resolveApproverDmTargets: createChannelApproverDmTargetResolver({
-      shouldHandleRequest: shouldHandleCapabilityRequest,
+    resolveApproverDmTargets: createChannelApproverDmTargetResolverAsync({
+      shouldHandleRequest: shouldHandleDiscordApprovalRequest,
       resolveApprovers: ({ cfg, accountId }) => getDiscordExecApprovalApprovers({ cfg, accountId }),
       mapApprover: (approver) => ({ to: approver }),
     }),
     notifyOriginWhenDmOnly: true,
-    nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+    nativeRuntimeAsync: createLazyChannelApprovalNativeRuntimeAdapterAsync({
       capabilityBoundary: true,
       eventKinds: ["exec", "plugin", "system-agent"],
       isConfigured: ({ cfg, accountId }) => isDiscordExecApprovalClientEnabled({ cfg, accountId }),
-      shouldHandle: shouldHandleCapabilityRequest,
+      shouldHandle: shouldHandleDiscordApprovalRequest,
       load: async () =>
         (await import("./approval-handler.runtime.js")).discordApprovalNativeRuntime,
     }),

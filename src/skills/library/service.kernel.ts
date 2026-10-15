@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import type {
   SkillsLibraryListParams,
   SkillsLibraryListResult,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { selectHasMultipleSessionSharingIdentities } from "../../state/user-profile-identity.read.js";
 import { SkillLibraryError } from "../skill-library-error.js";
@@ -34,7 +34,7 @@ export function hydrateSkillLibraryWorkerAuthority(
 }
 
 export function resolveSkillLibraryPresentationInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   authority: SkillLibraryAuthority,
   actor = resolveSkillLibraryActor(db, authority),
 ): Pick<
@@ -57,7 +57,7 @@ export function resolveSkillLibraryPresentationInDatabase(
 }
 
 export function listSkillLibraryInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   authority: SkillLibraryAuthority,
   params: SkillsLibraryListParams = {},
 ): SkillsLibraryListResult {
@@ -74,7 +74,7 @@ export function listSkillLibraryInDatabase(
 }
 
 export function readSkillLibraryMetadataInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   authority: SkillLibraryAuthority,
   skillId: string,
   revision?: string,
@@ -122,7 +122,10 @@ export function readSkillLibraryMetadataInDatabase(
   };
 }
 
-export function publishSkillLibraryInDatabase(db: DatabaseSync, input: SkillLibraryPublishInput) {
+export function publishSkillLibraryInDatabase(
+  db: EngineConnection,
+  input: SkillLibraryPublishInput,
+) {
   const { params, skillId, bundle, uploadId } = input;
   const authority = hydrateSkillLibraryWorkerAuthority(input.authority);
   const actor = requireSkillLibraryProfile(db, authority);
@@ -202,7 +205,7 @@ export function publishSkillLibraryInDatabase(db: DatabaseSync, input: SkillLibr
   return skillLibraryReceipt(requireSkillLibraryEntry(db, skillId, authority));
 }
 
-export function mutateSkillLibraryInDatabase(db: DatabaseSync, input: SkillLibraryMutateInput) {
+export function mutateSkillLibraryInDatabase(db: EngineConnection, input: SkillLibraryMutateInput) {
   const { params } = input;
   const authority = hydrateSkillLibraryWorkerAuthority(input.authority);
   if (!tableExists(db, "skill_library_entries")) {

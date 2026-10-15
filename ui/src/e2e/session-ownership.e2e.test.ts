@@ -180,6 +180,8 @@ suite.define(() => {
     });
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    await chooseSidebarOwner(currentPage, "all");
+    await closeSidebarMenu(currentPage);
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
@@ -197,15 +199,17 @@ suite.define(() => {
       ownerMenu.getByRole("option", { name: "Owners", exact: true }),
     ).toBeVisible();
     await currentPage.keyboard.press("Escape");
-    const ownerSelect = ownerMenu.locator("#sidebar-sessions-owner");
+    const ownerSelect = currentPage.locator("#sidebar-session-owner-title");
     await ownerSelect.click();
-    const ownerRows = ownerMenu.locator('[role="option"][data-value^="owner:"]');
+    const ownerRows = currentPage.locator(
+      '.sidebar-session-owner-filter [role="option"][data-value^="owner:"]',
+    );
     await expectBrowser(ownerRows).toHaveCount(3);
     await expectBrowser(ownerRows.first()).toHaveAttribute("data-value", "owner:profile-patrick");
-    await expectBrowser(ownerRows.first()).toContainText("Patrick (You)");
+    await expectBrowser(ownerRows.first()).toContainText("My sessions");
     await captureUiProof(
       suite,
-      ownerMenu.locator(".sidebar-session-filter-panel"),
+      currentPage.locator(".sidebar-shell"),
       "00-people-controls-from-session-owners.png",
       [ownerSelect],
     );
@@ -276,25 +280,21 @@ suite.define(() => {
       .poll(async () => (await gateway.getRequests("connect")).length)
       .toBeGreaterThan(initialConnections);
     await expectOwnerFilter(beforeReconnect);
-    const reconnectedMenu = await openSidebarSortMenu(currentPage);
-    await openSidebarMenu(currentPage);
-    await expectBrowser(reconnectedMenu.locator("#sidebar-sessions-owner")).toHaveAccessibleName(
+    await expectBrowser(currentPage.locator("#sidebar-session-owner-title")).toHaveAccessibleName(
       "Owners: Ada",
     );
 
     await currentPage.reload();
     // Reload starts a new in-page request log, so no earlier traffic can satisfy this.
     await expectOwnerFilter(0);
-    const reloadedMenu = await openSidebarSortMenu(currentPage);
-    await openSidebarMenu(currentPage);
-    await expectBrowser(reloadedMenu.locator("#sidebar-sessions-owner")).toHaveAccessibleName(
+    await expectBrowser(currentPage.locator("#sidebar-session-owner-title")).toHaveAccessibleName(
       "Owners: Ada",
     );
     await captureSessionOwnerPageProof(
       suite,
-      reloadedMenu.locator(".sidebar-session-filter-panel"),
+      currentPage.locator(".sidebar-shell"),
       "05-owner-filter-restored-after-reload.png",
-      [reloadedMenu.locator("#sidebar-sessions-owner")],
+      [currentPage.locator("#sidebar-session-owner-title")],
     );
   });
 
@@ -309,6 +309,7 @@ suite.define(() => {
       presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: {
+        "config.get": { config: {}, hash: "owner-filter-fixture" },
         "sessions.list": {
           cases: [
             {
@@ -328,6 +329,8 @@ suite.define(() => {
     });
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    await chooseSidebarOwner(currentPage, "all");
+    await closeSidebarMenu(currentPage);
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
     await chooseSidebarOwner(currentPage, "involving-me");
     await closeSidebarMenu(currentPage);
@@ -361,8 +364,7 @@ suite.define(() => {
       .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
       .toBe(0);
     await expectBrowser(currentPage.locator('[data-session-key="agent:main:ada"]')).toBeVisible();
-    const filteredMenu = await openSidebarSortMenu(currentPage);
-    await expectBrowser(filteredMenu.locator("#sidebar-sessions-owner")).toHaveAccessibleName(
+    await expectBrowser(currentPage.locator("#sidebar-session-owner-title")).toHaveAccessibleName(
       "Owners: Involving me",
     );
     await captureSessionOwnerProof(suite, currentPage, "03-involving-me-after-active-event.png");
@@ -377,8 +379,7 @@ suite.define(() => {
       )
       .toBe(true);
     await expectBrowser(currentPage.locator('[data-session-key="agent:main:bob"]')).toHaveCount(0);
-    const restoredMenu = await openSidebarSortMenu(currentPage);
-    await expectBrowser(restoredMenu.locator("#sidebar-sessions-owner")).toHaveAccessibleName(
+    await expectBrowser(currentPage.locator("#sidebar-session-owner-title")).toHaveAccessibleName(
       "Owners: Involving me",
     );
   });
@@ -412,6 +413,8 @@ suite.define(() => {
     });
     await currentPage.clock.install();
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    await chooseSidebarOwner(currentPage, "all");
+    await closeSidebarMenu(currentPage);
     const row = currentPage.locator('[data-session-key="agent:main:ada"]');
     await expectBrowser(row).toBeVisible();
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
@@ -431,11 +434,11 @@ suite.define(() => {
     await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(0);
     // Cross the event window and deliver the nested mock response timer.
     await currentPage.clock.runFor(2);
-    await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(1);
     expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(
       initialRequests + 1,
     );
     await currentPage.clock.resume();
+    await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(1);
     await captureSessionOwnerProof(suite, currentPage, "multiple-humans.png");
   });
 
@@ -507,7 +510,7 @@ suite.define(() => {
     await expect.poll(() => threads.locator(".sidebar-recent-session").count()).toBe(2);
 
     const newThread = currentPage
-      .locator(".sidebar-session-toolbar")
+      .locator(".sidebar-rail")
       .getByRole("link", { name: "New conversation" });
     await newThread.focus();
     await currentPage.keyboard.press("Enter");
@@ -525,6 +528,8 @@ suite.define(() => {
     });
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    await chooseSidebarOwner(currentPage, "all");
+    await closeSidebarMenu(currentPage);
     const ownDraft = currentPage.locator('[data-session-key="agent:main:ada"]');
     const otherDraft = currentPage.locator('[data-session-key="agent:main:bob"]');
     await ownDraft.waitFor();
@@ -628,12 +633,12 @@ suite.define(() => {
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
-    await currentPage.getByLabel("Session sharing").click();
+    await currentPage.getByRole("button", { name: "Session sharing", exact: true }).click();
     const publish = currentPage.getByText("Publish draft", { exact: true });
     await publish.waitFor();
     await captureUiProof(
       suite,
-      currentPage.locator('.chat-pane__sharing-menu [part="menu"]'),
+      currentPage.locator(".chat-pane__sharing-panel"),
       "04-publish-draft-action.png",
       [publish],
     );
@@ -671,11 +676,16 @@ suite.define(() => {
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     await currentPage.getByRole("button", { name: "Session sharing" }).click();
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
-    await expect.poll(() => dropdown.getAttribute("open")).not.toBeNull();
+    const panel = dropdown.locator(".chat-pane__sharing-panel");
+    await expect
+      .poll(() => panel.evaluate((element) => element.matches(":popover-open")))
+      .toBe(true);
     await expectBrowser(dropdown.locator(".chat-pane__sharing-title")).toHaveCount(3);
     await currentPage.getByText("Publish draft", { exact: true }).click();
     await gateway.waitForRequest("session.visibility.set");
-    await expect.poll(() => dropdown.getAttribute("open")).toBeNull();
+    await expect
+      .poll(() => panel.evaluate((element) => element.matches(":popover-open")))
+      .toBe(false);
     expect(await gateway.getRequests("session.members.listEvidence")).toHaveLength(0);
 
     const message = "visibility change rejected";
@@ -726,24 +736,18 @@ suite.define(() => {
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
-    await currentPage.getByLabel("Session sharing").click();
+    await currentPage.getByRole("button", { name: "Session sharing", exact: true }).click();
     await gateway.waitForRequest("session.members.listEvidence");
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
-    const publish = dropdown.locator('wa-dropdown-item[value="visibility:shared"]');
-    await publish.waitFor();
-    expect(await publish.getAttribute("disabled")).not.toBeNull();
-
+    const publish = dropdown.locator('button[value="visibility:shared"]');
+    const member = dropdown.locator('button[value="member:profile-bob"]');
+    await expectBrowser(publish).toBeVisible();
+    await expectBrowser(publish).toBeDisabled();
+    await expectBrowser(member).toBeVisible();
+    await expectBrowser(member).toBeDisabled();
     await dropdown.evaluate((element) => {
-      element.dispatchEvent(
-        new CustomEvent("wa-select", {
-          detail: { item: { value: "visibility:shared" } },
-        }),
-      );
-      element.dispatchEvent(
-        new CustomEvent("wa-select", {
-          detail: { item: { value: "member:profile-bob" } },
-        }),
-      );
+      element.querySelector<HTMLButtonElement>('button[value="visibility:shared"]')?.click();
+      element.querySelector<HTMLButtonElement>('button[value="member:profile-bob"]')?.click();
     });
 
     expect(await gateway.getRequests("session.visibility.set")).toHaveLength(0);
@@ -816,20 +820,20 @@ suite.define(() => {
     await currentPage.locator(".chat-pane__sharing-trigger").click();
     await gateway.waitForRequest("session.members.listEvidence");
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
-    await dropdown.locator('wa-dropdown-item[value="member:profile-member-0"]').waitFor();
+    await dropdown.locator('button[value="member:profile-member-0"]').waitFor();
     await dropdown.evaluate(async (element) => {
-      const menu = element.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+      const menu = element.querySelector<HTMLElement>(".chat-pane__sharing-panel");
       const animations = [...element.getAnimations(), ...(menu?.getAnimations() ?? [])];
       await Promise.all(animations.map((animation) => animation.finished.catch(() => {})));
     });
-    const longNameItem = dropdown.locator('wa-dropdown-item[value="member:profile-long-name"]');
-    const longIdItem = dropdown.locator(`wa-dropdown-item[value="member:${longMemberId}"]`);
+    const longNameItem = dropdown.locator('button[value="member:profile-long-name"]');
+    const longIdItem = dropdown.locator(`button[value="member:${longMemberId}"]`);
 
     await longIdItem.scrollIntoViewIfNeeded();
-    const selectedIndicator = longIdItem.locator('[slot="details"]');
+    const selectedIndicator = longIdItem.locator(".session-menu__check");
     await expectBrowser(selectedIndicator).toBeVisible();
     const selectedIndicatorContained = await longIdItem.evaluate((item) => {
-      const indicator = item.querySelector<HTMLElement>('[slot="details"]');
+      const indicator = item.querySelector<HTMLElement>(".session-menu__check");
       const itemRect = item.getBoundingClientRect();
       const indicatorRect = indicator?.getBoundingClientRect();
       return Boolean(
@@ -841,7 +845,7 @@ suite.define(() => {
     expect(selectedIndicatorContained).toBe(true);
 
     const beforeScroll = await dropdown.evaluate((element) => {
-      const menu = element.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+      const menu = element.querySelector<HTMLElement>(".chat-pane__sharing-panel");
       if (menu) {
         menu.scrollTop = 0;
       }
@@ -889,7 +893,7 @@ suite.define(() => {
         ),
         visibilityTitlePosition: visibilityTitle ? getComputedStyle(visibilityTitle).position : "",
         membersTitlePosition: membersTitle ? getComputedStyle(membersTitle).position : "",
-        nestedScrollers: [...element.children].filter((child) => {
+        nestedScrollers: [...(menu?.children ?? [])].filter((child) => {
           const node = child as HTMLElement;
           return (
             node.scrollHeight > node.clientHeight &&
@@ -899,7 +903,7 @@ suite.define(() => {
       };
     });
     const afterScroll = await dropdown.evaluate(async (element) => {
-      const menu = element.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+      const menu = element.querySelector<HTMLElement>(".chat-pane__sharing-panel");
       const visibilityTitle = element.querySelector<HTMLElement>(
         ".chat-pane__sharing-visibility-title",
       );

@@ -15,8 +15,8 @@ import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pair
 import {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,
-  resolveRuntimeConversationBindingRoute,
-} from "openclaw/plugin-sdk/conversation-runtime";
+  resolveRuntimeConversationBindingRouteAsync,
+} from "openclaw/plugin-sdk/conversation-binding-runtime";
 import {
   resolvePromptHistoryLimit,
   parseStrictNonNegativeInteger,
@@ -31,7 +31,6 @@ import {
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   evaluateSupplementalContextVisibility,
   normalizeAgentId,
@@ -869,7 +868,7 @@ export async function handleFeishuMessage(params: {
       // Bound Feishu conversations intentionally require an exact live conversation-id match.
       // Sender-scoped topic sessions therefore bind on `chat:topic:root:sender:user`, while
       // configured ACP bindings may still inherit the shared `chat:topic:root` topic session.
-      const runtimeRoute = resolveRuntimeConversationBindingRoute({
+      const runtimeRoute = await resolveRuntimeConversationBindingRouteAsync({
         route,
         conversation: {
           channel: "feishu",
@@ -914,10 +913,6 @@ export async function handleFeishuMessage(params: {
       }
     }
 
-    const preview = truncateUtf16Safe(ctx.content.replace(/\s+/g, " "), 160);
-    const inboundLabel = isGroup
-      ? `Feishu[${account.accountId}] message in group ${ctx.chatId}`
-      : `Feishu[${account.accountId}] DM from ${ctx.senderOpenId}`;
     const contextVisibilityMode = resolveChannelContextVisibilityMode({
       cfg: effectiveCfg,
       channel: "feishu",
@@ -932,11 +927,6 @@ export async function handleFeishuMessage(params: {
       allowFrom: effectiveGroupSenderAllowFrom,
       mode: contextVisibilityMode,
     };
-
-    // Do not enqueue inbound user previews as system events.
-    // System events are prepended to future prompts and can be misread as
-    // authoritative transcript turns.
-    log(`feishu[${account.accountId}]: ${inboundLabel}: ${preview}`);
 
     const mediaMaxBytes = (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024;
     const mediaList = await resolveFeishuMediaList({
@@ -981,7 +971,7 @@ export async function handleFeishuMessage(params: {
         ) {
           quotedContent = quotedMessageInfo.content;
           log(
-            `feishu[${account.accountId}]: fetched quoted message: ${truncateUtf16Safe(quotedContent, 100)}`,
+            `feishu[${account.accountId}]: fetched quoted message (${quotedContent.length} chars)`,
           );
         } else if (quotedMessageInfo) {
           log(
@@ -1606,7 +1596,7 @@ export async function handleFeishuMessage(params: {
               );
             },
           };
-          const allowReasoningPreview = resolveFeishuReasoningPreviewEnabled({
+          const allowReasoningPreview = await resolveFeishuReasoningPreviewEnabled({
             cfg,
             agentId,
             storePath: agentStorePath,
@@ -1734,7 +1724,7 @@ export async function handleFeishuMessage(params: {
       const storePath = resolveStorePath(effectiveCfg.session?.store, {
         agentId: route.agentId,
       });
-      const allowReasoningPreview = resolveFeishuReasoningPreviewEnabled({
+      const allowReasoningPreview = await resolveFeishuReasoningPreviewEnabled({
         cfg: effectiveCfg,
         agentId: route.agentId,
         storePath,

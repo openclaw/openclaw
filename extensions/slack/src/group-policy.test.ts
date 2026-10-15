@@ -1,6 +1,7 @@
 // Slack tests cover group policy plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { setSlackChannelPolicyBindings } from "./channel-policy-state.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
 
@@ -27,14 +28,103 @@ const cfg = {
 } as OpenClawConfig;
 
 describe("slack group policy", () => {
+  beforeEach(() => {
+    setSlackChannelPolicyBindings("default", new Map([["alerts", "C01234567"]]));
+  });
+
+  afterEach(() => {
+    setSlackChannelPolicyBindings("default", new Map());
+  });
+
+  it("does not select another channel's policy from its current display name", () => {
+    const params = { cfg, groupId: "c98765432", groupChannel: "#alerts" };
+
+    expect(resolveSlackGroupRequireMention(params)).toBe(true);
+    expect(resolveSlackGroupToolPolicy(params)).toEqual({ deny: ["exec"] });
+    expect(resolveSlackGroupToolPolicy({ ...params, senderId: "user:alice" })).toEqual({
+      deny: ["exec"],
+    });
+  });
+
+  it("keeps a resolved name policy bound to its channel ID after a rename", () => {
+    setSlackChannelPolicyBindings("default", new Map([["alerts", "c01234567"]]));
+    const params = { cfg, groupId: "c01234567", groupChannel: "#renamed" };
+
+    expect(resolveSlackGroupRequireMention(params)).toBe(false);
+    expect(resolveSlackGroupToolPolicy(params)).toEqual({ allow: ["message.send"] });
+    expect(resolveSlackGroupToolPolicy({ ...params, senderId: "user:alice" })).toEqual({
+      allow: ["sessions.list"],
+    });
+
+    setSlackChannelPolicyBindings("default", new Map());
+    expect(resolveSlackGroupRequireMention(params)).toBe(true);
+    expect(resolveSlackGroupToolPolicy(params)).toEqual({ deny: ["exec"] });
+  });
+
+  it.each(["#alerts", "alerts", "Alerts"])(
+    "allows direct name matching for %s only when the merged account enables it",
+    (groupChannel) => {
+      const nameMatchingCfg: OpenClawConfig = {
+        channels: {
+          slack: {
+            ...cfg.channels?.slack,
+            dangerouslyAllowNameMatching: true,
+            accounts: { restricted: { dangerouslyAllowNameMatching: false } },
+          },
+        },
+      };
+      const params = {
+        cfg: nameMatchingCfg,
+        accountId: "default",
+        groupId: "c98765432",
+        groupChannel,
+      };
+
+      expect(resolveSlackGroupRequireMention(params)).toBe(false);
+      expect(resolveSlackGroupToolPolicy(params)).toEqual({ allow: ["message.send"] });
+      expect(resolveSlackGroupToolPolicy({ ...params, senderId: "user:alice" })).toEqual({
+        allow: ["sessions.list"],
+      });
+      expect(resolveSlackGroupRequireMention({ ...params, accountId: "restricted" })).toBe(true);
+      expect(resolveSlackGroupToolPolicy({ ...params, accountId: "restricted" })).toEqual({
+        deny: ["exec"],
+      });
+    },
+  );
+
+  it("prefers an ID entry over resolved and directly matched name entries", () => {
+    const idCfg: OpenClawConfig = {
+      channels: {
+        slack: {
+          ...cfg.channels?.slack,
+          dangerouslyAllowNameMatching: true,
+          channels: {
+            ...cfg.channels?.slack?.channels,
+            C01234567: { requireMention: true, tools: { deny: ["exec"] } },
+          },
+        },
+      },
+    };
+    const params = { cfg: idCfg, groupId: "c01234567", groupChannel: "#alerts" };
+
+    expect(resolveSlackGroupRequireMention(params)).toBe(true);
+    expect(resolveSlackGroupToolPolicy(params)).toEqual({ deny: ["exec"] });
+    expect(resolveSlackGroupToolPolicy({ ...params, senderId: "user:alice" })).toEqual({
+      deny: ["exec"],
+    });
+  });
+
   it("uses matched channel requireMention and wildcard fallback", () => {
-    expect(resolveSlackGroupRequireMention({ cfg, groupChannel: "#alerts" })).toBe(false);
+    expect(
+      resolveSlackGroupRequireMention({ cfg, groupId: "c01234567", groupChannel: "#alerts" }),
+    ).toBe(false);
     expect(resolveSlackGroupRequireMention({ cfg, groupChannel: "#missing" })).toBe(true);
   });
 
   it("resolves sender override, then channel tools, then wildcard tools", () => {
     const senderOverride = resolveSlackGroupToolPolicy({
       cfg,
+      groupId: "c01234567",
       groupChannel: "#alerts",
       senderId: "user:alice",
     });
@@ -42,6 +132,7 @@ describe("slack group policy", () => {
 
     const channelTools = resolveSlackGroupToolPolicy({
       cfg,
+      groupId: "c01234567",
       groupChannel: "#alerts",
       senderId: "user:bob",
     });

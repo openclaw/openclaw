@@ -298,12 +298,14 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
     });
   });
 
-  it("reports failed session repair while completing the other maintenance owners", async () => {
+  it("reports nested session repair failures while completing the other maintenance owners", async () => {
     const log = createLog();
     const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
     const cfg = slackConfig();
     runGatewaySessionStartupMaintenance.mockRejectedValueOnce(
-      new Error("synthetic repair failure"),
+      new Error("synthetic repair failure", {
+        cause: Object.assign(new Error("synthetic storage failure"), { code: "SQLITE_BUSY" }),
+      }),
     );
     listLegacyPairingStoreFiles.mockResolvedValueOnce(["synthetic-pairing.json"]);
     await runGatewayPostReadyStartupMaintenance({
@@ -314,7 +316,9 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
       log,
     });
     expect(runChannelPluginStartupMaintenance).toHaveBeenCalledWith({ cfg, env: process.env, log });
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("synthetic repair failure"));
+    expect(log.warn).toHaveBeenCalledWith(
+      "Gateway post-ready sessions maintenance failed: synthetic repair failure | synthetic storage failure | SQLITE_BUSY",
+    );
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("synthetic-pairing.json"));
   });
 

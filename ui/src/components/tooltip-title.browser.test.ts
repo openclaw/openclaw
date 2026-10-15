@@ -55,6 +55,35 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       },
     );
 
+    it.each([
+      ["an entering ancestor", "container", false],
+      ["the trigger itself", "button", false],
+      ["the label inside the trigger", "label", true],
+    ] as const)(
+      "judges a repeated title against text faded by %s",
+      async (_case, fadedPart, expectedOpen) => {
+        const parts = {
+          container: document.createElement("div"),
+          button: document.createElement("button"),
+          label: document.createElement("span"),
+        };
+        parts.label.textContent = "Active";
+        parts.button.title = "Active";
+        parts.button.append(parts.label);
+        parts.container.append(parts.button);
+        document.body.append(parts.container);
+        parts[fadedPart].style.opacity = "0";
+
+        parts.button.focus();
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+        expect(document.querySelector("openclaw-tooltip")?.hasAttribute("open") ?? false).toBe(
+          expectedOpen,
+        );
+      },
+    );
+
     it("releases an injected name when an existing text node becomes the label", async () => {
       const button = document.createElement("button");
       const label = document.createTextNode("");

@@ -95,9 +95,10 @@ export function sanitizeConfiguredProviderRequest(
       auth = { mode: "provider-default" };
     } else if (rawAuth.mode === "authorization-bearer") {
       const token = sanitizeConfiguredRequestString(rawAuth.token, "request.auth.token");
-      if (token) {
-        auth = { mode: "authorization-bearer", token };
+      if (!token) {
+        throw new Error("request.auth.token must resolve to a non-empty value");
       }
+      auth = { mode: "authorization-bearer", token };
     } else if (rawAuth.mode === "header") {
       const headerName = sanitizeConfiguredRequestString(
         rawAuth.headerName,
@@ -105,14 +106,15 @@ export function sanitizeConfiguredProviderRequest(
       );
       const value = sanitizeConfiguredRequestString(rawAuth.value, "request.auth.value");
       const prefix = sanitizeConfiguredRequestString(rawAuth.prefix, "request.auth.prefix");
-      if (headerName && value) {
-        auth = {
-          mode: "header",
-          headerName,
-          value,
-          ...(prefix ? { prefix } : {}),
-        };
+      if (!headerName || !value) {
+        throw new Error("request.auth.headerName and request.auth.value must be non-empty");
       }
+      auth = {
+        mode: "header",
+        headerName,
+        value,
+        ...(prefix ? { prefix } : {}),
+      };
     }
   }
 
@@ -270,22 +272,21 @@ function resolveTlsOverride(tls: ProviderRequestTlsOverride | undefined) {
   if (tls.insecureSkipVerify === true) {
     throw new Error(FORBIDDEN_INSECURE_TLS_MESSAGE);
   }
-  const ca = tls.ca?.trim();
-  const cert = tls.cert?.trim();
-  const key = tls.key?.trim();
-  const passphrase = tls.passphrase?.trim();
-  const serverName = tls.serverName?.trim();
+  const keys = ["ca", "cert", "key", "passphrase", "serverName"] as const;
+  const fields: Partial<Record<(typeof keys)[number], string | undefined>> = {};
+  for (const key of keys) {
+    const value = tls[key]?.trim();
+    if (value) {
+      fields[key] = value;
+    }
+  }
   const rejectUnauthorized = tls.insecureSkipVerify === false ? true : undefined;
-  if (!ca && !cert && !key && !passphrase && !serverName && rejectUnauthorized === undefined) {
+  if (Object.keys(fields).length === 0 && rejectUnauthorized === undefined) {
     return { configured: false } as const;
   }
   return {
     configured: true,
-    ...(ca ? { ca } : {}),
-    ...(cert ? { cert } : {}),
-    ...(key ? { key } : {}),
-    ...(passphrase ? { passphrase } : {}),
-    ...(serverName ? { serverName } : {}),
+    ...fields,
     ...(rejectUnauthorized !== undefined ? { rejectUnauthorized } : {}),
   } as const;
 }

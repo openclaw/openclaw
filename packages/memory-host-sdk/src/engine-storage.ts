@@ -34,6 +34,7 @@ export {
 export {
   formatMemoryIndexRebuildGuidance,
   isAutomaticMemoryEntryEligible,
+  readMemorySearchManagerStatus,
   resolveMemoryIndexIdentityDiagnostic,
   resolveMemoryIndexIdentityReason,
   resolveMemoryIndexSearchDiagnostic,
@@ -46,6 +47,9 @@ export {
   type MemorySearchDeadlineControlOptions,
 } from "./host/search-deadline-control.js";
 export type {
+  MemoryCliSearchParams,
+  MemoryCliSearchResult,
+  MemoryCliSearchOutcome,
   MemoryEmbeddingProbeResult,
   MemoryEntryProvenance,
   MemoryExtraPath,

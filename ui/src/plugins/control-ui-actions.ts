@@ -41,6 +41,7 @@ export async function runControlUiPluginAction(
     placement: ControlUiAction["placement"];
     session?: ControlUiSession;
     signal: AbortSignal;
+    isCurrent?: () => boolean;
   },
 ): Promise<void> {
   const retry =
@@ -59,22 +60,28 @@ export async function runControlUiPluginAction(
     throw new Error(`This plugin action is no longer active. ${retry}`);
   }
   const signal = AbortSignal.any([params.signal, entry.signal]);
-  signal.throwIfAborted();
+  const check = () => {
+    signal.throwIfAborted();
+    if (params.isCurrent?.() === false) {
+      throw new Error("This plugin UI view has ended.");
+    }
+  };
+  check();
   const context = {
     sessionKey: params.sessionKey,
     agentId: params.agentId ?? params.session?.agentId,
     session: params.session ? structuredClone(params.session) : undefined,
   };
   const state = entry.value.resolve?.(context);
-  // A resolver can synchronously withdraw its own registration.
-  signal.throwIfAborted();
+  // A resolver can synchronously withdraw its registration or remove the view.
+  check();
   if (state?.hidden || state?.disabled) {
     throw new Error(`This plugin action is currently unavailable. ${retry}`);
   }
   await entry.value.run({
     ...context,
-    host: scopeControlUiHost(entry.host, signal),
+    host: scopeControlUiHost(entry.host, signal, params.isCurrent),
     signal,
   });
-  signal.throwIfAborted();
+  check();
 }

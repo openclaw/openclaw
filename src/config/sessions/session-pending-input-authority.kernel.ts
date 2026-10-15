@@ -2,15 +2,12 @@ import {
   getSqliteReadScopeRevision,
   type SqliteReadScopeRevision,
 } from "../../infra/sqlite-schema-facts.js";
-import {
-  assertTransactionUsable,
-  runSqliteDeferredTransactionSync,
-} from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
-import { attachSessionEntrySnapshots } from "./session-entry-snapshots.js";
+import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
@@ -21,7 +18,7 @@ export function readSessionPendingInputAuthorityFacts(
   agentId = database.agentId,
   postimage?: { sessionKey: string; entry: SessionEntry; revision: SqliteReadScopeRevision },
 ): SessionPendingInputAuthorityFacts {
-  const read = () =>
+  return runSqliteReadSnapshotSync(database.db, () =>
     readSessionPendingInputAuthorityFactsInTransaction(
       database,
       sessionKey,
@@ -30,14 +27,8 @@ export function readSessionPendingInputAuthorityFacts(
         getSqliteReadScopeRevision(database.db) === postimage.revision
         ? new Map([[sessionKey, structuredClone(postimage.entry)]])
         : undefined,
-    );
-  if (database.db.isTransaction) {
-    assertTransactionUsable(database.db);
-    const facts = read();
-    assertTransactionUsable(database.db);
-    return facts;
-  }
-  return runSqliteDeferredTransactionSync(database.db, read);
+    ),
+  );
 }
 
 /** The caller already owns the coherent SQLite transaction. */

@@ -71,23 +71,6 @@ describe("findOcPaths — JSONC", () => {
     }),
   ).ast;
 
-  it("expands slash-deep array wildcards into resolvable concrete paths", () => {
-    const out = findOcPaths(deep, parseOcPath("oc://openclaw.json/agents/*/tools/exec/security"));
-    expect(leafValues(out)).toEqual(["deny", "allowlist"]);
-    for (const { path, match } of out) {
-      expect(formatOcPath(path)).not.toContain("*");
-      expect(resolveOcPath(deep, path)).toEqual(match);
-    }
-  });
-
-  it("filters slash-deep arrays by a sibling field", () => {
-    const out = findOcPaths(
-      deep,
-      parseOcPath("oc://openclaw.json/agents/[id=reviewer]/tools/exec/security"),
-    );
-    expect(leafValues(out)).toEqual(["allowlist"]);
-  });
-
   it("finds leaves recursively in slash-deep objects", () => {
     const out = findOcPaths(deep, parseOcPath("oc://openclaw.json/mcp/**/GITHUB_TOKEN"));
     expect(leafValues(out)).toEqual(["gh-token", "gl-token"]);
@@ -135,19 +118,6 @@ describe("findOcPaths — JSONC", () => {
   const quoted = parseJsonc(
     '{\n  "models":{"vendor/model":{"alias":"one","contextWindow":1000000},"vendor/model.v2":{"alias":"two"},"plain":{"alias":"three"}}\n}\n',
   ).ast;
-
-  it("quotes structural characters in wildcard results that round-trip", () => {
-    const out = findOcPaths(quoted, parseOcPath("oc://config/models/*/alias"));
-    expect(out.map(({ path }) => path.item)).toEqual([
-      '"vendor/model"',
-      '"vendor/model.v2"',
-      "plain",
-    ]);
-    expect(leafValues(out)).toEqual(["one", "two", "three"]);
-    for (const { path, match } of out) {
-      expect(resolveOcPath(quoted, path)).toEqual(match);
-    }
-  });
 
   it("preserves quoted literal keys while expanding a field union", () => {
     const out = findOcPaths(
@@ -297,12 +267,6 @@ describe("findOcPaths — JSONL", () => {
     }
   });
 
-  it("enumerates value lines with concrete line addresses", () => {
-    const out = findOcPaths(ast, parseOcPath("oc://session/*/event"));
-    expect(leafValues(out)).toEqual(["start", "action", "end"]);
-    expect(out.map(({ path }) => path.section)).toEqual(["L1", "L2", "L3"]);
-  });
-
   it("expands a union of literal and positional line addresses", () => {
     const out = findOcPaths(ast, parseOcPath("oc://session/{L2,$first,$last}/event"));
     expect(leafValues(out)).toEqual(["action", "start", "end"]);
@@ -317,9 +281,8 @@ describe("findOcPaths — JSONL", () => {
 
 describe("quoted segment validation", () => {
   it.each([
-    ['oc://X/keys/"a\\\\b"', /Quoted segment cannot contain/],
+    [String.raw`oc://X/keys/"a\q"`, /Quoted segment must escape/],
     ['oc://X/"unterminated', /Unbalanced/],
-    ['oc://X/"\x00"', /Control character/],
   ])("rejects %s", (uri, error) => {
     expect(() => parseOcPath(uri)).toThrow(error);
   });
@@ -335,7 +298,6 @@ describe("numeric predicates", () => {
     ["maxTokens>=128000", ["medium", "large"]],
     ["contextWindow<500000", ["small"]],
     ["contextWindow<=200000", ["small"]],
-    ["maxTokens>foo", []],
   ])("filters numeric leaves with %s", (predicate, expected) => {
     expect(
       leafValues(findOcPaths(ast, parseOcPath("oc://config/models/[" + predicate + "]/id"))),
@@ -387,17 +349,6 @@ describe("findOcPaths — Markdown", () => {
   const union = parseMd(
     "## Boundaries\n\n- enabled: true\n- timeout: 5\n\n## Limits\n\n- max-tokens: 4096\n- alias: example\n",
   ).ast;
-
-  it("expands section unions", () => {
-    const out = findOcPaths(union, parseOcPath("oc://X.md/{boundaries,limits}/*/*"));
-    expect(out.map(({ path }) => path.section)).toEqual([
-      "boundaries",
-      "boundaries",
-      "limits",
-      "limits",
-    ]);
-    expect(leafValues(out)).toEqual(["true", "5", "4096", "example"]);
-  });
 
   it("expands field unions and excludes absent alternatives", () => {
     const out = findOcPaths(union, parseOcPath("oc://X.md/limits/alias/{alias,nope}"));

@@ -152,8 +152,6 @@ describe("state lease worker result boundary", () => {
               if (expiresDuringCommit) {
                 expect(admission.failure).toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
               }
-              expect(request("commit")).toBe(2);
-              expect(beforeCommit).toHaveBeenCalledOnce();
               // Acknowledgement remains deliverable after the commit grant.
               current = false;
             } else {

@@ -379,6 +379,61 @@ describe("node worker Git transfers", () => {
 });
 
 describe("node worker transfer client hash memo", () => {
+  it("downloads repeated blob content once while preserving independent files and modes", async () => {
+    const root = tempDirs.make("node-worker-transfer-repeated-blob-");
+    const workspaceDir = path.join(root, "workspace");
+    const body = Buffer.from("shared workspace content\n");
+    const sha256 = createHash("sha256").update(body).digest("hex");
+    const rawManifest = serializeWorkerWorkspaceManifest({
+      version: 1,
+      baseCommit: null,
+      entries: [
+        { path: "first.txt", type: "file", mode: 0o644, size: body.byteLength, sha256 },
+        { path: "second.sh", type: "file", mode: 0o755, size: body.byteLength, sha256 },
+        { path: "third.txt", type: "file", mode: 0o644, size: body.byteLength, sha256 },
+      ],
+    });
+    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+    let requestedBlobs = 0;
+    const server = createHttpServer((req, res) => {
+      if (req.url?.endsWith("/manifest")) {
+        res.writeHead(200).end(rawManifest);
+      } else if (req.url?.endsWith(`/blobs/${sha256}`)) {
+        requestedBlobs += 1;
+        res.writeHead(200).end(body);
+      } else {
+        res.writeHead(404).end();
+      }
+    });
+    const gatewayUrl = await listen(server);
+    try {
+      await expect(
+        runNodeWorkerWorkspaceTransfer({
+          gatewayUrl,
+          environmentId: "environment-repeated-blob",
+          workspaceDir,
+          manifestHome: root,
+          transfer: { direction: "download", token: "download-token", manifestRef },
+        }),
+      ).resolves.toBe(manifestRef);
+      expect(requestedBlobs).toBe(1);
+      for (const file of ["first.txt", "second.sh", "third.txt"]) {
+        await expect(fs.readFile(path.join(workspaceDir, file))).resolves.toEqual(body);
+      }
+      if (process.platform !== "win32") {
+        expect((await fs.stat(path.join(workspaceDir, "first.txt"))).mode & 0o777).toBe(0o644);
+        expect((await fs.stat(path.join(workspaceDir, "second.sh"))).mode & 0o777).toBe(0o755);
+      }
+      await fs.writeFile(path.join(workspaceDir, "first.txt"), "edited independently\n");
+      await expect(fs.readFile(path.join(workspaceDir, "third.txt"))).resolves.toEqual(body);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
   it("reuses the placement hash memo across download and upload captures", async () => {
     transferDebug.mockClear();
     const root = tempDirs.make("node-worker-transfer-memo-");

@@ -5,6 +5,7 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../shared/regexp.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
+import { assertAppContainerSpawnSupported } from "./windows-appcontainer-spawn.js";
 
 const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 const DEFAULT_PROGRAM_FILES = "C:\\Program Files";
@@ -111,6 +112,7 @@ export function queryWindowsRegistryValue(
     if (timeoutMs <= 0) {
       return null;
     }
+    assertAppContainerSpawnSupported();
     try {
       const stdout = execFileSync(regExe, ["query", key, "/v", valueName, ...viewArgs], {
         env: resolveDiagnosticProcessEnv(),

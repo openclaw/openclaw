@@ -1,4 +1,3 @@
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
@@ -35,10 +34,8 @@ import {
   contextStates,
   observedContexts,
   PLAYWRIGHT_CONNECTION_CLOSE_TIMEOUT_MS,
-  retainedClosingByCdpUrl,
   type ConnectedBrowser,
   type ContextState,
-  type PendingBrowserConnection,
   type PlaywrightConnectionRetirement,
 } from "./pw-session-contracts.js";
 import {
@@ -52,6 +49,11 @@ import {
   normalizeCdpUrl,
   targetKey,
 } from "./pw-session-state.js";
+import {
+  guardHeadlessContexts,
+  isHeadlessChromium,
+  refuseHeadlessPasskeyDialogs,
+} from "./pw-session-webauthn.js";
 
 export { pageTargetInfo } from "./pw-session-page-target.js";
 
@@ -161,12 +163,6 @@ function takeCachedPlaywrightBrowserConnection(cdpUrl: string): ConnectedBrowser
   const normalized = normalizeCdpUrl(cdpUrl);
   const cur = cachedByCdpUrl.get(normalized);
   cachedByCdpUrl.delete(normalized);
-  const pending = connectingByCdpUrl.get(normalized);
-  if (pending) {
-    // Invalidation must also retire an in-flight connect. Otherwise it can
-    // resolve after cleanup and repopulate the cache with the stale pipe.
-    pending.attempt.cancelled = true;
-  }
   connectingByCdpUrl.delete(normalized);
   if (!cur) {
     return null;
@@ -185,35 +181,12 @@ class BlockedBrowserTargetError extends Error {
   }
 }
 
-function retainClosingPlaywrightConnection(connection: ConnectedBrowser): void {
-  const retained = retainedClosingByCdpUrl.get(connection.cdpUrl) ?? new Set<ConnectedBrowser>();
-  retained.add(connection);
-  retainedClosingByCdpUrl.set(connection.cdpUrl, retained);
-}
-
-function releaseClosingPlaywrightConnection(connection: ConnectedBrowser): void {
-  const retained = retainedClosingByCdpUrl.get(connection.cdpUrl);
-  retained?.delete(connection);
-  if (retained?.size === 0) {
-    retainedClosingByCdpUrl.delete(connection.cdpUrl);
-  }
-}
-
 async function closeTrackedPlaywrightConnection(connection: ConnectedBrowser): Promise<void> {
   const existing = closeConnectionPromises.get(connection);
   if (existing) {
     return await existing;
   }
-  retainClosingPlaywrightConnection(connection);
-  const closing = (async () => {
-    try {
-      await connection.browser.close();
-      releaseClosingPlaywrightConnection(connection);
-    } catch (error) {
-      closeConnectionPromises.delete(connection);
-      throw error;
-    }
-  })();
+  const closing = connection.browser.close();
   closeConnectionPromises.set(connection, closing);
   return await closing;
 }
@@ -236,45 +209,31 @@ export function retirePlaywrightBrowserConnectionExact(opts: {
   const normalized = normalizeCdpUrl(opts.cdpUrl);
   clearBlockedTargetsForCdpUrl(normalized);
   clearBlockedPageRefsForCdpUrl(normalized);
-  const connections = new Map<ConnectedBrowser, Promise<void> | undefined>();
-  const pendingCollections = new Set<Promise<void>>();
+  const connections = new Map<ConnectedBrowser, Promise<void>>();
+  const closing: Promise<void>[] = [];
   let retired = false;
   const captureConnection = (connection: ConnectedBrowser) => {
-    const existing = connections.get(connection);
-    if (existing) {
-      return existing;
+    let task = connections.get(connection);
+    if (!task) {
+      task = closeTrackedPlaywrightConnection(connection);
+      connections.set(connection, task);
+      closing.push(task);
+      void task.catch(() => {});
     }
-    const closing = closeTrackedPlaywrightConnection(connection);
-    connections.set(connection, closing);
-    void closing.catch(() => {});
-    return closing;
+    return task;
   };
   const capture = () => {
     const pending = connectingByCdpUrl.get(normalized);
     const cached = takeCachedPlaywrightBrowserConnection(normalized);
-    for (const connection of retainedClosingByCdpUrl.get(normalized) ?? []) {
-      void captureConnection(connection);
-    }
     if (cached) {
       void captureConnection(cached);
     }
     if (pending) {
-      const collection = pending.promise.then(
-        (connection) => {
-          void captureConnection(connection);
-        },
-        () => {
-          if (pending.attempt.retired) {
-            void captureConnection(pending.attempt.retired);
-          }
-        },
-      );
-      pendingCollections.add(collection);
-      void collection.then(() => {
-        pendingCollections.delete(collection);
-      });
+      const task = pending.then(captureConnection, () => {});
+      closing.push(task);
+      void task.catch(() => {});
     }
-    const captured = Boolean(pending || connections.size > 0);
+    const captured = Boolean(pending || cached);
     retired ||= captured;
     return captured;
   };
@@ -285,31 +244,14 @@ export function retirePlaywrightBrowserConnectionExact(opts: {
     },
     refresh: capture,
     close: async () => {
+      // Failed disconnects are visible to the caller; a process restart is the recovery path.
       await withPlaywrightCloseTimeout(
-        (async () => {
-          for (const connection of connections.keys()) {
-            void captureConnection(connection);
+        Promise.allSettled(closing).then((results) => {
+          const failed = results.find((result) => result.status === "rejected");
+          if (failed?.status === "rejected") {
+            throw failed.reason;
           }
-          await Promise.all(pendingCollections);
-          const attempts = [...connections.keys()].map(
-            (connection) => [connection, captureConnection(connection)] as const,
-          );
-          const results = await Promise.allSettled(attempts.map(([, closing]) => closing));
-          let firstError: Error | undefined;
-          for (const [index, result] of results.entries()) {
-            if (result.status !== "rejected") {
-              continue;
-            }
-            const [connection, closing] = attempts[index]!;
-            if (connections.get(connection) === closing) {
-              connections.set(connection, undefined);
-            }
-            firstError ??= toErrorObject(result.reason, "Playwright adapter disconnect failed.");
-          }
-          if (firstError) {
-            throw firstError;
-          }
-        })(),
+        }),
       );
     },
   };
@@ -423,16 +365,12 @@ export async function connectBrowser(
   }
   const connecting = connectingByCdpUrl.get(normalized);
   if (connecting) {
-    return await connecting.promise;
+    return await connecting;
   }
 
-  const connectionAttempt: PendingBrowserConnection["attempt"] = { cancelled: false };
   const connectWithRetry = async (): Promise<ConnectedBrowser> => {
     let lastErr: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      if (connectionAttempt.cancelled) {
-        break;
-      }
       try {
         const timeout = 5000 + attempt * 2000;
         let endpointDiscoveryError: unknown;
@@ -502,28 +440,48 @@ export async function connectBrowser(
           }
           browser = await connectEndpoint(normalized, configuredPin?.lookup);
         }
-        if (connectionAttempt.cancelled) {
-          connectionAttempt.retired = { browser, cdpUrl: normalized };
-          void closeTrackedPlaywrightConnection(connectionAttempt.retired).catch(() => {});
-          throw new Error("Playwright connection attempt was superseded.");
-        }
+        let disconnected = false;
         const onDisconnected = () => {
+          disconnected = true;
           const current = cachedByCdpUrl.get(normalized);
           if (current?.browser === browser) {
             cachedByCdpUrl.delete(normalized);
           }
         };
-        if (resolveBrowserEngine(engine).descriptor.sessionScope === "connection") {
+        // Listen before the awaited setup below, so a browser lost meanwhile is not cached.
+        browser.on("disconnected", onDisconnected);
+        const engineAdapter = resolveBrowserEngine(engine);
+        if (engineAdapter.descriptor.sessionScope === "connection") {
           markConnectionScopedBrowser(browser);
         }
-        const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected, engine };
-        cachedByCdpUrl.set(normalized, connected);
-        browser.on("disconnected", onDisconnected);
+        // Relay connections drive the user's visible Chrome, which shows its own dialogs.
+        const headless =
+          !relay && engineAdapter.descriptor.id === "chromium"
+            ? await isHeadlessChromium(browser)
+            : false;
         observeBrowser(browser);
+        if (headless) {
+          // Before any caller can load a document through this connection.
+          await guardHeadlessContexts(browser.contexts());
+        }
+        if (disconnected) {
+          browser.off("disconnected", onDisconnected);
+          throw new Error("Browser disconnected while connecting.");
+        }
+        const connected: ConnectedBrowser = {
+          browser,
+          cdpUrl: normalized,
+          onDisconnected,
+          engine,
+          headless,
+        };
+        if (connectingByCdpUrl.get(normalized) === pending) {
+          cachedByCdpUrl.set(normalized, connected);
+        }
         return connected;
       } catch (err) {
         lastErr = err;
-        if (connectionAttempt.cancelled || relay) {
+        if (relay) {
           break;
         }
         // Don't retry rate-limit errors; retrying worsens the 429.
@@ -541,11 +499,11 @@ export async function connectBrowser(
   };
 
   const pending = connectWithRetry().finally(() => {
-    if (connectingByCdpUrl.get(normalized)?.attempt === connectionAttempt) {
+    if (connectingByCdpUrl.get(normalized) === pending) {
       connectingByCdpUrl.delete(normalized);
     }
   });
-  connectingByCdpUrl.set(normalized, { attempt: connectionAttempt, promise: pending });
+  connectingByCdpUrl.set(normalized, pending);
 
   return await pending;
 }
@@ -593,7 +551,11 @@ async function getPageForTargetIdOnce(opts: {
   if (opts.targetId && isBlockedTarget(opts.cdpUrl, opts.targetId)) {
     throw new BlockedBrowserTargetError();
   }
-  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy, opts.relayReference);
+  const { browser, headless } = await connectBrowser(
+    opts.cdpUrl,
+    opts.ssrfPolicy,
+    opts.relayReference,
+  );
   const pages = await getAllPages(browser);
   if (!pages.length) {
     throw new Error("No pages available in the connected browser.");
@@ -611,6 +573,10 @@ async function getPageForTargetIdOnce(opts: {
     : accessible[0];
   if (found) {
     bindRoleRefsTarget(found.page, opts.cdpUrl, found.targetId);
+    if (headless) {
+      // Settled guards are cached; this only re-registers one that failed.
+      void refuseHeadlessPasskeyDialogs(found.page.context());
+    }
     return found.page;
   }
   throw new BrowserTabNotFoundError();

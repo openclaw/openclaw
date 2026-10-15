@@ -2,7 +2,7 @@ import type { RequestListener } from "node:http";
 import { type FetchFunction, type WebClientOptions, WebClient } from "@slack/web-api";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   warn,
   computeBackoff,
@@ -217,7 +217,7 @@ function resolveSlackRelayConfig(params: { relay: unknown; accountId: string }):
 
 export async function monitorSlackProvider(opts: MonitorSlackOpts) {
   const { scheduler } = opts;
-  const cfg = opts.config ?? getRuntimeConfig();
+  const cfg = opts.config ?? (await captureRuntimeConfigAsyncReader()());
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
   const account = resolveSlackAccount({
@@ -295,7 +295,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
     ...(opts.abortSignal ? { abortSignal: opts.abortSignal } : {}),
   });
   const monitorContextRef: { current?: SlackMonitorContext } = {};
-  const { app, receiver, socketModeLogger } = createSlackBoltApp({
+  const { app, receiver, socketClient, socketModeLogger } = createSlackBoltApp({
     interop: await getSlackBoltInterop(),
     slackMode,
     token,
@@ -369,15 +369,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
         })
       : null;
   let unregisterHttpHandler: (() => void) | null = null;
-  const unregisterSocketModeConnectionDiagnostics =
-    slackMode === "socket"
-      ? registerSlackSocketModeConnectionDiagnostics({
-          app,
-          onSharedConnection: (activeConnections) => {
-            runtime.log?.(warn(formatSlackSocketModeSharedConnectionWarning(activeConnections)));
-          },
-        })
-      : () => {};
+  const unregisterSocketModeConnectionDiagnostics = socketClient
+    ? registerSlackSocketModeConnectionDiagnostics({
+        client: socketClient,
+        onSharedConnection: (activeConnections) => {
+          runtime.log?.(warn(formatSlackSocketModeSharedConnectionWarning(activeConnections)));
+        },
+      })
+    : () => {};
 
   let botUserId = "";
   let botId = "";
@@ -446,7 +445,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
       warn(
         `[${account.accountId}] slack auth.test failed at boot (${authTestError}); ` +
           `${identityFailureDetail}; ` +
-          "required-mention channels will fail closed without another trusted activation signal",
+          "required-mention channels will ignore messages without another trusted activation signal",
       ),
     );
   }
@@ -660,7 +659,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
 
   const stopOnAbort = () => {
     if (opts.abortSignal?.aborted && slackMode === "socket") {
-      void gracefulStopSlackApp(app);
+      void gracefulStopSlackApp(app, socketClient);
     }
   };
   opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
@@ -685,7 +684,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
       publishSlackConnectedStatus(opts.setStatus, ctx.identityHealth);
     }
 
-    if (slackMode === "socket") {
+    if (socketClient) {
       let reconnectAttempts = 0;
       let hasLoggedSocketConnected = false;
       while (!opts.abortSignal?.aborted) {
@@ -693,6 +692,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
         try {
           const disconnect = await startSlackSocketAndWaitForDisconnect({
             app,
+            socketClient,
             abortSignal: opts.abortSignal,
             onStarted: async () => {
               reconnectAttempts = 0;
@@ -739,7 +739,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
               }),
             ),
           );
-          await gracefulStopSlackApp(app);
+          await gracefulStopSlackApp(app, socketClient);
         } catch (err) {
           if (isNonRecoverableSlackAuthError(err)) {
             publishSlackBlockedStatus(opts.setStatus, err);
@@ -805,7 +805,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
     unregisterSocketModeConnectionDiagnostics();
     unregisterHttpHandler?.();
     await durableIngress.stop();
-    await gracefulStopSlackApp(app);
+    await gracefulStopSlackApp(app, socketClient);
     await slackDispatchers.close();
   }
 }

@@ -10,10 +10,6 @@ import type {
   SavedRemoteMedia,
   saveRemoteMedia,
 } from "openclaw/plugin-sdk/media-runtime";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -113,25 +109,17 @@ export function createMattermostMonitorResources(params: {
     // Cache only resolved resources: failures must not hide a channel or sender for a TTL.
     const cache = new Map<string, { value: T; expiresAt: number }>();
     return async (id) => {
-      const rawNow = Date.now();
-      const now = asDateTimestampMs(rawNow);
+      const now = Date.now();
       const cached = cache.get(id);
-      if (cached && now !== undefined && cached.expiresAt > now) {
-        if (cached.value !== undefined) {
-          return cached.value;
-        }
-      } else {
-        cache.delete(id);
+      if (cached && cached.expiresAt > now) {
+        return cached.value;
       }
+      cache.delete(id);
       try {
         const value = await fetchValue(id);
-        const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
-        if (expiresAt !== undefined) {
-          // Concurrent misses can resolve out of order; retain the most recently resolved values.
-          cache.delete(id);
-          cache.set(id, { value, expiresAt });
-          pruneMapToMaxSize(cache, MONITOR_RESOURCE_CACHE_MAX_ENTRIES);
-        }
+        cache.delete(id);
+        cache.set(id, { value, expiresAt: now + ttlMs });
+        pruneMapToMaxSize(cache, MONITOR_RESOURCE_CACHE_MAX_ENTRIES);
         return value;
       } catch (err) {
         logger.debug?.(`mattermost: ${label} lookup failed: ${String(err)}`);

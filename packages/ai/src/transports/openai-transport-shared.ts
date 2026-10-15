@@ -299,14 +299,48 @@ export type OpenAIModeModel = Omit<Model, "compat"> & {
   compat?: OpenAIModeCompatInput | null;
 };
 
-type MutableToolCall = ToolCall & { partialArgs?: string };
-
 export type MutableAssistantOutput = Omit<AssistantMessage, "content" | "usage"> & {
-  content: Array<TextContent | ThinkingContent | MutableToolCall>;
+  content: Array<TextContent | ThinkingContent | ToolCall>;
   usage: Usage & {
     reasoningTokens?: number;
   };
 };
+
+// Boundary events carry `partial` so consumers can replace their state
+// wholesale; text-delta events omit it (per-token snapshots would be
+// retained) and rely on append semantics instead. The partial must therefore
+// be detached from the transport's live AssistantMessage: both OpenAI
+// transports mutate blocks in place (e.g. appends happen before the delta
+// event is pushed), so an aliased snapshot lets a consumer double-apply the
+// very delta event that follows — text doubles until the next partial heals
+// it. Boundary events are not per-token, so copying here is bounded.
+// The event unions are heterogeneous (not every member carries `partial`),
+// so presence is checked at runtime instead of via a constrained signature.
+export function detachPartialSnapshot<TEvent>(event: TEvent): TEvent {
+  // SAFETY: event unions are heterogeneous; runtime presence check verifies `partial`.
+  const source = event as { partial?: AssistantMessage };
+  if (!source.partial) {
+    return event;
+  }
+  const partial = source.partial;
+  return {
+    ...event,
+    partial: {
+      ...partial,
+      // Copy text blocks only. The double-apply hazard is text_delta-specific
+      // (agent-core appends only text_delta; every other delta kind carries
+      // its own partial and is replaced wholesale). The other block kinds are
+      // identity-owned by their consumers and must stay referenced:
+      // thinking blocks record append facts in a WeakMap keyed by the
+      // original object (#123120 — copying would force quadratic prefix
+      // rescans), and tool blocks are normalized in place by consumers
+      // against the transport-owned output (#170751).
+      content: partial.content.map((block) =>
+        block.type === "text" ? Object.assign({}, block) : block,
+      ),
+    },
+  } as TEvent; // SAFETY: TEvent survives the spread; only `partial` is rebuilt.
+}
 
 export function parseOpenAICompletionsUsage(
   rawUsage: NonNullable<ChatCompletionChunk["usage"]> & {
@@ -389,6 +423,26 @@ export function createOpenAIProviderAcceptanceHook(
   model: Model,
 ): () => Promise<void> {
   return () => notifyProviderHttpResponse({ options, response, model });
+}
+
+export function withOpenAIErrorResponseHook(
+  fetch: typeof globalThis.fetch,
+  onResponse: BaseOpenAIStreamOptions["onResponse"],
+  model: Model,
+): typeof globalThis.fetch {
+  return async (input, init) => {
+    const response = await fetch(input, init);
+    // The SDK consumes rejected bodies before exposing its response promise.
+    if (!response.ok) {
+      await notifyProviderHttpResponse({
+        options: { onResponse },
+        response,
+        model,
+        signal: init?.signal ?? (input instanceof Request ? input.signal : undefined),
+      });
+    }
+    return response;
+  };
 }
 
 /** Measure one UTF-8 append without double-counting a surrogate pair split across chunks. */

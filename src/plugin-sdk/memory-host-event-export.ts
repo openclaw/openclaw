@@ -1,6 +1,10 @@
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
+import {
+  sameFileIdentity,
+  type ExactFileIdentity,
+  type FileIdentityStat,
+} from "@openclaw/fs-safe/advanced";
 import { syncDirectoryIfSupported } from "../infra/directory-durability.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { writeFileWindowFully } from "../infra/file-descriptor.js";
@@ -47,11 +51,11 @@ export function memoryHostEventExportOwnerContent(
   content: {
     currentSha256?: string;
     pendingSha256?: string;
-    identity?: FileIdentityStat;
+    identity?: ExactFileIdentity;
   },
 ): string {
   return `${JSON.stringify({
-    schemaVersion: 3,
+    schemaVersion: 4,
     kind: "openclaw-memory-host-events-export",
     stateHash: owner.stateHash,
     workspaceHash: owner.workspaceHash,
@@ -90,7 +94,7 @@ export async function rewriteMemoryHostEventArtifactIfUnchanged(params: {
   await using observed = observation;
   if (
     params.expectedIdentity
-      ? !sameFileIdentity(params.expectedIdentity, observed.stat)
+      ? !sameFileIdentity(params.expectedIdentity, observed.exactIdentity)
       : (await observed.handle.readFile({ encoding: "utf8" })) !== params.expectedContent
   ) {
     return false;
@@ -106,7 +110,7 @@ export async function rewriteMemoryHostEventArtifactIfUnchanged(params: {
     // The matching marker/content snapshot owns this generated artifact inode for
     // the locked update. A distinct workspace file can take the path only by
     // replacing that inode; direct writes still target the owned export itself.
-    if (!sameFileIdentity(observed.stat, writable.stat)) {
+    if (!sameFileIdentity(observed.exactIdentity, writable.exactIdentity)) {
       return false;
     }
     await writable.handle.writeFile(params.nextContent, { encoding: "utf8" });
@@ -122,7 +126,7 @@ export async function rewriteMemoryHostEventArtifactIfUnchanged(params: {
   }
   await using verified = verification;
   return (
-    sameFileIdentity(observed.stat, verified.stat) &&
+    sameFileIdentity(observed.exactIdentity, verified.exactIdentity) &&
     (await verified.handle.readFile({ encoding: "utf8" })) === params.nextContent
   );
 }
@@ -140,7 +144,7 @@ export async function isMemoryHostEventArtifactAtIdentity(params: {
     return false;
   }
   await using opened = observation;
-  if (!sameFileIdentity(params.expectedIdentity, opened.stat)) {
+  if (!sameFileIdentity(params.expectedIdentity, opened.exactIdentity)) {
     return false;
   }
   return (
@@ -156,7 +160,7 @@ export async function publishMemoryHostEventArtifact(params: {
   expectedOwnerContent: string;
   content: string;
   contentSha256: string;
-}): Promise<FileIdentityStat | undefined> {
+}): Promise<ExactFileIdentity | undefined> {
   const writeTarget = await openMemoryHostEventArtifact(() =>
     params.workspaceRoot.openWritable(params.owner.relativePath, {
       mode: 0o600,
@@ -172,7 +176,7 @@ export async function publishMemoryHostEventArtifact(params: {
   if (!writable.createdForWrite) {
     return undefined;
   }
-  const publishedIdentity = { dev: writable.stat.dev, ino: writable.stat.ino };
+  const publishedIdentity = writable.exactIdentity;
   const isPublishedArtifactCurrent = () =>
     isMemoryHostEventArtifactAtIdentity({
       workspaceRoot: params.workspaceRoot,

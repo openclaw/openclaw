@@ -58,13 +58,6 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
       errorMessage: message.errorMessage || "Unknown error",
     });
 
-    // Async tool results can settle after the error. Keep them and the durable transcript.
-    const messages = this.agent.state.messages;
-    const failedIndex = messages.findLastIndex((candidate) => candidate === message);
-    if (failedIndex >= 0) {
-      this.agent.state.messages = messages.toSpliced(failedIndex, 1);
-    }
-
     this.retryAbortController = new AbortController();
     try {
       await sleep(delayMs, this.retryAbortController.signal);

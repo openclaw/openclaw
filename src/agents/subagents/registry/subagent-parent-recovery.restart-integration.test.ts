@@ -14,6 +14,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { markCanonicalSessionValidationPending } from "../../../config/sessions/session-canonical-key.js";
 import * as gatewayCall from "../../../gateway/call.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { prepareGatewayStartupSessions } from "../../../gateway/server-startup-session-migration.js";
@@ -29,7 +30,7 @@ import {
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   closeOpenClawAgentDatabasesAsync,
-  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../../state/openclaw-agent-db.js";
 import { createRecoveryRuntimeFixture } from "../../main-session-recovery/main-session-recovery-runtime.test-support.js";
 import { transitionMainSessionRecovery } from "../../main-session-recovery/main-session-recovery-state.js";
@@ -64,7 +65,7 @@ vi.mock("../../../gateway/session-utils.fs.js", () => ({
 }));
 
 describe("subagent parent recovery — durable yielded continuation", () => {
-  const fixture = useSubagentRestartRecoveryFixture();
+  const fixture = useSubagentRestartRecoveryFixture({ reuseDatabaseWorkers: true });
   const { activateGatewayRuntime, dispatchAgent, gatewayRuntime } = fixture;
 
   it.each([
@@ -238,6 +239,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     const predecessor = makeRunRecord({
       runId,
       childSessionKey,
+      childSessionIdentity: { sessionId: "warm-restart-child-session" },
       expectsCompletionMessage: true,
       execution: {
         status: "interrupted",
@@ -314,9 +316,10 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     const legacy = scenario.startsWith("legacy ");
     const newForeground = scenario === "new foreground" || scenario === "legacy new foreground";
     const globalParent = scenario === "global in second agent store";
+    const rawParent = globalParent || scenario === "unrelated agent";
     const parentAgentId = globalParent ? "other" : "main";
     const requesterAgentId = scenario === "unrelated agent" ? "other" : parentAgentId;
-    if (globalParent) {
+    if (rawParent) {
       setRuntimeConfigSnapshot({
         agents: { entries: { main: {}, other: {} } },
         session: { scope: "global" },
@@ -324,7 +327,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     }
     const now = Date.now();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const parentKey = globalParent ? "global" : "agent:main:yielded-parent-recovery";
+    const parentKey = rawParent ? "global" : "agent:main:yielded-parent-recovery";
     const parentRunId = "yielded-parent-original-run";
     const childKey = "agent:main:subagent:yielded-parent-child";
     const parentStorePath = await writeSubagentSessionEntry({
@@ -355,6 +358,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     const child = makeRunRecord({
       runId: "yielded-parent-child-run",
       childSessionKey: childKey,
+      childSessionIdentity: { sessionId: "yielded-parent-child-session" },
       requesterSessionKey: parentKey,
       requesterAgentId,
       requesterTurnRunId: parentRunId,
@@ -570,12 +574,18 @@ describe("subagent parent recovery — durable yielded continuation", () => {
           { cwd: fixture.stateDir, message },
         );
       }
-      const { db } = openOpenClawAgentDatabase({ agentId: parentAgentId });
       // The old writer persisted running for both turns; only a new start cleared yielded timing.
-      db.prepare(
-        "UPDATE session_nodes SET entry_json = json_set(json_remove(entry_json, '$.restartRecoveryRuns'), '$.status', 'running') WHERE session_key = ?",
-      ).run(parentKey);
-      db.prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?").run(parentKey);
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          database.db
+            .prepare(
+              "UPDATE session_nodes SET entry_json = json_set(json_remove(entry_json, '$.restartRecoveryRuns'), '$.status', 'running') WHERE session_key = ?",
+            )
+            .run(parentKey);
+          markCanonicalSessionValidationPending(database, [parentKey]);
+        },
+        { agentId: parentAgentId },
+      );
       await closeOpenClawAgentDatabasesAsync(fixture.stateDir);
       await prepareGatewayStartupSessions({
         cfg: getRuntimeConfig(),
@@ -659,6 +669,10 @@ describe("subagent parent recovery — durable yielded continuation", () => {
         const child = makeRunRecord({
           runId: `yielded-child-${index}`,
           childSessionKey: `agent:main:subagent:yielded-child-${index}`,
+          childSessionIdentity: {
+            sessionId: `yielded-child-session-${index}`,
+            lifecycleRevision: "original-child-revision",
+          },
           requesterSessionKey,
           requesterTurnRunId,
           requesterTurnYielded: true,
@@ -673,6 +687,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
           updatedAt: now,
           abortedLastRun: true,
           defaultSessionId: `yielded-child-session-${index}`,
+          lifecycleRevision: "original-child-revision",
         });
         await appendTranscriptMessage(
           {
@@ -775,6 +790,10 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       const stale = makeRunRecord({
         runId: "stale-child-run",
         childSessionKey: "agent:main:subagent:restart-child",
+        childSessionIdentity: {
+          sessionId: "restart-child-run-session",
+          lifecycleRevision: "original-child-revision",
+        },
         requesterSessionKey,
         requesterTurnRunId: staleRequesterTurnRunId,
         expectsCompletionMessage: true,
@@ -789,6 +808,10 @@ describe("subagent parent recovery — durable yielded continuation", () => {
         runId: "restart-child-run",
         taskRunId: supersededBy !== "superseded cancellation" ? stale.runId : undefined,
         childSessionKey: stale.childSessionKey,
+        childSessionIdentity: {
+          sessionId: "restart-child-run-session",
+          lifecycleRevision: "original-child-revision",
+        },
         requesterSessionKey,
         requesterTurnRunId,
         requesterTurnYielded: requesterYielded || undefined,
@@ -800,6 +823,10 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       const sibling = makeRunRecord({
         runId: "restart-sibling-run",
         childSessionKey: "agent:main:subagent:restart-sibling",
+        childSessionIdentity: {
+          sessionId: "restart-sibling-run-session",
+          lifecycleRevision: "original-child-revision",
+        },
         requesterSessionKey,
         requesterTurnRunId,
         requesterTurnYielded: requesterYielded || undefined,
@@ -809,6 +836,10 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       const nested = makeRunRecord({
         runId: "restart-nested-run",
         childSessionKey: "agent:main:subagent:restart-nested",
+        childSessionIdentity: {
+          sessionId: "restart-nested-run-session",
+          lifecycleRevision: "original-child-revision",
+        },
         requesterSessionKey: child.childSessionKey,
         requesterTurnRunId: child.runId,
         expectsCompletionMessage: true,
@@ -822,6 +853,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
           agentId: "main",
           sessionKey: entry.childSessionKey,
           defaultSessionId: `${entry.runId}-session`,
+          lifecycleRevision: "original-child-revision",
           abortedLastRun: true,
         });
         await replaceSessionEntry(

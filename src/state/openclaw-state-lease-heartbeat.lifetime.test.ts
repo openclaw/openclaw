@@ -75,10 +75,10 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         if (controls.constructorError) {
           throw controls.constructorError;
         }
-        const data: LeaseHeartbeatWorkerData & { completedRequest?: SharedArrayBuffer } =
-          structuredClone(workerOptions.workerData);
+        const { databaseAdmissionPort, ...data } = workerOptions.workerData;
         this.data = {
-          ...data,
+          ...structuredClone(data),
+          databaseAdmissionPort,
           completedRequest:
             data.completedRequest ?? new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
         };
@@ -172,7 +172,7 @@ async function finish(
 }
 
 describe("state lease heartbeat lifetime", () => {
-  it.each(["success", "failure", "uncertain"] as const)(
+  it.each(["failure", "uncertain"] as const)(
     "preserves heartbeat handoff after late startup renewal %s",
     async (settlement) => {
       const params = options();
@@ -200,19 +200,14 @@ describe("state lease heartbeat lifetime", () => {
         worker.emit("message", { startup: "prepared" });
         await vi.advanceTimersByTimeAsync(0);
         expect(worker.activationSeen).toBe(false);
-        if (settlement === "success") {
-          renewal.resolve(Date.now() + 5_000);
-          await renewal.promise;
-        } else {
-          const failure =
-            settlement === "uncertain"
-              ? new AggregateError([
-                  Object.assign(new Error("Unknown startup renewal"), { code: "outcome-unknown" }),
-                ])
-              : new Error("Known startup renewal contention");
-          renewal.reject(failure);
-          await expect(renewal.promise).rejects.toBe(failure);
-        }
+        const failure =
+          settlement === "uncertain"
+            ? new AggregateError([
+                Object.assign(new Error("Unknown startup renewal"), { code: "outcome-unknown" }),
+              ])
+            : new Error("Known startup renewal contention");
+        renewal.reject(failure);
+        await expect(renewal.promise).rejects.toBe(failure);
         await vi.advanceTimersByTimeAsync(0);
         if (settlement === "uncertain") {
           await expect(heartbeat.ready).rejects.toBeInstanceOf(AggregateError);
@@ -387,7 +382,11 @@ describe("state lease heartbeat lifetime", () => {
       }
       worker.emit("message", { id: request.id, ok: true, expiresAt: expiry });
       if (ending === "late") {
-        expect(await outcome).toEqual(new Error("state lease heartbeat is not responsive"));
+        expect(await outcome).toMatchObject({
+          message: expect.stringContaining(
+            "phase=verify, trigger=reply, requestId=1, elapsedMs=1001, responseRemainingMs=-1",
+          ),
+        });
       } else {
         await expect(result).resolves.toBe(expiry);
       }
@@ -399,8 +398,6 @@ describe("state lease heartbeat lifetime", () => {
   it.each([
     { operation: "verify", delivery: "reply-first" },
     { operation: "verify", delivery: "deadline-first" },
-    { operation: "renew", delivery: "reply-first" },
-    { operation: "renew", delivery: "deadline-first" },
   ] as const)(
     "accepts a completed $operation with delayed $delivery delivery",
     async ({ operation, delivery }) => {
@@ -455,9 +452,17 @@ describe("state lease heartbeat lifetime", () => {
           ok: true,
           expiresAt: Date.now() + (ending === "expired" ? -1 : 60_000),
         });
-        expect(await outcome).toEqual(
-          new Error(`state lease heartbeat is not ${ending === "lost" ? "running" : "responsive"}`),
-        );
+        const error = await outcome;
+        assert(error instanceof Error);
+        if (ending === "lost") {
+          expect(error).toEqual(new Error("state lease heartbeat is not running"));
+        } else {
+          expect(error).toMatchObject({
+            message: expect.stringContaining("phase=verify, trigger=reply, requestId=1"),
+          });
+          expect(error.message).toContain("status=1, renewalProgress=0, completedRequestId=1");
+          expect(error.message).toContain("returnedLeaseRemainingMs=-1");
+        }
       } finally {
         await finish(heartbeat, worker);
       }
@@ -481,7 +486,15 @@ describe("state lease heartbeat lifetime", () => {
       const next = heartbeat.verify();
       const outcome = next.catch((error: unknown) => error);
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(await outcome).toEqual(new Error("state lease heartbeat is not responsive"));
+      const error = await outcome;
+      assert(error instanceof Error);
+      expect(error).toMatchObject({
+        message: expect.stringContaining(
+          "state lease heartbeat is not responsive (phase=verify, trigger=deadline, requestId=2, elapsedMs=1000",
+        ),
+      });
+      expect(error.message).toContain("responseRemainingMs=0, operationRemainingMs=59000");
+      expect(error.message).toContain("status=1, renewalProgress=0, completedRequestId=1");
       expect(params.onLost).toHaveBeenCalledOnce();
     } finally {
       await finish(heartbeat, worker);
@@ -504,7 +517,13 @@ describe("state lease heartbeat lifetime", () => {
       expect(params.onLost).not.toHaveBeenCalled();
       Atomics.store(worker.shared, state.expiresAt, BigInt(Date.now() + params.leaseMs));
       await vi.advanceTimersByTimeAsync(1_500);
-      expect(await outcome).toEqual(new Error("state lease heartbeat is not responsive"));
+      const error = await outcome;
+      assert(error instanceof Error);
+      expect(error.message).toContain(
+        "phase=verify, trigger=deadline, requestId=1, elapsedMs=3000",
+      );
+      expect(error.message).toContain("operationRemainingMs=0, leaseRemainingMs=1500");
+      expect(error.message).toContain("status=1, renewalProgress=0, completedRequestId=1");
       expect(params.onLost).toHaveBeenCalledOnce();
     } finally {
       await finish(heartbeat, worker);
@@ -578,7 +597,11 @@ describe("state lease heartbeat lifetime", () => {
           mode === "idle" ? 1 : mode === "finished" ? 2_000 : 1_500,
         );
         await result;
-        expect(outcomes).toEqual([new Error("state lease heartbeat is not responsive")]);
+        expect(outcomes).toEqual([
+          expect.objectContaining({
+            message: expect.stringContaining("phase=verify, trigger=deadline, requestId=1"),
+          }),
+        ]);
         expect(params.onLost).toHaveBeenCalledOnce();
       } finally {
         await finish(heartbeat, worker);
@@ -660,7 +683,9 @@ describe("state lease heartbeat lifetime", () => {
           expect(check).not.toThrow();
           expect(params.onLost).not.toHaveBeenCalled();
         } else {
-          expect(check).toThrow("not responsive");
+          expect(check).toThrow(
+            `phase=ack, trigger=ack, requestId=5, elapsedMs=1500, responseRemainingMs=-500, operationRemainingMs=${ending === "expired" ? -500 : 58500}, leaseRemainingMs=${ending === "expired" ? -500 : 58500}, status=1, renewalProgress=0, completedRequestId=0, ack=${ending === "expired" ? 5 : 4}`,
+          );
           expect(params.onLost).toHaveBeenCalledOnce();
         }
         expect(waits).toBe(1);

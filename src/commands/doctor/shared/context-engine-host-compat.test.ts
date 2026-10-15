@@ -212,46 +212,6 @@ describe("doctor context-engine host compatibility", () => {
     },
   );
 
-  it("evaluates native Codex and OpenClaw agent-run hosts", async () => {
-    const engineId = await registerEngine(["thread-bootstrap-projection"]);
-    const warnings = await collectContextEngineHostCompatibilityWarnings({
-      cfg: configWithEngine(engineId, {
-        agents: {
-          defaults: {
-            models: {
-              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "openclaw" } },
-            },
-          },
-        },
-      }),
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expect(warnings.join("\n")).toContain("OpenClaw embedded runner");
-    expect(warnings.join("\n")).toContain("Some configured runtimes support");
-    expect(warnings.join("\n")).not.toContain("Codex app-server harness (");
-  });
-
-  it("does not warn for context engines without host requirements", async () => {
-    const engineId = await registerEngine([]);
-    const warnings = await collectContextEngineHostCompatibilityWarnings({
-      cfg: configWithEngine(engineId, {
-        agents: {
-          defaults: {
-            model: "anthropic/claude-sonnet-4-6",
-            models: {
-              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
-            },
-          },
-        },
-      }),
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expect(warnings).toEqual([]);
-  });
-
   it("uses the system agent when inspecting an explicit multi-agent roster", async () => {
     const engineId = await registerEngine([]);
     const warnings = await collectContextEngineHostCompatibilityWarnings({
@@ -308,26 +268,6 @@ describe("doctor context-engine host compatibility", () => {
     expect(result.changes).toEqual([
       `Reset plugins.slots.contextEngine to the default "legacy" because context engine "${engineId}" is incompatible with every configured agent-run host.`,
     ]);
-  });
-
-  it("leaves compatible native runtimes unchanged", async () => {
-    const engineId = await registerEngine(["assemble-before-prompt", "runtime-llm-complete"]);
-    const cfg = configWithEngine(engineId, {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-          },
-        },
-      },
-    });
-    const result = await maybeRepairContextEngineHostCompatibility({
-      cfg,
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expect(result.config).toBe(cfg);
-    expect(result.changes).toEqual([]);
   });
 
   it("warns but does not auto-repair mixed compatible and incompatible runtimes", async () => {

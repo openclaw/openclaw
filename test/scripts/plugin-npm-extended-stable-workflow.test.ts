@@ -402,6 +402,7 @@ describe("plugin npm extended-stable workflow", () => {
           "release-tooling-identity.mjs",
           "lib/record-shared.mjs",
           "openclaw-npm-extended-stable-release.mjs",
+          "plugin-sdk-api-release-evidence.mjs",
           "lib/release-version.mjs",
         ]) {
           writeFileSync(join(root, "scripts", script), readFileSync(join("scripts", script)));
@@ -914,7 +915,7 @@ ${policy}`,
     expect(prepare.run).toContain("oidcWrite: false");
 
     const upload = step(preview, "Upload immutable npm preflight artifact");
-    expect(upload.uses).toBe("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
+    expect(upload.uses).toBe("actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9");
     expect(upload.with).toMatchObject({
       "compression-level": 0,
       "if-no-files-found": "error",
@@ -932,7 +933,7 @@ ${policy}`,
     expect(trustedCheckout.with?.ref).toBe("${{ github.workflow_sha }}");
     const download = step(verify, "Download immutable npm preflight artifact");
     expect(download.uses).toBe(
-      "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+      "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
     );
     expect(download.with?.name).toBe(
       "plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}",

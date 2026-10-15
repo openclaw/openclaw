@@ -6,7 +6,11 @@ import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gat
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { openChatDetails, openDetailsPullRequests } from "./chat-details.test-support.ts";
+import {
+  closeChatDetails,
+  openChatDetails,
+  openDetailsPullRequests,
+} from "./chat-details.test-support.ts";
 import {
   chatThreadDistanceFromBottom,
   captureUiProofEnabled,
@@ -342,7 +346,7 @@ suite.define(() => {
         await page.screenshot({ path: path.join(proofDir, "01-expanded-at-bottom.png") });
       }
 
-      await page.getByRole("button", { name: "Close details", exact: true }).click();
+      await closeChatDetails(page);
       await scrollChatThreadToTop(page);
       expect(await card.getAttribute("open")).toBe("");
       await openChatDetails(page);

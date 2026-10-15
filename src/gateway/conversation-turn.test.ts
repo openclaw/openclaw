@@ -12,7 +12,7 @@ import {
 } from "../config/sessions/conversation-delivery-store.js";
 import * as deliveryStore from "../config/sessions/conversation-delivery-store.js";
 import {
-  resolveConversationRegistryScope,
+  prepareConversationRegistryScope,
   registerConversationAddresses,
 } from "../config/sessions/conversation-registry.js";
 import * as conversationRegistry from "../config/sessions/conversation-registry.js";
@@ -171,7 +171,7 @@ describe("runGatewayConversationTurn", () => {
 
   it("waits for the writer before its initial writable operation lookup", async () => {
     const deps = await createDeps();
-    const scope = resolveConversationRegistryScope({ agentId: "main", config: deps.config });
+    const scope = await prepareConversationRegistryScope({ agentId: "main", config: deps.config });
     const writer = holdConversationWriterForTest(scope);
     await writer.entered;
     const turn = runGatewayConversationTurn({
@@ -207,7 +207,7 @@ describe("runGatewayConversationTurn", () => {
 
   it("refuses a replaced session at admitted turn creation", async () => {
     const deps = await createDeps();
-    const scope = resolveConversationRegistryScope({ agentId: "main", config: deps.config });
+    const scope = await prepareConversationRegistryScope({ agentId: "main", config: deps.config });
     const blocked = createDeferred<ReturnType<typeof holdConversationWriterForTest>>();
     deps.readConversation.mockImplementationOnce(async () => {
       const writer = holdConversationWriterForTest(scope);

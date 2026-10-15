@@ -16,6 +16,7 @@ import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import * as configSessions from "../../config/sessions.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
@@ -51,6 +52,11 @@ import {
 import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  enqueueCommandInLane,
+  getQueueSize,
+  setCommandLaneConcurrency,
+} from "../../process/command-queue.js";
 import * as gatewayWorkAdmission from "../../process/gateway-work-admission.js";
 import {
   GatewayDrainingError,
@@ -107,6 +113,7 @@ import {
   mockCallArg,
   waitForFast,
 } from "../subagent-test-fixtures.test-helpers.js";
+import { resolveRequesterRecoveryDelivery } from "../subagents/announce/subagent-announce-completion-delivery.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { registerHarnessCompletionRecoveryCases } from "./main-session-harness-completion.test-harness.js";
 import { registerParentRestartRecoveryCases } from "./main-session-parent-recovery.test-harness.js";
@@ -116,6 +123,8 @@ import {
   claimMainSessionRecoveryOwner,
   commitMainSessionRecovery,
 } from "./main-session-recovery-store.js";
+import { registerCheckpointReceiptTests } from "./main-session-restart-checkpoint.test-support.js";
+import { registerAcceptedRecoveryStopCase } from "./main-session-restart-command.test-support.js";
 import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-dispatch-start.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
 import {
@@ -254,6 +263,7 @@ beforeEach(async () => {
   resetGatewayWorkAdmission();
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-main-restart-recovery-"));
   freshTmpDir = tmpDir;
+  setRuntimeConfigSnapshot({});
 });
 
 afterEach(async () => {
@@ -265,6 +275,7 @@ afterEach(async () => {
   } finally {
     await cleanupSessionStateForTest({ stateDir: tmpDir });
     await fs.rm(tmpDir, { recursive: true, force: true });
+    clearRuntimeConfigSnapshot();
   }
 });
 
@@ -453,6 +464,102 @@ function getHarnessRecoveryFixture() {
 }
 
 describe("main-session-restart-recovery", () => {
+  it.each(["finish", "stop"] as const)(
+    "bounds resumed turns and preserves waiting work on %s",
+    async (outcome) => {
+      const sessionsDir = await makeSessionsDir();
+      const entries = Object.fromEntries(
+        [0, 1, 2].map((index) => [
+          `agent:main:dashboard:recovery-${index}`,
+          mainSessionEntry({ sessionId: `recovery-${index}` }),
+        ]),
+      );
+      await writeStore(sessionsDir, entries);
+      for (const entry of Object.values(entries)) {
+        await writeTranscript(sessionsDir, entry.sessionId, [
+          { role: "user", content: "finish the interrupted task" },
+        ]);
+      }
+      setCommandLaneConcurrency("main", 20);
+      const cancellation = new AbortController();
+      const finish = createDeferred();
+      const firstDispatch = createDeferred();
+      let active = 0;
+      let peak = 0;
+      let dispatches = 0;
+      const runtime: GatewayRecoveryRuntime = {
+        ...mockRecoveryRuntime,
+        dispatchAgent: <T>(
+          request: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[0],
+          _timeout?: number,
+          options?: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[2],
+        ) => {
+          const ordinal = ++dispatches;
+          let executionStarted = false;
+          options?.onStartOwner?.({
+            observe: () => ({ executionStarted, expiresAtMs: Date.now() + 60_000 }),
+            abort: () => false,
+          });
+          options?.onAccepted?.({ runId: request.idempotencyKey });
+          return enqueueCommandInLane(request.lane ?? "main", async () => {
+            active++;
+            peak = Math.max(peak, active);
+            executionStarted = true;
+            options?.onExecutionStarted?.();
+            if (ordinal === 1) {
+              firstDispatch.resolve();
+            }
+            await finish.promise;
+            active--;
+            return { runId: request.idempotencyKey, status: "ok" } as T;
+          });
+        },
+      };
+      const recovery = recoverRestartAbortedMainSessions({
+        stateDir: tmpDir,
+        signal: cancellation.signal,
+        shouldContinue: () => !cancellation.signal.aborted,
+        gatewayRuntime: runtime,
+      });
+      try {
+        await firstDispatch.promise;
+        await waitForFast(() => {
+          expect(getQueueSize("background") > 1 || peak > 1).toBe(true);
+        });
+        await expect(enqueueCommandInLane("main", async () => "interactive reply")).resolves.toBe(
+          "interactive reply",
+        );
+        expect(peak).toBe(1);
+        if (outcome === "stop") {
+          cancellation.abort(new Error("recovery stopped"));
+          await expect(recovery).rejects.toThrow("recovery stopped");
+          for (const index of [1, 2]) {
+            expect(
+              loadSessionEntry({
+                storePath: path.join(sessionsDir, "sessions.json"),
+                sessionKey: `agent:main:dashboard:recovery-${index}`,
+              }),
+            ).toMatchObject({
+              status: "interrupted",
+              abortedLastRun: true,
+              mainRestartRecovery: { chargedAttempts: 0 },
+            });
+          }
+        }
+      } finally {
+        finish.resolve();
+        await recovery.catch((error: unknown) => {
+          if (!cancellation.signal.aborted) {
+            throw error;
+          }
+        });
+        setCommandLaneConcurrency("main", 1);
+      }
+      expect(dispatches).toBe(outcome === "finish" ? 3 : 1);
+      expect(peak).toBe(1);
+    },
+  );
+
   it("preserves exact restart identities against stale same-id rows", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -1380,7 +1487,7 @@ describe("main-session-restart-recovery", () => {
         const resumeParams = gatewayParams() as Record<string, unknown>;
         expect(resumeParams).toMatchObject({
           bestEffortDeliver: true,
-          lane: "main",
+          lane: "background",
           threadId: "123",
         });
         const recoveryRunId = String(resumeParams.idempotencyKey);
@@ -1416,10 +1523,9 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
-  it("keeps recovered Telegram notice authority current after a transport failure", async () => {
+  it("releases recovered Telegram notice authority after a transport failure", async () => {
     const sessionsDir = await makeSessionsDir();
     const sessionKey = "agent:main:telegram:group:-100123:topic:99";
-    const storePath = path.join(sessionsDir, "sessions.json");
     await writeMainSession({
       sessionsDir,
       sessionKey,
@@ -1431,8 +1537,13 @@ describe("main-session-restart-recovery", () => {
       },
     });
     await writeCompletedToolTranscript(sessionsDir);
-    sendRecoveryNotice.mockRejectedValueOnce(new Error("temporary transport failure"));
+    let currentAtSend: boolean | undefined;
+    sendRecoveryNotice.mockImplementationOnce(async (notice) => {
+      currentAtSend = notice.isCurrent?.({});
+      throw new Error("temporary transport failure");
+    });
     await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+    expect(currentAtSend).toBe(true);
     expect(sendRecoveryNotice).toHaveBeenCalledOnce();
     const notice = sendRecoveryNotice.mock.calls[0]?.[0];
     expect(notice).toMatchObject({
@@ -1443,23 +1554,21 @@ describe("main-session-restart-recovery", () => {
       text: "I'm continuing your interrupted request now (the gateway has just restarted).  Don't be concerned with the lack of typing; I am working behind the scenes and I'll send a message when I'm done!",
       idempotencyKey: `main-session-restart-recovery:${String(gatewayParams().idempotencyKey)}:resumed-notice`,
     });
-    expect(notice?.isCurrent?.({})).toBe(true);
-    const current = loadSessionEntry({ sessionKey, storePath });
-    if (!current) {
-      throw new Error("expected recovered session");
-    }
-    await writeStore(sessionsDir, {
-      [sessionKey]: { ...current, abortedLastRun: true },
-    });
     expect(notice?.isCurrent?.({})).toBe(false);
+    const current = loadSessionEntry({
+      sessionKey,
+      storePath: path.join(sessionsDir, "sessions.json"),
+    });
+    if (!current) {
+      throw new Error("Recovered session fixture is missing");
+    }
     await writeStore(sessionsDir, {
       [sessionKey]: { ...current, sessionId: "replacement-session" },
     });
     expect(notice?.isCurrent?.({})).toBe(false);
     await writeStore(sessionsDir, { [sessionKey]: current });
-    expect(notice?.isCurrent?.({})).toBe(true);
+    expect(notice?.isCurrent?.({})).toBe(false);
     dispatchSettlement.resolve();
-    await waitForFast(() => expect(notice?.isCurrent?.({})).toBe(false));
   });
 
   it("re-adopts a persisted Telegram private-topic route and releases the next turn", async () => {
@@ -3608,75 +3717,13 @@ describe("main-session-restart-recovery", () => {
     }
   });
 
-  it("restores an accepted recovery that fails before execution starts", async () => {
-    const { sessionsDir, storePath, readEntry } = await makeMainSessionFixture({
-      restartRecoveryDeliveryRunId: "recovery-main",
-      restartRecoveryDeliverySourceRunId: "source-main",
-    });
-    await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "recover without losing the owner" },
-    ]);
-    const scheduleSpy = vi
-      .spyOn(recoveryOwnerRelease, "scheduleMainSessionRecoveryPendingTarget")
-      .mockImplementation(() => {});
-    let acceptedObserver: ((payload: unknown) => void) | undefined;
-    const dispatchAgent = vi.fn<GatewayRecoveryRuntime["dispatchAgent"]>(
-      async (request, _timeoutMs, options) => {
-        const runId = request.idempotencyKey!;
-        await commitMainSessionRecovery({
-          command: {
-            kind: "admit_recovery",
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
-            now: Date.now(),
-            runId,
-            sessionId: "main-session",
-          },
-          requireWriteSuccess: true,
-          target: { sessionKey: "agent:main:main", storePath },
-        });
-        acceptedObserver = options?.onAccepted;
-        acceptedObserver?.({ runId, status: "accepted" });
-        throw new Error("detached execution failed before provider start");
-      },
-    );
-
-    try {
-      const result = await retryRestartAbortedMainSessionRecovery({
-        cfg: {},
-        expectedRecoveryRunId: "recovery-main",
-        expectedRecoverySourceRunId: "source-main",
-        expectedSessionId: "main-session",
-        sessionKey: "agent:main:main",
-        storePath,
-        gatewayRuntime: createMockGatewayRecoveryRuntime({
-          dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
-          waitForAgent: vi.fn(async () => ({
-            runId: "recovery-main",
-            status: "timeout",
-            timeoutPhase: "queue",
-            providerStarted: false,
-          })) as GatewayRecoveryRuntime["waitForAgent"],
-        }),
-      });
-
-      expect(result).toEqual({ started: 0, settled: 0, failed: 1, skipped: 0 });
-      expect(acceptedObserver).toBeTypeOf("function");
-      expect(scheduleSpy).toHaveBeenCalledWith({
-        agentId: "main",
-        sessionId: "main-session",
-        sessionKey: "agent:main:main",
-        storePath,
-      });
-      expect(readEntry()).toMatchObject({
-        status: "interrupted",
-        abortedLastRun: true,
-        restartRecoveryDeliverySourceRunId: "source-main",
-        mainRestartRecovery: { chargedAttempts: 1 },
-      });
-      expect(readEntry()?.restartRecoveryDeliveryRunId).toBeUndefined();
-    } finally {
-      scheduleSpy.mockRestore();
-    }
+  registerAcceptedRecoveryStopCase({
+    getStateDir: () => tmpDir,
+    makeMainSessionFixture,
+    writeTranscript,
+    recoverRestartAbortedMainSessions,
+    retryRestartAbortedMainSessionRecovery,
+    sendRecoveryNotice,
   });
 
   it.each([
@@ -4015,41 +4062,13 @@ describe("main-session-restart-recovery", () => {
     expect(readEntry()).toMatchObject({ abortedLastRun: false });
   });
 
-  it("reconciles a receipt delivered during a restart-recovery continuation", async () => {
-    const { sessionsDir, storePath, sessionKey, readEntry } =
-      await makeDeliveredReceiptFixture("message-call-recovered");
-    await writeTranscript(
-      sessionsDir,
-      "main-session",
-      makeMessageDeliveryTranscript({
-        toolCallId: "message-call-recovered",
-        beforeCall: [
-          makeAssistantTextMessage("starting"),
-          makeUserMessage("[System] continue after restart", {
-            idempotencyKey: "recovery-1:user",
-          }),
-        ],
-      }),
-    );
-
-    await expectRecovery({ started: 0, settled: 1, failed: 0, skipped: 0 });
-
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(readEntry()).toMatchObject({
-      status: "done",
-      abortedLastRun: false,
-      restartRecoveryTerminalRunIds: ["discord-message-1"],
-    });
-    const transcript = await loadTestTranscript(sessionKey, storePath);
-    expect(
-      transcript
-        .map((event) => event.message)
-        .some(
-          (message) =>
-            message?.idempotencyKey ===
-            "restart-recovery:message-tool-result:discord-message-1:message-call-recovered",
-        ),
-    ).toBe(true);
+  registerCheckpointReceiptTests({
+    makeMainSessionFixture,
+    makeDeliveredReceiptFixture,
+    writeTranscript,
+    expectRecovery,
+    loadTestTranscript,
+    discordDeliveryContext,
   });
 
   it.each([
@@ -4143,6 +4162,10 @@ describe("main-session-restart-recovery", () => {
       abortedLastRun: false,
       lastRunId: "control-ui-run",
       restartRecoveryTerminalRunIds: ["control-ui-run"],
+    });
+    expect(resolveRequesterRecoveryDelivery(readEntry(), "control-ui-run")).toMatchObject({
+      kind: "result",
+      result: { captured: true, meta: { terminalReply: { disposition: "silent" } } },
     });
   });
 

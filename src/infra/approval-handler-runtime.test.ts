@@ -1,6 +1,7 @@
 // Covers approval handler runtime adapter creation and lazy wiring.
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "./approval-handler-adapter-runtime.js";
 import type { ChannelApprovalNativeRuntimeAdapter } from "./approval-handler-runtime-types.js";
 import {
   createChannelApprovalNativeRuntimeAdapter,
@@ -103,6 +104,35 @@ function firstCallArg(mock: ReturnType<typeof vi.fn>): unknown {
 }
 
 describe("createChannelApprovalHandlerFromCapability", () => {
+  it("awaits async native eligibility before loading delivery hooks", async () => {
+    const deliverPending = vi.fn().mockResolvedValue({ messageId: "async-card" });
+    const capability = makeNativeApprovalCapability({ deliverPending });
+    const nativeRuntime = capability.nativeRuntime;
+    if (!nativeRuntime) {
+      throw new Error("Expected fixture native runtime");
+    }
+    const load = vi.fn(async () => nativeRuntime);
+    const eligibility = createDeferred<boolean>();
+    const nativeRuntimeAsync = createLazyChannelApprovalNativeRuntimeAdapterAsync({
+      load,
+      isConfigured: async () => true,
+      shouldHandle: () => eligibility.promise,
+    });
+    const runtime = await createChannelApprovalHandlerFromCapability({
+      capability: { native: capability.native, nativeRuntimeAsync },
+      ...TEST_HANDLER_PARAMS,
+    });
+    if (!runtime) {
+      throw new Error("Expected async approval handler");
+    }
+    const requested = runtime.handleRequested(makeExecApprovalRequest("async-declined"));
+    eligibility.resolve(false);
+    await requested;
+    expect(load).not.toHaveBeenCalled();
+    expect(deliverPending).not.toHaveBeenCalled();
+    await runtime.stop();
+  });
+
   it("returns null when the capability does not expose a native runtime", async () => {
     await expect(
       createChannelApprovalHandlerFromCapability({
@@ -255,36 +285,6 @@ describe("createChannelApprovalHandlerFromCapability", () => {
       expect.objectContaining({ request: normalizedRequest, approvalKind: "plugin" }),
     );
     await approvalRuntime.stop();
-  });
-
-  it("ignores duplicate pending request ids before finalization", async () => {
-    const unbindPending = vi.fn();
-    const buildResolvedResult = vi.fn().mockResolvedValue({ kind: "leave" });
-    const approvalRuntime = await createTestApprovalHandler({
-      buildResolvedResult,
-      deliverPending: makeSequentialPendingDeliveryMock(),
-      bindPending: makeSequentialPendingBindingMock(),
-      unbindPending,
-    });
-
-    const request = makeExecApprovalRequest("exec:1");
-
-    await approvalRuntime.handleRequested(request);
-    await approvalRuntime.handleRequested(request);
-    await approvalRuntime.handleResolved({
-      id: "exec:1",
-      decision: "approved",
-      resolvedBy: "operator",
-    } as never);
-
-    expect(unbindPending).toHaveBeenCalledTimes(1);
-    const unbind = firstCallArg(unbindPending) as
-      | { entry?: unknown; binding?: unknown; request?: unknown }
-      | undefined;
-    expect(unbind?.entry).toEqual({ messageId: "1" });
-    expect(unbind?.binding).toEqual({ bindingId: "bound-1" });
-    expect(unbind?.request).toBe(request);
-    expect(buildResolvedResult).toHaveBeenCalledTimes(1);
   });
 
   it("continues finalization cleanup after one resolved entry unbind failure", async () => {

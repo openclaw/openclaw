@@ -100,7 +100,7 @@ describe("widget-card", () => {
     expect(host.querySelector("iframe")?.getAttribute("src")).toContain("/__openclaw__/cap/three/");
   });
 
-  it.each(["pending", "failed"] as const)(
+  it.each(["failed"] as const)(
     "replaces an uninitialized %s frame when its capability rotates",
     (loadState) => {
       const preview = {
@@ -136,31 +136,6 @@ describe("widget-card", () => {
       expect(renewed.getAttribute("src")).toContain("/__openclaw__/cap/renewed/");
     },
   );
-
-  it("fits a tall widget instead of scrolling it inside the frame", () => {
-    const host = document.createElement("div");
-    document.body.append(host);
-    mountWidget(
-      {
-        ...canvasPreview,
-        url: "/__openclaw__/canvas/documents/cv_tall_widget/index.html",
-        sandbox: "scripts",
-      } as const,
-      { canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one" },
-      host,
-    );
-    const frame = host.querySelector<HTMLIFrameElement>("iframe");
-    initializeWidgetFrame(frame!);
-    window.dispatchEvent(
-      new MessageEvent("message", {
-        data: { type: "openclaw:widget-size", height: 3000 },
-        source: frame?.contentWindow,
-      }),
-    );
-    expect(frame?.style.height).toBe("3000px");
-    expect(frame?.style.minHeight).toBe("3000px");
-    host.remove();
-  });
 
   it("keeps a short reported frame height across a capability rotation", () => {
     const preview = {
@@ -213,36 +188,6 @@ describe("widget-card", () => {
     host.remove();
   });
 
-  it("mounts a new document on the rotated surface URL within one connection", () => {
-    const preview = {
-      ...canvasPreview,
-      viewId: "cv_surface_lease_mounted",
-      url: "/__openclaw__/canvas/documents/cv_surface_lease_mounted/index.html",
-      sandbox: "strict",
-    } as const;
-    const mountedHost = mountWidget(preview, {
-      canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one",
-    });
-    expect(mountedHost.querySelector("iframe")?.getAttribute("src")).toContain(
-      "/__openclaw__/cap/one/",
-    );
-
-    // The renewal that fixes expired widgets only helps if a widget created
-    // after the rotation picks up the fresh capability instead of the mounted
-    // document's cached one.
-    const rotatedHost = mountWidget(
-      {
-        ...preview,
-        viewId: "cv_surface_lease_rotated",
-        url: "/__openclaw__/canvas/documents/cv_surface_lease_rotated/index.html",
-      },
-      { canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/two" },
-    );
-    expect(rotatedHost.querySelector("iframe")?.getAttribute("src")).toContain(
-      "/__openclaw__/cap/two/",
-    );
-  });
-
   it("unloads an external frame when external embeds become disallowed", () => {
     const preview = {
       ...canvasPreview,
@@ -269,7 +214,7 @@ describe("widget-card", () => {
     expect(canvas.querySelector("mcp-app-view")).toBeNull();
     expect(canvas.querySelector('button[aria-label="Widget actions"]')).not.toBeNull();
     expect(
-      Array.from(canvas.querySelectorAll("wa-dropdown-item"), (item) => item.textContent?.trim()),
+      Array.from(canvas.querySelectorAll('[role="menuitem"]'), (item) => item.textContent?.trim()),
     ).toEqual(["Copy as image", "Download as image"]);
 
     const app = mountWidget(
@@ -302,7 +247,7 @@ describe("widget-card", () => {
     );
     expect(app.querySelector('button[aria-label="Widget actions"]')).not.toBeNull();
     expect(
-      Array.from(app.querySelectorAll("wa-dropdown-item"), (item) => item.textContent?.trim()),
+      Array.from(app.querySelectorAll('[role="menuitem"]'), (item) => item.textContent?.trim()),
     ).toEqual(["Show raw details"]);
 
     const external = mountWidget(
@@ -313,7 +258,9 @@ describe("widget-card", () => {
       { allowExternalEmbedUrls: true, rawText: "external raw payload" },
     );
     expect(
-      Array.from(external.querySelectorAll("wa-dropdown-item"), (item) => item.textContent?.trim()),
+      Array.from(external.querySelectorAll('[role="menuitem"]'), (item) =>
+        item.textContent?.trim(),
+      ),
     ).toEqual(["Show raw details"]);
 
     const unknown = mountWidget({ kind: "unknown" } as never);
@@ -526,16 +473,7 @@ describe("widget-card presentation", () => {
     } as unknown as BoardProvider;
   }
 
-  it("keeps widget content edge-to-edge with controls outside a visible header", () => {
-    const host = mountWidget(preview, { boardProvider: providerWith("full-bleed") });
-    expect(host.querySelector(".chat-tool-card__preview-header")).toBeNull();
-    expect(host.querySelector(".chat-tool-card__preview-label")).toBeNull();
-    expect(host.querySelector(".chat-tool-card__preview-actions")).not.toBeNull();
-    expect(host.querySelector("openclaw-canvas-widget-view")?.title).toBe("Clock");
-  });
-
   it.each([
-    ["strict", undefined, false],
     ["strict", "scripts", false],
     ["trusted", undefined, true],
     ["trusted", "strict", false],

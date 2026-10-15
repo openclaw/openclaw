@@ -4,14 +4,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loseFirstCronMutationReply } from "../../test/helpers/cron/runtime-mutation.js";
 import { createCronRegressionState } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -261,7 +259,7 @@ describe("cron scratch worker service", () => {
   });
 
   it.each([
-    { change: "caller revocation", boundary: "native commit admission" },
+    { change: "caller revocation", boundary: "queued before dispatch" },
     { change: "job owner replacement", boundary: "queued before admission" },
   ] as const)("refuses scratch after $change ($boundary)", async ({ change }) => {
     await withScratchService(async ({ service, job, storePath, databasePath }) => {
@@ -269,48 +267,14 @@ describe("cron scratch worker service", () => {
       const entered = createDeferred();
       const release = createDeferred();
       const execute = runtimeMutation.runCronRuntimeMutation;
-      const held =
-        change === "job owner replacement"
-          ? vi
-              .spyOn(runtimeMutation, "runCronRuntimeMutation")
-              .mockImplementationOnce(async (params) => {
-                entered.resolve();
-                await release.promise;
-                return execute(params);
-              })
-          : undefined;
+      const held = vi
+        .spyOn(runtimeMutation, "runCronRuntimeMutation")
+        .mockImplementationOnce(async (params) => {
+          entered.resolve();
+          await release.promise;
+          return execute(params);
+        });
       let callerCurrent = true;
-      let commitAdmissionWitnessed = false;
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      const admission =
-        change === "caller revocation"
-          ? vi
-              .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-              .mockImplementation((admit, attachment) => {
-                let nonce: string | undefined;
-                return createAdmission((request, grant) => {
-                  const facts = request.facts;
-                  if (
-                    request.stage === "transaction" &&
-                    isRecord(facts) &&
-                    typeof facts.nonce === "string"
-                  ) {
-                    nonce = facts.nonce;
-                  }
-                  if (
-                    request.stage === "commit" &&
-                    nonce &&
-                    isRecord(facts) &&
-                    facts.nonce === nonce &&
-                    facts.bytes instanceof Uint8Array
-                  ) {
-                    commitAdmissionWitnessed = true;
-                    callerCurrent = false;
-                  }
-                  admit(request, grant);
-                }, attachment);
-              })
-          : undefined;
       const completion = expectDefined(
         createCronMutationCompletion("cron.scratch.set"),
         "scratch receipt",
@@ -333,13 +297,15 @@ describe("cron scratch worker service", () => {
           (error: unknown) => ({ kind: "rejected" as const, error }),
         );
       try {
-        if (change === "job owner replacement") {
-          expect(
-            await Promise.race([
-              entered.promise.then(() => "queued-before-admission"),
-              pending.then(() => "completed-before-worker-admission"),
-            ]),
-          ).toBe("queued-before-admission");
+        expect(
+          await Promise.race([
+            entered.promise.then(() => "queued-before-admission"),
+            pending.then(() => "completed-before-worker-admission"),
+          ]),
+        ).toBe("queued-before-admission");
+        if (change === "caller revocation") {
+          callerCurrent = false;
+        } else {
           const peer = new DatabaseSync(databasePath);
           try {
             runSqliteImmediateTransactionSync(peer, () => {
@@ -354,9 +320,6 @@ describe("cron scratch worker service", () => {
         }
         release.resolve();
         const result = await pending;
-        if (change === "caller revocation") {
-          expect(commitAdmissionWitnessed).toBe(true);
-        }
         expect(result).toMatchObject({
           kind: "rejected",
           error: {
@@ -375,13 +338,12 @@ describe("cron scratch worker service", () => {
       } finally {
         release.resolve();
         await pending;
-        held?.mockRestore();
-        admission?.mockRestore();
+        held.mockRestore();
       }
     });
   });
 
-  it("retains a committed scratch write when its worker reply is lost without replay", async () => {
+  it("retains scratch bytes without claiming completion after reply loss", async () => {
     await withScratchService(async ({ service, job, storePath }) => {
       const completion = expectDefined(
         createCronMutationCompletion("cron.scratch.set"),
@@ -404,7 +366,7 @@ describe("cron scratch worker service", () => {
         expect(dropped.wasDropped()).toBe(true);
         expect(dropped.attempts).toEqual(["cron.writeScratch"]);
         await dropped.waitForExit();
-        expect(completion.isCommitted()).toBe(true);
+        expect(completion.isCommitted()).toBe(false);
         expect(readCronJobScratchState(storePath, job.id)).toMatchObject({
           currentRevision: 1,
           scratch: { content: "committed once", revision: 1 },

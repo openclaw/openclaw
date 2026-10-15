@@ -155,19 +155,30 @@ write_review_transition_journal() {
 
 validate_prep_baseline_transition() {
   local command="$1" pr="$2" source="$3" target="$4" branch="$5"
-  local root observation incoming head_ref
+  local root observation archive helper
+  helper="$(dirname "${BASH_SOURCE[0]}")/baseline-refresh.mjs"
   root=$(repo_root) || return 1
+  # Replay once before observing live authority. The private facts stay in this
+  # recovery invocation; retry must reconstruct them from the admitted journal.
+  PREP_TRANSITION_FACTS=$(node "$helper" validate-transition \
+    "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID") || return 1
+  validate_review_transition_state "$pr" "$source" "$target" || return 1
+  observation=$(cat .local/pr-meta.json) || return 1
+  archive=$(printf '%s' "$PREP_TRANSITION_FACTS" | jq -er '.binding | @base64d | fromjson | .archive') || return 1
+  revalidate_baseline_publication "$pr" "$observation" "$source" "$archive" || return 1
   if [ "$command" = install-transition ]; then
-    observation=$(cat .local/pr-meta.json) || return 1
-    incoming=$(printf '%s' "$observation" | jq -er .headRefOid) || return 1
-    head_ref=$(printf '%s' "$observation" | jq -er .headRefName) || return 1
-    revalidate_pr_publication "$pr" "$observation" "$head_ref" "$incoming" "$incoming" || return 1
+    PREP_TRANSITION_FACTS=$(printf '%s' "$PREP_TRANSITION_FACTS" | node "$helper" install-transition \
+      "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID") || return 1
+  else
+    check_prep_baseline_transition check-transition "$pr" "$source" "$target" "$branch" || return 1
   fi
-  pr_operation_lock_owner_is_current "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
-  node "$(dirname "${BASH_SOURCE[0]}")/baseline-refresh.mjs" \
-    "$command" "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
-  pr_operation_lock_owner_is_current "$root" \
-    "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
+}
+
+check_prep_baseline_transition() {
+  local command="$1" pr="$2" source="$3" target="$4" branch="$5" root
+  root=$(repo_root) || return 1
+  printf '%s' "$PREP_TRANSITION_FACTS" | node "$(dirname "${BASH_SOURCE[0]}")/baseline-refresh.mjs" \
+    "$command" "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID"
 }
 
 recover_review_transition() {
@@ -175,7 +186,14 @@ recover_review_transition() {
   local journal=.local/review-transition.json
   [ -e "$journal" ] || return 0
 
-  local fields source target mode branch
+  # A correction continuation retires metadata only. It must not enter the
+  # baseline transition's source/index restoration or branch movement path.
+  if [ "$(jq -r .mode "$journal")" = correction ]; then
+    recover_correction_continuation "$pr"
+    return $?
+  fi
+
+  local fields source target mode branch PREP_TRANSITION_FACTS
   fields=$(jq -er --argjson pr "$pr" '
     select(type == "object" and
       (if .mode == "prep" then (keys | sort) == ["binding","branch","mode","pr","source","target","version"] and (.binding | type == "string")
@@ -200,12 +218,17 @@ recover_review_transition() {
 
   validate_review_transition_state "$pr" "$source" "$target" || return 1
   if [ "$mode" = prep ]; then
-    validate_prep_baseline_transition validate-transition "$pr" "$source" "$target" "$branch" || return 1
     validate_prep_baseline_transition install-transition "$pr" "$source" "$target" "$branch" || return 1
   fi
   # Restore can write files before committing its index. Rebuild the validated
   # source index so replay also owns source-only files left after index deletion.
+  if [ "$mode" = prep ]; then
+    check_prep_baseline_transition check-transition "$pr" "$source" "$target" "$branch" || return 1
+  fi
   pr_git read-tree "$source" || return 1
+  if [ "$mode" = prep ]; then
+    check_prep_baseline_transition restore-transition "$pr" "$source" "$target" "$branch" || return 1
+  fi
   if ! pr_git diff --quiet "$source" "$target"; then
     pr_git diff --name-only --no-renames -z "$source" "$target" |
       pr_git --literal-pathspecs restore --source="$target" --staged --worktree \
@@ -216,7 +239,7 @@ recover_review_transition() {
     return 1
   fi
   if [ "$mode" = prep ]; then
-    validate_prep_baseline_transition validate-transition "$pr" "$source" "$target" "$branch" || return 1
+    validate_prep_baseline_transition finalize-transition "$pr" "$source" "$target" "$branch" || return 1
     if [ "$(pr_git rev-parse "refs/heads/$branch")" = "$source" ]; then
       pr_git update-ref --no-deref "refs/heads/$branch" "$target" "$source" || return 1
     fi
@@ -300,7 +323,7 @@ fetch_pr_head() {
     return 1
   fi
   case "$destination" in
-    ""|"refs/heads/pr-$pr"|"refs/heads/pr-$pr-verify") ;;
+    ""|"refs/heads/pr-$pr") ;;
     *) echo "Invalid PR head acquisition destination for #$pr: $destination" >&2; return 1 ;;
   esac
 

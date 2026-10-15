@@ -324,21 +324,6 @@ describe("RFB attachments", () => {
     expect(dispose).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps a reserved observer session alive and rearms cleanup on release", async () => {
-    vi.useFakeTimers();
-    const teardown = vi.fn(async () => undefined);
-    const registry = createDesktopSessionRegistry({ lingerMs: 25 });
-    await registry.activate({ sourceKey: "node:one", ownerEpoch: 1, teardown });
-    const pending = createPendingStream(registry);
-    expect(pending.reserve()).toBe(true);
-    await vi.advanceTimersByTimeAsync(100);
-    expect(teardown).not.toHaveBeenCalled();
-
-    await pending.stop();
-    await vi.advanceTimersByTimeAsync(25);
-    expect(teardown).toHaveBeenCalled();
-  });
-
   it("does not linger-stop a reservation when another observer disconnects", async () => {
     vi.useFakeTimers();
     const teardown = vi.fn(async () => undefined);

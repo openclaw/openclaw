@@ -236,7 +236,7 @@ it("projects without suppressing warnings when receipt storage is unavailable", 
   const session = await createChat();
   const project = vi.fn(async () => true);
   const patch = vi
-    .spyOn(sessionStore, "patchSessionEntry")
+    .spyOn(sessionStore, "prepareSessionEntryPatch")
     .mockRejectedValueOnce(new Error("store unavailable"));
   await deliver(session, project);
   expect(patch).toHaveBeenCalledOnce();

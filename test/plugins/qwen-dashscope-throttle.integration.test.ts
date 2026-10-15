@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
 import type { AssistantMessage, Context, Model } from "@openclaw/ai";
 import { streamOpenAICompletions } from "@openclaw/ai/internal/openai";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -11,6 +12,9 @@ import { createEmbeddedRunFailoverRetryController } from "../../src/agents/embed
 import { resolveEmbeddedRunAttemptTerminalState } from "../../src/agents/embedded-agent-runner/run/terminal-outcome.js";
 import { makeEmbeddedRunnerAttempt } from "../../src/agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createPluginMetadataSnapshot } from "../../src/config/plugin-auto-enable.test-helpers.js";
+import { withPluginMetadataSnapshotScope } from "../../src/plugins/current-plugin-metadata-snapshot.js";
+import { loadPluginManifestRegistryCore } from "../../src/plugins/manifest-registry.js";
+import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
 import { resolveProviderRuntimePluginHandle } from "../../src/plugins/provider-hook-runtime.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../src/plugins/runtime/generation-scope.js";
@@ -39,8 +43,19 @@ const model = {
 } satisfies Model<"openai-completions">;
 
 const registeredProviders = new Map<string, ProviderPlugin[]>();
+let availabilitySnapshot: ReturnType<typeof createPluginMetadataSnapshotFixture>;
 
 beforeAll(async () => {
+  const registry = loadPluginManifestRegistryCore({
+    installRecords: {},
+    candidates: ["qwen", "openrouter"].map((id) => ({
+      idHint: id,
+      rootDir: path.resolve("extensions", id),
+      source: path.resolve("extensions", id, "index.ts"),
+      origin: "bundled" as const,
+    })),
+  });
+  availabilitySnapshot = createPluginMetadataSnapshotFixture(registry);
   for (const pluginId of ["qwen", "openrouter"]) {
     const { default: plugin } = await loadBundledPluginFacade<{
       default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
@@ -145,7 +160,7 @@ async function runTransportError(params: {
   }
 }
 
-async function runThroughFailureRecovery(params: {
+async function runThroughFailureRecoveryInScope(params: {
   provider: string;
   providerOwner?: ProviderPlugin;
   fixture: ErrorFixture;
@@ -279,6 +294,14 @@ async function runThroughFailureRecovery(params: {
   );
 }
 
+function runThroughFailureRecovery(params: Parameters<typeof runThroughFailureRecoveryInScope>[0]) {
+  return withPluginMetadataSnapshotScope(
+    availabilitySnapshot,
+    () => runThroughFailureRecoveryInScope(params),
+    { trustConfigIdentity: true },
+  );
+}
+
 function expectRateLimitState(result: Awaited<ReturnType<typeof runThroughFailureRecovery>>): void {
   expect.soft(result.failureReason).toBe("rate_limit");
   expect.soft(result.usage).toMatchObject({
@@ -311,11 +334,52 @@ function expectOpenRouterState(
   expect
     .soft(result.suspensionReasons)
     .toEqual([reason === "rate_limit" ? "quota_exhausted" : "manual"]);
-  // OpenRouter manages credential cooldowns; preserve the existing writer/reader bypass.
-  expect.soft(result.usage).toBeUndefined();
-  expect.soft(result.affectedModelBlocked).toBe(false);
-  expect.soft(result.otherModelBlocked).toBe(false);
+  if (reason === "billing") {
+    expectBillingState(result);
+  } else {
+    expect.soft(result.usage).toBeUndefined();
+    expect.soft(result.affectedModelBlocked).toBe(false);
+    expect.soft(result.otherModelBlocked).toBe(false);
+  }
 }
+
+describe("self-managed provider HTTP recovery", () => {
+  const provider = "self-managed-fixture";
+  const snapshot = createPluginMetadataSnapshotFixture({
+    plugins: [{ id: provider, providers: [provider], managesOwnAvailability: true }],
+  });
+  it.each([
+    { status: 429, message: "Too many requests", reason: "rate_limit", transient: true },
+    { status: 503, message: "Provider overloaded", reason: "overloaded", transient: true },
+    { status: 401, message: "Invalid API key", reason: "auth", transient: false },
+    { status: 402, message: "Insufficient credits", reason: "billing", transient: false },
+  ] as const)(
+    "enforces policy after HTTP $status",
+    async ({ status, message, reason, transient }) => {
+      const result = await withPluginMetadataSnapshotScope(
+        snapshot,
+        () =>
+          runThroughFailureRecoveryInScope({
+            provider,
+            fixture: { status, code: status, message },
+          }),
+        { trustConfigIdentity: true },
+      );
+      expect(result.failureReason).toBe(reason);
+      if (transient) {
+        expect(result.usage).toBeUndefined();
+      } else {
+        expect(result.usage).toMatchObject(
+          reason === "billing"
+            ? { disabledReason: reason, disabledUntil: expect.any(Number) }
+            : { cooldownReason: reason, cooldownUntil: expect.any(Number) },
+        );
+      }
+      expect(result.affectedModelBlocked).toBe(!transient);
+      expect(result.otherModelBlocked).toBe(!transient);
+    },
+  );
+});
 
 describe("Qwen DashScope 429 profile classification", () => {
   it.each<

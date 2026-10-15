@@ -10,8 +10,8 @@ import {
   invokeNativeHookRelay,
   registerNativeHookRelay,
   registerOwnedNativeHookRelay,
-  testing,
 } from "./native-hook-relay.js";
+import { clearNativeHookRelaysForTests } from "./native-hook-relay.test-support.js";
 
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
@@ -32,7 +32,7 @@ beforeEach(() => {
 afterEach(async () => {
   vi.restoreAllMocks();
   mockCallGatewayTool.mockReset();
-  await testing.clearNativeHookRelaysForTests();
+  await clearNativeHookRelaysForTests();
 });
 
 function registerRelay(overrides: Partial<Parameters<typeof registerNativeHookRelay>[0]> = {}) {

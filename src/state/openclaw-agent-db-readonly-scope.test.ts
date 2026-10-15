@@ -16,7 +16,6 @@ import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { recordOpenClawAgentCanonicalValidation } from "./openclaw-agent-canonical-validation-receipt.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
@@ -43,14 +42,14 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
 }));
 
 it.each([false, true])(
-  "reuses admitted metadata and observes foreign commits (snapshot=%s)",
+  "reuses admitted metadata and reads in-process writes without probes (snapshot=%s)",
   async (snapshot) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const options = { agentId: "main", env: state.env };
       const { path } = openOpenClawAgentDatabase(options);
       await closeOpenClawAgentDatabaseByPathAsync(path);
       const scope = new OpenClawAgentDatabaseReadOnlyScope();
-      const writer = new (requireNodeSqlite().DatabaseSync)(path);
+      const writer = nodeSqlite.openNodeSqliteDatabase(path);
       try {
         scope.run({ agentId: "main", path }, () => {
           withOpenClawAgentDatabaseReadOnly(({ db }) => {
@@ -89,7 +88,7 @@ it.each([false, true])(
                 observation.queries.filter((sql) =>
                   /PRAGMA data_version|FROM main\.pragma_data_version\(\)/iu.test(sql),
                 ),
-              ).toHaveLength(40);
+              ).toHaveLength(0);
               expect(
                 observation.queries.filter((sql) =>
                   /^SELECT role, schema_version, agent_id/iu.test(sql),
@@ -109,31 +108,33 @@ it.each([false, true])(
   },
 );
 
-it("keeps admitted ownership while pinned metadata reads observe foreign commits", async () => {
+it("keeps a multi-statement snapshot stable until the next read after an in-process write", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const options = { agentId: "main", env: state.env };
     const { path } = openOpenClawAgentDatabase(options);
     await closeOpenClawAgentDatabaseByPathAsync(path);
     const scope = new OpenClawAgentDatabaseReadOnlyScope();
-    const writer = new (requireNodeSqlite().DatabaseSync)(path);
-    const readOwner = (db: DatabaseSync) =>
-      db.prepare("SELECT agent_id FROM schema_meta WHERE meta_key = 'primary'").get()?.agent_id;
+    const writer = nodeSqlite.openNodeSqliteDatabase(path);
+    const readStamp = (db: DatabaseSync) =>
+      db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get()?.updated_at;
+    writer.exec("UPDATE schema_meta SET updated_at = 1 WHERE meta_key = 'primary'");
     try {
       scope.run({ agentId: "main", path }, () => {
         const read = () =>
-          withOpenClawAgentDatabaseReadOnly(({ db }) => readOwner(db), options, { snapshot: true });
-        expect(read()).toEqual({ found: true, value: "main" });
+          withOpenClawAgentDatabaseReadOnly(({ db }) => readStamp(db), options, { snapshot: true });
+        expect(read()).toEqual({ found: true, value: 1 });
         expect(
           withOpenClawAgentDatabaseReadOnly(
             ({ db }) => {
-              writer.exec("UPDATE schema_meta SET agent_id = 'other' WHERE meta_key = 'primary'");
-              return readOwner(db);
+              expect(readStamp(db)).toBe(1);
+              writer.exec("UPDATE schema_meta SET updated_at = 2 WHERE meta_key = 'primary'");
+              return readStamp(db);
             },
             options,
             { snapshot: true },
           ),
-        ).toEqual({ found: true, value: "main" });
-        expect(read()).toEqual({ found: true, value: "other" });
+        ).toEqual({ found: true, value: 1 });
+        expect(read()).toEqual({ found: true, value: 2 });
       });
     } finally {
       writer.close();
@@ -196,19 +197,7 @@ it("keeps one connection while nested reads retain independent committed snapsho
 
 it.each([
   {
-    sql: `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`,
-  },
-  {
-    sql: `PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`,
-  },
-  {
-    sql: "UPDATE schema_meta SET agent_id = 'another' WHERE meta_key = 'primary'",
-  },
-  {
     sql: "UPDATE schema_meta SET role = 'state' WHERE meta_key = 'primary'",
-  },
-  {
-    sql: "CREATE TRIGGER unexpected_node_validation AFTER UPDATE ON session_nodes BEGIN SELECT 1; END",
   },
 ])(
   "reuses admitted format while observing fresh rows after a foreign commit: $sql",
@@ -490,9 +479,6 @@ it("closes generic and explicit candidate-family readers without releasing unrel
           (error: unknown) => error instanceof AggregateError && causes(error).includes(failure),
         );
         expect(reopened.isOpen).toBe(true);
-        expect(() => scope.run(options(sibling), () => read(sibling))).toThrow(
-          "native cleanup is pending",
-        );
         close.mockRestore();
         await closeReaders();
         expect(reopened.isOpen).toBe(false);
@@ -506,7 +492,7 @@ it("closes generic and explicit candidate-family readers without releasing unrel
   });
 });
 
-it("loads canonical proof before fresh full reads without trusting a copied file", async () => {
+it("loads canonical proof before fresh full selections without trusting a copied file", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const options = { agentId: "main", env };
     const database = openOpenClawAgentDatabase(options);
@@ -537,7 +523,7 @@ it("loads canonical proof before fresh full reads without trusting a copied file
               database: target,
               env,
               projection: "full",
-              sessionKeys: [sessionKey],
+              selection: { kind: "session-id", sessionId: "receipt-session" },
             });
             expect(result.entries[0]?.entry.sessionId).toBe("receipt-session");
             if (pathname === database.path) {

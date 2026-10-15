@@ -3,11 +3,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { updateExecutorEntrypoints } from "../cli/cli-entrypoint.test-support.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import {
+  createManagedHandoffTempDirTracker,
+  readManagedHandoffArtifacts,
+} from "./update-managed-service-handoff-artifacts.test-support.js";
 import { createManagedServiceBoundaryCleanup } from "./update-managed-service-handoff-process.test-support.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
@@ -22,18 +25,17 @@ vi.mock("node:child_process", async () => {
   });
 });
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(async () => {
-    await Promise.all([...processCleanups].map((closeProcess) => closeProcess()));
-    processCleanups.clear();
-    for (const releaseLease of leaseCleanups) {
-      releaseLease();
-    }
-    leaseCleanups.clear();
-    cleanup();
-    vi.restoreAllMocks();
-    vi.resetModules();
-  });
+const tempDirs = createManagedHandoffTempDirTracker();
+afterEach(async () => {
+  await Promise.all([...processCleanups].map((closeProcess) => closeProcess()));
+  processCleanups.clear();
+  for (const releaseLease of leaseCleanups) {
+    releaseLease();
+  }
+  leaseCleanups.clear();
+  await tempDirs.cleanup();
+  vi.restoreAllMocks();
+  vi.resetModules();
 });
 
 beforeEach(() => {
@@ -49,7 +51,7 @@ beforeEach(() => {
     process.nextTick(() =>
       signalMockManagedUpdateHandoffReady({
         child,
-        paramsPath: args.at(-1)!,
+        paramsPath: readManagedHandoffArtifacts(args).paramsPath,
         cleanups: leaseCleanups,
       }),
     );
@@ -121,7 +123,8 @@ describe("foreground update through the prepared managed helper", () => {
       string[],
       { env: NodeJS.ProcessEnv },
     ];
-    const [scriptPath, paramsPath] = args;
+    tempDirs.add(path.dirname(prepared.logPath));
+    const { scriptPath, paramsPath } = readManagedHandoffArtifacts(args);
     spawnMock.mock.results.at(-1)!.value.emit("exit", 0, null);
     for (const cleanup of leaseCleanups) {
       cleanup();

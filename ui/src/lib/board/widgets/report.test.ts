@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { BoardReport } from "../../../../../src/boards/board-report.ts";
 import type { BoardWidget } from "../types.ts";
-import "./report.ts";
+import "./report.tsx";
 
 function widget(props: Record<string, unknown>): BoardWidget {
   return {

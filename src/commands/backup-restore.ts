@@ -40,7 +40,7 @@ async function assertTargetOutsideLiveState(targetPath: string): Promise<void> {
     );
   }
   const configSnapshot = await readConfigFileSnapshot({ observe: false });
-  const discoverySnapshot = resolveLegacyConfigSnapshotForBackup(configSnapshot);
+  const discoverySnapshot = await resolveLegacyConfigSnapshotForBackup(configSnapshot);
   if (!discoverySnapshot) {
     return;
   }

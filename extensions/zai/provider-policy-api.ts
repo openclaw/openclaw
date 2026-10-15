@@ -44,7 +44,7 @@ export function resolveZaiReasoningEffort(
 
 export function resolveThinkingProfile(
   ctx: ProviderDefaultThinkingPolicyContext,
-): ProviderThinkingProfile {
+): ProviderThinkingProfile & { defaultLevel: ZaiThinkingLevel } {
   const version = resolveGlmReasoningEffortVersion(ctx.modelId);
   if (version === "5.3") {
     return {

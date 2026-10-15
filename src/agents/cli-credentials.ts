@@ -78,6 +78,18 @@ function readCodexAuthMode(data: Record<string, unknown>): string {
   return authMode || (typeof data.OPENAI_API_KEY === "string" ? "api_key" : "chatgpt");
 }
 
+/** Presence is only a discovery hint; Codex verifies the login without exporting its tokens. */
+export function hasCodexCliAuthFile(codexHome?: string): boolean {
+  try {
+    const file = fs.statSync(
+      path.join(resolveCodexCliHomePath(codexHome), CODEX_CLI_AUTH_FILENAME),
+    );
+    return file.isFile() && file.size > 0;
+  } catch {
+    return false;
+  }
+}
+
 function readFileMtimeMs(filePath: string): number | null {
   try {
     return fs.statSync(filePath).mtimeMs;

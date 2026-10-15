@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MODELS_JSON_STATE } from "../agents/models-config-state.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import * as manifestModelIdNormalization from "../plugins/manifest-model-id-normalization.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
-  resetUsageFormatCachesForTest,
   formatUsd,
   resolveModelCostConfig,
   resolveModelCostConfigFingerprint,
@@ -50,13 +50,13 @@ describe("usage-format", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
     delete process.env.OPENCLAW_AGENT_DIR;
     await fs.mkdir(agentDir, { recursive: true });
-    resetUsageFormatCachesForTest();
+    MODELS_JSON_STATE.costCache.clear();
   });
 
   afterEach(async () => {
     envSnapshot?.restore();
     envSnapshot = undefined;
-    resetUsageFormatCachesForTest();
+    MODELS_JSON_STATE.costCache.clear();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -144,7 +144,7 @@ describe("usage-format", () => {
   const firstRates = { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 };
   const laterRates = { input: 7, output: 8, cacheRead: 0.7, cacheWrite: 0.8 };
 
-  it("refreshes duplicate model prices and fingerprints after ordered source mutations", () => {
+  it("refreshes duplicate model prices and fingerprints with replacement config snapshots", () => {
     type SourceModel = { id: string; cost?: Partial<ModelDefinitionConfig["cost"]> };
     const first: SourceModel = { id: "priced-fixture", cost: { ...firstRates } };
     const later: SourceModel = { id: "priced-fixture", cost: { ...laterRates } };
@@ -154,19 +154,30 @@ describe("usage-format", () => {
     } as unknown as OpenClawConfig;
     let previousFingerprint: string | undefined;
     const check = (label: string, expected: ModelCostConfig | undefined) => {
+      const snapshot = structuredClone(config);
       expect
         .soft(
-          resolveModelCostConfig({ config, agentDir, provider: "venice", model: "priced-fixture" }),
+          resolveModelCostConfig({
+            config: snapshot,
+            agentDir,
+            provider: "venice",
+            model: "priced-fixture",
+          }),
           label,
         )
         .toEqual(expected);
-      const fingerprint = resolveModelCostConfigFingerprint(config, agentDir);
+      const fingerprint = resolveModelCostConfigFingerprint(snapshot, agentDir);
       expect.soft(fingerprint, label).not.toBe(previousFingerprint);
       previousFingerprint = fingerprint;
-      // Fingerprinting refreshes the full index; it must agree with direct lookups.
+      // Fingerprinting and direct lookups share this snapshot's prices.
       expect
         .soft(
-          resolveModelCostConfig({ config, agentDir, provider: "venice", model: "priced-fixture" }),
+          resolveModelCostConfig({
+            config: snapshot,
+            agentDir,
+            provider: "venice",
+            model: "priced-fixture",
+          }),
           label,
         )
         .toEqual(expected);
@@ -232,7 +243,7 @@ describe("usage-format", () => {
       resolveModelCostConfig({
         provider: "demo-metadata-row",
         model: "metadata-only",
-        config,
+        config: structuredClone(config),
       })?.input,
     ).toBe(9);
 

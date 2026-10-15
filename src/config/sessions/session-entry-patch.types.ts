@@ -23,6 +23,8 @@ export type SessionEntryPatchGuard = {
   ensureIdentitySource?: SessionSourceTransactionGrant;
   /** Retained host authority; same-store predicates belong in the worker transaction. */
   assertCurrent?: () => void;
+  /** Check live effect authority at native write and commit grants, never during preparation. */
+  assertMutationAllowed?: () => void;
   /** Same-store route authority is reread inside the worker's write transaction. */
   conversation?: ConversationAuthority;
   cliHistory?: {
@@ -58,6 +60,7 @@ export type SessionEntryPatchCommit = {
 export type SessionEntryPatchCommitted = {
   kind: "session-entry-patch";
   entry: SessionEntry | null;
+  applied: boolean;
   publication?: SessionEntryReplacementPublication;
   /** Guard snapshot before the entry patch, carried only while the session ID is unchanged. */
   transcriptPredicate?: {
@@ -67,6 +70,7 @@ export type SessionEntryPatchCommitted = {
   refusedSource?: { index: number; facts: SessionSourcePredicateFacts };
 };
 
+/** Internal bookkeeping borrows the committed result without mutating it. */
 export type SessionEntryPatchCommitObserver = (
   entry: SessionEntry,
   /** Historical predicate facts from the committed transaction, never current authority. */

@@ -17,12 +17,14 @@ export type WorkerProcessInput = ReturnType<typeof parseWorkerProcessRequest>;
 export function buildWorkerProcessTurn<T extends WorkerLaunchPlan>(
   descriptor: T,
   idleRetention = false,
+  canonicalWorkspace = false,
 ) {
   return {
     type: "turn" as const,
     turnId: descriptor.assignment.turnId,
     descriptor,
     ...(idleRetention ? { idleRetention: true as const } : {}),
+    ...(canonicalWorkspace ? { canonicalWorkspace: true as const } : {}),
   };
 }
 
@@ -31,10 +33,12 @@ export function measureWorkerProcessTurnBytes(
   idleRetention = false,
 ): number {
   // The node supplies the endpoint privately. Replace only its JSON null placeholder
-  // with the parser-owned bound; the managed envelope is the sender's exact shape.
+  // with the parser-owned bound and reserve the node-owned canonical-folder marker.
   return (
     Buffer.byteLength(
-      JSON.stringify(buildWorkerProcessTurn({ ...plan, connectionEndpoint: null }, idleRetention)),
+      JSON.stringify(
+        buildWorkerProcessTurn({ ...plan, connectionEndpoint: null }, idleRetention, true),
+      ),
     ) -
     "null".length +
     WORKER_CONNECTION_ENDPOINT_MAX_JSON_BYTES
@@ -62,7 +66,7 @@ const RuntimeResultSchema = z.union([
   workerProtocolObject({ status: z.literal("completed"), ...TranscriptResultFields }),
   workerProtocolObject({
     status: z.literal("failed"),
-    reason: z.literal("turn-failed"),
+    reason: z.enum(["turn-failed", "node-lost"]),
     ...TranscriptResultFields,
   }),
 ]);
@@ -80,7 +84,9 @@ const ProcessResultSchema = workerProtocolObject({
 }).refine(
   ({ result, retainWorker, retention }) =>
     (retention === undefined || retainWorker) &&
-    (!retainWorker || result.status === "completed" || result.status === "failed"),
+    (!retainWorker ||
+      result.status === "completed" ||
+      (result.status === "failed" && result.reason === "turn-failed")),
 );
 const ProcessMessageSchema = z.union([
   WorkerProcessObservationResultSchema,
@@ -113,14 +119,23 @@ export function parseWorkerProcessRequest(value: unknown) {
   }
   if (
     value.type === "turn" &&
-    hasExactOwnKeys(value, ["type", "turnId", "descriptor"], ["idleRetention"]) &&
-    (value.idleRetention === undefined || value.idleRetention === true)
+    hasExactOwnKeys(
+      value,
+      ["type", "turnId", "descriptor"],
+      ["idleRetention", "canonicalWorkspace"],
+    ) &&
+    (value.idleRetention === undefined || value.idleRetention === true) &&
+    (value.canonicalWorkspace === undefined || value.canonicalWorkspace === true)
   ) {
     const descriptor = parseWorkerLaunchDescriptor(value.descriptor);
     if (descriptor.assignment.turnId !== value.turnId) {
       throw new Error("managed worker request disagrees with its assigned turn");
     }
-    return buildWorkerProcessTurn(descriptor, value.idleRetention === true);
+    return buildWorkerProcessTurn(
+      descriptor,
+      value.idleRetention === true,
+      value.canonicalWorkspace === true,
+    );
   }
   throw new Error("invalid managed worker request");
 }

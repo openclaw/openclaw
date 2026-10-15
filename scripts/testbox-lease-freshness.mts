@@ -18,6 +18,7 @@ const DEPENDENCY_INPUTS = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yam
 const ENVIRONMENT_INPUTS = [
   ".crabbox.yaml",
   ".github/actions/prepare-testbox-shell",
+  ".github/actions/setup-android-toolchain",
   ".node-version",
   "scripts/crabbox-wrapper.mjs",
   "scripts/crabbox-wrapper.mts",
@@ -235,18 +236,6 @@ export function prepareTestboxLeaseFreshness({
     retained: args[0] === "warmup" || keep || Boolean(id),
     keepOnFailure,
     assertCurrent() {
-      const latest = buildTestboxLeaseFingerprint(repoRoot, args, env);
-      const changed = testboxLeaseStaleReasons(current, latest);
-      // A new command may refresh compatible source. An already prepared
-      // command must still delegate exactly the revision it captured.
-      if (current.headSha !== latest.headSha) {
-        changed.unshift("headSha");
-      }
-      if (changed.length > 0) {
-        throw new Error(
-          `Testbox inputs changed during preparation (${changed.join(", ")}); rerun from the current checkout`,
-        );
-      }
       assertAllocationReceipt(stateDir, id, current);
     },
     attribution: {

@@ -1,36 +1,12 @@
 import { execFile } from "node:child_process";
-import { constants as fsConstants } from "node:fs";
-import fs, { type FileHandle } from "node:fs/promises";
+import { constants as fsConstants, createWriteStream } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import type { WindowsVcRuntimeDependency } from "./llama-server-assets.js";
 
 const CAB_HEADER_SIZE = 12;
-const COPY_BUFFER_SIZE = 1024 * 1024;
 const EXPAND_TIMEOUT_MS = 60_000;
-
-function assertManifestBasename(filename: string): string {
-  if (
-    !filename ||
-    filename === "." ||
-    filename === ".." ||
-    /[\\/]/u.test(filename) ||
-    path.basename(filename) !== filename
-  ) {
-    throw new Error(`invalid Visual C++ runtime manifest filename: ${filename}`);
-  }
-  return filename;
-}
-
-async function writeFully(handle: FileHandle, buffer: Buffer, length: number): Promise<void> {
-  let offset = 0;
-  while (offset < length) {
-    const result = await handle.write(buffer, offset, length - offset);
-    if (result.bytesWritten <= 0) {
-      throw new Error("Visual C++ runtime container copy made no progress");
-    }
-    offset += result.bytesWritten;
-  }
-}
 
 async function extractPinnedContainer(params: {
   asset: WindowsVcRuntimeDependency;
@@ -63,28 +39,15 @@ async function extractPinnedContainer(params: {
       throw new Error("Visual C++ runtime bundle does not contain the pinned cabinet");
     }
 
-    const target = await fs.open(params.containerPath, "wx", 0o600);
-    try {
-      const buffer = Buffer.allocUnsafe(Math.min(COPY_BUFFER_SIZE, params.asset.containerSize));
-      let copied = 0;
-      while (copied < params.asset.containerSize) {
-        params.signal?.throwIfAborted();
-        const requested = Math.min(buffer.length, params.asset.containerSize - copied);
-        const result = await source.read(
-          buffer,
-          0,
-          requested,
-          params.asset.containerOffset + copied,
-        );
-        if (result.bytesRead <= 0) {
-          throw new Error("Visual C++ runtime container ended before its pinned size");
-        }
-        await writeFully(target, buffer, result.bytesRead);
-        copied += result.bytesRead;
-      }
-    } finally {
-      await target.close();
-    }
+    await pipeline(
+      source.createReadStream({
+        start: params.asset.containerOffset,
+        end: params.asset.containerOffset + params.asset.containerSize - 1,
+        autoClose: false,
+      }),
+      createWriteStream(params.containerPath, { flags: "wx", mode: 0o600 }),
+      { signal: params.signal },
+    );
   } finally {
     await source.close();
   }
@@ -134,14 +97,7 @@ export async function extractWindowsVcRuntime(params: {
   asset: WindowsVcRuntimeDependency;
   signal?: AbortSignal;
 }): Promise<string> {
-  const nestedCabinet = assertManifestBasename(params.asset.nestedCabinet);
-  const files = params.asset.files.map(({ source, target }) => ({
-    source: assertManifestBasename(source),
-    target: assertManifestBasename(target),
-  }));
-  if (new Set(files.map((file) => file.target)).size !== files.length) {
-    throw new Error("duplicate Visual C++ runtime target filename");
-  }
+  const { nestedCabinet, files } = params.asset;
 
   const expandCommand = resolveExpandCommand();
   const containerPath = path.join(params.destDir, "bundle.cab");
@@ -169,7 +125,6 @@ export async function extractWindowsVcRuntime(params: {
     await assertRegularFile(sourcePath, file.source);
     const targetPath = path.join(params.destDir, file.target);
     await fs.copyFile(sourcePath, targetPath, fsConstants.COPYFILE_EXCL);
-    await assertRegularFile(targetPath, file.target);
   }
   return params.destDir;
 }

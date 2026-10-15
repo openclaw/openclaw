@@ -1,31 +1,65 @@
 /* @vitest-environment jsdom */
-import { afterEach, expect, it, vi } from "vitest";
+import { createComponent } from "solid-js";
+import { expect, it, vi } from "vitest";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
-import { ChatDetailsSession } from "./chat-details-session.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import type { ChatSubagentActivityLive } from "./chat-subagent-activity-live.ts";
 
-const mounted: HTMLElement[] = [];
-afterEach(() => {
-  for (const element of mounted.splice(0)) {
-    element.remove();
-  }
-});
 async function mount(overrides: Partial<ChatDetailsProps> = {}) {
-  const element = new ChatDetailsSession();
-  element.props = {
+  const value: ChatDetailsProps = {
     sessionKey: "agent:main:details",
     currentAgentId: "main",
     messages: [],
     selectedSession: { key: "agent:main:details", kind: "direct" },
     ...overrides,
   };
-  element.presented = true;
-  document.body.append(element);
-  mounted.push(element);
+  const view = mountSolid(() =>
+    createComponent(ChatDetailsSession, { props: value, presented: true }),
+  );
+  const element = view.container.querySelector("openclaw-chat-details-session")!;
   await element.updateComplete;
   return element;
 }
+it("omits empty linked-work disclosures and opens arriving pull requests", async () => {
+  const element = await mount();
+  expect(element.querySelector("[data-details-group]")).toBeNull();
+  element.props = {
+    ...element.props!,
+    pullRequests: [
+      {
+        number: 7,
+        owner: "example",
+        repo: "project",
+        branch: "feature",
+        title: "A pull request arriving after the panel opens",
+        url: "https://github.com/example/project/pull/7",
+        state: "open",
+      },
+    ],
+  };
+  await element.updateComplete;
+  const group = element.querySelector<HTMLDetailsElement>('[data-details-group="pull-requests"]')!;
+  expect(group.open).toBe(true);
+  group.open = false;
+  group.dispatchEvent(new Event("toggle"));
+  flush();
+  element.props = { ...element.props! };
+  await element.updateComplete;
+  expect(group.open).toBe(false);
+  const pullRequests = element.props!.pullRequests;
+  element.props = { ...element.props!, pullRequests: [] };
+  await element.updateComplete;
+  expect(element.querySelector("[data-details-group]")).toBeNull();
+  expect(element.querySelector(".chat-details-session > summary")).toBeNull();
+  element.props = { ...element.props!, pullRequests };
+  await element.updateComplete;
+  expect(
+    element.querySelector<HTMLDetailsElement>('[data-details-group="pull-requests"]')?.open,
+  ).toBe(true);
+});
 it("keeps immutable creator, mutable owner and participants distinct without claiming live presence", async () => {
   const element = await mount({
     selectedSession: {
@@ -80,7 +114,7 @@ it("uses the current PR renderer and preserves CI session identity and branch di
   }
   const automation = element.querySelector("openclaw-chat-ci-automation");
   expect(automation).toHaveProperty("sessionId", "incarnation-7");
-  expect(automation).toHaveProperty("presented", false);
+  expect(automation).toHaveProperty("presented", true);
   element.querySelector<HTMLButtonElement>(".chat-pr__dismiss")!.click();
   expect(dismiss).toHaveBeenCalledWith(element.props!.pullRequests![0]);
   const branch = {
@@ -124,4 +158,66 @@ it("projects direct active children through the live observer with stable rounde
   element.presented = false;
   await element.updateComplete;
   expect(element.querySelector("openclaw-chat-subagent-activity")).toBeNull();
+});
+
+it("shows live environment and context facts while preserving disclosure intent", async () => {
+  const openFiles = vi.fn();
+  const element = await mount({
+    detailsWorkspace: { label: "project", root: "/workspace/project", branch: "feature/details" },
+    onOpenWorkspace: openFiles,
+    selectedSession: {
+      key: "agent:main:details",
+      kind: "direct",
+      execNode: "Design workstation",
+      model: "demo-model",
+      totalTokens: 64000,
+      totalTokensFresh: true,
+      contextTokens: 128000,
+      inputTokens: 1200,
+      outputTokens: 450,
+    },
+  });
+  expect(element.textContent).toContain("Design workstation");
+  expect(element.textContent).toContain("project");
+  expect(element.textContent).not.toContain("/workspace/project");
+  expect(element.textContent).toContain("demo-model");
+  expect(element.querySelector('[aria-label="Copy path"]')).not.toBeNull();
+  expect(element.querySelector('[aria-label="Copy branch name"]')).not.toBeNull();
+  const context = element.querySelector<HTMLDetailsElement>(".chat-details__context")!;
+  expect(context.querySelector("summary")?.textContent).toContain("50%");
+  context.open = true;
+  element.props = {
+    ...element.props!,
+    selectedSession: {
+      ...element.props!.selectedSession!,
+      totalTokens: 32000,
+      totalTokensFresh: false,
+    },
+  };
+  await element.updateComplete;
+  expect(context.open).toBe(true);
+  expect(context.querySelector("summary")?.textContent).toContain("~25%");
+  element
+    .querySelector<HTMLButtonElement>(".chat-details__environment .chat-details__navigation")!
+    .click();
+  expect(openFiles).toHaveBeenCalledOnce();
+  element.presented = false;
+  await element.updateComplete;
+  element
+    .querySelector<HTMLButtonElement>(".chat-details__environment .chat-details__navigation")!
+    .click();
+  expect(openFiles).toHaveBeenCalledOnce();
+});
+
+it.each([
+  "/home/private-user/.openclaw/workspace/",
+  "C:\\Users\\private-user\\.openclaw\\workspace\\",
+])("keeps an unlabelled workspace's private parent path out of Details: %s", async (root) => {
+  const element = await mount({ detailsWorkspace: { root, label: null } });
+  const environment = element.querySelector(".chat-details__environment")!;
+  expect(environment.textContent).toContain("workspace");
+  expect(environment.textContent).not.toContain(root);
+  expect(environment.textContent).not.toContain("private-user");
+  expect(environment.querySelector(".chat-details__row")?.getAttribute("title")).toBe("workspace");
+  expect(environment.querySelector('[aria-label="Copy path"]')).not.toBeNull();
 });

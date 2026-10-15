@@ -60,7 +60,11 @@ LaunchAgent registration so its KeepAlive policy can recover; the error reports
 whether the job is loaded and gives a recovery command if bootstrap also fails.
 An ambiguous `kickstart` error followed by a check that confirms the job is absent
 uses bootstrap recovery; successful activation then completes normally. A failure
-for a job that remains loaded stays visible.
+for a job that remains loaded stays visible. Bootstrap repair also accepts an
+operation-in-progress response when native inspection verifies that the job is
+loaded, without restarting a healthy Gateway. A stopped job is kickstarted before
+repair reports success. Persistent bootstrap I/O failures remain visible and
+require service diagnostics.
 
 Doctor rechecks update admission after acquiring both maintenance coordinators.
 If it must cancel before repair starts, it reverses its own stop while its native
@@ -203,6 +207,10 @@ path, rather than running `pnpm ui:build` in an unrelated project.
 Packaged installs without UI sources receive reinstall guidance instead of a
 source-build command. Doctor does not download a source checkout to repair a
 packaged installation.
+
+Doctor reports obsolete `cache/control-ui-assets` directories left by older
+installs. `openclaw doctor --fix` removes them; the update command's Doctor pass
+also runs this repair. Cleanup failures are warnings and do not abort Doctor.
 
 ## Invalid Gateway tokens
 

@@ -9,6 +9,7 @@ type IsolatedAgentRunResult = Awaited<ReturnType<RunIsolatedAgentJob>>;
 type FailureAlertConfig = NonNullable<CronServiceParams["cronConfig"]>["failureAlert"];
 type SendCronFailureAlert = NonNullable<CronServiceParams["sendCronFailureAlert"]>;
 type RunCronFailureRepair = NonNullable<CronServiceParams["runCronFailureRepair"]>;
+type RunScriptJob = NonNullable<CronServiceParams["runScriptJob"]>;
 
 export function createTelegramDelivery(): NonNullable<CronJobCreate["delivery"]> {
   return { mode: "announce", channel: "telegram", to: "19098680" };
@@ -49,6 +50,7 @@ export function setupFailureAlertSuite() {
       sendCronFailureAlert: ReturnType<typeof vi.fn<SendCronFailureAlert>>;
       runCronFailureRepair: Mock<RunCronFailureRepair>;
       runIsolatedAgentJob: ReturnType<typeof vi.fn<RunIsolatedAgentJob>>;
+      runScriptJob: ReturnType<typeof vi.fn<RunScriptJob>>;
       addJob: (name: string, overrides?: Partial<CronJobCreate>) => ReturnType<CronService["add"]>;
     }) => Promise<void>,
   ): Promise<void> {
@@ -62,6 +64,7 @@ export function setupFailureAlertSuite() {
       error: "temporary upstream error",
     };
     const runIsolatedAgentJob = vi.fn<RunIsolatedAgentJob>(async () => runResult);
+    const runScriptJob = vi.fn<RunScriptJob>(async () => runResult);
     const cron = new CronService({
       scheduler: params.scheduler,
       nowMs: () => Date.now(),
@@ -74,6 +77,7 @@ export function setupFailureAlertSuite() {
       enqueueSystemEvent,
       requestHeartbeat,
       runIsolatedAgentJob,
+      runScriptJob,
       runCronFailureRepair,
       ...(params.useFallback ? {} : { sendCronFailureAlert }),
     });
@@ -87,6 +91,7 @@ export function setupFailureAlertSuite() {
         sendCronFailureAlert,
         runCronFailureRepair,
         runIsolatedAgentJob,
+        runScriptJob,
         addJob: async (name, overrides) => await cron.add(createFailureAlertJob(name, overrides)),
       });
     } finally {

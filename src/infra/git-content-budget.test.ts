@@ -103,7 +103,17 @@ it("bounds content, snapshot, and checkout removal through cancellation while me
       runGitWorkerOperation(
         {
           type: "pull-request.branch-facts",
-          input: { root: "canceled", branch: "main", mergedHeads: [] },
+          input: {
+            root: "canceled",
+            branch: "main",
+            mergedHeads: [],
+            comparison: {
+              statsBase: null,
+              creatable: false,
+              equalPushedTips: false,
+              complete: true,
+            },
+          },
         },
         { git: gitCommands, signal: abortQueued.signal },
       ),
@@ -146,7 +156,8 @@ it("bounds content, snapshot, and checkout removal through cancellation while me
               stderr: "",
             }),
           },
-          false,
+          // Keep this slot/cancellation test independent of checkout filesystem setup.
+          true,
           "bounded",
           undefined,
           queueSignal,

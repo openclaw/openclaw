@@ -21,6 +21,19 @@ const paneRouteData = new WeakMap<
   { sessionKey: string; value: SessionChatRouteData }
 >();
 
+export function subscribeChatPageRouteDefaults(
+  gateway: Pick<ApplicationContext["gateway"], "snapshot" | "subscribe">,
+  notify: () => void,
+): () => void {
+  let hello = gateway.snapshot.hello;
+  return gateway.subscribe((snapshot) => {
+    if (snapshot.hello !== hello) {
+      hello = snapshot.hello;
+      notify();
+    }
+  });
+}
+
 export function sameChatPaneRoute(
   context: ApplicationContext,
   before: SessionChatRouteData | undefined,

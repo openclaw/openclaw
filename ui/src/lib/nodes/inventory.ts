@@ -10,8 +10,8 @@ import {
   normalizeTrimmedStringList,
   normalizeUniqueTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
-import { z } from "zod";
 import { parseWorkerCapacity } from "../../../../packages/gateway-protocol/src/worker-capacity.js";
+import { isNodeHostStats } from "../../../../src/shared/node-host-stats.js";
 import type {
   NodeListNode,
   NodeWorkerBundleStatus,
@@ -20,26 +20,6 @@ import type { PresenceEntry } from "../../api/types.ts";
 import type { PairedDevice } from "./index.ts";
 
 type NodeApprovalState = NonNullable<NodeListNode["approvalState"]>;
-
-const hostStatsSchema = z
-  .object({
-    cpuCount: z.number().int().positive(),
-    loadAverage: z
-      .tuple([z.number().nonnegative(), z.number().nonnegative(), z.number().nonnegative()])
-      .optional(),
-    memoryTotalBytes: z.number().positive(),
-    memoryFreeBytes: z.number().nonnegative(),
-    diskTotalBytes: z.number().positive().optional(),
-    diskAvailableBytes: z.number().nonnegative().optional(),
-    updatedAtMs: z.number().nonnegative(),
-  })
-  .refine(
-    (stats) =>
-      stats.memoryFreeBytes <= stats.memoryTotalBytes &&
-      (stats.diskAvailableBytes === undefined ||
-        stats.diskTotalBytes === undefined ||
-        stats.diskAvailableBytes <= stats.diskTotalBytes),
-  );
 
 type NodeListEntry = NodeListNode & {
   caps: string[];
@@ -125,7 +105,7 @@ function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null 
     pendingRequestId: normalizeOptionalString(raw.pendingRequestId),
     workerSlots: parseWorkerCapacity(raw.workerSlots) ?? undefined,
     workerBundle: parseWorkerBundleStatus(raw.workerBundle),
-    hostStats: hostStatsSchema.safeParse(raw.hostStats).data,
+    hostStats: isNodeHostStats(raw.hostStats) ? raw.hostStats : undefined,
     connected: raw.connected === true,
     paired: raw.paired === true,
     connectedAtMs: optionalNumber(raw.connectedAtMs),

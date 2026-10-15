@@ -97,5 +97,5 @@ it("bounds Doctor output without stopping accepted work and preserves split UTF-
   expect(completedWork).toBe(true);
   expect(lines[0]).toBe("🦞");
   expect(Buffer.byteLength(lines.join("\n"))).toBeLessThan(1024 * 1024 + 512);
-  expect(lines.at(-1)).toContain("Doctor output was truncated");
+  expect(lines.at(-1)).toMatch(/Doctor output was truncated.*`openclaw doctor --lint`/);
 });

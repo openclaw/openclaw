@@ -272,10 +272,20 @@ describe("gateway agent auth refresh dispatch", () => {
     const subsequentRunId = "idem-agent-auth-subsequent";
     const before = await prepareAuthDispatchAgents(affectedAgentId);
     const activeWorkBefore = getActiveGatewayRootWorkCount();
-    const siblingExecution = await observeGatewayRunExecution({
-      method: "agent",
-      runId: siblingRunId,
-    });
+    const runExecution = await observeGatewayRunExecution();
+    const preparedRuntime = await import("../agents/prepared-model-runtime.js");
+    const loadRuntime = preparedRuntime.loadPublishedGatewayReplyDispatchRuntime;
+    const waitersEntered = createDeferred();
+    let waiterCount = 0;
+    const runtimeSpy = vi
+      .spyOn(preparedRuntime, "loadPublishedGatewayReplyDispatchRuntime")
+      .mockImplementation((params) => {
+        const pending = loadRuntime(params);
+        if (params.agentId === affectedAgentId && params.abortSignal && ++waiterCount === 2) {
+          waitersEntered.resolve();
+        }
+        return pending;
+      });
     const publicationGate = createDeferred<{ agentDir: string; wrote: false }>();
     const modelsConfig = await import("../agents/models-config.js");
     const ensureOpenClawModelsJson = modelsConfig.ensureOpenClawModelsJson;
@@ -317,6 +327,15 @@ describe("gateway agent auth refresh dispatch", () => {
         before.agentDir,
       );
 
+      const sibling = sendAgentRpc(gatewaySuite.ws, { agentId: "main", runId: siblingRunId });
+      await expect(sibling.response).resolves.toMatchObject({
+        ok: true,
+        payload: { status: "accepted" },
+      });
+      await expect(sibling.final).resolves.toMatchObject({ ok: true, payload: { status: "ok" } });
+      await runExecution.waitForCompletion(siblingRunId);
+      expect(participantRecorded).toBe(true);
+      expect(agentCommandCallsFor(siblingRunId)).toHaveLength(1);
       const aborted = sendAgentRpc(gatewaySuite.ws, {
         agentId: affectedAgentId,
         runId: abortedRunId,
@@ -325,15 +344,9 @@ describe("gateway agent auth refresh dispatch", () => {
         agentId: affectedAgentId,
         runId: waitingRunId,
       });
-      const sibling = sendAgentRpc(gatewaySuite.ws, { agentId: "main", runId: siblingRunId });
-      await expect(sibling.response).resolves.toMatchObject({
-        ok: true,
-        payload: { status: "accepted" },
-      });
-      await expect(sibling.final).resolves.toMatchObject({ ok: true, payload: { status: "ok" } });
-      await siblingExecution.waitForCompletion();
-      expect(participantRecorded).toBe(true);
-      expect(agentCommandCallsFor(siblingRunId)).toHaveLength(1);
+      await expect(
+        Promise.race([waitersEntered.promise, aborted.response, waiting.response]),
+      ).resolves.toBeUndefined();
       expect(agentCommandCallsFor(abortedRunId)).toHaveLength(0);
       expect(agentCommandCallsFor(waitingRunId)).toHaveLength(0);
       expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(
@@ -348,7 +361,6 @@ describe("gateway agent auth refresh dispatch", () => {
         ok: true,
         payload: { aborted: true, runIds: [abortedRunId] },
       });
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(activeWorkBefore + 1));
       await expect(aborted.response).resolves.toMatchObject({
         ok: true,
         payload: {
@@ -358,6 +370,10 @@ describe("gateway agent auth refresh dispatch", () => {
           providerStarted: false,
         },
       });
+      await runExecution.waitForCompletion(abortedRunId);
+      expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(
+        activeWorkBefore + 1,
+      );
       expect(waiting.hasResponse()).toBe(false);
 
       publicationGate.resolve({ agentDir: before.agentDir, wrote: false });
@@ -396,8 +412,9 @@ describe("gateway agent auth refresh dispatch", () => {
       unregister();
       ensureSpy.mockRestore();
       try {
-        await siblingExecution.restore();
+        await runExecution.restore();
       } finally {
+        runtimeSpy.mockRestore();
         unsubscribeParticipant();
       }
     }

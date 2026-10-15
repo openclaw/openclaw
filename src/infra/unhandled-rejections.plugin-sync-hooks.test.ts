@@ -15,6 +15,7 @@ function createToolResultMessage(text: string, details?: Record<string, unknown>
   return {
     role: "toolResult",
     toolCallId: "call_1",
+    toolName: "probe",
     content: [{ type: "text", text }],
     isError: false,
     ...(details ? { details } : {}),
@@ -193,5 +194,36 @@ describe("sync-only plugin hooks", () => {
     );
     expect(logger.warn).not.toHaveBeenCalled();
     expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it.each(
+    (["tool_result_persist", "before_message_write"] as const).flatMap((hookName) =>
+      ["not-a-message", {}].map((message) => ({ hookName, message })),
+    ),
+  )("logs and ignores $hookName replacement $message", ({ hookName, message }) => {
+    const logger = createLogger();
+    const originalMessage = createToolResultMessage("original");
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName,
+          pluginId: "malformed-sync-hook",
+          handler: () => ({ message }),
+        },
+      ]),
+      { logger },
+    );
+
+    const result =
+      hookName === "tool_result_persist"
+        ? runner.runToolResultPersist({ message: originalMessage }, {})
+        : runner.runBeforeMessageWrite({ message: originalMessage }, {});
+
+    expect(result).toEqual(
+      hookName === "tool_result_persist" ? { message: originalMessage } : undefined,
+    );
+    expect(logger.error).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(`[hooks] ${hookName} handler from malformed-sync-hook failed:`),
+    );
   });
 });

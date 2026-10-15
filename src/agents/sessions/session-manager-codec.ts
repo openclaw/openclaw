@@ -1,9 +1,10 @@
-import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildSessionContext as buildCoreSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
+import { stripCompactionReplayCheckpointInPlace } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { MIN_READABLE_SESSION_VERSION } from "../../config/sessions/version.js";
 import { logWarn } from "../../logger.js";
+import { projectModelContextMessages } from "../../shared/model-context-message.js";
 import type { SessionTreeEntry as CoreSessionTreeEntry } from "../runtime/index.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import type {
@@ -11,6 +12,7 @@ import type {
   FileEntry,
   SessionContext,
   SessionEntry,
+  SessionHeader,
 } from "./session-manager-types.js";
 
 export {
@@ -127,6 +129,24 @@ export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEnt
     (entry) => entry.type === "reset" || entry.type === "compaction",
   );
   return boundary?.type === "compaction" ? boundary : null;
+}
+
+export function cloneSessionModelContextEntries(
+  header: SessionHeader | null,
+  branch: readonly SessionEntry[],
+): FileEntry[] {
+  // Project storage-only payloads before cloning, while isolating mutable manager entries.
+  const events: FileEntry[] = [...(header ? [header] : []), ...branch];
+  for (let index = 0; index < events.length; index++) {
+    const entry = events[index]!;
+    if (entry.type === "message") {
+      const message = projectModelContextMessages([entry.message])[0]!;
+      if (message !== entry.message) {
+        events[index] = { ...entry, message };
+      }
+    }
+  }
+  return structuredClone(events);
 }
 
 export function buildSessionContext(

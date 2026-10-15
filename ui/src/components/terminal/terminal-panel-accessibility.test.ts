@@ -8,21 +8,25 @@ import { TERMINAL_PANEL_DOCK_BOTTOM_EVENT } from "../panel-toggle-contract.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import {
   createTerminalController,
+  createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
-import { OpenClawTerminalPanel } from "./terminal-panel.ts";
+import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
 const createGhosttyTerminalMock: CreateGhosttyTerminalMock = vi.fn();
 const TERMINAL_PANEL_ELEMENT_NAME = defineTestTerminalPanelElement(createGhosttyTerminalMock);
 
-function createPanel(client: TerminalGatewayClient) {
-  const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+function createPanel(client: TerminalGatewayClient, embedded = false) {
+  const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
   panel.client = client;
   panel.available = true;
+  panel.embedded = embedded;
   document.body.append(panel);
-  panel.toggle();
+  if (!embedded) {
+    panel.toggle();
+  }
   return panel;
 }
 
@@ -48,26 +52,10 @@ describe("OpenClawTerminalPanel accessibility", () => {
     await i18n.setLocale("en");
   });
 
-  it("labels the placement switcher with the alternative destinations only", async () => {
-    const panel = createPanel(createPickerClient());
-    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-actions")).not.toBeNull());
-
-    // The occupied dock (bottom by default) has nowhere to move to, so its
-    // button drops out of the cluster instead of rendering a pressed state.
-    const switcher = panel.renderRoot.querySelector('.tp-actions [role="group"]');
-    expect(switcher?.getAttribute("aria-label")).toBe("Terminal panel position");
-    expect(
-      ["Dock to right", "Fill main content area"].every((label) =>
-        switcher?.querySelector(`[aria-label="${label}"]`),
-      ),
-    ).toBe(true);
-    expect(switcher?.querySelector('[aria-label="Dock to bottom"]')).toBeNull();
-  });
-
   it("offers bottom docking from an embedded terminal", async () => {
     const event = vi.fn();
     window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, event);
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
     panel.client = createPickerClient();
     panel.available = true;
     panel.agentId = "main";
@@ -122,6 +110,7 @@ describe("OpenClawTerminalPanel accessibility", () => {
       panel.closeTerminalPanel();
     }
     document.body.replaceChildren();
+    await Promise.resolve();
     localStorage.clear();
     sessionStorage.clear();
     createGhosttyTerminalMock.mockReset();
@@ -130,38 +119,34 @@ describe("OpenClawTerminalPanel accessibility", () => {
     await i18n.setLocale("en");
   });
 
-  it("manages focus and dismissal for the terminal session picker", async () => {
-    const panel = createPanel(createPickerClient());
-    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-actions")).not.toBeNull());
+  it("keeps tab and session-picker references inside each split terminal", async () => {
+    const ids: string[] = [];
+    for (let index = 0; index < 2; index += 1) {
+      const panel = createPanel(createPickerClient(), true);
+      await waitForFast(() =>
+        expect(
+          panel.renderRoot.querySelector('.tabstrip-tab[aria-selected="true"]'),
+        ).not.toBeNull(),
+      );
+      const viewport = panel.renderRoot.querySelector(".tp-viewport")!;
+      const selectedTab = panel.renderRoot.querySelector('.tabstrip-tab[aria-selected="true"]')!;
+      expect(document.getElementById(selectedTab.getAttribute("aria-controls")!)).toBe(viewport);
+      expect(document.getElementById(viewport.getAttribute("aria-labelledby")!)).toBe(selectedTab);
 
-    const trigger = panel.renderRoot.querySelector<HTMLButtonElement>(
-      '[aria-label="Terminal sessions"]',
-    );
-    expect(trigger?.getAttribute("aria-haspopup")).toBe("dialog");
-    expect(trigger?.getAttribute("aria-controls")).toBe("terminal-session-picker-dialog");
-
-    trigger?.click();
-    await waitForFast(() =>
-      expect(panel.shadowRoot?.activeElement).toBe(
-        panel.renderRoot.querySelector(".tp-session-refresh"),
-      ),
-    );
-    expect(panel.renderRoot.querySelector(".tp-session-menu")?.getAttribute("role")).toBe("dialog");
-
-    panel.renderRoot
-      .querySelector(".tp-session-refresh")
-      ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await panel.updateComplete;
-    expect(panel.renderRoot.querySelector(".tp-session-menu")).toBeNull();
-    expect(panel.shadowRoot?.activeElement).toBe(trigger);
-
-    trigger?.click();
-    await waitForFast(() =>
-      expect(panel.renderRoot.querySelector(".tp-session-menu")).not.toBeNull(),
-    );
-    document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, composed: true }));
-    await panel.updateComplete;
-    expect(panel.renderRoot.querySelector(".tp-session-menu")).toBeNull();
+      const trigger = panel.renderRoot.querySelector<HTMLButtonElement>(
+        '[aria-label="Terminal sessions"]',
+      )!;
+      trigger.click();
+      await waitForFast(() =>
+        expect(panel.renderRoot.querySelector(".tp-session-menu")).not.toBeNull(),
+      );
+      const menu = panel.renderRoot.querySelector(".tp-session-menu")!;
+      expect(document.getElementById(trigger.getAttribute("aria-controls")!)).toBe(menu);
+      ids.push(viewport.id, selectedTab.id, menu.id);
+      menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await panel.updateComplete;
+    }
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it("keeps trigger focus inside the picker and dismisses after focus leaves", async () => {
@@ -186,9 +171,7 @@ describe("OpenClawTerminalPanel accessibility", () => {
 
     trigger.click();
     await waitForFast(() =>
-      expect(panel.shadowRoot?.activeElement).toBe(
-        panel.renderRoot.querySelector(".tp-session-refresh"),
-      ),
+      expect(document.activeElement).toBe(panel.renderRoot.querySelector(".tp-session-refresh")),
     );
     trigger.focus();
     await Promise.resolve();

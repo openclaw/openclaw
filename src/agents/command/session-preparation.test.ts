@@ -21,9 +21,14 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
+import { persistAgentSession } from "./attempt-execution.shared.js";
 import { prepareCommandConversationContext } from "./conversation-context.js";
-import { prepareEmbeddedSessionState } from "./session-preparation.js";
+import {
+  prepareCommandSessionRecoveryEntry,
+  prepareEmbeddedSessionState,
+} from "./session-preparation.js";
 
 vi.mock("../embedded-agent-runner/runs.js", () => ({
   resolveEmbeddedAgentSessionProgressState: () => undefined,
@@ -39,15 +44,161 @@ vi.mock("../../skills/discovery/agent-filter.js", () => ({
   resolveEffectiveAgentSkillFilter: () => undefined,
 }));
 vi.mock("./attempt-execution.shared.js", () => ({ persistAgentSession: vi.fn() }));
+// mock-isolation: Session-preparation tests own their skill snapshot and exec eligibility without host storage.
 vi.mock("./runtime-loaders.js", () => ({
   loadSkillsRuntime: async () => ({
     getRemoteSkillEligibility: () => ({}),
-    resolveReusableWorkspaceSkillSnapshot: () => ({ snapshot: undefined, shouldRefresh: false }),
+    resolveReusableWorkspaceSkillSnapshot: skillSnapshot,
   }),
   loadExecDefaultsRuntime: async () => ({
-    resolveNodeExecEligibility: () => ({ canExec: false }),
+    resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
   }),
 }));
+
+const { skillSnapshot } = vi.hoisted(() => ({
+  skillSnapshot: vi.fn(() => ({
+    snapshot: undefined as SessionEntry["skillsSnapshot"],
+    shouldRefresh: false,
+  })),
+}));
+
+it.each([
+  { refresh: true, skipTouch: false },
+  { refresh: true, skipTouch: true },
+  { refresh: false, skipTouch: false },
+  { refresh: false, skipTouch: true },
+])(
+  "prepares session metadata together (refresh=$refresh, skipTouch=$skipTouch)",
+  async (testCase) => {
+    const sessionKey = "agent:main:prepare-metadata";
+    const runId = "prepare-metadata";
+    const initial: SessionEntry = {
+      sessionId: "metadata-session",
+      updatedAt: 1,
+      lastInteractionAt: 1,
+      agentStatus: { note: "busy", expiresAt: 10 },
+    };
+    const snapshot = { prompt: "skill instructions", skills: [], version: 1 };
+    const store = { [sessionKey]: initial };
+    const persist = vi.mocked(persistAgentSession);
+    persist.mockImplementation(async ({ entry }) => {
+      store[sessionKey] = entry;
+      return entry;
+    });
+    skillSnapshot.mockReturnValue({
+      snapshot: testCase.refresh ? snapshot : undefined,
+      shouldRefresh: testCase.refresh,
+    });
+    try {
+      const prepared = await prepareEmbeddedSessionState({
+        cfg: {},
+        opts: { message: "hello", skipInitialSessionTouch: testCase.skipTouch },
+        sessionEntry: initial,
+        sessionStore: store,
+        sessionKey,
+        sessionId: initial.sessionId,
+        storePath: "/unused/command.sqlite",
+        sessionAgentId: "main",
+        lifecycleGeneration: getAgentRunLifecycleGeneration(),
+        runId,
+        executionWorkspaceDir: "/workspace",
+        watchSkills: false,
+        isNewSession: false,
+        isSubagentLaneTurn: true,
+        suppressVisibleSessionEffects: false,
+        sessionStateActor: { actorType: "human" },
+      });
+      expect(prepared.sessionEntry).toMatchObject({
+        sessionId: "metadata-session",
+        lastInteractionAt: testCase.skipTouch ? 1 : expect.any(Number),
+      });
+      expect(prepared.sessionEntry?.skillsSnapshot).toEqual(
+        testCase.refresh ? snapshot : undefined,
+      );
+      expect(prepared.sessionEntry?.agentStatus).toEqual(
+        testCase.skipTouch ? { note: "busy", expiresAt: 10 } : undefined,
+      );
+      expect(persist).toHaveBeenCalledTimes(testCase.refresh || !testCase.skipTouch ? 1 : 0);
+    } finally {
+      persist.mockReset();
+      skillSnapshot.mockReturnValue({ snapshot: undefined, shouldRefresh: false });
+      clearAgentRunContext(runId);
+    }
+  },
+);
+
+it.each(["subagent_settle", "subagent_announce", "sessions_send"])(
+  "retains original operator recovery custody only for the exact requester settle source: %s",
+  (sourceTool) => {
+    const runId = "announce:requester-settle:main:agent:main:main:child-run";
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "original-operator",
+      scopes: ["operator.read"],
+      assertCurrent() {},
+      recoverySnapshot: {
+        profileId: "original-operator",
+        scopes: ["operator.read"],
+        assignedRole: null,
+        githubLogin: null,
+        grant: null,
+        aliasBindingIds: [],
+        authPolicy: {
+          generation: "",
+          grantGeneration: "original-grant",
+          role: "operator",
+          authMethod: "token",
+        },
+        controlUiAdmin: false,
+        localOperator: false,
+        sourceIngress: "control-ui",
+      },
+    });
+    const { nextEntry } = prepareCommandSessionRecoveryEntry({
+      entry: {
+        sessionId: "requester-session",
+        lifecycleRevision: "requester-revision",
+        updatedAt: 1,
+      },
+      sessionId: "requester-session",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      runId,
+      now: 2,
+      lifecycleGeneration: "current-generation",
+      isSessionRollover: false,
+      opts: {
+        message: "Child completed",
+        operatorAuthority,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceTool,
+          sourceChannel: "internal",
+          sourceSessionKey: "agent:main:subagent:child",
+        },
+      },
+    });
+    if (sourceTool !== "subagent_settle") {
+      expect(nextEntry.restartRecoveryOperatorSource).toBeUndefined();
+      return;
+    }
+    expect(nextEntry).toMatchObject({
+      restartRecoveryDeliverySourceRunId: runId,
+      restartRecoverySourceIngress: "internal",
+      restartRecoveryOperatorSource: {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "requester-session",
+        lifecycleRevision: "requester-revision",
+        sourceRunId: runId,
+        snapshot: {
+          profileId: "original-operator",
+          scopes: ["operator.read"],
+          controlUiAdmin: false,
+        },
+      },
+    });
+  },
+);
 
 it.each([
   { internal: false, coordination: false },

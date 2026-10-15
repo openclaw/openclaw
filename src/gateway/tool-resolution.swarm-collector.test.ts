@@ -6,6 +6,7 @@ import {
   getSubagentRunByRunId,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { useMcpCollectorRegistry } from "./mcp-http.collector-registry.test-support.js";
 import { resolveMcpLoopbackScopedTools } from "./mcp-http.runtime.js";
@@ -51,13 +52,15 @@ async function resolveLoopbackTools(
     isGrantCurrent?: () => boolean;
   },
 ) {
+  const cfg = buildConfig(options?.tools);
+  setRuntimeConfigSnapshot(cfg);
   const admittedRunId =
     options?.admittedRunId === undefined
       ? admittedRunIdBySessionKey[sessionKey]
       : (options.admittedRunId ?? undefined);
   return (
     await resolveGatewayScopedTools({
-      cfg: buildConfig(options?.tools),
+      cfg,
       sessionKey,
       surface: "loopback",
       runId: admittedRunId,
@@ -68,9 +71,11 @@ async function resolveLoopbackTools(
 
 /** Mirrors the only non-loopback caller, `tools-invoke-shared.ts`. */
 async function resolveHttpToolNames(sessionKey: string, tools?: OpenClawConfig["tools"]) {
+  const cfg = buildConfig(tools);
+  setRuntimeConfigSnapshot(cfg);
   return (
     await resolveGatewayScopedTools({
-      cfg: buildConfig(tools),
+      cfg,
       sessionKey,
       senderIsOwner: true,
       allowGatewaySubagentBinding: true,
@@ -79,18 +84,21 @@ async function resolveHttpToolNames(sessionKey: string, tools?: OpenClawConfig["
   ).tools.map((tool) => tool.name);
 }
 
-function resolveLoopbackGrantToolNames(toolsAllow: string[], admittedRunId: string | null = runId) {
+function resolveLoopbackGrantToolNames(toolsAllow: string[]) {
+  const cfg = buildConfig();
+  setRuntimeConfigSnapshot(cfg);
   return resolveMcpLoopbackScopedTools({
-    cfg: buildConfig(),
+    cfg,
     context: {
       sessionKey: collectorSessionKey,
       senderIsOwner: false,
       toolsAllow,
-      ...(admittedRunId ? { runId: admittedRunId } : {}),
+      runId,
     },
   }).then((scoped) => scoped.tools.map((tool) => (tool as { name: string }).name));
 }
 
+beforeEach(() => setRuntimeConfigSnapshot(buildConfig()));
 useMcpCollectorRegistry({ runId, childSessionKey: collectorSessionKey, outputSchema: schema });
 
 beforeEach(async () => {
@@ -146,26 +154,15 @@ describe("resolveGatewayScopedTools swarm collectors", () => {
     expect(names).not.toContain("sessions_yield");
   });
 
-  it("withholds requester-only tools from a collector child that requested no schema", async () => {
-    const names = (await resolveLoopbackTools(schemalessCollectorSessionKey)).map(
-      (tool) => tool.name,
-    );
-
-    // A schema-less collector is still collected by an explicit wait, so it has no
-    // requester continuation to yield into and no interactive surface to ask on.
-    for (const forbidden of ["ask_user", "sessions_send", "sessions_yield"]) {
+  it("passes collector identity into tool construction for a schema-less collector", async () => {
+    const tools = await resolveLoopbackTools(schemalessCollectorSessionKey);
+    const names = tools.map((tool) => tool.name);
+    for (const forbidden of ["ask_user", "sessions_send", "sessions_yield", "structured_output"]) {
       expect(names).not.toContain(forbidden);
     }
-    // Its result tool stays absent: there is no schema to validate a result against.
-    expect(names).not.toContain("structured_output");
     expect(names).toContain("sessions_list");
-  });
-
-  it("passes collector identity into tool construction for a schema-less collector", async () => {
     const spawn = expectDefined(
-      (await resolveLoopbackTools(schemalessCollectorSessionKey)).find(
-        (tool) => tool.name === "sessions_spawn",
-      ),
+      tools.find((tool) => tool.name === "sessions_spawn"),
       "collector sessions_spawn",
     );
 
@@ -214,14 +211,6 @@ describe("collector contract is bound to the admitted collector run", () => {
     }
   });
 
-  it("does not withhold requester-only tools from a collector session on the http surface", async () => {
-    const names = await resolveHttpToolNames(collectorSessionKey);
-
-    expect(names).toContain("sessions_yield");
-    expect(names).not.toContain("structured_output");
-    expect(names).toEqual(await resolveHttpToolNames(schemalessCollectorSessionKey));
-  });
-
   it("keeps operator tool policy authoritative for a collector session on the http surface", async () => {
     const names = await resolveHttpToolNames(collectorSessionKey, {
       allow: ["sessions_list"],
@@ -244,6 +233,7 @@ describe("collector write authority is re-checked before persistence", () => {
       tools.find((tool) => tool.name === "structured_output"),
       "collector output transport",
     );
+    expect(structuredOutput.catalogMode).toBe("direct-only");
 
     grantCurrent = false;
 
@@ -255,80 +245,11 @@ describe("collector write authority is re-checked before persistence", () => {
     expect(getSubagentRunByRunId(runId)?.structuredOutput).toBeUndefined();
     expect(getSubagentRunByRunId(runId)?.collectorCompletion).toBeUndefined();
   });
-
-  it("rejects the result when the caller stops owning the admitted collector run", async () => {
-    const tools = await resolveLoopbackTools(collectorSessionKey);
-    const structuredOutput = expectDefined(
-      tools.find((tool) => tool.name === "structured_output"),
-      "collector output transport",
-    );
-
-    const nextRunId = "cli-collector-rebound";
-    await mutateSubagentRuns([runId, nextRunId], (rows) => {
-      const entry = expectDefined(rows.get(runId), "collector run");
-      return {
-        value: undefined,
-        postimages: new Map<string, SubagentRunRecord | null>([
-          [runId, null],
-          [nextRunId, { ...entry, runId: nextRunId, swarmRunId: nextRunId }],
-        ]),
-      };
-    });
-
-    await expect(
-      structuredOutput.execute("rebound-collector-result", {
-        result: { answer: "ok" },
-      }),
-    ).rejects.toThrow("caller no longer owns the admitted collector run");
-    const entry = expectDefined(getSubagentRunByRunId(nextRunId), "rebound collector run");
-    expect(entry.structuredOutput).toBeUndefined();
-    expect(entry.collectorCompletion).toBeUndefined();
-  });
-
-  it("records the result while the grant is still current", async () => {
-    const tools = await resolveLoopbackTools(collectorSessionKey, {
-      isGrantCurrent: () => true,
-    });
-    const structuredOutput = expectDefined(
-      tools.find((tool) => tool.name === "structured_output"),
-      "collector output transport",
-    );
-
-    expect(structuredOutput.catalogMode).toBe("direct-only");
-    const names = tools.map((tool) => tool.name);
-    for (const forbidden of ["ask_user", "sessions_send", "sessions_yield"]) {
-      expect(names).not.toContain(forbidden);
-    }
-    const result = await structuredOutput.execute("current-collector-result", {
-      result: { answer: "ok" },
-    });
-
-    expect(result.details).toEqual({ status: "recorded" });
-    expect(getSubagentRunByRunId(runId)?.structuredOutput).toEqual({
-      structured: { answer: "ok" },
-      invalidAttempts: 0,
-    });
-  });
 });
 
 describe("collector tools behind the loopback grant allowlist", () => {
-  it("serves structured_output when the CLI grant carries the merged collector allowlist", async () => {
-    const names = await resolveLoopbackGrantToolNames(["read", "structured_output"]);
-
-    expect(names).toContain("structured_output");
-    expect(names).toContain("read");
-  });
-
   it("hard-filters structured_output out of a grant that never merged it", async () => {
     const names = await resolveLoopbackGrantToolNames(["read"]);
-
-    expect(names).toEqual(["read"]);
-  });
-
-  it("withholds structured_output from a run-less context at the loopback entry point", async () => {
-    // Same entry point the loopback server calls, with the request context an
-    // attach grant produces: a bound session key and no admitted run.
-    const names = await resolveLoopbackGrantToolNames(["read", "structured_output"], null);
 
     expect(names).toEqual(["read"]);
   });

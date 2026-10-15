@@ -1,6 +1,7 @@
 // Msteams tests cover reply stream controller plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { teamsQuotedTableReply } from "./format.test-fixtures.js";
+import { flattenInformativeStatus } from "./informative-status.js";
 import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
 
 type StreamCloseResult = { id: string } | undefined;
@@ -173,7 +174,7 @@ describe("createTeamsReplyStreamController", () => {
     expect(stream.close).not.toHaveBeenCalled();
   });
 
-  it("preserves held payload order after replacement emit fails", async () => {
+  it("preserves held payload order after replacement close fails", async () => {
     const stream = makeAcknowledgedStream();
     const ctrl = makeController({ stream });
 
@@ -181,15 +182,13 @@ describe("createTeamsReplyStreamController", () => {
     stream.acknowledge("abcde");
     ctrl.onPartialReply({ text: "provider replacement" });
     expect(ctrl.preparePayload({ mediaUrl: "https://example.test/before.png" })).toBeUndefined();
-    stream.emit.mockImplementationOnce(() => {
-      throw new Error("network failure");
-    });
+    stream.close.mockRejectedValueOnce(new Error("network failure"));
     expect(ctrl.preparePayload({ text: "provider replacement" })).toBeUndefined();
     expect(ctrl.preparePayload({ text: "later payload" })).toBeUndefined();
 
     await expect(ctrl.finalize()).resolves.toEqual({
       visibleReplySent: true,
-      messageId: "stream-final",
+      messageId: "stream-acknowledged",
       content: "abcde",
       logicalContent: "provider replacement\nlater payload",
       postNativePayloads: [
@@ -306,25 +305,6 @@ describe("createTeamsReplyStreamController", () => {
     expect(stream.update).not.toHaveBeenCalled();
   });
 
-  it("falls back to normal delivery when progress final streaming fails", () => {
-    const stream = makeStream();
-    stream.emit.mockImplementation(() => {
-      throw new Error("progress final failed");
-    });
-    const ctrl = createTeamsReplyStreamController({
-      allowProviderPreview: true,
-      conversationType: "personal",
-      context: makeContext(stream),
-      feedbackLoopEnabled: false,
-      log: { debug: vi.fn() } as never,
-      msteamsConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } } as never,
-    });
-
-    expect(ctrl.preparePayload({ text: "complete final answer" })).toEqual({
-      text: "complete final answer",
-    });
-  });
-
   describe("StreamCancelledError handling", () => {
     function makeCancelError(): Error {
       const err = new Error("stream canceled");
@@ -372,27 +352,25 @@ describe("createTeamsReplyStreamController", () => {
       });
     });
 
-    it("does not trim an independent later payload using a previous stream acknowledgement", () => {
+    it("does not trim an independent later payload using a previous stream acknowledgement", async () => {
       const stream = makeAcknowledgedStream();
       const ctrl = makeController({ stream });
 
       ctrl.onPartialReply({ text: "hello" });
       stream.acknowledge("hello");
-      stream.emit.mockImplementation(() => {
-        throw new Error("network failure");
-      });
+      stream.close.mockRejectedValueOnce(new Error("network failure"));
       ctrl.onPartialReply({ text: "hello world" });
 
-      expect(ctrl.preparePayload({ text: "hello world" })).toEqual({
-        text: " world",
+      expect(ctrl.preparePayload({ text: "hello world" })).toBeUndefined();
+      await expect(ctrl.finalize()).resolves.toMatchObject({
+        fallbackPayload: { text: " world" },
       });
       expect(ctrl.preparePayload({ text: "hello again" })).toEqual({
         text: "hello again",
       });
-      expect(stream.events.off).not.toHaveBeenCalled();
     });
 
-    it("ignores unrelated, informative, and out-of-order stream acknowledgements", () => {
+    it("ignores unrelated, informative, and out-of-order stream acknowledgements", async () => {
       const stream = makeAcknowledgedStream();
       const ctrl = makeController({ stream });
 
@@ -403,25 +381,22 @@ describe("createTeamsReplyStreamController", () => {
       stream.acknowledge("he");
       stream.acknowledge("hello", { id: "different-stream" });
       stream.acknowledge("h");
-      stream.emit.mockImplementation(() => {
-        throw new Error("network failure");
-      });
+      stream.close.mockRejectedValueOnce(new Error("network failure"));
       ctrl.onPartialReply({ text: "hello world" });
 
-      expect(ctrl.preparePayload({ text: "hello world" })).toEqual({
-        text: "llo world",
+      expect(ctrl.preparePayload({ text: "hello world" })).toBeUndefined();
+      await expect(ctrl.finalize()).resolves.toMatchObject({
+        fallbackPayload: { text: "llo world" },
       });
     });
 
-    it("retains media when Teams already acknowledged all fallback text", () => {
+    it("retains media when Teams already acknowledged all fallback text", async () => {
       const stream = makeAcknowledgedStream();
       const ctrl = makeController({ stream });
 
       ctrl.onPartialReply({ text: "hello" });
       stream.acknowledge("hello");
-      stream.emit.mockImplementation(() => {
-        throw new Error("network failure");
-      });
+      stream.close.mockRejectedValueOnce(new Error("network failure"));
       ctrl.onPartialReply({ text: "hello world" });
 
       expect(
@@ -430,6 +405,7 @@ describe("createTeamsReplyStreamController", () => {
         text: undefined,
         mediaUrl: "https://example.com/image.png",
       });
+      expect((await ctrl.finalize()).fallbackPayload).toBeUndefined();
     });
 
     it("treats post-cancel stream as inactive without further emit attempts", () => {
@@ -446,5 +422,24 @@ describe("createTeamsReplyStreamController", () => {
       expect(stream.emit).toHaveBeenCalledTimes(1);
       expect(ctrl.isStreamActive()).toBe(false);
     });
+  });
+});
+
+describe("flattenInformativeStatus", () => {
+  const bytes = (v: string) => new TextEncoder().encode(v).length;
+
+  it("keeps the newest rows within 1000 characters", () => {
+    const rows = Array.from({ length: 40 }, (_, i) => `row ${i} ${"x".repeat(40)}`);
+    const out = flattenInformativeStatus(rows.join("\n"));
+    expect(out.length).toBeLessThanOrEqual(1000);
+    expect(out.startsWith("…")).toBe(true);
+    expect(out.endsWith(rows.at(-1)!)).toBe(true);
+  });
+
+  it("enforces the byte limit without splitting a joined emoji", () => {
+    const grapheme = "👩🏽‍💻";
+    const out = flattenInformativeStatus(grapheme.repeat(200));
+    expect(out).toBe(`…${grapheme.repeat(68)}`);
+    expect(bytes(out)).toBe(1023);
   });
 });

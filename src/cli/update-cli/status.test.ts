@@ -14,6 +14,7 @@ import {
   writeSessionSqliteMigrationManifest,
 } from "../../infra/session-sqlite-migration-manifest.js";
 import * as updateCheck from "../../infra/update-check.js";
+import * as immutableInspection from "../../infra/update-immutable-inspection.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   createUpdateRun,
@@ -105,7 +106,7 @@ describe("update status installation replacement history", () => {
         "gateway.installation_replaced: on-disk 2026.9.5 differs from running 2026.9.4";
       const completedAtMs = Date.UTC(2026, 8, 19, 12);
       const bootId = recordGatewayBootStart(process.env, completedAtMs - 1_000);
-      completeGatewayBootLifecycle(
+      await completeGatewayBootLifecycle(
         bootId,
         { outcome: "planned_restart", reason },
         process.env,
@@ -197,34 +198,54 @@ describe("update status service definition facts", () => {
   );
 });
 
-it("reports prepared immutable generations without offering package updates", async () => {
-  const immutable = {
-    root: "/opt/openclaw",
-    currentSha: "a".repeat(40),
-    currentPath: `/opt/openclaw/releases/${"a".repeat(40)}`,
-    prepared: {
-      sha: "b".repeat(40),
-      path: `/opt/openclaw/releases/${"b".repeat(40)}`,
-      buildDigest: "c".repeat(64),
-      preparedAtMs: 123,
-    },
-  };
-  vi.spyOn(updateCheck, "checkUpdateStatus").mockResolvedValue({
-    root: immutable.currentPath,
-    installKind: "immutable",
-    packageManager: "unknown",
-    immutable,
-    registry: { latestVersion: "99.0.0" },
-  });
+it.each([false, true])(
+  "reports immutable coverage without offering package updates (JSON: %s)",
+  async (json) => {
+    const immutable = {
+      root: "/opt/openclaw",
+      currentSha: "a".repeat(40),
+      currentPath: `/opt/openclaw/releases/${"a".repeat(40)}`,
+      prepared: {
+        sha: "b".repeat(40),
+        path: `/opt/openclaw/releases/${"b".repeat(40)}`,
+        buildDigest: "c".repeat(64),
+        preparedAtMs: 123,
+      },
+    };
+    vi.spyOn(updateCheck, "checkUpdateStatus").mockResolvedValue({
+      root: immutable.currentPath,
+      installKind: "immutable",
+      packageManager: "unknown",
+      immutable,
+      registry: { latestVersion: "99.0.0" },
+    });
+    const coverage: immutableInspection.ImmutableUpdateCoverage = {
+      target: {
+        sha: immutable.prepared.sha,
+        preparation: "prepared",
+        schemaVersions: { state: 20, agent: 25 },
+      },
+      unsupportedReasons: [
+        "Immutable activation does not support the agent schema crossing 24 → 25.",
+      ],
+      warnings: [],
+    };
+    vi.spyOn(immutableInspection, "inspectImmutableUpdateCoverage").mockResolvedValue(coverage);
 
-  await updateStatusCommand({});
-  const output = runtime.log.mock.calls.flat().join("\n");
-  expect(output).toContain("immutable (/opt/openclaw)");
-  expect(output).toContain("aaaaaaaaaaaa");
-  expect(output).toContain("prepared bbbbbbbbbbbb");
-  expect(output).toContain("activation unavailable");
-  expect(output).not.toContain("npm update");
-});
+    await updateStatusCommand({ json });
+    if (json) {
+      expect(runtime.writeJson.mock.lastCall?.[0]).toMatchObject({ immutableCoverage: coverage });
+      return;
+    }
+    const output = runtime.log.mock.calls.flat().join("\n");
+    expect(output).toContain("immutable (/opt/openclaw)");
+    expect(output).toContain("aaaaaaaaaaaa");
+    expect(output).toContain("prepared bbbbbbbbbbbb");
+    expect(output).toContain("activation unavailable");
+    expect(output).toContain("agent schema crossing 24 → 25");
+    expect(output).not.toContain("npm update");
+  },
+);
 
 it.each([
   { outcome: "succeeded", label: "accepted", pending: true, verified: true },
@@ -683,29 +704,36 @@ describe("update status abandoned-run reporting", () => {
     expect(() => listUpdateRuns({ limit: 1 })).toThrow();
   });
 
-  it("reports abandoned history read-only when its driver died", async () => {
-    const now = Date.now();
-    const lastActivity = now - ABANDONED_UPDATE_RUN_MS - 10;
-    const driver = readUpdateRunDriver();
-    if (!driver) {
-      throw new Error("Test process identity is unavailable");
-    }
-    vi.spyOn(Date, "now").mockReturnValue(lastActivity);
-    const created = createUpdateRun({
-      trigger: "control-ui",
-      before: { version: "2026.9.2" },
-      origin: {
-        driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) },
-      },
-    });
-    const recorded = recordUpdateRunPhase(created.runId, "staging");
-    vi.mocked(Date.now).mockReturnValue(now);
-    await updateStatusCommand({});
-    expect(getUpdateRun(created.runId)).toEqual(recorded);
-    const output = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
-    expect(output).not.toContain("update in progress:");
-    expect(output).toContain("Abandoned update detected;");
-    expect(output).toContain("openclaw update repair");
-    expect(output).not.toContain("update failed:");
-  });
+  it.each([undefined, "work"])(
+    "reports abandoned history read-only when its driver died (profile=%s)",
+    async (profile) => {
+      vi.stubEnv("OPENCLAW_PROFILE", profile);
+      const now = Date.now();
+      const lastActivity = now - ABANDONED_UPDATE_RUN_MS - 10;
+      const driver = readUpdateRunDriver();
+      if (!driver) {
+        throw new Error("Test process identity is unavailable");
+      }
+      vi.spyOn(Date, "now").mockReturnValue(lastActivity);
+      const created = createUpdateRun({
+        trigger: "control-ui",
+        before: { version: "2026.9.2" },
+        origin: {
+          driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) },
+        },
+      });
+      const recorded = recordUpdateRunPhase(created.runId, "staging");
+      vi.mocked(Date.now).mockReturnValue(now);
+      await updateStatusCommand({});
+      expect(getUpdateRun(created.runId)).toEqual(recorded);
+      const output = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
+      expect(output).not.toContain("update in progress:");
+      expect(output).toContain("Abandoned update detected;");
+      expect(output).toContain(
+        `Stop the Gateway first (openclaw${profile ? " --profile work" : ""} gateway stop)`,
+      );
+      expect(output).toContain(`openclaw${profile ? " --profile work" : ""} update repair`);
+      expect(output).not.toContain("update failed:");
+    },
+  );
 });

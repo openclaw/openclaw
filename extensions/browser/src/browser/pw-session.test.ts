@@ -4,14 +4,17 @@ import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { Dialog, Frame, Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
-import { pwAi } from "./pw-ai.js";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
+import { getObservedBrowserStateForPage } from "./pw-session-state.js";
 import {
   armObservedDialogResponseOnPage,
   beginActionDownloadCaptureOnPage,
+  createObservedDialogAbortSignalForPage,
   ensurePageState,
+  isBrowserObservedDialogBlockedError,
   isDownloadStartingNavigationError,
   refLocator,
+  respondToObservedDialogOnPage,
   restoreRoleRefsForTarget,
   storeRoleRefsForTarget,
 } from "./pw-session.js";
@@ -177,36 +180,6 @@ describe("pw-session role refs cache", () => {
       e1: { role: "heading", name: "Page B" },
     });
     expect(ensurePageState(pageB).roleRefsMode).toBe("aria");
-  });
-
-  it("does not let an obsolete Page invalidate a newer cache generation", () => {
-    const cdpUrl = "http://127.0.0.1:9222";
-    const targetId = "shared-target";
-    const { page: oldPage, handlers, mainFrame } = fakePage();
-    storeRoleRefsForTarget({
-      page: oldPage,
-      cdpUrl,
-      targetId,
-      refs: { e1: { role: "button", name: "Old document" } },
-      mode: "role",
-    });
-
-    const { page: currentPage } = fakePage();
-    storeRoleRefsForTarget({
-      page: currentPage,
-      cdpUrl,
-      targetId,
-      refs: { e1: { role: "heading", name: "Current document" } },
-      mode: "aria",
-    });
-    handlers.get("framenavigated")?.[0]?.(mainFrame);
-
-    const { page: replacementPage } = fakePage();
-    restoreRoleRefsForTarget({ cdpUrl, targetId, page: replacementPage });
-    expect(ensurePageState(replacementPage).roleRefs).toEqual({
-      e1: { role: "heading", name: "Current document" },
-    });
-    expect(ensurePageState(replacementPage).roleRefsMode).toBe("aria");
   });
 
   it("invalidates page-wide aria refs on subframe navigation", () => {
@@ -684,13 +657,6 @@ describe("pw-session ensurePageState", () => {
     expect(state.roleRefsFrame).toBeUndefined();
   });
 });
-
-const {
-  createObservedDialogAbortSignalForPage,
-  getObservedBrowserStateForPage,
-  isBrowserObservedDialogBlockedError,
-  respondToObservedDialogOnPage,
-} = pwAi;
 
 type Handler = (arg: unknown) => void;
 

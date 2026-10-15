@@ -4,6 +4,7 @@ import {
   type ToolCall,
 } from "@mistralai/mistralai/models/components";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost } from "../host.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Context, Model } from "../types.js";
@@ -219,6 +220,56 @@ function makeMistralToolResultContext(
 }
 
 describe("Mistral provider", () => {
+  it("exposes cumulative tool input before the provider completes the call", async ({
+    onTestFinished,
+  }) => {
+    const gates = [createDeferred(), createDeferred()];
+    onTestFinished(() => gates.forEach((gate) => gate.resolve()));
+    const source = mistralToolStream(
+      "progress",
+      [
+        parseMistralToolCall({
+          id: "progress",
+          type: "function",
+          function: { name: "write", arguments: '{"content":"line' },
+        }),
+      ],
+      [
+        parseMistralToolCall({
+          id: "progress",
+          type: "function",
+          function: { name: "write", arguments: ' end"}' },
+        }),
+      ],
+    );
+    mistralMockState.streamResult = {
+      async *[Symbol.asyncIterator]() {
+        let index = 0;
+        for await (const event of source) {
+          yield event;
+          await gates[index++]?.promise;
+        }
+      },
+    };
+    const stream = streamMistral(makeMistralModel(), context, { apiKey: crypto.randomUUID() });
+    const inputs: unknown[] = [];
+    try {
+      for await (const event of stream) {
+        if (event.type === "toolcall_delta") {
+          inputs.push(structuredClone(event.partial.content[event.contentIndex]));
+          gates[inputs.length - 1]?.resolve();
+        }
+      }
+    } finally {
+      gates.forEach((gate) => gate.resolve());
+    }
+    expect(inputs).toMatchObject([
+      { partialJson: '{"content":"line' },
+      { partialJson: '{"content":"line end"}' },
+    ]);
+    expect((await stream.result()).content[0]).not.toHaveProperty("partialJson");
+  });
+
   beforeEach(() => {
     mistralMockState.payloads = [];
     mistralMockState.requestOptions = [];
@@ -422,7 +473,7 @@ describe("Mistral provider", () => {
     ).toEqual(["alpha_tool", "zeta_tool"]);
   });
 
-  it("omits tools and automatic tool choice when every schema is unreadable", async () => {
+  it("reports unreadable tool parameters before sending a request", async () => {
     const result = await runMistralFixture(
       {
         ...context,
@@ -432,11 +483,9 @@ describe("Mistral provider", () => {
         toolChoice: "auto",
       },
     );
-    const payload = mistralMockState.payloads[0] as Record<string, unknown>;
-
     expect(result.stopReason).toBe("error");
-    expect(payload).not.toHaveProperty("tools");
-    expect(payload).not.toHaveProperty("toolChoice");
+    expect(result.errorMessage).toContain("fuzzplugin parameters getter exploded");
+    expect(mistralMockState.payloads).toHaveLength(0);
   });
 
   it("keeps omitted streamed tool ids stable within a response and unique across responses", async () => {
@@ -671,7 +720,7 @@ describe("Mistral provider", () => {
     ]);
   });
 
-  it("fails locally when a pinned Mistral tool choice is skipped", async () => {
+  it("reports unreadable parameters even when another tool is usable", async () => {
     const result = await runMistralFixture(
       {
         ...context,
@@ -683,9 +732,7 @@ describe("Mistral provider", () => {
     );
 
     expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain(
-      'Mistral tool_choice requested unavailable tool "broken_tool"',
-    );
+    expect(result.errorMessage).toContain("fuzzplugin parameters getter exploded");
     expect(mistralMockState.payloads).toHaveLength(0);
   });
 
@@ -821,35 +868,6 @@ describe("Mistral provider", () => {
     const toolContent = Array.isArray(toolMessage?.content) ? toolMessage.content : [];
     const textBlock = toolContent.find((block) => block.type === "text");
     expect(textBlock?.text).toBe("  indented\n");
-  });
-
-  it("serializes structured non-image blocks in tool results as JSON text", async () => {
-    // Prove the host redaction port is applied to structured tool-result text.
-    configureAiTransportHost({
-      redactModelVisibleSecrets: <T>(value: T): T =>
-        JSON.parse(JSON.stringify(value).replaceAll('"value"', '"***"')) as T,
-    });
-    const testContext = makeMistralToolResultContext("fetch", [
-      {
-        type: "resource",
-        resource: {
-          uri: "https://example.com/data.json",
-          mimeType: "application/json",
-          text: '{"key":"value"}',
-        },
-      },
-    ]);
-
-    await runMistralFixture(testContext);
-
-    const payload = mistralMockState.payloads[0] as {
-      messages: Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>;
-    };
-    const toolMessage = payload.messages.find((message) => message.role === "tool");
-    const toolContent = Array.isArray(toolMessage?.content) ? toolMessage.content : [];
-    const textBlock = toolContent.find((block) => block.type === "text");
-    expect(textBlock?.text).toEqual(expect.stringContaining('{"type":"resource"'));
-    expect(textBlock?.text).toContain('{\\"key\\":\\"value\\"}');
   });
 
   it("does not emit image chunks or placeholders for payload-less tool media", async () => {

@@ -1,12 +1,18 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { vi } from "vitest";
 import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentMeta } from "../../agents/embedded-agent-runner/types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import type { ReplyPayload } from "../types.js";
+import { withAgentTurnCompletion } from "./agent-runner-completion.js";
+import type { AgentTurnCompletion } from "./agent-runner-completion.types.js";
 import type {
   AgentTurnCompaction,
   AgentTurnExecutionResult,
@@ -51,18 +57,23 @@ export async function createAgentAccountingPersistenceFixture({
   storePath,
   root,
   fixtureId,
+  incognito = false,
   registerOperation,
 }: {
   storePath: string;
   root: string;
   fixtureId: number;
+  incognito?: boolean;
   registerOperation: (operation: ReplyOperation) => void;
 }) {
-  const sessionKey = `agent:main:accounting-${fixtureId}`;
+  const sessionKey = incognito
+    ? `agent:main:dashboard:incognito-accounting-${fixtureId}`
+    : `agent:main:accounting-${fixtureId}`;
   const sessionId = `accounting-session-${fixtureId}`;
   const runId = `context-pressure-run-${fixtureId}`;
   const entry: InternalSessionEntry = {
     sessionId,
+    ...(incognito ? { incognito: true } : {}),
     lifecycleRevision: "generation-1",
     activeWriterRunId: runId,
     updatedAt: 1,
@@ -190,9 +201,31 @@ export async function createAgentAccountingPersistenceFixture({
     sendPolicy: "allow",
     preflightCompactionApplied: false,
   };
-  const accountQueued = (outcome: AgentTurnExecutionResult["outcome"]) =>
+  const withCompletion = <T>(
+    consume: (completion: AgentTurnCompletion | undefined) => Promise<T>,
+  ) =>
+    withAgentTurnCompletion(
+      {
+        agentId: "main",
+        storePath,
+        sessionKey,
+        entry: context.activeSessionEntry,
+        operation: replyOperation,
+        publish(next) {
+          context.activeSessionEntry = next;
+          sessionStore[sessionKey] = next;
+          turn.session.publish(next);
+        },
+      },
+      consume,
+    );
+  const accountQueued = (
+    outcome: AgentTurnExecutionResult["outcome"],
+    completion?: AgentTurnCompletion,
+  ) =>
     accountFollowupTurn({
       turn,
+      completion,
       defaults: {
         defaultModel: diagnostic.model,
         typing: createMockTypingController(),
@@ -230,6 +263,7 @@ export async function createAgentAccountingPersistenceFixture({
     sessionId,
     context,
     turn,
+    withCompletion,
     deliverQueued: async () => {
       const registry = createEmptyPluginRegistry();
       registry.providers.push({
@@ -243,12 +277,16 @@ export async function createAgentAccountingPersistenceFixture({
       });
       return withPluginRuntimeRegistryScope(registry, async () => {
         const delivered: ReplyPayload[] = [];
-        const accounting = await accountQueued(context.execution);
-        const decision = await resolveFollowupDeliveryDecision({
-          turn,
-          execution: { runId: context.runId, outcome: context.execution },
-          accounting,
-          opts: { onBlockReply: async () => {} },
+        const decision = await withCompletion(async (completion) => {
+          const accounting = await accountQueued(context.execution, completion);
+          const resolved = await resolveFollowupDeliveryDecision({
+            turn,
+            execution: { runId: context.runId, outcome: context.execution },
+            accounting,
+            opts: { onBlockReply: async () => {} },
+          });
+          await completion?.complete();
+          return resolved;
         });
         await deliverFollowupDecision({
           decision,
@@ -281,7 +319,7 @@ export async function createAgentAccountingPersistenceFixture({
       return accountQueued({ kind: "aborted", reason, compaction });
     },
     read: () => loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
-    replace: (next: SessionEntry) => replaceSessionEntry({ storePath, sessionKey }, next),
+    replace: (next: InternalSessionEntry) => replaceSessionEntry({ storePath, sessionKey }, next),
     account: async (lane: "ordinary" | "followup", meta: Partial<EmbeddedAgentMeta>) => {
       context.execution.result.meta.agentMeta = {
         sessionId: entry.sessionId,
@@ -292,24 +330,104 @@ export async function createAgentAccountingPersistenceFixture({
         ...meta,
       };
       if (lane === "ordinary") {
-        const accounting = await accountAgentTurn(context);
-        await completeReplyAgentRun({
-          context,
-          accounting,
-          prepared: {
-            kind: "continue",
-            activeSessionEntry: accounting.activeSessionEntry,
-            // The reply was already delivered; exercise completion bookkeeping
-            // without creating another pending delivery intent.
-            completedSourceReplyDelivery: true,
-            guardedReplyPayloads: [],
-            responseUsageLine: undefined,
-          },
+        await withCompletion(async (completion) => {
+          const current = { ...context, completion };
+          const accounting = await accountAgentTurn(current);
+          await completeReplyAgentRun({
+            context: current,
+            accounting,
+            prepared: {
+              kind: "continue",
+              activeSessionEntry: accounting.activeSessionEntry,
+              // The reply was already delivered; exercise completion bookkeeping
+              // without creating another pending delivery intent.
+              completedSourceReplyDelivery: true,
+              reminderNoteAppended: false,
+              guardedReplyPayloads: [],
+              responseUsageLine: undefined,
+            },
+          });
         });
       } else {
         turn.preflightCompactionApplied = context.preflightCompactionApplied === true;
-        await accountQueued(context.execution);
+        await withCompletion((completion) => accountQueued(context.execution, completion));
       }
+    },
+  };
+}
+
+export function observeCompletionCommands(
+  options: {
+    hideCommittedReceipt?: boolean;
+    beforeCommit?: () => void;
+    afterRead?: () => void | Promise<void>;
+  } = {},
+) {
+  const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
+  const commands: string[] = [];
+  const execution = vi
+    .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
+    .mockImplementation((...args) => {
+      const owner = capture(...args);
+      return {
+        ...owner,
+        get fileIdentity() {
+          return owner.fileIdentity;
+        },
+        runExisting: (source, run, runOptions) =>
+          owner.runExisting(
+            source,
+            (worker) =>
+              run({
+                execute(command, commandOptions) {
+                  commands.push(command.type);
+                  const result = worker.execute(command, commandOptions);
+                  return command.type === "session.actor.read" && options.afterRead
+                    ? result.then(async (value) => {
+                        await options.afterRead?.();
+                        return value;
+                      })
+                    : result;
+                },
+              }),
+            runOptions,
+          ),
+      };
+    });
+  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+  const admission = vi
+    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((authorize, attachment) => {
+      let terminalCommit = false;
+      const owner = createAdmission((request, grant) => {
+        if (
+          request.stage === "commit" &&
+          isRecord(request.facts) &&
+          isRecord(request.facts.publication) &&
+          request.facts.publication.kind === "session-actor-admission" &&
+          request.facts.publication.final === true
+        ) {
+          terminalCommit = true;
+          options.beforeCommit?.();
+        }
+        return authorize(request, grant);
+      }, attachment);
+      if (options.hideCommittedReceipt) {
+        const committed = Object.getOwnPropertyDescriptor(owner, "committed")!;
+        Object.defineProperty(owner, "committed", {
+          get() {
+            const receipt = committed.get!.call(owner);
+            return terminalCommit ? undefined : receipt;
+          },
+        });
+      }
+      return owner;
+    });
+  return {
+    commands,
+    restore() {
+      admission.mockRestore();
+      execution.mockRestore();
     },
   };
 }

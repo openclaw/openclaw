@@ -11,10 +11,13 @@ import {
 const fixture = createNativeApprovalTestFixture({
   channel: "imessage",
   capability: imessageApprovalCapability,
-  buildConfig: ({ channel, approvals } = {}) => ({
-    channels: { imessage: { enabled: true, ...channel } },
-    approvals,
-  }),
+  buildConfig: (options = {}) => {
+    const { channel, approvals } = options;
+    return {
+      channels: { imessage: { enabled: true, ...channel } },
+      approvals,
+    };
+  },
 });
 const {
   buildConfig,
@@ -80,7 +83,7 @@ describe("imessage approval capability", () => {
     expect(text.indexOf("React with:")).toBeLessThan(text.indexOf("/approve exec-1 allow-once"));
   });
 
-  it("allows group-origin tapback approvals only after exec forwarding and approvers are configured", () => {
+  it("allows group-origin tapback approvals only after exec forwarding and approvers are configured", async () => {
     const request = buildExecRequest(GROUP_TARGET);
     const withoutApprovers = buildConfig({ approvals: { exec: { enabled: true } } });
     const withApprovers = buildConfig({
@@ -88,8 +91,8 @@ describe("imessage approval capability", () => {
       approvals: { exec: { enabled: true } },
     });
 
-    expect(resolveExecOrigin(withoutApprovers, request)).toBeNull();
-    expect(resolveExecOrigin(withApprovers, request)).toEqual({
+    expect(await resolveExecOrigin(withoutApprovers, request)).toBeNull();
+    expect(await resolveExecOrigin(withApprovers, request)).toEqual({
       to: GROUP_TARGET,
       accountId: DEFAULT_ACCOUNT_ID,
     });

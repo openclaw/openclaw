@@ -1,14 +1,17 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
-import { hasActiveCronJobs } from "../../cron/active-jobs.js";
+import { getActiveCronJobCount } from "../../cron/active-jobs.js";
 import { CronService, type CronEvent } from "../../cron/service.js";
 import { setupCronServiceSuite } from "../../cron/service.test-harness.js";
+import * as cronServiceState from "../../cron/service/state.js";
 import type { CronServiceDeps } from "../../cron/service/state.js";
+import { onTimer } from "../../cron/service/timer.test-support.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -27,17 +30,20 @@ const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-self-rem
 
 describe("cron self-removal", () => {
   it.each([
-    { payloadKind: "agentTurn", path: "manual", timeoutSeconds: 0 },
-    { payloadKind: "agentTurn", path: "timer", timeoutSeconds: 60 },
-    { payloadKind: "script", path: "manual", timeoutSeconds: 0 },
-    { payloadKind: "script", path: "timer", timeoutSeconds: 60 },
+    ["agentTurn", "manual", 0, "exact"],
+    ["agentTurn", "timer", 60, "exact"],
+    ["script", "manual", 0, "exact"],
+    ["script", "timer", 60, "exact"],
+    ["agentTurn", "manual", 0, "unbound"],
+    ["agentTurn", "manual", 0, "different instance"],
   ] as const)(
-    "$payloadKind finishes its $path run with timeoutSeconds=$timeoutSeconds",
-    async ({ payloadKind, path, timeoutSeconds }) => {
+    "%s preserves %s completion (timeoutSeconds=%i, owner=%s)",
+    async (payloadKind, path, timeoutSeconds, owner) => {
       const { storePath } = await makeStorePath();
       const clock = createGatewaySchedulerClock(Date.now());
       const scheduler = createTestGatewayScheduler(clock.clock);
       const events: CronEvent[] = [];
+      const finished = createDeferred<CronEvent>();
       let abortedAfterRemoval: boolean | undefined;
       let activeAfterRemoval: boolean | undefined;
       const runJob = async ({
@@ -57,7 +63,9 @@ describe("cron self-removal", () => {
         const creatorScope = createCronCreatorAuthorityRunScope(`run-${job.id}`, { kind: "local" });
         try {
           const admitted = await admission.admit("embedded");
-          await executionIdentity?.onPostAdmission?.(admitted);
+          if (owner !== "unbound") {
+            await executionIdentity?.onPostAdmission?.(admitted);
+          }
           const delegatedAuthority = expectDefined(
             getAdmittedRunDelegatedAuthority(admitted),
             "live scheduled admission",
@@ -69,7 +77,10 @@ describe("cron self-removal", () => {
                 kind: "agentRuntime",
                 agentId: "main",
                 sessionKey: `agent:main:cron:${job.id}`,
-                operationalRunInstance: admitted.operationalRunInstance,
+                operationalRunInstance:
+                  owner === "different instance"
+                    ? createOperationalRunInstanceRef(`run-${job.id}`)
+                    : admitted.operationalRunInstance,
                 delegatedAuthority: { kind: "local", ...delegatedAuthority },
                 cronCreatorAuthorityGrant: mintCronCreatorAuthorityGrant(
                   creatorScope,
@@ -99,9 +110,17 @@ describe("cron self-removal", () => {
             }),
             isWebchatConnect: () => false,
           });
-          expect(respond).toHaveBeenCalledWith(true, { ok: true, removed: true }, undefined);
+          if (owner === "exact") {
+            expect(respond).toHaveBeenCalledWith(true, { ok: true, removed: true }, undefined);
+          } else {
+            expect(respond).toHaveBeenCalledWith(
+              false,
+              undefined,
+              expect.objectContaining({ message: expect.stringContaining("job was not removed") }),
+            );
+          }
           abortedAfterRemoval = abortSignal?.aborted;
-          activeAfterRemoval = hasActiveCronJobs();
+          activeAfterRemoval = getActiveCronJobCount() > 0;
           return {
             status: "ok" as const,
             summary: "final reply after self-cleanup",
@@ -112,6 +131,14 @@ describe("cron self-removal", () => {
           admission.close();
         }
       };
+      let ownedState: ReturnType<typeof cronServiceState.createCronServiceState> | undefined;
+      const createState = cronServiceState.createCronServiceState;
+      const captureState = vi.spyOn(cronServiceState, "createCronServiceState");
+      captureState.mockImplementationOnce((deps) => {
+        captureState.mockRestore();
+        ownedState = createState(deps);
+        return ownedState;
+      });
       const cron = new CronService({
         scheduler,
         storePath,
@@ -120,7 +147,12 @@ describe("cron self-removal", () => {
         log: logger,
         enqueueSystemEvent: vi.fn(),
         requestHeartbeat: vi.fn(),
-        onEvent: (event) => events.push(event),
+        onEvent: (event) => {
+          events.push(event);
+          if (event.action === "finished") {
+            finished.resolve(event);
+          }
+        },
         runIsolatedAgentJob: runJob,
         runScriptJob: runJob,
       });
@@ -145,22 +177,27 @@ describe("cron self-removal", () => {
           await cron.run(job.id, "force");
         } else {
           await cron.start();
-          await clock.advanceBy(1_000);
+          clock.setTime(clock.clock.now() + 1_000);
+          await onTimer(expectDefined(ownedState, "constructed cron state"));
         }
-        await vi.waitFor(() => {
-          expect(events.filter((event) => event.action === "finished")).toEqual([
-            expect.objectContaining({
-              jobId: job.id,
-              status: "ok",
-              completionStatus: "succeeded",
-              summary: "final reply after self-cleanup",
-            }),
-          ]);
-          expect(abortedAfterRemoval).toBe(false);
-          expect(activeAfterRemoval).toBe(true);
-          expect(hasActiveCronJobs()).toBe(false);
-        });
-        expect(await cron.readJob(job.id)).toBeUndefined();
+        await finished.promise;
+        expect(events.filter((event) => event.action === "finished")).toEqual([
+          expect.objectContaining({
+            jobId: job.id,
+            status: "ok",
+            completionStatus: "succeeded",
+            summary: "final reply after self-cleanup",
+          }),
+        ]);
+        expect(abortedAfterRemoval).toBe(false);
+        expect(activeAfterRemoval).toBe(true);
+        expect(getActiveCronJobCount()).toBe(0);
+        const remainingJob = await cron.readJob(job.id);
+        if (owner === "exact") {
+          expect(remainingJob).toBeUndefined();
+        } else {
+          expect(remainingJob).toMatchObject({ id: job.id });
+        }
       } finally {
         cron.stop();
         await scheduler.stop();

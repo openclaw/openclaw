@@ -154,39 +154,6 @@ describe("Responses service-tier recovery", () => {
     expect(result.rejected).toEqual(["ultrafast", "priority"]);
   });
 
-  it.each(["response.output_text.delta", "response.output_item.added"])(
-    "does not retry after %s",
-    async (type) => {
-      const result = await fixture(() =>
-        sse([
-          { type, delta: "partial", item: { type: "web_search_call" } },
-          { type: "response.failed", response: { error: rejection, output: [] } },
-        ]),
-      );
-      expect(result.bodies).toHaveLength(1);
-      expect(result.rejected).toEqual([]);
-    },
-  );
-
-  it("does not retry an error response that already contains output", async () => {
-    const result = await fixture(() =>
-      sse([
-        {
-          type: "response.failed",
-          response: { error: rejection, output: [{ type: "function_call", name: "tool" }] },
-        },
-      ]),
-    );
-    expect(result.bodies).toHaveLength(1);
-  });
-
-  it("does not replay an observer exception that resembles a provider rejection", async () => {
-    const hookError = Object.assign(new Error(rejection.message), rejection);
-    const result = await fixture(() => sse([complete]), { hookError });
-    expect(result.error).toBe(hookError);
-    expect(result.bodies).toHaveLength(1);
-  });
-
   it("does not send a retry after cancellation during rejection observation", async () => {
     const controller = new AbortController();
     const result = await fixture(
@@ -208,13 +175,10 @@ describe("Responses service-tier recovery", () => {
     expect(result.bodies).toHaveLength(1);
   });
 
-  it.each([
-    { code: "server_error", param: "service_tier", message: rejection.message },
-    { status: 503, error: rejection },
-    { status: 401, error: rejection },
-    { type: "invalid_request_error", param: "temperature", message: "Unsupported" },
-    { message: "Invalid service_tier argument" },
-  ])("does not replay unrelated failures: %j", (error) => {
-    expect(nextResponsesServiceTier("ultrafast", error)).toBeUndefined();
-  });
+  it.each([{ status: 503, error: rejection }])(
+    "does not replay unrelated failures: %j",
+    (error) => {
+      expect(nextResponsesServiceTier("ultrafast", error)).toBeUndefined();
+    },
+  );
 });

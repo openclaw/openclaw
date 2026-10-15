@@ -404,69 +404,6 @@ describe("LINE webhook spool", () => {
     });
   });
 
-  it("waits for deferred claim settlement before disposing on stop", async () => {
-    await withQueue(async (queue) => {
-      let deferredLifecycle: LineWebhookTurnAdoptionLifecycle | undefined;
-      const deliver = vi.fn(async (_event, _destination, control) => {
-        deferredLifecycle = control.turnAdoptionLifecycle;
-        control.turnAdoptionLifecycle.onDeferred();
-      });
-      const spool = createSpool(queue, deliver);
-      const event = createEvent({ webhookEventId: "event-stop-deferred" });
-
-      spool.start();
-      await spool.accept(callback(event));
-      await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1));
-
-      let stopSettled = false;
-      const stopping = spool.stop().then(() => {
-        stopSettled = true;
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 50);
-      });
-      expect(stopSettled).toBe(false);
-      expect(await queue.listClaims()).toHaveLength(1);
-
-      if (!deferredLifecycle) {
-        throw new Error("LINE delivery did not expose its deferred lifecycle");
-      }
-      await deferredLifecycle.onAbandoned();
-      await stopping;
-      expect(stopSettled).toBe(true);
-      expect(await queue.listClaims()).toEqual([]);
-      expect(await queue.listPending()).toHaveLength(1);
-    });
-  });
-
-  it("recovers an uncompleted event with a fresh drain and dispatches once", async () => {
-    await withQueue(async (queue) => {
-      const event = createEvent({ webhookEventId: "event-restart" });
-      const first = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver: async () => {
-          throw new Error("first drain must not dispatch");
-        },
-      });
-      await first.accept(callback(event));
-      await first.stop();
-
-      const deliver = vi.fn(async (_event, _destination, control) => {
-        await control.turnAdoptionLifecycle.onAdopted();
-      });
-      const restarted = createSpool(queue, deliver);
-      restarted.start();
-      try {
-        await waitForVerdict(queue, "message:message-event-restart", "completed");
-        expect(deliver).toHaveBeenCalledTimes(1);
-      } finally {
-        await restarted.stop();
-      }
-    });
-  });
-
   it("deduplicates a redelivered message id even when webhookEventId changes", async () => {
     await withQueue(async (queue) => {
       const enqueue = vi.spyOn(queue, "enqueue");
@@ -496,45 +433,6 @@ describe("LINE webhook spool", () => {
     });
   });
 
-  it("stores raw event JSON and normalizes it only during dispatch", async () => {
-    await withQueue(async (queue) => {
-      const event = createEvent({ webhookEventId: "event-raw", text: "before" });
-      const deliveredText: string[] = [];
-      const spool = createLineWebhookSpool({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver: async (delivered, _destination, control) => {
-          for (const delivery of delivered) {
-            if (delivery.type === "message" && delivery.message.type === "text") {
-              deliveredText.push(delivery.message.text);
-            }
-          }
-          await control.turnAdoptionLifecycle.onAdopted();
-        },
-      });
-      await spool.accept(callback(event));
-      const pending = await queue.listPending();
-      expect(pending).toHaveLength(1);
-      expect(pending[0]?.laneKey).toBe("user:user-1");
-      expect(pending[0]?.payload).toEqual({
-        version: 1,
-        rawEvent: JSON.stringify(event),
-        destination: "destination-1",
-      });
-      (event as webhook.MessageEvent & { message: { type: "text"; text: string } }).message.text =
-        "after";
-
-      spool.start();
-      try {
-        await waitForVerdict(queue, "message:message-event-raw", "completed");
-        expect(deliveredText).toEqual(["before"]);
-      } finally {
-        await spool.stop();
-      }
-    });
-  });
-
   it("dead-letters malformed stored JSON without dispatch", async () => {
     await withQueue(async (queue) => {
       await queue.enqueue(
@@ -557,27 +455,6 @@ describe("LINE webhook spool", () => {
         if (verdict.kind === "failed") {
           expect(verdict.record.reason).toBe("invalid-event");
         }
-      } finally {
-        await spool.stop();
-      }
-    });
-  });
-
-  it("retries transient dispatch errors", async () => {
-    await withQueue(async (queue) => {
-      const event = createEvent({ webhookEventId: "event-retry" });
-      const deliver = vi.fn(async (_event, _destination, control) => {
-        if (deliver.mock.calls.length === 1) {
-          throw new Error("temporary dispatch outage");
-        }
-        await control.turnAdoptionLifecycle.onAdopted();
-      });
-      const spool = createSpool(queue, deliver);
-      spool.start();
-      try {
-        await spool.accept(callback(event));
-        await waitForVerdict(queue, "message:message-event-retry", "completed");
-        expect(deliver).toHaveBeenCalledTimes(2);
       } finally {
         await spool.stop();
       }

@@ -1,4 +1,4 @@
-import { html, render } from "lit";
+import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderDecisionModelPicker } from "./decision-model-picker.ts";
 import { renderModelPicker, type ModelPickerOption } from "./model-picker.ts";
@@ -9,10 +9,19 @@ import "../styles/base.css";
 import "../styles/settings-controls.css";
 import "../styles/settings.css";
 
-afterEach(() => document.body.replaceChildren());
+const hosts: HTMLElement[] = [];
+
+afterEach(async () => {
+  for (const host of hosts.splice(0)) {
+    render(nothing, host);
+  }
+  document.body.replaceChildren();
+  await Promise.resolve();
+});
 
 function mountHost(style = "") {
   const host = document.createElement("div");
+  hosts.push(host);
   host.style.cssText = style;
   document.body.append(host);
   return host;
@@ -56,17 +65,17 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
         label: `Model ${index}`,
       }));
       const onChange = vi.fn();
-      const shared = renderPicker({
+      const shared = html`${renderPicker({
         label: "Shared",
         value: "fixture/model-0",
         options,
         searchable: true,
         onChange,
-      });
+      })}`;
       render(
         html`
-          ${renderSettingsRow({ title: "Primary", control: renderModelPicker({ label: "Primary", value: "fixture/model-0", options, onChange }) })}
-          ${renderSettingsRow({ title: "Decision", control: renderDecisionModelPicker({ id: "alignment-decision", models: [{ provider: "fixture", id: "one", name: "Decision one", pluginId: "fixture" }], value: "fixture/one", disabled: false, onChange }) })}
+          ${renderSettingsRow({ title: "Primary", control: html`${renderModelPicker({ label: "Primary", value: "fixture/model-0", options, onChange })}` })}
+          ${renderSettingsRow({ title: "Decision", control: html`${renderDecisionModelPicker({ id: "alignment-decision", models: [{ provider: "fixture", id: "one", name: "Decision one", pluginId: "fixture" }], value: "fixture/one", disabled: false, onChange })}` })}
           ${renderSettingsRow({ title: "Shared", control: shared })} ${shared}
           ${renderSettingsRow({ title: "Value", control: html`<input class="settings-input" aria-label="Value" value="42" /><span class="settings-secret"><input class="settings-input" aria-label="Nested value" value="example" /></span>` })}
         `,

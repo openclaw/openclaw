@@ -16,7 +16,25 @@ enum GatewayLaunchAgentManager {
         var isInferredLegacyInstall = false
         var sourcePrefix: [String]?
         var serviceAuthority: ServiceAuthority?
+
+        /// Flags remain exact invocation custody; bundle identity uses its concrete packaged files.
+        func matchesBundledRuntime(_ runtime: BundledRuntime) -> Bool {
+            let concrete = GatewayLaunchAgentManager.concreteServicePrefix(self.prefix)
+            guard concrete.first == runtime.bun.resolvingSymlinksInPath().path,
+                  let entry = GatewayLaunchAgentManager.serviceCLIEntrypoint(concrete),
+                  let sqliteLibrary,
+                  URL(fileURLWithPath: sqliteLibrary).resolvingSymlinksInPath() ==
+                  runtime.sqliteLibrary.resolvingSymlinksInPath()
+            else { return false }
+            return GatewayLaunchAgentManager.serviceCLIEntrypoints.contains {
+                runtime.packageRoot.appendingPathComponent($0).resolvingSymlinksInPath() == entry
+            }
+        }
     }
+
+    private static let serviceCLIEntrypoints = [
+        "openclaw.mjs", "dist/index.js", "dist/index.mjs", "dist/entry.js", "dist/entry.mjs",
+    ]
 
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.launchd")
     private static let disableLaunchAgentMarker = "disable-launchagent"
@@ -24,9 +42,7 @@ enum GatewayLaunchAgentManager {
     /// migration lease. Keep the app from killing healthy migration work before it can finish.
     static let startupMigrationTolerance: TimeInterval = 120
     /// A launchd PID started at login has no install evidence, and a cold start after reboot can
-    /// outlast the first-run budget (a real reboot measured about 139s on Apple silicon). The app
-    /// re-proves that the same PID owns the port at every deadline, so this wider budget only
-    /// delays repair of a PID that is still alive and still holding the port.
+    /// outlast the first-run budget (a real reboot measured about 139s on Apple silicon).
     static let reusedLaunchdColdStartTolerance: TimeInterval = 300
 
     private static var disableLaunchAgentMarkerURL: URL {
@@ -121,26 +137,19 @@ enum GatewayLaunchAgentManager {
 
     static func setLaunchAgentWriteDisabled(_ disabled: Bool) -> String? {
         let marker = self.disableLaunchAgentMarkerURL
-        if disabled {
-            do {
+        do {
+            if disabled {
                 try FileManager().createDirectory(
                     at: marker.deletingLastPathComponent(),
                     withIntermediateDirectories: true)
                 if !FileManager().fileExists(atPath: marker.path) {
                     FileManager().createFile(atPath: marker.path, contents: nil)
                 }
-            } catch {
-                return error.localizedDescription
-            }
-            return nil
-        }
-
-        if FileManager().fileExists(atPath: marker.path) {
-            do {
+            } else if FileManager().fileExists(atPath: marker.path) {
                 try FileManager().removeItem(at: marker)
-            } catch {
-                return error.localizedDescription
             }
+        } catch {
+            return error.localizedDescription
         }
         return nil
     }
@@ -487,21 +496,10 @@ enum GatewayLaunchAgentManager {
             programArguments: snapshot.programArguments,
             environmentFile: environmentFile,
             environmentWrapper: environmentWrapper),
-            let service = command.firstIndex(of: subcommand), service >= 2,
-            let executable = command.first,
-            ["node", "bun"].contains(URL(fileURLWithPath: executable).lastPathComponent)
+            let service = command.firstIndex(of: subcommand), service >= 2
         else { return nil }
         let prefix = Array(command[..<service])
-        let entry = prefix.dropFirst().drop(while: {
-            $0.hasPrefix("--max-old-space-size=") ||
-                $0.hasPrefix("--max-old-space-size-percentage=") || $0.hasPrefix("--max-heap-size=")
-        })
-        guard entry.count == 1, let script = entry.first, script.hasPrefix("/") else { return nil }
-        let url = URL(fileURLWithPath: script)
-        guard url.lastPathComponent == "openclaw.mjs" ||
-            (url.deletingLastPathComponent().lastPathComponent == "dist" &&
-                ["index.js", "index.mjs", "entry.js", "entry.mjs"].contains(url.lastPathComponent))
-        else { return nil }
+        guard self.serviceCLIEntrypoint(prefix) != nil else { return nil }
         return InstalledServiceCLI(
             prefix: self.concreteServicePrefix(prefix),
             sqliteLibrary: snapshot.environment["OPENCLAW_SQLITE_LIBRARY"],
@@ -509,6 +507,20 @@ enum GatewayLaunchAgentManager {
             usesGeneratedEnvironment: snapshot.programArguments.first == "/bin/sh" ||
                 snapshot.programArguments.first == environmentWrapper.path,
             sourcePrefix: prefix)
+    }
+
+    private static func serviceCLIEntrypoint(_ prefix: [String]) -> URL? {
+        guard let executable = prefix.first,
+              ["node", "bun"].contains(URL(fileURLWithPath: executable).lastPathComponent)
+        else { return nil }
+        let entry = prefix.dropFirst().drop(while: {
+            ($0 == "--no-install" && URL(fileURLWithPath: executable).lastPathComponent == "bun") ||
+                $0.hasPrefix("--max-old-space-size=") ||
+                $0.hasPrefix("--max-old-space-size-percentage=") || $0.hasPrefix("--max-heap-size=")
+        })
+        guard entry.count == 1, let script = entry.first, script.hasPrefix("/") else { return nil }
+        let url = URL(fileURLWithPath: script)
+        return self.serviceCLIEntrypoints.contains { url.path.hasSuffix("/" + $0) } ? url : nil
     }
 
     static func kickstart() async -> String? {
@@ -825,21 +837,19 @@ extension GatewayLaunchAgentManager {
             prefix: prefix,
             environment: self.daemonEnvironment(
                 runtime: runtime,
-                installedCLI: installedCLI,
-                environment: ProcessInfo.processInfo.environment,
-                profile: .current,
-                searchPaths: CommandResolver.preferredPaths()),
+                installedCLI: installedCLI),
             // Only an explicitly selected bundled CLI carries this interop contract.
-            supportsExpectedRuntimePin: runtime != nil &&
-                (installedCLI == nil || installedCLI?.prefix == runtime?.cliCommand))
+            supportsExpectedRuntimePin: runtime.map {
+                installedCLI == nil || installedCLI?.matchesBundledRuntime($0) == true
+            } ?? false)
     }
 
     static func daemonEnvironment(
-        runtime: BundledRuntime?,
+        runtime: BundledRuntime? = nil,
         installedCLI: InstalledServiceCLI? = nil,
-        environment: [String: String],
-        profile: AppProfile,
-        searchPaths: [String]) -> [String: String]
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        profile: AppProfile = .current,
+        searchPaths: [String] = CommandResolver.preferredPaths()) -> [String: String]
     {
         var result = environment.merging(installedCLI?.environment ?? [:]) { _, installed in installed }
         let installedPaths = installedCLI?.environment["PATH"]?.split(separator: ":").map(String.init) ?? []
@@ -918,19 +928,5 @@ extension GatewayLaunchAgentManager {
         self.testingState.withLock { $0.commandCalls.map(\.command) }
     }
 
-    static func _testRunningGatewayPID(from json: String) -> Int32? {
-        guard let data = json.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let service = object["service"] as? [String: Any]
-        else {
-            return nil
-        }
-        return self.runningGatewayPID(from: service)
-    }
-
-    static func _testLaunchdProgramArguments(plistURL: URL) -> [String]? {
-        guard FileManager.default.fileExists(atPath: plistURL.path) else { return [] }
-        return LaunchAgentPlist.snapshot(url: plistURL)?.programArguments
-    }
     #endif
 }

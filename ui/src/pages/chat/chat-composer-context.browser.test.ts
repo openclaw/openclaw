@@ -1,13 +1,18 @@
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
+import {
+  createComposerContainer,
+  createComposerProps,
+  disposeComposer,
+  renderComposerInto,
+} from "./chat-composer.test-support.ts";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "../../styles.css";
 import "../../styles/chat.ts";
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-progress.css";
-import { createComposerProps } from "./chat-composer.test-support.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
+
+import { resetChatComposerState } from "./components/chat-composer.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
 let container: HTMLDivElement;
@@ -16,13 +21,13 @@ let viewport: { width: number; height: number };
 
 beforeEach(() => {
   viewport = { width: window.innerWidth, height: window.innerHeight };
-  container = document.createElement("div");
+  container = createComposerContainer();
   document.body.append(container);
   releaseDismissal = installChatComposerPickerDismissal(document);
 });
 
 afterEach(async () => {
-  render(nothing, container);
+  disposeComposer(container);
   container.remove();
   resetChatComposerState();
   releaseDismissal();
@@ -31,25 +36,23 @@ afterEach(async () => {
 });
 
 function drawComposer(attachment = false, goal = false) {
-  render(
-    renderChatComposer(
-      createComposerProps({
-        goalDraftMode: goal ? { action: "start" } : null,
-        attachments: attachment
-          ? [{ id: "context-proof", mimeType: "text/plain", fileName: "proof.txt" }]
-          : [],
-        selectedSession: {
-          key: "main",
-          kind: "direct",
-          updatedAt: 1,
-          totalTokens: 20_300,
-          contextTokens: 200_000,
-          inputTokens: 19_600,
-          outputTokens: 126,
-        },
-      }),
-    ),
+  renderComposerInto(
     container,
+    createComposerProps({
+      goalDraftMode: goal ? { action: "start" } : null,
+      attachments: attachment
+        ? [{ id: "context-proof", mimeType: "text/plain", fileName: "proof.txt" }]
+        : [],
+      selectedSession: {
+        key: "main",
+        kind: "direct",
+        updatedAt: 1,
+        totalTokens: 20_300,
+        contextTokens: 200_000,
+        inputTokens: 19_600,
+        outputTokens: 126,
+      },
+    }),
   );
   return {
     composer: container.querySelector<HTMLElement>(".agent-chat__input")!,

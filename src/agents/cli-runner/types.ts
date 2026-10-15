@@ -1,6 +1,6 @@
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ToolResultContentSource } from "../../../packages/agent-core/src/types.js";
-import type { SessionEventTarget } from "../../auto-reply/reply/session-event-contract.js";
+import type { SessionEventSourcePolicy } from "../../auto-reply/reply/session-event-contract.js";
 import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
@@ -146,6 +146,8 @@ export type RunCliAgentParams = {
   onBeforeForkedCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   /** Private seam: report the credential/runtime owner only after a successful real turn. */
   onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
+  /** An unbound scheduled run may use native login, never a host credential profile. */
+  nativeAuthOnly?: true;
   onBeforeFreshCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   bootstrapContextMode?: BootstrapContextMode;
   chatId?: string;
@@ -236,7 +238,7 @@ export function captureCliRunStartTime() {
 export type PreparedCliRunContext = {
   params: RunCliAgentParams & { admittedRunContext: AdmittedRunContext };
   /** Original host policy, retained before native tool translation consumes runtime caps. */
-  sessionEventSourcePolicy?: Readonly<Pick<SessionEventTarget, "toolsAllow" | "settings">>;
+  sessionEventSourcePolicy?: SessionEventSourcePolicy;
   /** Core-only original caller policy, bound to each native request's exact lifetime. */
   bindQuestionAnswerAuthority?: (assertActive: () => void) => PreparedQuestionAnswerAuthority;
   effectiveAuthProfileId?: string;
