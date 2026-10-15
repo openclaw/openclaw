@@ -4,10 +4,7 @@ import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
-import {
-  formatKeyboardShortcutCombo,
-  KEYBOARD_SHORTCUT_COMBOS,
-} from "../../lib/keyboard-shortcut-contract.ts";
+import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRosterActivity } from "../../lib/reactive/domain-capabilities.ts";
@@ -20,9 +17,9 @@ import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { newSessionSearch, type NewSessionTarget } from "../../pages/new-session/location.ts";
 import type { AgentIdentity } from "../identity-avatar-view.ts";
-import { renderShortcutHint } from "../kbd.ts";
 import { Icon } from "./icon.tsx";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
+import { ShortcutHint } from "./kbd.tsx";
 import type { MenuItem } from "./menu.tsx";
 import "../tooltip.ts";
 import "../../styles/sidebar-agent-roster.css";
@@ -34,7 +31,7 @@ export function renderNewSessionLink(params: {
   basePath: string;
   agentId: string;
   target?: NewSessionTarget;
-  className: string;
+  class: string;
   label: string;
   disabledReason?: string;
   showShortcut?: boolean;
@@ -43,21 +40,17 @@ export function renderNewSessionLink(params: {
   const disabled = () => Boolean(params.disabledReason);
   const href = () =>
     `${pathForRoute("new-session", params.basePath)}${newSessionSearch(params.agentId, params.target)}`;
-  const hint = () =>
-    params.showShortcut
-      ? `${params.label} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.newSession)})`
-      : params.label;
   return (
     <openclaw-tooltip
-      prop:content={params.disabledReason ?? hint()}
-      prop:contentTemplate={
-        params.disabledReason == null && params.showShortcut
-          ? renderShortcutHint(params.label, KEYBOARD_SHORTCUT_COMBOS.newSession)
-          : undefined
-      }
+      prop:content={params.disabledReason ?? (params.showShortcut ? undefined : params.label)}
     >
+      <Show when={params.disabledReason == null && params.showShortcut}>
+        <span slot="content">
+          <ShortcutHint label={params.label} combo={KEYBOARD_SHORTCUT_COMBOS.newSession} />
+        </span>
+      </Show>
       <a
-        class={params.className}
+        class={params.class}
         role="link"
         href={disabled() ? undefined : href()}
         aria-label={params.label}
@@ -84,11 +77,19 @@ export function renderNewSessionLink(params: {
   );
 }
 
+const NewSessionLink = renderNewSessionLink;
+
 export function ContextNewSessionAction(props: {
   context: ApplicationContext;
   class: string;
   agentId?: string;
-}): JSX.Element {
+}) {
+  const agentId = () =>
+    props.agentId ??
+    normalizeAgentId(
+      props.context.agentSelection.state.selectedId ??
+        props.context.gateway.snapshot.assistantAgentId,
+    );
   const readAccess = () =>
     readSessionMethodAccess(props.context.gateway.snapshot, {
       method: "sessions.create",
@@ -96,46 +97,35 @@ export function ContextNewSessionAction(props: {
       sessionScope: true,
     });
   const access = createMemo(readAccess);
-  const onOpen = (agentId: string) => {
+  const disabledReason = () => {
+    const current = access();
+    return current.allowed ? undefined : current.reason;
+  };
+  const onOpen = (id: string) => {
     if (readAccess().allowed) {
-      props.context.navigate("new-session", { search: newSessionSearch(agentId) });
+      props.context.navigate("new-session", { search: newSessionSearch(id) });
     }
   };
   return (
     <Show
       when={props.context.theme.settings.sidebarAgentsMode === "roster"}
-      fallback={renderNewSessionLink({
-        get basePath() {
-          return props.context.basePath;
-        },
-        get agentId() {
-          return (
-            props.agentId ??
-            normalizeAgentId(
-              props.context.agentSelection.state.selectedId ??
-                props.context.gateway.snapshot.assistantAgentId,
-            )
-          );
-        },
-        get className() {
-          return props.class;
-        },
-        get label() {
-          return t("agentChip.newConversation");
-        },
-        showShortcut: true,
-        get disabledReason() {
-          const current = access();
-          return current.allowed ? undefined : current.reason;
-        },
-        onOpen,
-      })}
+      fallback={
+        <NewSessionLink
+          basePath={props.context.basePath}
+          agentId={agentId()}
+          class={props.class}
+          label={t("agentChip.newConversation")}
+          showShortcut
+          disabledReason={disabledReason()}
+          onOpen={onOpen}
+        />
+      }
     >
       <NewSessionMenu
         basePath={props.context.basePath}
         access={access()}
         triggerClass={props.class}
-        active={true}
+        active
         snapshotCards={null}
         onOpen={onOpen}
       />

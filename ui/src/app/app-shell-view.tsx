@@ -7,7 +7,7 @@ import { Icon } from "../components/solid/icon.tsx";
 import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
 import {
   ContextNewSessionAction,
-  renderNewSessionLink,
+  renderNewSessionLink as NewSessionLink,
 } from "../components/solid/new-session-link.tsx";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import {
@@ -81,25 +81,6 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
       Object.assign(props.host.navigationSidebar, state.sidebarProperties);
     }
   });
-  const newSessionAction = (
-    <Show
-      when={
-        !view().nativeEmbed &&
-        view().mobileNavLayout &&
-        !view().mergedChatChrome &&
-        !view().navDrawerOpen &&
-        !view().onboarding &&
-        !view().nativeWebChrome &&
-        !document.documentElement.classList.contains("openclaw-native-nav")
-      }
-    >
-      <ContextNewSessionAction
-        context={view().context}
-        class="header-new-session"
-        agentId={view().selectedAgentId}
-      />
-    </Show>
-  );
   const workspace = (
     <div style={{ display: "contents" }}>
       <ShellLazyOverlays
@@ -160,7 +141,24 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
             prop:resourceBasePath={view().context.resourceBasePath}
             prop:environment={view().config.environment}
             prop:navDrawerOpen={view().navDrawerOpen}
-            prop:newSessionAction={newSessionAction}
+            prop:newSessionAction={() => (
+              <Show
+                when={
+                  view().mobileNavLayout &&
+                  !view().mergedChatChrome &&
+                  !view().navDrawerOpen &&
+                  !view().onboarding &&
+                  !view().nativeWebChrome &&
+                  !document.documentElement.classList.contains("openclaw-native-nav")
+                }
+              >
+                <ContextNewSessionAction
+                  context={view().context}
+                  class="header-new-session"
+                  agentId={view().selectedAgentId}
+                />
+              </Show>
+            )}
             prop:onOpenPalette={props.host.openPalette}
             prop:onToggleDrawer={props.host.toggleNavigationSurface}
           />
@@ -189,15 +187,15 @@ function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Element {
               </openclaw-tooltip>
             </Show>
             <Show when={!view().railAvailable}>
-              {renderNewSessionLink({
-                basePath: view().context.basePath,
-                agentId: view().selectedAgentId,
-                className: "shell-chrome-controls__button shell-chrome-controls__new-thread",
-                label: t("chat.runControls.newSession"),
-                showShortcut: true,
-                disabledReason: view().newSessionDisabledReason,
-                onOpen: props.host.viewCallbacks.requestOpenNewSession,
-              })}
+              <NewSessionLink
+                basePath={view().context.basePath}
+                agentId={view().selectedAgentId}
+                class="shell-chrome-controls__button shell-chrome-controls__new-thread"
+                label={t("chat.runControls.newSession")}
+                showShortcut
+                disabledReason={view().newSessionDisabledReason}
+                onOpen={props.host.viewCallbacks.requestOpenNewSession}
+              />
             </Show>
             <Show when={!view().railAvailable || legacyMacChrome()}>
               <openclaw-tooltip

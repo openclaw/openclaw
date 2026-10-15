@@ -11,7 +11,7 @@ import "./tooltip.ts";
 
 type Props = {
   navDrawerOpen: boolean;
-  newSessionAction: JSX.Element;
+  newSessionAction: (() => JSX.Element) | undefined;
   resourceBasePath: string;
   environment: ControlUiEnvironment | null;
   onToggleDrawer: ((trigger: HTMLElement) => void) | undefined;
@@ -58,7 +58,7 @@ defineSolidBridge<Props>(
             </div>
           </div>
           <div class="topnav-shell__actions">
-            {props.newSessionAction}
+            {props.newSessionAction?.()}
             <openclaw-tooltip prop:content={t("chat.commandPaletteTitle")}>
               <span slot="content">
                 <ShortcutText
