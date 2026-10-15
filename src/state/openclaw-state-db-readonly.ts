@@ -243,6 +243,10 @@ export async function withDisposableOpenClawStateReads<T>(
 }
 
 function requiresArtifactPreservingSnapshot(pathname: string): boolean {
+  // PostgreSQL reads use the admitted connection's read-only transaction, never a copied anchor.
+  if (isStatePostgres()) {
+    return false;
+  }
   const required =
     isArtifactPreservingStateRead("shared", pathname) &&
     !isUpdateRehearsalPrivateDatabase(pathname, process.env) &&

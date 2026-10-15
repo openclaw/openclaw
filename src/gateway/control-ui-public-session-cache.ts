@@ -102,6 +102,9 @@ export function createPublicSessionRepresentationCache() {
             remove(key, entry);
             return representation;
           }
+          // Completion, not build admission, makes this representation most recently used.
+          entries.delete(key);
+          entries.set(key, entry);
           for (const [oldestKey, oldest] of entries) {
             if (bytes + size <= MAX_BYTES) {
               break;

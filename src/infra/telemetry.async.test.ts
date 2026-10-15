@@ -263,7 +263,7 @@ it.each(["do-not-track", "opt-out", "update-disabled"] as const)(
       await countRequested.promise;
       const replacement: OpenClawConfig = {
         telemetry: { enabled: change !== "opt-out" },
-        ...(change === "update-disabled" ? { update: { checkOnStart: false } } : {}),
+        update: { checkOnStart: change !== "update-disabled" },
       };
       setRuntimeConfigSnapshot(replacement);
       expect(getRuntimeConfig()).toBe(replacement);
