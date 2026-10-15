@@ -540,6 +540,25 @@ describe("WhatsApp reply delivery", () => {
     await restoration;
     expect(reactions).toEqual(["✅", "👀"]);
   });
+  it("shows an error when an accepted follow-up is evicted before it runs", async () => {
+    const { controller, reactions, restoration, nextRestoration } = statusReactionFixture();
+    const { plan } = await fixture({ statusReactionController: controller });
+    plan.finalize({ deferredToActiveRun: "followup", counts: {} });
+    await restoration;
+    const completed = nextRestoration();
+    plan.replyOptions.onFollowupQueueDisposition?.();
+    await completed;
+    expect(reactions).toEqual(["👀", "❌", "👀"]);
+  });
+  it("keeps a queue-cap rejection failed even when its notice is delivered", async () => {
+    const { controller, reactions, restoration } = statusReactionFixture();
+    const { plan, deliver } = await fixture({ statusReactionController: controller });
+    plan.replyOptions.onFollowupQueueDisposition?.();
+    await deliver({ text: "The message queue is full." });
+    expect(plan.finalize({ counts: { final: 1 } })).toBe(true);
+    await restoration;
+    expect(reactions).toEqual(["❌", "👀"]);
+  });
   it("keeps visible delivery successful while marking a failed run as an error", async () => {
     const { controller, reactions, restoration } = statusReactionFixture();
     readAgentRunTerminalOutcome.mockReturnValueOnce("failed");

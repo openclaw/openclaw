@@ -580,6 +580,12 @@ export function createWhatsAppReplyPlan(params: {
     }
     await statusReactionController.restoreInitial();
   };
+  const onAgentRunTerminalOutcome = (outcome: "completed" | "failed") => {
+    agentRunOutcome = outcome;
+    if (reactionDeferred) {
+      void finalizeStatusReaction(outcome);
+    }
+  };
 
   const recordDeliveredPayload = (
     payload: DeliverableWhatsAppOutboundPayload<ReplyPayload>,
@@ -795,12 +801,8 @@ export function createWhatsAppReplyPlan(params: {
     onModelSelected: params.onModelSelected,
     ...(statusReactionController
       ? {
-          onAgentRunTerminalOutcome: (outcome: "completed" | "failed") => {
-            agentRunOutcome = outcome;
-            if (reactionDeferred) {
-              void finalizeStatusReaction(outcome);
-            }
-          },
+          onAgentRunTerminalOutcome,
+          onFollowupQueueDisposition: () => onAgentRunTerminalOutcome("failed"),
           onToolStart: async (payload: { name?: string }) => {
             const toolName = payload.name?.trim();
             if (toolName) {
@@ -842,7 +844,9 @@ export function createWhatsAppReplyPlan(params: {
       void finalizeStatusReaction(
         reactionDeferred
           ? agentRunOutcome
-          : readAgentRunTerminalOutcome(dispatchResult) === "failed" || !didDeliverVisibleReply
+          : agentRunOutcome === "failed" ||
+              readAgentRunTerminalOutcome(dispatchResult) === "failed" ||
+              !didDeliverVisibleReply
             ? "failed"
             : "completed",
       );

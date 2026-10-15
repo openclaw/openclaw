@@ -421,6 +421,12 @@ when initialization must finish before the child runs.
       observer. Human-facing channels should continue to
       deliver useful host notices.
 
+      `replyOptions.onFollowupQueueDisposition` reports terminal queue-cap rejection
+      (`queue-cap` or `queue-cap-new`) and eviction (`queue-cap-old`) for the original
+      source. These messages will not run, so channels should finalize their status
+      without waiting for `onAgentRunTerminalOutcome`. Summarized overflow remains
+      pending and does not report a drop through this callback.
+
       When cloning a host-supplied reply, use `copyReplyPayloadMetadata(source, clone)`
       from `openclaw/plugin-sdk/reply-payload` to preserve its non-serialized runtime
       metadata. Persisted transcript delivery facts cannot replace that metadata.
