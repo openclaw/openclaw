@@ -86,7 +86,6 @@ const runtimeAuthStoreSnapshotRevisions = new Map<string, number>();
 const runtimeAuthStoreDeletedSnapshotRevisions = new Map<string, number>();
 let runtimeAuthStoreMetadataRevision = 0;
 const runtimeAuthStoreMetadataRevisions = new Map<string, number>();
-let runtimeAuthStoreMetadataRevisionFloor = 0;
 
 const runtimeAuthFileObservation = createRuntimeAuthProfileFileObservation({
   snapshots: runtimeAuthStoreSnapshots,
@@ -177,12 +176,8 @@ function advanceRuntimeAuthStoreMetadataRevision(key: string): void {
   runtimeAuthStoreMetadataRevisions.set(key, runtimeAuthStoreMetadataRevision);
   // Keep unpublished and deleted owners fenced without retaining them indefinitely.
   while (runtimeAuthStoreMetadataRevisions.size > 256) {
-    const [oldestKey, revision] = runtimeAuthStoreMetadataRevisions.entries().next().value!;
+    const oldestKey = runtimeAuthStoreMetadataRevisions.keys().next().value!;
     runtimeAuthStoreMetadataRevisions.delete(oldestKey);
-    runtimeAuthStoreMetadataRevisionFloor = Math.max(
-      runtimeAuthStoreMetadataRevisionFloor,
-      revision,
-    );
   }
 }
 
@@ -421,7 +416,6 @@ export function clearRuntimeAuthProfileStoreSnapshots(): void {
   runtimeAuthProfileRowsCache.clear();
   // Explicit lifecycle clears also fence in-flight reads without a published snapshot.
   runtimeAuthStoreMetadataRevision += 1;
-  runtimeAuthStoreMetadataRevisionFloor = runtimeAuthStoreMetadataRevision;
   runtimeAuthStoreSnapshots.clear();
   clearAllRuntimeAuthMaterializations();
   runtimeAuthStoreSnapshotRevisions.clear();
