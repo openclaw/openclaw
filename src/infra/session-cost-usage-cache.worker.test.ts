@@ -470,23 +470,18 @@ it("leaves an empty usage store absent until a transcript needs a rollup", async
     await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
 
     openOpenClawAgentDatabase({ agentId });
-    const pruned = vi.fn();
+    let pruneRows: ReturnType<typeof vi.fn> | undefined;
     const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
     const observer = vi
       .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
       .mockImplementation((...args) => {
         const owner = prepareLock(...args);
-        return {
-          ...owner,
-          pruneRows: (rows) => {
-            pruned(rows);
-            return owner.pruneRows(rows);
-          },
-        };
+        pruneRows = vi.fn(owner.pruneRows.bind(owner));
+        return { ...owner, pruneRows };
       });
     try {
       expect(await refreshCostUsageCacheForAgent({ config, agentId })).toBe("refreshed");
-      expect(pruned).not.toHaveBeenCalled();
+      expect(pruneRows).not.toHaveBeenCalled();
     } finally {
       observer.mockRestore();
     }
