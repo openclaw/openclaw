@@ -540,17 +540,10 @@ function buildGoogleGemini3FirstResponseRetryParams(params: {
   if (!thinkingLevel) {
     return undefined;
   }
-  // Retry copies retain JSON wire semantics, including omitted undefined fields.
-  const serializedRequest = JSON.stringify(params.request);
-  const retryRequest = JSON.parse(serializedRequest) as GoogleGenerateContentRequest;
-  const generationConfig =
-    retryRequest.generationConfig && typeof retryRequest.generationConfig === "object"
-      ? retryRequest.generationConfig
-      : {};
-  const thinkingConfig =
-    generationConfig.thinkingConfig && typeof generationConfig.thinkingConfig === "object"
-      ? { ...(generationConfig.thinkingConfig as Record<string, unknown>) }
-      : {};
+  const generationConfig = params.request.generationConfig;
+  const thinkingConfig = {
+    ...(generationConfig?.thinkingConfig as Record<string, unknown> | undefined),
+  };
 
   // Gemini 3 defaults to dynamic high thinking when the request omits an
   // explicit level. On a zero-output stall, retry with the smallest supported
@@ -559,9 +552,10 @@ function buildGoogleGemini3FirstResponseRetryParams(params: {
   delete thinkingConfig.thinkingBudget;
   delete thinkingConfig.includeThoughts;
   thinkingConfig.thinkingLevel = thinkingLevel;
-  generationConfig.thinkingConfig = thinkingConfig;
-  retryRequest.generationConfig = generationConfig;
-  return retryRequest;
+  return {
+    ...params.request,
+    generationConfig: { ...generationConfig, thinkingConfig },
+  };
 }
 
 function createChildSignal(parent: AbortSignal | undefined, timeoutMs: number) {
