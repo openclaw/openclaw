@@ -973,9 +973,7 @@ describe("image tool implicit imageModel config", () => {
       const authStore = {
         version: 1,
         profiles: {
-          ...(cnCandidate
-            ? { mini: { type: "api_key", provider: "minimax-cn", key: "minimax-test" } }
-            : {}),
+          ...(cnCandidate ? { mini: createApiKeyCredential("minimax-cn", "minimax-test") } : {}),
           miniGlobal: { type: "api_key", provider: "minimax", key: "minimax-test" },
         },
       } as const;
