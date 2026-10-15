@@ -1,30 +1,26 @@
 import fs from "node:fs";
-import { afterEach, expect, it, vi } from "vitest";
-import { mkdtempPluginCaptureSync } from "./plugin-source-capture-path.js";
+import path from "node:path";
+import { afterEach, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  mkdtempPluginCaptureSync,
+  PLUGIN_SOURCE_CAPTURE_PREFIX,
+} from "./plugin-source-capture-path.js";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+const temp = useAutoCleanupTempDirTracker(afterEach);
 
-it("creates Windows captures through the extended-length namespace", () => {
-  // Rehearsal roots put this template past CreateDirectoryW's 248-character limit.
-  const prefix = `C:\\Users\\runneradmin\\${"rehearsal\\".repeat(20)}captures\\openclaw-plugin-build-`;
-  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-  const mkdtemp = vi
-    .spyOn(fs, "mkdtempSync")
-    .mockImplementation((template) => `${String(template)}AbC123`);
+it("allocates captures beneath roots deeper than the Windows directory limit", () => {
+  // Update rehearsal roots put this template past CreateDirectoryW's 248-character limit.
+  let parent = temp.make("plugin-capture-depth-");
+  while (parent.length < 240) {
+    parent = path.join(parent, "rehearsal-root");
+  }
+  fs.mkdirSync(parent, { recursive: true });
 
-  expect(mkdtempPluginCaptureSync(prefix)).toBe(`${prefix}AbC123`);
-  expect(mkdtemp).toHaveBeenCalledWith(`\\\\?\\${prefix}`);
-});
+  const capture = mkdtempPluginCaptureSync(path.join(parent, PLUGIN_SOURCE_CAPTURE_PREFIX));
+  fs.writeFileSync(path.join(capture, "index.js"), "export {};\n");
 
-it("returns UNC captures in their ordinary spelling", () => {
-  const prefix = "\\\\server\\share\\state\\openclaw-plugin-build-";
-  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-  const mkdtemp = vi
-    .spyOn(fs, "mkdtempSync")
-    .mockImplementation((template) => `${String(template)}AbC123`);
-
-  expect(mkdtempPluginCaptureSync(prefix)).toBe(`${prefix}AbC123`);
-  expect(mkdtemp).toHaveBeenCalledWith("\\\\?\\UNC\\server\\share\\state\\openclaw-plugin-build-");
+  expect(path.dirname(capture)).toBe(parent);
+  expect(capture.startsWith("\\\\?\\")).toBe(false);
+  expect(fs.readFileSync(path.join(capture, "index.js"), "utf8")).toBe("export {};\n");
 });
