@@ -213,9 +213,6 @@ export async function assembleModelCatalogBundle(options: {
       delete providers[providerId];
     }
   }
-  if (!Object.hasOwn(providers, "anthropic") || !Object.hasOwn(providers, "openai")) {
-    throw new Error("catalog must include anthropic and openai providers");
-  }
   const bundle = {
     schemaVersion: 1,
     generatedAt: options.generatedAt,
@@ -225,13 +222,21 @@ export async function assembleModelCatalogBundle(options: {
   };
   const validateBundle = options.validateBundle ?? (await loadClientBundleValidator());
   const validated = validateBundle(bundle);
-  const summary = summarizeModelCatalogBundle(validated);
+  assertModelCatalogCompleteness(validated);
+  return validated;
+}
+
+function assertModelCatalogCompleteness(bundle: PublishedModelCatalogBundle) {
+  if (!Object.hasOwn(bundle.providers, "anthropic") || !Object.hasOwn(bundle.providers, "openai")) {
+    throw new Error("catalog must include anthropic and openai providers");
+  }
+  const summary = summarizeModelCatalogBundle(bundle);
   if (summary.models < MODEL_CATALOG_MIN_MODELS) {
     throw new Error(
       `catalog model count ${summary.models} is below required floor ${MODEL_CATALOG_MIN_MODELS}`,
     );
   }
-  return validated;
+  return summary;
 }
 
 export function summarizeModelCatalogBundle(bundle: PublishedModelCatalogBundle) {
@@ -1430,7 +1435,7 @@ export async function runPublishModelCatalog(
       )
     : undefined;
   bundle = validateBundle(bundle);
-  const summary = summarizeModelCatalogBundle(bundle);
+  const summary = assertModelCatalogCompleteness(bundle);
   const serialized = serializeModelCatalogBundle(bundle);
   const bundleBytes = Buffer.byteLength(serialized);
   const serializedV2 = bundleV2 ? serializeModelCatalogBundleV2(bundleV2) : undefined;

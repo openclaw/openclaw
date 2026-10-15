@@ -24,7 +24,7 @@ afterEach(() => {
   }
 });
 
-function fixtureRoot() {
+function fixtureRoot(videoOnlySeeds = 0) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-v2-"));
   roots.push(root);
   const dir = path.join(root, "extensions", "fixture");
@@ -52,13 +52,15 @@ function fixtureRoot() {
             recommendedModels: ["seed-0"],
             models: [
               ...seeds.map((model, index) =>
-                index === 0
-                  ? {
-                      ...model,
-                      input: ["text", "image", "video", "document"],
-                      cost: { input: 0.5 },
-                    }
-                  : model,
+                index < videoOnlySeeds
+                  ? { id: model.id, input: ["video"] }
+                  : index === 0
+                    ? {
+                        ...model,
+                        input: ["text", "image", "video", "document"],
+                        cost: { input: 0.5 },
+                      }
+                    : model,
               ),
               { id: "video-only", input: ["video"] },
             ],
@@ -411,6 +413,45 @@ describe("publish model catalog v2", () => {
       serialized,
     );
   });
+
+  it.each([
+    {
+      paired: false,
+      videoOnlySeeds: 5,
+      error: "catalog model count 198 is below required floor 200",
+    },
+    {
+      paired: true,
+      videoOnlySeeds: 5,
+      error: "catalog model count 198 is below required floor 200",
+    },
+    {
+      paired: true,
+      videoOnlySeeds: 100,
+      error: "catalog must include anthropic and openai providers",
+    },
+  ])(
+    "preserves published files when modality filtering breaks completeness: $paired/$videoOnlySeeds",
+    async ({ paired, videoOnlySeeds, error }) => {
+      const rootDir = fixtureRoot(videoOnlySeeds);
+      const outputs = paired ? ["v1.json", "v2.json"] : ["v1.json"];
+      for (const output of outputs) {
+        fs.writeFileSync(path.join(rootDir, output), "previous catalog");
+      }
+      await expect(
+        runPublishModelCatalog({
+          rootDir,
+          sourceCommit: "fixture",
+          now: () => 42,
+          fetchImpl: fixtureFetch(),
+          args: ["--out", "v1.json", ...(paired ? ["--out-v2", "v2.json"] : [])],
+        }),
+      ).rejects.toThrow(error);
+      for (const output of outputs) {
+        expect(fs.readFileSync(path.join(rootDir, output), "utf8")).toBe("previous catalog");
+      }
+    },
+  );
 
   it("writes paired catalogs compatible with released input schemas, preserving prices", async () => {
     const rootDir = fixtureRoot();
