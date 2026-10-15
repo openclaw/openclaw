@@ -259,10 +259,7 @@ function skillItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
         checked: skill.enabled,
         disabled: skill.missingDeps || skill.blocked || menu.mutationBlockedReason !== null,
         title,
-        note:
-          skill.missingDeps || skill.blocked ? (
-            <span class="agent-chat__capability-menu-note">{title}</span>
-          ) : null,
+        note: skill.missingDeps || skill.blocked ? title : null,
       }),
     );
   }
@@ -300,16 +297,8 @@ function connectorItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
         checked: enabled,
         disabled: menu.mutationBlockedReason !== null,
         title: menu.mutationBlockedReason,
-        note: (
-          <span class="agent-chat__capability-menu-note">
-            {enabled ? t("common.enabled") : t("common.disabled")}
-            {override !== undefined ? (
-              <span class="agent-chat__capability-menu-session-tag">
-                {t("chat.composer.menu.sessionTag")}
-              </span>
-            ) : null}
-          </span>
-        ),
+        note: enabled ? t("common.enabled") : t("common.disabled"),
+        sessionNote: override !== undefined ? t("chat.composer.menu.sessionTag") : undefined,
       }),
     );
     if (menu.onOpenToolAccess) {
@@ -411,6 +400,7 @@ function toolItems(menu: ChatComposerPlusMenuContentProps, serverName: string): 
     );
   }
   for (const tool of tools) {
+    const label = tool.label?.trim();
     entries.push(
       renderCapabilityToggleRow({
         value: `mcp-tool:${tool.mcpToolName}`,
@@ -418,10 +408,7 @@ function toolItems(menu: ChatComposerPlusMenuContentProps, serverName: string): 
         checked: !isToolDenied(menu, tool),
         disabled: menu.toolAccessMutationBlockedReason !== null,
         title: menu.toolAccessMutationBlockedReason,
-        note:
-          tool.label?.trim() && tool.label.trim() !== tool.mcpToolName ? (
-            <span class="agent-chat__capability-menu-note">{tool.label.trim()}</span>
-          ) : null,
+        note: label !== tool.mcpToolName ? label : null,
       }),
     );
   }

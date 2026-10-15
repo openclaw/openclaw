@@ -185,7 +185,7 @@ suite.define(() => {
           return {
             backOffset: backRect.top - menuRect.top,
             clientHeight: menu.clientHeight,
-            maxHeight: Number.parseFloat(style.maxHeight),
+            height: menuRect.height,
             overscrollY: style.overscrollBehaviorY,
             scrollHeight: menu.scrollHeight,
             scrollTop: menu.scrollTop,
@@ -310,8 +310,8 @@ suite.define(() => {
         expect(compactHeightCap).toBe(420);
         expect(layout.scrollHeight).toBeGreaterThan(layout.clientHeight);
         expect(layout.scrollTop).toBeGreaterThan(0);
-        expect(layout.maxHeight).toBeGreaterThanOrEqual(compactHeightCap - 1);
-        expect(layout.maxHeight).toBeLessThanOrEqual(compactHeightCap + 1);
+        expect(layout.height).toBeGreaterThanOrEqual(compactHeightCap - 1);
+        expect(layout.height).toBeLessThanOrEqual(compactHeightCap + 1);
         expect(layout.clientHeight).toBeLessThanOrEqual(compactHeightCap + 1);
         expect(layout.overscrollY).toBe("contain");
         expect(layout.backOffset).toBeGreaterThanOrEqual(0);

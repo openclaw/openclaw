@@ -70,7 +70,11 @@ it("retains the focused capability row and management link through catalog refre
     onViewChange: vi.fn(),
     capabilityMenu: {
       basePath: "/control",
-      skills: [{ key: "focused", name: "Focused skill", enabled: true, baseEnabled: true }],
+      skills: [
+        { key: "focused", name: "Focused skill", enabled: true, baseEnabled: true },
+        { key: "broken", name: "Broken", enabled: false, baseEnabled: false, missingDeps: true },
+        { key: "private", name: "Private", enabled: false, baseEnabled: false, blocked: true },
+      ],
       skillsLoading: false,
       skillsError: false,
       mcpServers: [],
@@ -88,6 +92,12 @@ it("retains the focused capability row and management link through catalog refre
     },
   });
   const view = mountSolid(() => <ChatComposerPlusMenu menu={menu()} />);
+  for (const name of ["Broken deps missing", "Private not available for this agent"]) {
+    expect(
+      view.getByRole("menuitemcheckbox", { name, hidden: true }).hasAttribute("disabled"),
+    ).toBe(true);
+  }
+  expect(view.getByRole("menuitemcheckbox", { name: "Focused skill", hidden: true })).toBeTruthy();
   const row = view.container.querySelector<HTMLButtonElement>('[data-value="skill:focused"]')!;
   await waitForSolid(() =>
     expect(row.closest("[data-menu-content]")?.getAttribute("data-phase")).toBe("open"),
@@ -139,6 +149,88 @@ it("retains the focused capability row and management link through catalog refre
   expect(onNavigate).not.toHaveBeenCalled();
   manage.click();
   await waitForSolid(() => expect(onNavigate).toHaveBeenCalledExactlyOnceWith("skills"));
+
+  setMenu((previous) => ({
+    ...previous,
+    view: "connectors",
+    toolOverrides: { mcpServers: { docs: true } },
+    capabilityMenu: {
+      ...previous.capabilityMenu!,
+      mcpServers: [
+        {
+          name: "docs",
+          enabled: false,
+          transport: "stdio",
+          target: "docs-server",
+          auth: null,
+          signIn: null,
+          toolFilter: false,
+          parallel: false,
+          tls: null,
+        },
+      ],
+    },
+  }));
+  await waitForSolid(() =>
+    expect(
+      view.getByRole("menuitemcheckbox", { name: "docs Enabled session", hidden: true }),
+    ).toBeTruthy(),
+  );
+  const connector = view.getByRole("menuitemcheckbox", {
+    name: "docs Enabled session",
+    hidden: true,
+  });
+  setMenu((previous) => ({ ...previous, toolOverrides: null }));
+  await waitForSolid(() =>
+    expect(view.getByRole("menuitemcheckbox", { name: "docs Disabled", hidden: true })).toBe(
+      connector,
+    ),
+  );
+
+  setMenu((previous) => ({
+    ...previous,
+    view: "tools:docs",
+    capabilityMenu: {
+      ...previous.capabilityMenu!,
+      toolsEffectiveResult: {
+        agentId: "main",
+        profile: "full",
+        groups: [
+          {
+            id: "mcp",
+            label: "MCP",
+            source: "mcp",
+            tools: [
+              {
+                id: "docs_search",
+                label: "Search documents",
+                description: "Search",
+                rawDescription: "Search",
+                source: "mcp",
+                mcpServer: "docs",
+                mcpToolName: "search",
+              },
+              {
+                id: "docs_list",
+                label: "list",
+                description: "List",
+                rawDescription: "List",
+                source: "mcp",
+                mcpServer: "docs",
+                mcpToolName: "list",
+              },
+            ],
+          },
+        ],
+      },
+    },
+  }));
+  await waitForSolid(() => {
+    expect(
+      view.getByRole("menuitemcheckbox", { name: "search Search documents", hidden: true }),
+    ).toBeTruthy();
+    expect(view.getByRole("menuitemcheckbox", { name: "list", hidden: true })).toBeTruthy();
+  });
 });
 
 it("retains attachment choices while the native menu closes and reopens", async () => {

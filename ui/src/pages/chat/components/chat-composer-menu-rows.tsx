@@ -45,12 +45,13 @@ export function renderCapabilityToggleRow(options: {
   disabled: boolean;
   title?: string | null;
   icon?: unknown;
-  note?: JSX.Element | null;
+  note?: string | null;
+  sessionNote?: string;
   checkbox?: boolean;
 }): MenuItem {
   return {
     id: options.value,
-    label: options.label,
+    label: [options.label, options.note, options.sessionNote].filter(Boolean).join(" "),
     type: "checkbox",
     checked: options.checked,
     disabled: options.disabled,
@@ -60,7 +61,14 @@ export function renderCapabilityToggleRow(options: {
     content: (
       <span class="agent-chat__capability-menu-label">
         <span>{options.label}</span>
-        {options.note}
+        {options.note ? (
+          <span class="agent-chat__capability-menu-note">
+            {options.note}
+            {options.sessionNote ? (
+              <span class="agent-chat__capability-menu-session-tag">{options.sessionNote}</span>
+            ) : null}
+          </span>
+        ) : null}
       </span>
     ),
     details: options.checkbox ? undefined : (
