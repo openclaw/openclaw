@@ -403,6 +403,15 @@ suite.define(() => {
         timeoutMs: 60_000,
         onPending: () => console.log("[search-proof] waiting for the preparing UI document"),
       });
+      if (!uiDocument.ready) {
+        console.log(
+          "[search-proof] document readiness failed",
+          JSON.stringify({
+            document: uiDocument,
+            gateway: owner.readiness.map(({ logs: _logs, ...receipt }) => receipt),
+          }),
+        );
+      }
       expect(uiDocument.ready, uiDocument.ready ? "ready" : uiDocument.reason).toBe(true);
       const handoff = await owner.cli(["dashboard", "--json"]);
       const result = requireRecord(JSON.parse(handoff.stdout));

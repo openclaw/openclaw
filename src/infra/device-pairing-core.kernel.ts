@@ -398,9 +398,15 @@ export function removePairedDeviceRoleInWorker(params: {
 export function updatePairedDeviceMetadataInWorker(
   deviceId: string,
   patch: Partial<PairedDeviceMetadataPatch>,
+  accessIdentity?: import("./device-pairing-access.js").DevicePairingAccessIdentity,
 ): boolean {
   return updatePairedDeviceInTransaction(deviceId, (device) => {
-    if (!device) {
+    if (
+      !device ||
+      (accessIdentity &&
+        (device.publicKey !== accessIdentity.publicKey ||
+          device.approvedAtMs !== accessIdentity.approvedAtMs))
+    ) {
       return { value: false };
     }
     const next: Partial<PairedDeviceMetadataPatch> = {};

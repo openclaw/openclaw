@@ -161,7 +161,7 @@ describe("Gateway close during agent admission", () => {
           runId: "late-admission",
           status: "timeout",
           summary: "aborted",
-          stopReason: "rpc",
+          stopReason: "restart",
           providerStarted: false,
         }),
         undefined,

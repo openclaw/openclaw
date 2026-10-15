@@ -32,6 +32,7 @@ import {
   applyUserProfileEmailBinding,
   bindPreparedUserProfileIdentity,
   projectUserProfileDisplay,
+  projectUserProfileSnapshot,
   projectCatalogUserProfileIdentity,
   resolveCatalogProfile,
   toUserProfile,
@@ -159,6 +160,22 @@ export function readResidentGatewayOwnerProfile(pathname: string) {
     return undefined;
   }
   return toUserProfile({ ...owner, created_at: owner.gatewayOwnerCreatedAt });
+}
+
+/** Existing authenticated email bindings use the same write-through catalog as role checks. */
+export function readResidentUserProfileForEmail(email: string, pathname: string) {
+  const catalog = profileCatalogs.get(pathname);
+  const binding = catalog?.valid && profileBindings.get(catalog.rows)?.byEmail.get(email);
+  if (!binding) {
+    return undefined;
+  }
+  catalog.assertCurrent?.(binding.profileId);
+  const profile = resolveCatalogProfile(catalog.rows, binding.profileId);
+  if (profile) {
+    catalog.assertCurrent?.(profile.id);
+    return toUserProfile(profile);
+  }
+  return undefined;
 }
 
 /** Sharing pickers consume the session projection's committed display catalog. */
@@ -636,6 +653,22 @@ export async function prepareUserProfileCatalog(options: OpenClawStateDatabaseOp
     },
     release: catalog.release,
   };
+}
+
+/** Lists share committed profile facts rather than reserving the shared-state writer. */
+export async function readUserProfileSnapshot(
+  githubAccountIds?: readonly number[],
+  options: OpenClawStateDatabaseOptions = {},
+) {
+  const catalog = await acquireUserProfileCatalog(options);
+  try {
+    for (const row of catalog.rows.values()) {
+      catalog.assertCurrent(row.id);
+    }
+    return projectUserProfileSnapshot(catalog.rows, catalog.bindings, githubAccountIds);
+  } finally {
+    catalog.release();
+  }
 }
 
 /** Prepare once off-thread; execution reads only committed facts retained by this owner. */

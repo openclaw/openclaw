@@ -2601,7 +2601,7 @@ describe("grouped chat rendering", () => {
     const thumbnailUrl = `${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}&v=4&width=480`;
     const resolveArtifactDownload = vi.fn(async () => ({ url: ticketedUrl }));
     const objectUrls = ["blob:thumbnail", "blob:full", "blob:download"];
-    stubObjectUrls(() => objectUrls.shift() ?? "blob:extra");
+    const { revokeObjectURL } = stubObjectUrls(() => objectUrls.shift() ?? "blob:extra");
     const imageBlob = new Blob(["png"], { type: "image/png" });
     const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => ({
       ok: true,
@@ -2630,6 +2630,8 @@ describe("grouped chat rendering", () => {
         container.querySelector(".chat-image-actions .oc-menu")!.matches(":popover-open"),
       ).toBe(true),
     );
+    // Own the delayed download cleanup before restoring the URL globals.
+    vi.useFakeTimers();
     container
       .querySelector<HTMLButtonElement>('.chat-image-actions [data-value="download"]')!
       .click();
@@ -2640,6 +2642,9 @@ describe("grouped chat rendering", () => {
       1,
     );
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
+    expect(revokeObjectURL).not.toHaveBeenCalledWith("blob:download");
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:download");
     container.remove();
   });
 

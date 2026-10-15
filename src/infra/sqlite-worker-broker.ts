@@ -201,6 +201,7 @@ export class SqliteWorkerBroker {
     );
     stateAccess.assertAccessAllowed({
       maintenanceScope: options.maintenanceScope,
+      schemaLease: options.cleanupAccess,
     });
     const input = options.input;
     const admittedPaths = captureSqliteWorkerAdmissionPaths(
@@ -310,6 +311,7 @@ export class SqliteWorkerBroker {
           signal: options.signal,
           assertCurrent: options.assertCurrent,
           maintenanceScope: options.maintenanceScope,
+          cleanupAccess: options.cleanupAccess,
           createAdmission: options.createAdmission ?? options.createOpenAdmission,
         },
       ).then(async () => {
@@ -405,9 +407,12 @@ export class SqliteWorkerBroker {
             scope,
             assertCurrent,
             createAdmission,
-            maintenanceScope: scope
-              ? scope.maintenanceScope
-              : getOpenClawDatabaseMaintenanceScope(),
+            cleanupAccess: options.cleanupAccess,
+            maintenanceScope: options.cleanupAccess
+              ? undefined
+              : scope
+                ? scope.maintenanceScope
+                : getOpenClawDatabaseMaintenanceScope(),
           },
         ),
       release: async (reclaiming) => {
@@ -500,8 +505,15 @@ export class SqliteWorkerBroker {
     admitted = false,
     observation = trackWorkerRequest("sqlite_writer", options.requestClass ?? body.type),
   ): Promise<unknown> {
-    const { signal, dispatchState, scope, assertCurrent, createAdmission, maintenanceScope } =
-      options;
+    const {
+      signal,
+      dispatchState,
+      scope,
+      assertCurrent,
+      createAdmission,
+      maintenanceScope,
+      cleanupAccess,
+    } = options;
     const reject = (error: Error) => {
       observation.completed();
       return Promise.reject(error);
@@ -539,6 +551,7 @@ export class SqliteWorkerBroker {
       observation,
       signal,
       maintenanceScope,
+      cleanupAccess,
       createAdmission,
       assertCurrent,
       dispatchState,

@@ -12,8 +12,8 @@ import type { CatalogSessionContinuedDetail } from "../lib/sessions/catalog-key.
 import { childSessionListQuery } from "../lib/sessions/child-session-data.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
 import type { SolidController } from "../lit/solid-controller-host.ts";
-import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import {
   discardEmptyChildSessionSnapshot,
   applySidebarChildSessionSnapshot,

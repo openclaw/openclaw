@@ -15,8 +15,64 @@ import {
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { appendTranscriptMessage } from "./session-accessor.sqlite-transcript-write.js";
-import { readPendingInputRecoveryEntriesInWorker } from "./session-entry-read-maintenance.js";
+import {
+  iteratePendingExecNotificationEntriesInWorker,
+  readPendingInputRecoveryEntriesInWorker,
+} from "./session-entry-read-maintenance.js";
+
+it("pages only pending exec owners without reading unrelated session entries or saved prompts", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const expected: string[] = [];
+    for (let index = 0; index < 70; index += 1) {
+      const sessionKey = `agent:main:exec-${String(index).padStart(2, "0")}`;
+      expected.push(sessionKey);
+      replaceSessionEntrySync(
+        { agentId: "main", env, sessionKey },
+        {
+          sessionId: `exec-${index}`,
+          updatedAt: 1,
+          skillsSnapshot: { prompt: "saved prompt".repeat(1024), skills: [] },
+          pendingExecNotifications: {
+            [`execution-${index}`]: {
+              processSessionId: `process-${index}`,
+              sessionId: `exec-${index}`,
+              incarnation: "previous-gateway",
+              startedAt: 1,
+              label: "background exec",
+              policy: {},
+            },
+          },
+        },
+      );
+      writeSessionEntry(database, `agent:main:unrelated-${index}`, {
+        sessionId: `unrelated-${index}`,
+        updatedAt: 1,
+      });
+    }
+    writeSessionEntry(database, "agent:main:empty-exec", {
+      sessionId: "empty-exec",
+      updatedAt: 1,
+      pendingExecNotifications: {},
+    });
+
+    const selected = [];
+    for await (const item of iteratePendingExecNotificationEntriesInWorker({
+      agentId: "main",
+      storePath: database.path,
+      env,
+    })) {
+      selected.push(item);
+    }
+    expect(selected.map(({ sessionKey }) => sessionKey)).toEqual(expected);
+    expect(selected.every(({ entry }) => entry.skillsSnapshot === undefined)).toBe(true);
+    expect(
+      selected.every(({ entry }) => Object.keys(entry.pendingExecNotifications ?? {}).length === 1),
+    ).toBe(true);
+  });
+});
 
 it("skips an admitted store without optional pending-input storage", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {

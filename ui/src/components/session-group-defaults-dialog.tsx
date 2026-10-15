@@ -4,11 +4,11 @@ import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { t } from "../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { pathDisplayName } from "../lib/path-display.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import { PlaceBrowserState } from "../pages/new-session/place-browser-state.ts";
 import { PlaceBrowser } from "../pages/new-session/place-browser.tsx";
@@ -18,9 +18,8 @@ import { Icon } from "./solid/icon.tsx";
 import { Menu } from "./solid/menu.tsx";
 import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 
-registerSessionOrganizationEnglish();
-
-registerNewSessionSetupEnglish();
+registerEnglishCatalog(registerSessionOrganizationEnglish);
+registerEnglishCatalog(registerNewSessionSetupEnglish);
 
 export type SessionGroupDefaults = { cwd: string; worktree: boolean };
 

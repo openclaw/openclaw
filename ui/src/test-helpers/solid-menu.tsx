@@ -36,7 +36,9 @@ export function mountMenu(props: Partial<MenuProps> = {}) {
         {...props}
         ref={(value) => (handle = value)}
       />
-      <button type="button">After menu</button>
+      <button type="button" tabindex={0}>
+        After menu
+      </button>
     </>
   ));
   flush();

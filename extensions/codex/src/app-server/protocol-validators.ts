@@ -363,7 +363,7 @@ export function assertCodexModelListResponse(value: unknown): CodexModelListResp
   return assertCodexShape(validateModelListResponse, value, "model/list response");
 }
 
-export function readCodexTurnCompletedNotification(
+function readCodexTurnCompletedNotification(
   value: unknown,
 ): CodexTurnCompletedNotification | undefined {
   const notification = readCodexShape(validateTurnCompletedNotification, value);

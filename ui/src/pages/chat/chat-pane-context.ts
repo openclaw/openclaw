@@ -31,7 +31,7 @@ import {
   resolveUiConfiguredMainKey,
   uiConversationMatches,
 } from "../../lib/sessions/session-key.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { SubscriptionsController } from "../../lib/subscriptions-controller.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import { commitCurrentChatHistorySnapshot } from "./chat-history-snapshot.ts";
 import {

@@ -2,7 +2,6 @@ import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-j
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -210,7 +209,7 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
     };
   });
   return (
-    <ShellLayoutBoundary traits={{ workbench: true }}>
+    <>
       <div class="sidebar-region">
         <div class="sidebar-region__header">
           <LitContent value={view()?.header} />
@@ -254,7 +253,7 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
         })()}
         onClose={closeImage}
       />
-    </ShellLayoutBoundary>
+    </>
   );
 }
 export const PendingSessionCreate = defineSolidBridge<PendingSessionCreateProps>(
