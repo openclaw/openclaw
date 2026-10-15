@@ -55,6 +55,7 @@ export type Admission = {
   hostRevision?: number;
   writeScopes: Map<string, ScopedWriteRevision>;
   writeScopeRevision: number;
+  /** Each worker shares its handle count and unsettled native-write count. */
   references: Map<number, SharedArrayBuffer>;
   facts: Map<string, AdmissionFact>;
 };
@@ -179,7 +180,7 @@ export class SqliteDatabaseAdmissionRegistry {
   changeReferences(record: Admission, change: 1 | -1): boolean {
     let references = record.references.get(threadId);
     if (!references) {
-      references = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+      references = new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT);
       record.references.set(threadId, references);
     }
     const count = Atomics.add(new Int32Array(references), 0, change) + change;
@@ -216,19 +217,12 @@ export class SqliteDatabaseAdmissionRegistry {
   releaseWorker(owner: number): void {
     for (const record of this.records.values()) {
       const references = owner > 0 ? record.references.get(owner) : undefined;
-      // A worker cannot leave an unpublished write in a database it never borrowed.
       if (!references) {
         continue;
       }
       // Zero permits a live worker to reopen; negative cells cannot be revived by old snapshots.
-      const priorReferences = Atomics.exchange(new Int32Array(references), 0, -1);
+      Atomics.store(new Int32Array(references), 0, -1);
       this.retireUnreferenced(record);
-      // Native close settles receipts before releasing the worker's final reference.
-      if (priorReferences <= 0) {
-        continue;
-      }
-      advanceSqliteDatabaseGeneration(record, "writeRevision");
-      advanceSqliteDatabaseGeneration(record, "unscopedWriteRevision");
     }
     this.publish();
   }

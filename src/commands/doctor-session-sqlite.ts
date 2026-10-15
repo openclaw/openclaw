@@ -877,9 +877,9 @@ async function inspectOrMigrateTarget(params: {
     validateLegacySessionRecords(params.target, records, report, "validate", params.env);
   }
   let validationPassed = retainedImport !== undefined;
-  if (params.mode === "import" && retainedImport) {
-    // Exact source and database identities carry the earlier verified import into archival.
-    updateManifest("passed");
+  if (params.mode === "import") {
+    // A blocked import cannot certify archival; retained imports already carry exact identities.
+    updateManifest(retainedImport ? "passed" : "failed");
   }
   if (
     params.mode === "import" &&

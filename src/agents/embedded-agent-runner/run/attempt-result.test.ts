@@ -211,12 +211,21 @@ describe("attempt result projection", () => {
     ).toBe(expected);
   });
 
-  it.each([false, true])(
-    "recognizes text-only terminal calls after a read (native terminal call=%s)",
-    (nativeCall) => {
+  it.each(
+    [false, true].flatMap((nativeCall) =>
+      [
+        '{"name":"write","arguments":{"path":"proof.txt"}}',
+        "<tool_call><function=write><parameter=path>proof.txt</parameter></function></tool_call>",
+        'Action: write\nAction Input: {"path":"proof.txt"}',
+        '[TOOL_CALL]{tool => "write", args => {"path":"proof.txt"}}[/TOOL_CALL]',
+      ].map((text) => ({ nativeCall, text })),
+    ),
+  )(
+    "recognizes text-only terminal calls after a read (native=$nativeCall): $text",
+    ({ nativeCall, text }) => {
       const assistant = makeAssistantMessageFixture({
         stopReason: "stop",
-        content: [{ type: "text", text: '{"name":"write","arguments":{"path":"proof.txt"}}' }],
+        content: [{ type: "text", text }],
       });
       if (nativeCall) {
         assistant.content.push({ type: "toolCall", id: "native", name: "write", arguments: {} });

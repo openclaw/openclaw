@@ -522,7 +522,9 @@ export async function authorizeGatewayConnectDevice(
       return true;
     };
 
+    const lookupStartedAt = performance.now();
     const paired = await getPairedDevice(device.id);
+    context.recordAttachTiming?.("deviceLookupMs", lookupStartedAt);
     const isPaired = paired?.publicKey === devicePublicKey;
     if (paired && !isPaired && state.remoteIngressPrincipal) {
       failPairingHandshake({
@@ -595,6 +597,7 @@ export async function authorizeGatewayConnectDevice(
 
   // Ingress authenticates exclusively from its live principal grant and signed
   // device proof. Never mint a reusable credential that can outlive that grant.
+  const tokensStartedAt = performance.now();
   const { deviceToken, bootstrapDeviceTokens } =
     state.remoteIngressPrincipal || (roleConfiguredHumanOperator && authResult.user?.trim())
       ? { deviceToken: null, bootstrapDeviceTokens: [] }
@@ -604,6 +607,8 @@ export async function authorizeGatewayConnectDevice(
           hasApprovedDeviceBaseline: hasServerApprovedDeviceTokenBaseline,
           isIssuanceCurrent: isConnectAuthorizationCurrent,
         });
+
+  context.recordAttachTiming?.("deviceTokensMs", tokensStartedAt);
 
   return {
     ...state,

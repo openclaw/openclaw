@@ -710,8 +710,11 @@ merge_outcome_normalize() {
 }
 
 merge_outcome_read_remote() {
-  local response observation before main previous local_only="${2:-false}"
+  local response observation before main previous proof_started local_only="${2:-false}"
+  # Keep timing in the caller's shell without adding it to retained observations.
+  MERGE_REMOTE_LOCAL_PROOF_SECONDS=0
   response=$(merge_read observe "$1") || return 1
+  MERGE_REMOTE_PROJECTION_AT=$(pr_merge_now)
   observation=$(merge_outcome_normalize "$response" "$1") || return 1
   if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ] &&
     [ "$(printf '%s\n' "$observation" | jq -r .transport)" = rest ] &&
@@ -727,14 +730,16 @@ merge_outcome_read_remote() {
         previous=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -er .main) || return 1
       fi
       # Consume transient read boundaries before emitting normalized/retained facts.
+      proof_started=$(pr_merge_now)
       verify_merge_main_advance "$previous" "$before" "$local_only" >&2 || return 1
       [ "$before" = "$main" ] || verify_merge_main_advance "$before" "$main" "$local_only" >&2 || return 1
+      MERGE_REMOTE_LOCAL_PROOF_SECONDS=$(( $(pr_merge_now) - proof_started ))
     elif [ "$(printf '%s\n' "$observation" | jq -r .pr.state)" != MERGED ] && [ "$before" != "$main" ]; then
       merge_outcome_stop "main changed while reading evidence outside active prior-CI admission" >&2
       return 1
     fi
   fi
-  printf '%s\n' "$observation"
+  MERGE_REMOTE_OBSERVATION="$observation"
 }
 
 merge_outcome_require_commit() {
@@ -756,13 +761,16 @@ merge_outcome_receipt_head() {
 }
 
 merge_outcome_observe() {
-  local main
-  MERGE_OBSERVATION=$(merge_outcome_read_remote "$1") || {
+  local main proof_started
+  merge_outcome_read_remote "$1" || {
     merge_outcome_stop "PR/main metadata: observed=unavailable or invalid; expected=authoritative valid snapshot"; return 1;
   }
+  MERGE_OBSERVATION="$MERGE_REMOTE_OBSERVATION"
   MERGE_TRANSPORT=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r '.transport') || return 1
   main=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main) || return 1
+  proof_started=$(pr_merge_now)
   merge_outcome_require_main "$main" || return 1
+  MERGE_REMOTE_LOCAL_PROOF_SECONDS=$((MERGE_REMOTE_LOCAL_PROOF_SECONDS + $(pr_merge_now) - proof_started))
   if [ "${MERGE_ADMISSION_ACTIVE:-false}" = true ]; then
     MERGE_OBSERVED_MAIN="$main"
     if [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ] && [ "$MERGE_TRANSPORT" = rest ]; then
@@ -852,6 +860,7 @@ merge_outcome_stable() {
   local reread="$MERGE_OBSERVATION" main previous_main observation_attempt=0 settling=false local_only="${2:-false}"
   local main_floor="${4:-}" supplied="${5:-}" before="${6:-}"
   local settle_start="" settle_deadline="" settle_delay=2 prior_ci_round=false projection_at
+  local local_proof_seconds proof_started
   if [ "${3:-}" = requalify-prior-ci ] && [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" = true ]; then
     prior_ci_round=true
     settling="${MERGE_PRIOR_CI_SETTLING:-false}"
@@ -868,12 +877,16 @@ merge_outcome_stable() {
     observation_attempt=$((observation_attempt + 1))
     if [ -n "$supplied" ]; then
       reread="$supplied"
+      projection_at=$(pr_merge_now)
+      local_proof_seconds=0
     else
-      reread=$(merge_outcome_read_remote "$1" "$local_only") || {
+      merge_outcome_read_remote "$1" "$local_only" || {
         merge_outcome_stop "observation reread: observed=unavailable or invalid; expected=authoritative PR/main metadata"; return 1;
       }
+      reread="$MERGE_REMOTE_OBSERVATION"
+      projection_at="$MERGE_REMOTE_PROJECTION_AT"
+      local_proof_seconds="$MERGE_REMOTE_LOCAL_PROOF_SECONDS"
     fi
-    projection_at=$(pr_merge_now)
     if { [ "$prior_ci_round" = true ] && [ -n "${MERGE_PRIOR_CI_UNKNOWN_START:-}" ] &&
       [ "$projection_at" -ge "$((MERGE_PRIOR_CI_UNKNOWN_START + 60))" ]; } ||
       { [ "$prior_ci_round" = false ] && [ "$settling" = true ] && [ "$projection_at" -ge "$settle_deadline" ]; }; then
@@ -921,12 +934,25 @@ merge_outcome_stable() {
           # A returned authority window must also descend from its missing tip.
           proof_main="$MERGE_PRIOR_CI_REMATERIALIZE_MAIN"
         fi
+        proof_started=$(pr_merge_now)
         if [ -n "$before" ] && [ "$before" != "$main" ]; then
           verify_merge_main_advance "$proof_main" "$before" "$local_only" "${3:-}" || advance_result=$?
-          if [ "$advance_result" -ne 0 ]; then return "$advance_result"; fi
           proof_main="$before"
         fi
-        verify_merge_main_advance "$proof_main" "$main" "$local_only" "${3:-}" || advance_result=$?
+        if [ "$advance_result" -eq 0 ]; then
+          verify_merge_main_advance "$proof_main" "$main" "$local_only" "${3:-}" || advance_result=$?
+        fi
+        local_proof_seconds=$((local_proof_seconds + $(pr_merge_now) - proof_started))
+        # UNKNOWN budgets remote settlement; local Git proof still counts toward
+        # the separate wall-clock authority deadline.
+        if [ "$prior_ci_round" = true ] && [ -n "$MERGE_PRIOR_CI_UNKNOWN_START" ]; then
+          MERGE_PRIOR_CI_UNKNOWN_START=$((MERGE_PRIOR_CI_UNKNOWN_START + local_proof_seconds))
+          settle_start="$MERGE_PRIOR_CI_UNKNOWN_START"
+          settle_deadline=$((settle_start + 60))
+        elif [ "$prior_ci_round" = false ] && [ "$settling" = true ]; then
+          settle_start=$((settle_start + local_proof_seconds))
+          settle_deadline=$((settle_deadline + local_proof_seconds))
+        fi
         if [ "$advance_result" -ne 0 ]; then
           [ "$advance_result" -eq 75 ] && [ -n "${MERGE_PRIOR_CI_REMATERIALIZE_MAIN:-}" ] && return 75
           return 1
@@ -937,7 +963,7 @@ merge_outcome_stable() {
         if printf '%s\n' "$reread" | jq -e '.pr.mergeable == "UNKNOWN" or .pr.mergeStateStatus == "UNKNOWN"' >/dev/null; then
           if [ "$prior_ci_round" = false ] && [ "$settling" = false ]; then
             # The initial read is not part of the UNKNOWN settlement window.
-            settle_start="$projection_at"
+            settle_start=$((projection_at + local_proof_seconds))
             settle_deadline=$((settle_start + 60))
           fi
           settling=true

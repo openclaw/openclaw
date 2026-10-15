@@ -432,6 +432,7 @@ src/channels/plugins/setup-contract.ts
 src/channels/registry-lookup.ts
 src/channels/registry-normalize.ts
 src/channels/registry.ts
+src/claws/add-state-worker-contract.ts
 src/claws/provenance-secondary-references.ts
 src/cli/command-format.ts
 src/cli/daemon-cli/restart-health.types.ts
@@ -888,6 +889,7 @@ src/infra/diagnostic-trace-context.ts
 src/infra/diagnostic-trace-propagation.ts
 src/infra/diagnostics-timeline.ts
 src/infra/directory-durability.ts
+src/infra/directory-watch-host.ts
 src/infra/disk-space.ts
 src/infra/dispatch-wrapper-resolution.ts
 src/infra/device-identity-process-cache.ts
