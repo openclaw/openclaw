@@ -4,10 +4,12 @@ import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { brotliCompressSync, gzipSync, gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as identityFiles from "../agents/identity-file.js";
 import * as configIo from "../config/io.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -23,6 +25,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -1175,6 +1178,49 @@ describe("handleControlUiHttpRequest", () => {
       });
     } finally {
       rateLimiter.dispose();
+    }
+  });
+
+  it("serves configured avatar metadata without waiting for workspace identity", async () => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore<identityFiles.AgentIdentityFile | null>();
+    const read = vi
+      .spyOn(identityFiles, "loadAgentIdentityFromWorkspaceAsync")
+      .mockImplementation(() => {
+        entered.resolve();
+        return release.promise;
+      });
+    const avatar = "https://example.com/avatar.png";
+    const started = performance.now();
+    const pending = runAvatarRequest({
+      url: "/avatar/main?meta=1",
+      config: createAvatarConfig("/tmp/avatar-workspace", avatar),
+      auth: tokenAuth,
+      headers: { authorization: "Bearer test-token" },
+    });
+    try {
+      const winner = await Promise.race([
+        pending.then(() => "response" as const),
+        entered.promise.then(() => "workspace-read" as const),
+      ]);
+      console.info("configured avatar response boundary", {
+        winner,
+        elapsedMs: performance.now() - started,
+      });
+      expect(winner).toBe("response");
+      const response = await pending;
+      expect(response.handled).toBe(true);
+      expect(response.res.statusCode).toBe(200);
+      expect(responseJson(response.end)).toEqual({
+        avatarUrl: avatar,
+        avatarSource: "remote URL",
+        avatarStatus: "remote",
+        avatarReason: null,
+      });
+    } finally {
+      release.resolve(null);
+      await pending;
+      read.mockRestore();
     }
   });
 

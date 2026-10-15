@@ -320,18 +320,11 @@ export function createSessionHistoryWorkerReaders(
     readStoreProjection: reader("session-store-projection", (value) => value),
     readStoreSummary: reader("session-store-summary", (value) => value.summary),
     readIdentityEvidence: reader("session-identity-evidence", (value) => value.evidence),
-    readProjectionStatus: async (input, signal) =>
-      await runRequest(
-        () => ({ kind: "projection-status", ...input }),
-        JSON.stringify(input).length * 2,
-        (value) => value,
-        signal,
-      ),
-    readEntryPresence: async (scope) =>
-      await runRequest(
-        () => ({ kind: "session-row-presence", scope }),
-        JSON.stringify(scope).length * 2,
-        (value) => value,
-      ),
+    readProjectionStatus: reader("projection-status", (value) => value),
+    readEntryPresence: reader(
+      "session-row-presence",
+      (value) => value,
+      (scope) => ({ kind: "session-row-presence", scope }),
+    ),
   };
 }

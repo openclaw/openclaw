@@ -24,7 +24,11 @@ import {
   prepareGatewayAssistantAvatar,
   resolveGatewayAssistantAvatar,
 } from "./assistant-avatar.js";
-import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import {
+  DEFAULT_ASSISTANT_IDENTITY,
+  resolveAssistantIdentity,
+  resolveAssistantIdentityAvatar,
+} from "./assistant-identity.js";
 import {
   buildAssistantMediaContentDisposition,
   resolveAssistantMediaFilename,
@@ -470,7 +474,7 @@ export async function handleControlUiAvatarRequest(
   requestAuth.assertCurrent();
 
   try {
-    const identity = await resolveAssistantIdentity({ cfg: opts.config, agentId });
+    const identity = await resolveAssistantIdentityAvatar({ cfg: opts.config, agentId });
     const projection = await prepareGatewayAssistantAvatar({
       cfg: opts.config,
       identity,

@@ -28,6 +28,7 @@ import {
 } from "./chat-message-attachment-status-solid.tsx";
 import {
   loadManagedImageBlob,
+  managedImageInlineVariant,
   readCachedManagedImageUrl,
   resolveManagedImageResource,
 } from "./chat-message-image-loading.ts";
@@ -184,7 +185,14 @@ class MessageImagePresentation {
     // decoded node only within the existing metadata cache and ticket lifetime.
     if (!this.admitted) {
       if (this.managed) {
-        this.admitted = Boolean(readCachedManagedImageUrl(image.url, options, image.artifactId));
+        this.admitted = Boolean(
+          readCachedManagedImageUrl(
+            image.url,
+            options,
+            image.artifactId,
+            managedImageInlineVariant(image),
+          ),
+        );
       } else if (image.url && !this.element) {
         this.element = takeRetainedAssistantImage(image.url, options);
         this.previewElement = this.element;
@@ -303,7 +311,12 @@ class MessageImagePresentation {
     subscriptionOptions: ImageRenderOptions | undefined,
     source = image.url,
   ) {
-    const resource = resolveManagedImageResource(source, subscriptionOptions, image.artifactId);
+    const resource = resolveManagedImageResource(
+      source,
+      subscriptionOptions,
+      image.artifactId,
+      managedImageInlineVariant(image),
+    );
     const pending = resource.pending;
     // Standalone renders settle without opting into pane-owned automatic retries.
     if (!options?.onRequestUpdate && pending && this.pendingPreview !== pending) {
@@ -378,7 +391,7 @@ class MessageImagePresentation {
                   ? { ...this.options, onRequestUpdate: this.refreshImage }
                   : this.options,
                 image.artifactId,
-                "thumbnail",
+                managedImageInlineVariant(image),
                 true,
               );
               this.refreshImage();
@@ -490,7 +503,12 @@ function openMessageImage(
   }
 
   if (onOpenImage) {
-    const preview = resolveManagedImageResource(img.url, opts, img.artifactId);
+    const preview = resolveManagedImageResource(
+      img.url,
+      opts,
+      img.artifactId,
+      managedImageInlineVariant(img),
+    );
     open({
       src: previewUrl,
       title,
