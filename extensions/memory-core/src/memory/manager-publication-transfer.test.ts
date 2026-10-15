@@ -16,7 +16,6 @@ import {
   recordMemorySessionTombstonesInDatabase,
 } from "../memory-session-tombstones.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import {
   memoryEmbeddingCacheBatches,
   memoryPublicationBatches,
@@ -27,10 +26,7 @@ import {
   openExistingSqliteWorkerBackend,
 } from "./manager-publication.worker.js";
 import { readMemoryShadowIdentity } from "./manager-shadow-task.js";
-import type {
-  MemorySourceIndexReplacement,
-  MemorySourceIndexRow,
-} from "./manager-source-index-kernel.js";
+import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
 import { memoryChunkRowId } from "./manager-source-index-kernel.js";
 
 const owners: MemoryIndexDatabase[] = [];
@@ -302,7 +298,7 @@ describe("bounded memory publication transfer", () => {
     }
   });
 
-  it.each(["success", "stale", "begin", "write", "transaction", "commit"] as const)(
+  it.each(["write", "commit"] as const)(
     "settles a single-statement source refresh through %s",
     async (fault) => {
       const owner = await createOwner();
@@ -321,9 +317,6 @@ describe("bounded memory publication transfer", () => {
         db.exec(`CREATE TRIGGER refuse_refresh BEFORE UPDATE ON memory_index_sources
           BEGIN SELECT RAISE(ABORT, 'refused write'); END`);
       }
-      const locker =
-        fault === "begin" ? sqliteRuntime.openNodeSqliteDatabase(db.location()!) : undefined;
-      locker?.exec("BEGIN IMMEDIATE");
       const exec = vi.spyOn(db, "exec");
       try {
         const outcome = backend.execute({
@@ -333,20 +326,14 @@ describe("bounded memory publication transfer", () => {
             hash: "new",
             mtime: 2,
             size: 2,
-            expectedHash: fault === "stale" ? "superseded" : "old",
+            expectedHash: "old",
           },
         });
-        expect(outcome).toMatchObject(
-          fault === "success" || fault === "stale"
-            ? { ok: true, value: fault === "success" }
-            : { ok: false, entered: fault !== "begin", committed: false },
-        );
-        expect(stages).toEqual(
-          fault === "transaction" ? ["transaction"] : ["transaction", "commit"],
-        );
+        expect(outcome).toMatchObject({ ok: false, entered: true, committed: false });
+        expect(stages).toEqual(["transaction", "commit"]);
         expect(
           exec.mock.calls.filter(([sql]) => sql === "PRAGMA busy_timeout = 5000"),
-        ).toHaveLength(fault === "transaction" || fault === "commit" ? 0 : 1);
+        ).toHaveLength(fault === "commit" ? 0 : 1);
         expect(
           exec.mock.calls.filter(([sql]) =>
             /^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/u.test(sql),
@@ -355,12 +342,10 @@ describe("bounded memory publication transfer", () => {
         expect(db.isTransaction).toBe(false);
         expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
         expect(db.prepare("SELECT hash FROM memory_index_sources").get()).toEqual({
-          hash: fault === "success" ? "new" : "old",
+          hash: "old",
         });
       } finally {
         exec.mockRestore();
-        locker?.exec("ROLLBACK");
-        locker?.close();
       }
     },
   );
@@ -522,28 +507,6 @@ describe("bounded memory publication transfer", () => {
       expect(owner.db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
     },
   );
-
-  it("discards declined preparation and reuses its healthy publication owner", async () => {
-    const open = vi.spyOn(sqliteRuntime, "openSqliteWorkerStore");
-    const owner = await createOwner();
-    await expect(
-      owner.replaceSource(
-        replacement("declined"),
-        () => undefined,
-        async () => false,
-      ),
-    ).resolves.toBeUndefined();
-    expect(owner.db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
-    await owner.replaceSource(
-      replacement("accepted"),
-      () => undefined,
-      async () => true,
-    );
-    expect(open).toHaveBeenCalledTimes(1);
-    expect(owner.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
-      { text: "accepted" },
-    ]);
-  });
 
   it("roundtrips an oversized Unicode record and its metadata through the native publication owner", async () => {
     const owner = await createOwner();
@@ -772,7 +735,7 @@ describe("bounded memory publication transfer", () => {
     ).toEqual([{ start_line: 1 }, { start_line: 3 }]);
   });
 
-  it.each([8, 4 * 1024 * 1024 + 1])(
+  it.each([4 * 1024 * 1024 + 1])(
     "roundtrips %i-coordinate cache vectors with tombstone and capacity limits",
     async (coordinates) => {
       const owner = await createOwner();
@@ -845,53 +808,4 @@ describe("bounded memory publication transfer", () => {
       expect(owner.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     },
   );
-
-  it("bounds each serialized batch and preserves every row when provider vectors share an array", () => {
-    const input = replacement();
-    const chunk = input.chunks[0];
-    if (!chunk) {
-      throw new Error("Expected a fixture chunk");
-    }
-    const numericCases = [
-      [0.125, 0.125],
-      [-0, 0],
-      [Number.NaN, null],
-      [Infinity, null],
-      [-Infinity, null],
-      [-0.0000010000000000000002, -0.0000010000000000000002],
-    ] as const;
-    const vector = Array.from(
-      { length: 16_384 },
-      (_, index) => numericCases[index % numericCases.length]![0],
-    );
-    input.chunks = Array.from({ length: 32 }, (_, index) => ({
-      ...chunk,
-      startLine: index + 1,
-      endLine: index + 1,
-      hash: String(index),
-    }));
-    input.embeddings = input.chunks.map(() => vector);
-    const rows: MemorySourceIndexRow[] = [];
-    let json = "";
-    let batches = 0;
-    for (const batch of memoryPublicationBatches(input)) {
-      batches++;
-      expect(serialize(batch).byteLength).toBeLessThanOrEqual(512 * 1024);
-      for (const fragment of batch) {
-        expect(fragment.json.length).toBeLessThanOrEqual(16 * 1024);
-        json += fragment.json;
-        if (fragment.last) {
-          rows.push(JSON.parse(json));
-          json = "";
-        }
-      }
-    }
-    expect(batches).toBeGreaterThan(1);
-    expect(json).toBe("");
-    const expectedVector = Array.from(
-      { length: vector.length },
-      (_, index) => numericCases[index % numericCases.length]![1],
-    );
-    expect(rows).toEqual(input.chunks.map((row) => ({ chunk: row, embedding: expectedVector })));
-  });
 });

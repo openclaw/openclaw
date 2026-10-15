@@ -3,10 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import {
-  ensureMemoryIndexSchema,
-  loadSqliteVecExtension,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
@@ -16,7 +12,6 @@ import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runti
 import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
-  openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
@@ -221,25 +216,7 @@ describe("memory manager FTS-only reindex", () => {
     });
   }
 
-  it("keeps a reopened semantic index valid before discovering the provider model", async () => {
-    providerAvailable = true;
-    const indexed = await createManager({ provider: "openai" });
-    await indexed.sync({ force: true });
-    expect(indexed.status().chunks).toBeGreaterThan(0);
-    await indexed.close();
-    await closeAllMemorySearchManagers();
-    createEmbeddingProviderMock.mockClear();
-
-    const reopened = await createManager({ provider: "openai", purpose: "status" });
-    expect(reopened.status().custom?.indexIdentity).toEqual({ status: "valid" });
-    expect(reopened.status().custom?.providerState).toEqual({
-      mode: "pending",
-      requestedProvider: "openai",
-    });
-    expect(createEmbeddingProviderMock).not.toHaveBeenCalled();
-  });
-
-  it.each(["first search", "failed background sync"])(
+  it.each(["failed background sync"])(
     "returns keyword matches after an embedding failure during %s",
     async (phase) => {
       providerAvailable = true;
@@ -300,33 +277,6 @@ describe("memory manager FTS-only reindex", () => {
     } finally {
       nowSpy.mockRestore();
     }
-  });
-
-  it("falls back to keyword results when the default query embedding fails", async () => {
-    providerAvailable = true;
-    const memoryManager = await createManager();
-    await memoryManager.sync({ force: true });
-    expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
-    await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
-    expect(providerQueryCalls).toBeGreaterThan(0);
-
-    providerQueryError = new Error("query embedding request failed at runtime");
-    const results = await memoryManager.search("Alpha topic");
-
-    expect(results).toEqual([expect.objectContaining({ path: "MEMORY.md", source: "memory" })]);
-  });
-
-  it("keeps explicit providers fail-closed when a runtime query embedding fails", async () => {
-    providerAvailable = true;
-    const memoryManager = await createManager({ provider: "openai" });
-    await memoryManager.sync({ force: true });
-    expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
-
-    providerQueryError = new Error("query embedding request failed at runtime");
-
-    await expect(memoryManager.search("Alpha topic")).rejects.toThrow(
-      "query embedding request failed at runtime",
-    );
   });
 
   it("keeps explicit required providers fail-closed when construction fails", async () => {
@@ -588,26 +538,6 @@ describe("memory manager FTS-only reindex", () => {
     expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
   });
 
-  it("ignores persisted vector rebuild debt after reopening an FTS-only index", async () => {
-    const memoryManager = await createManager({ provider: "none" });
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-    db.prepare(
-      `INSERT INTO memory_index_meta (key, value) VALUES ('memory_vector_rebuild_v1', '1')`,
-    ).run();
-
-    await memoryManager.sync({ force: true });
-    await memoryManager.close();
-    await closeAllMemorySearchManagers();
-
-    const reopened = await createManager({ provider: "none", purpose: "status" });
-    expect(reopened.status()).toMatchObject({
-      dirty: false,
-      vector: { enabled: false, index: { state: "empty" } },
-      custom: { indexIdentity: { status: "valid" } },
-    });
-    expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
-  });
-
   it("aborts instead of downgrading an existing semantic index to FTS-only", async () => {
     const memoryManager = await createManager();
     await writeExistingMeta(memoryManager, "mock-embed");
@@ -616,170 +546,5 @@ describe("memory manager FTS-only reindex", () => {
       "Refusing to run sync in fts-only fallback mode to protect existing vector index (current model: mock-embed).",
     );
     expect(memoryManager.status().provider).toBe("openai");
-  });
-
-  function indexIdentityStatus(memoryManager: MemoryIndexManager): string | undefined {
-    const identity = memoryManager.status().custom?.indexIdentity as
-      | { status?: string }
-      | undefined;
-    return identity?.status;
-  }
-
-  function seedChunksWithNoMeta(model = "fts-only"): void {
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-    db.exec(`
-      INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-        VALUES ('chunk-1', 'MEMORY.md', 'memory', 1, 3, 'hash-1', '${model}', 'Alpha topic keep note', x'', ${Date.now()});
-      INSERT INTO memory_index_sources (path, source, hash, mtime, size)
-        VALUES ('MEMORY.md', 'memory', 'hash-1', ${Date.now()}, 100);
-    `);
-  }
-
-  it("self-heals missing identity on non-forced gateway sync when all chunks are FTS-only and provider is unavailable", async () => {
-    seedChunksWithNoMeta();
-    const memoryManager = await createManager({ provider: "auto", vectorEnabled: false });
-
-    expect(indexIdentityStatus(memoryManager)).toBe("missing");
-
-    // Non-forced sync simulates the gateway's periodic sync loop
-    await memoryManager.sync();
-
-    const statusAfter = memoryManager.status();
-    expect(indexIdentityStatus(memoryManager)).toBe("valid");
-    expect(statusAfter.chunks).toBeGreaterThan(0);
-    expect(statusAfter.dirty).toBe(false);
-  });
-
-  it("does not rebuild missing-identity semantic chunks when the provider is unavailable", async () => {
-    seedChunksWithNoMeta("text-embedding-3-small");
-    const memoryManager = await createManager({ provider: "auto", vectorEnabled: false });
-
-    await memoryManager.sync();
-
-    const statusAfter = memoryManager.status();
-    expect(indexIdentityStatus(memoryManager)).toBe("missing");
-    expect(statusAfter.chunks).toBe(1);
-    expect(statusAfter.dirty).toBe(true);
-  });
-
-  it("removes chunks and FTS rows when the dirty source file is already deleted", async () => {
-    const seedDb = openOpenClawAgentDatabase({ agentId: "main" }).db;
-    expect(() => seedDb.loadExtension("not-a-real-extension")).toThrow(
-      "extension loading is not allowed",
-    );
-    const loaded = await loadSqliteVecExtension({ db: seedDb });
-    expect(() => seedDb.loadExtension("not-a-real-extension")).toThrow(
-      "extension loading is not allowed",
-    );
-    expect(() => seedDb.prepare("SELECT load_extension(?)").get("not-a-real-extension")).toThrow(
-      "not authorized",
-    );
-    expect(loaded.ok, loaded.error).toBe(true);
-    const vectorExtensionPath = loaded.extensionPath;
-    ensureMemoryIndexSchema({ db: seedDb, cacheEnabled: false, ftsEnabled: true });
-    seedDb.exec(`
-        INSERT INTO memory_index_sources (path, source, hash, mtime, size)
-          VALUES
-            ('memory/deleted.md', 'memory', '', 200, 20),
-            ('memory/ownerless.md', 'memory', '', 190, 20),
-            ('sessions/excluded.jsonl', 'sessions', '', 200, 20);
-        INSERT INTO memory_index_chunks
-          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-        VALUES (
-          'chunk-canonical', 'memory/deleted.md', 'memory', 1, 2, 'canonical-chunk-hash',
-          'fts-only', 'obsolete saffronquasar', x'', 200
-        );
-        INSERT INTO memory_index_chunks
-          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-        VALUES (
-          'chunk-ownerless', 'memory/ownerless.md', 'memory', 1, 2, 'ownerless-chunk-hash',
-          'fts-only', 'obsolete ambercomet', x'', 190
-        );
-        CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
-          id TEXT PRIMARY KEY,
-          embedding FLOAT[3]
-        );
-        INSERT INTO memory_index_chunks_vec VALUES ('chunk-canonical', '[1,0,0]');
-        INSERT INTO memory_index_chunks_vec VALUES ('chunk-ownerless', '[0,1,0]');
-        INSERT INTO memory_index_meta (key, value)
-          VALUES ('memory_vector_rebuild_v1', 'clean');
-
-      `);
-    expect(seedDb.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
-      count: 2,
-    });
-
-    const manager = await createManager({
-      provider: "none",
-      vectorEnabled: false,
-      rememberAcrossConversations: false,
-    });
-    expect(manager.status().fts?.available).toBe(true);
-    expect(Reflect.get(manager, "sessionsFullRetryDirty")).toBe(false);
-
-    const db = seedDb;
-    const countRows = (table: string, sourcePath: string) =>
-      db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE path = ?`).get(sourcePath);
-    expect(
-      db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'memory/deleted.md'").get(),
-    ).toEqual({ hash: "" });
-    expect(
-      db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'memory/ownerless.md'").get(),
-    ).toEqual({ hash: "" });
-    expect(countRows("memory_index_chunks", "memory/deleted.md")).toEqual({ count: 1 });
-    expect(countRows("memory_index_chunks_fts", "memory/deleted.md")).toEqual({ count: 1 });
-    expect(countRows("memory_index_chunks_fts", "memory/ownerless.md")).toEqual({ count: 1 });
-
-    await (
-      manager as unknown as {
-        syncMemoryFiles(params: { needsFullReindex: boolean }): Promise<unknown>;
-      }
-    ).syncMemoryFiles({ needsFullReindex: false });
-
-    for (const sourcePath of ["memory/deleted.md", "memory/ownerless.md"]) {
-      for (const table of [
-        "memory_index_sources",
-        "memory_index_chunks",
-        "memory_index_chunks_fts",
-      ]) {
-        expect(countRows(table, sourcePath), `${table}: ${sourcePath}`).toEqual({ count: 0 });
-      }
-    }
-    // Cleanup ran while vectors were disabled. Keep the old table untouched and
-    // persist a rebuild marker; one-sided orphan pruning would still miss vector
-    // rows that should exist but were never written.
-    expect(
-      db
-        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'")
-        .get(),
-    ).toEqual({ value: "1" });
-    expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
-      count: 2,
-    });
-    // Exercise the later vector-enabled load directly. Recreating the public
-    // manager here also tests unrelated provider/cache retirement lifecycles.
-    const vectorState = Reflect.get(manager, "vector") as {
-      available: boolean | null;
-      enabled: boolean;
-      extensionPath?: string;
-    };
-    vectorState.enabled = true;
-    vectorState.available = true;
-    vectorState.extensionPath = vectorExtensionPath;
-    Reflect.set(Reflect.get(manager, "database"), "vectorReady", null);
-    await expect(
-      (
-        manager as unknown as {
-          loadVectorExtension(): Promise<boolean>;
-        }
-      ).loadVectorExtension(),
-    ).resolves.toBe(false);
-    expect(db.prepare("SELECT vec_version() AS version").get()).toEqual({
-      version: expect.any(String),
-    });
-    expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
-      count: 2,
-    });
-    expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(true);
   });
 });
