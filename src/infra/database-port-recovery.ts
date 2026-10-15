@@ -98,10 +98,11 @@ function refusal(stateDir: string): DatabasePortRecoveryError {
 function readManifest(stateDir: string): DatabasePortManifest | undefined {
   let raw: string;
   try {
-    // One syscall when absent; O_NOFOLLOW also refuses a dangling manifest symlink.
+    // One syscall when absent; no-follow refuses symlinks, and nonblocking
+    // admission lets malformed FIFO inputs fail instead of freezing startup.
     raw = fs.readFileSync(databasePortManifestPath(stateDir), {
       encoding: "utf8",
-      flag: fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+      flag: fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
     });
   } catch (error) {
     if (hasErrnoCode(error, "ENOENT")) {
