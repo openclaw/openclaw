@@ -507,7 +507,7 @@ function renderMessageBody(message: AgentMessage, options: MessageRenderOptions)
   const toolResultLabel =
     toolResult && message.toolCallId ? `tool result: ${message.toolCallId}` : "tool result";
   if (toolResult && options.toolPayloadMode === "elide") {
-    return `${toolResultLabel} [content omitted]`;
+    return "";
   }
   // The history window bounds conversation text; per-part caps apply only to payloads.
   const body =
@@ -550,7 +550,7 @@ function renderMessagePart(
         ? `tool result: ${record.toolUseId}`
         : "tool result";
     if (options.toolPayloadMode !== "preserve") {
-      return `${label} [${toolCall ? "input" : "content"} omitted]`;
+      return "";
     }
     const renderPayload = toolCall ? renderToolCallPayload : renderToolResultPayload;
     const prefix = !toolCall && toolResultBody ? "" : `${label}\n`;

@@ -16,7 +16,6 @@ const MODEL_CALL_STREAM_PROGRESS_REASON = "model_call:stream_progress";
 
 export type ModelCallStreamProgressTarget = {
   runId: string;
-  callId?: string;
   sessionKey?: string;
   sessionId?: string;
 };
@@ -26,21 +25,24 @@ export type ModelCallStreamProgressTarget = {
 export function createModelCallStreamProgressReporter({
   recordProgress,
   config,
-}: { recordProgress?: () => boolean; config?: OpenClawConfig } = {}): (
-  target: ModelCallStreamProgressTarget,
-) => void {
+  target,
+}: {
+  recordProgress?: () => boolean;
+  config?: OpenClawConfig;
+  target: ModelCallStreamProgressTarget;
+}): (callId?: string) => void {
+  const fields = {
+    runId: target.runId,
+    ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
+    ...(target.sessionId ? { sessionId: target.sessionId } : {}),
+    reason: MODEL_CALL_STREAM_PROGRESS_REASON,
+  };
   let lastEmittedAtMs: number | undefined;
-  return (target) => {
+  return (callId) => {
     if (recordProgress && !recordProgress()) {
       return;
     }
     const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
-    const fields = {
-      runId: target.runId,
-      ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
-      ...(target.sessionId ? { sessionId: target.sessionId } : {}),
-      reason: MODEL_CALL_STREAM_PROGRESS_REASON,
-    };
     if (diagnosticsEnabled && !recordProgress) {
       markDiagnosticRunProgress(fields);
     }
@@ -52,7 +54,7 @@ export function createModelCallStreamProgressReporter({
       return;
     }
     // Timeline flags only matter when a public heartbeat can be emitted.
-    const timelineEnabled = target.callId !== undefined && isDiagnosticsTimelineEnabled({ config });
+    const timelineEnabled = callId !== undefined && isDiagnosticsTimelineEnabled({ config });
     if (!diagnosticsEnabled && !timelineEnabled) {
       return;
     }
@@ -67,7 +69,7 @@ export function createModelCallStreamProgressReporter({
           name: "provider.request.activity",
           timestamp: new Date(now).toISOString(),
           runId: target.runId,
-          spanId: target.callId,
+          spanId: callId,
         },
         { config },
       );

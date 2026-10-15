@@ -140,10 +140,10 @@ describe("LINE send helpers", () => {
       messageId,
       meta: { messageCount },
     }));
-    const messageId = messageIds[0];
+    const primaryMessageId = messageIds[0];
     return {
       chatId,
-      messageId,
+      messageId: primaryMessageId,
       receipt: {
         parts: messageIds.map((id, index) => ({
           index,
@@ -153,7 +153,7 @@ describe("LINE send helpers", () => {
           threadId: chatId,
         })),
         platformMessageIds: messageIds,
-        primaryPlatformMessageId: messageId,
+        primaryPlatformMessageId: primaryMessageId,
         raw,
         sentAt: fixedSentAt,
         sourceResults: messageIds.map((id) => ({ channel: "line", messageId: id })),

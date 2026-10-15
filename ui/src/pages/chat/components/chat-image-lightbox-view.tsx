@@ -13,7 +13,8 @@ export function ChatImageLightbox(props: {
           mediaKind={item().kind ?? "image"}
           gallery={item().gallery}
           connectVideo={item().connectVideo}
-          loadFullResolution={item().loadFullResolution}
+          loadDisplayImage={item().loadDisplayImage}
+          readOriginalBlob={item().readOriginalBlob}
           src={item().src}
           originalSrc={item().originalSrc ?? ""}
           imageTitle={item().title}
