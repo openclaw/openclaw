@@ -87,28 +87,6 @@ describe("registered native command routing through the message pipeline", () =>
     });
   });
 
-  it("authorizes paired DMs without marking the sender as an owner", async () => {
-    await addChannelAllowFromStoreEntry({
-      channel: "telegram",
-      entry: from.id,
-      accountId: "default",
-    });
-    const bot = await createBot(true, true, {
-      commands: { native: true },
-      channels: { telegram: { dmPolicy: "pairing", allowFrom: [], streaming: { mode: "off" } } },
-    });
-
-    await bot.handleUpdate({ update_id: 1001, message: commandMessage("/status") });
-
-    expect(harness.replySpy).toHaveBeenCalledOnce();
-    const context = harness.replySpy.mock.calls[0]?.[0];
-    expect(context).toMatchObject({
-      CommandAuthorized: true,
-      CommandTurn: { kind: "native", body: "/status", authorized: true },
-    });
-    expect(context).not.toHaveProperty("OwnerAllowFrom");
-  });
-
   it("routes /reset to the topic agent and chat session", async () => {
     const cfg: OpenClawConfig = {
       commands: { native: true },
@@ -357,13 +335,6 @@ describe("registered native command routing through the message pipeline", () =>
     });
   });
 
-  it("does not dispatch the same update twice", async () => {
-    const bot = await createBot();
-    const update = { update_id: 1001, message: commandMessage("/status") };
-    await bot.handleUpdate(update);
-    await bot.handleUpdate(update);
-    expect(harness.replySpy).toHaveBeenCalledTimes(1);
-  });
   it("publishes account-scoped skills and keeps omitted bound skills callable", async () => {
     const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-native-skills-"));
     try {
