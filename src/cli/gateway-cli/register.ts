@@ -280,7 +280,9 @@ async function writeSupportExportFromCli(opts: {
   logLines?: string;
   logBytes?: string;
   stabilityBundle?: string | false;
-  rpc?: Pick<GatewayRpcOpts, "url" | "token" | "password" | "timeout">;
+  rpc?: Pick<GatewayRpcOpts, "url" | "token" | "password" | "timeout" | "port"> & {
+    localPortOverride?: number;
+  };
 }): Promise<void> {
   const { writeDiagnosticSupportExport } =
     await import("../../logging/diagnostic-support-export.js");
@@ -289,6 +291,8 @@ async function writeSupportExportFromCli(opts: {
     token: opts.rpc?.token,
     password: opts.rpc?.password,
     timeout: opts.rpc?.timeout ?? "3000",
+    port: opts.rpc?.port,
+    localPortOverride: opts.rpc?.localPortOverride,
     json: true,
   };
   const result = await writeDiagnosticSupportExport({
@@ -544,7 +548,7 @@ export function registerGatewayCli(program: Command) {
               json: rpcOpts.json,
               output: opts.output,
               stabilityBundle: bundleTarget ?? "latest",
-              rpc: rpcOpts,
+              rpc: resolveGatewayRpcOptionsWithLocalPort(rpcOpts, command),
             });
             return;
           }

@@ -529,42 +529,47 @@ describe("gateway-cli coverage", () => {
       name: "gateway diagnostics",
       args: ["gateway", "diagnostics", "export"],
       timeoutMs: 3000,
+      localPortOverride: undefined,
     },
     {
       name: "offline stability",
       args: ["gateway", "--port", "19097", "stability", "--bundle", "latest", "--export"],
       timeoutMs: 10_000,
+      localPortOverride: 19097,
     },
-  ])("writes $name export with a service-owned health snapshot", async ({ args, timeoutMs }) => {
-    callGateway.mockClear();
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-cli-support-"));
-    try {
-      const outputPath = path.join(tempDir, "diagnostics.zip");
-      await withEnvAsync(
-        { OPENCLAW_STATE_DIR: tempDir, OPENCLAW_TEST_FILE_LOG: undefined },
-        async () => {
-          await runGatewayCommand([...args, "--output", outputPath, "--json"]);
-        },
-      );
+  ])(
+    "writes $name export with a service-owned health snapshot",
+    async ({ args, timeoutMs, localPortOverride }) => {
+      callGateway.mockClear();
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-cli-support-"));
+      try {
+        const outputPath = path.join(tempDir, "diagnostics.zip");
+        await withEnvAsync(
+          { OPENCLAW_STATE_DIR: tempDir, OPENCLAW_TEST_FILE_LOG: undefined },
+          async () => {
+            await runGatewayCommand([...args, "--output", outputPath, "--json"]);
+          },
+        );
 
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      const healthCall = firstMockArg(callGateway) as {
-        method?: string;
-        timeoutMs?: number;
-        localPortOverride?: number;
-      };
-      expect(healthCall?.method).toBe("health");
-      expect(healthCall?.timeoutMs).toBe(timeoutMs);
-      expect(healthCall?.localPortOverride).toBeUndefined();
-      expect(fs.existsSync(outputPath)).toBe(true);
-      const output = runtimeLogs.join("\n");
-      expect(output).toContain('"path"');
-      expect(output).toContain("diagnostics.zip");
-      expect(output).toContain('"payloadFree": true');
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        const healthCall = firstMockArg(callGateway) as {
+          method?: string;
+          timeoutMs?: number;
+          localPortOverride?: number;
+        };
+        expect(healthCall?.method).toBe("health");
+        expect(healthCall?.timeoutMs).toBe(timeoutMs);
+        expect(healthCall?.localPortOverride).toBe(localPortOverride);
+        expect(fs.existsSync(outputPath)).toBe(true);
+        const output = runtimeLogs.join("\n");
+        expect(output).toContain('"path"');
+        expect(output).toContain("diagnostics.zip");
+        expect(output).toContain('"payloadFree": true');
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("gateway diagnostics export redacts namespaced paths in the ZIP across repeated exports", async () => {
     const stateDir = tempDirs.make("openclaw-gateway-redaction-");
