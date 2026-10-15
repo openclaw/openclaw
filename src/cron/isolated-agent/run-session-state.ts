@@ -176,6 +176,7 @@ export async function beginCronSessionWorkAdmission(params: {
   cronSession: MutableCronSession;
   agentSessionKey: string;
   runSessionKey: string;
+  usesDetachedRunSession: boolean;
   signal?: AbortSignal;
   onInterrupt: () => void;
 }) {
@@ -195,6 +196,10 @@ export async function beginCronSessionWorkAdmission(params: {
     signal: params.signal,
     onInterrupt: params.onInterrupt,
     assertAllowed: async (signal) => {
+      // Bound sessions borrow workspace authority; detached rows claim only at their write.
+      if (params.usesDetachedRunSession) {
+        return;
+      }
       const currentEntry = await loadCronSessionEntryLatest(cronSession.storePath, agentSessionKey);
       signal.throwIfAborted();
       const changed = initialSessionEntry
@@ -278,9 +283,7 @@ export function createPersistCronSessionEntry(params: {
     const persistedEntry =
       isCronSessionKey(params.agentSessionKey) &&
       liveEntry.sessionId &&
-      (liveEntry.sessionStartedAt !== undefined ||
-        liveEntry.lastInteractionAt !== undefined ||
-        liveEntry.cliSessionIds !== undefined ||
+      (liveEntry.cliSessionIds !== undefined ||
         liveEntry.cliSessionBindings !== undefined ||
         liveEntry.claudeCliSessionId !== undefined) &&
       !(await cronTranscriptExists({
