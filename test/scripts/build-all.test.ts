@@ -14,6 +14,7 @@ import {
   runBuildAllSteps,
 } from "../../scripts/build-all.mts";
 import {
+  hashInputFiles,
   resolveBuildStepCacheState,
   writeBuildStepCacheStamp,
   resolveBuildStepCacheStampState,
@@ -854,6 +855,52 @@ describe("build-all timing output", () => {
 });
 
 describe("resolveBuildStepCacheState", () => {
+  it("hashes static inputs once on warm lookup and invalidates changed or removed compiler inputs", () => {
+    const f = buildCacheFixture();
+    const consumed = writeFixture(f.rootDir, "shared/consumed.ts", "consumed");
+    const params = {
+      ...f.params,
+      inputSignature: (inputs: string[]) =>
+        hashInputFiles(
+          f.rootDir,
+          [f.inputPath, ...inputs.map((file) => path.join(f.rootDir, file))],
+          fs,
+        ),
+    };
+    const lookup = () => resolveBuildStepCacheState(f.step, params);
+    expect(lookup().fresh).toBe(false);
+    const inputs = ["shared/consumed.ts"];
+    writeBuildStepCacheStamp(
+      f.step,
+      {
+        ...lookup(),
+        signature: params.inputSignature(inputs),
+        consumedInputs: inputs,
+      },
+      params,
+    );
+    let staticBytesRead = 0;
+    const readFile = fs.readFileSync.bind(fs);
+    const read = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      const bytes = readFile(file, options);
+      if (file === f.inputPath) {
+        staticBytesRead += Buffer.byteLength(bytes);
+      }
+      return bytes;
+    });
+    try {
+      expect(lookup()).toMatchObject({ fresh: true, consumedInputs: inputs });
+      expect(staticBytesRead).toBe(Buffer.byteLength("input"));
+    } finally {
+      read.mockRestore();
+    }
+    fs.writeFileSync(consumed, "changed");
+    expect(lookup().fresh).toBe(false);
+    fs.rmSync(consumed);
+    expect(lookup()).toMatchObject({ fresh: false, signature: params.inputSignature([]) });
+    expect(lookup().consumedInputs).toBeUndefined();
+  });
+
   it("lists large nested inventories without an argument-count limit", () => {
     const { rootDir } = buildCacheFixture();
     // Builds run on the main Node thread; Vitest workers have a different stack budget.

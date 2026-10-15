@@ -83,11 +83,14 @@ describe("ModelProvidersPage profile actions", () => {
 
     page.profileActions.setOrder("openai", "openai", profileIds);
 
-    await waitForSolid(() =>
+    await waitForSolid(() => {
       expect(page.state.data?.authStatus?.unavailable?.code).toBe(
         "PREPARED_MODEL_AUTH_UNAVAILABLE",
-      ),
-    );
+      );
+      expect(toast.toast?.message).toBe(warning);
+    });
+    await toast.updateComplete;
+    await vi.dynamicImportSettled();
     await waitForSolid(() => expect(toast.textContent).toContain(warning));
     expect(page.state.profileOrders.openai).toBeUndefined();
     expect(page.state.data?.authStatus?.providers).toEqual([]);

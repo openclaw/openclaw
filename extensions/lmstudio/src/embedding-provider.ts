@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
 import { findNormalizedProviderKey } from "openclaw/plugin-sdk/provider-model-metadata";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { LMSTUDIO_DEFAULT_EMBEDDING_MODEL, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import {
@@ -24,7 +25,6 @@ import {
   type LmstudioPreparedModel,
 } from "./models.fetch.js";
 import {
-  normalizeLmstudioConfiguredCatalogEntries,
   normalizeLmstudioProviderConfig,
   resolveLmstudioCanonicalModelKey,
   resolveLmstudioInferenceBase,
@@ -93,9 +93,9 @@ async function resolveLmstudioApiKey(
 
 function resolveEmbeddingPreloadContextLength(params: {
   model: string;
-  models: unknown;
+  models: readonly ModelDefinitionConfig[] | undefined;
 }): number | undefined {
-  const configuredModel = normalizeLmstudioConfiguredCatalogEntries(params.models).find(
+  const configuredModel = params.models?.find(
     (entry) => normalizeLmstudioModel(entry.id) === params.model,
   );
   return configuredModel?.contextTokens ?? configuredModel?.contextWindow;

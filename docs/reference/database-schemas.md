@@ -192,6 +192,14 @@ idle timeout. Surplus readers retire after 30 seconds idle and restart on demand
 Retirement uses the pool's existing task and native-resource settlement so an
 active read or retained lease is not interrupted.
 
+Durable usage refreshes publish rollups in bounded transactions instead of one
+writer request per transcript. A batch flushes after 50 transcripts, 1 MiB of
+prepared payload, or one second of scanning, checked between whole transcripts;
+one large transcript may exceed the byte or time limit. Refresh completion always
+flushes the remaining batch. Fresh checkpoints remain untouched, and a failed or
+canceled scan leaves uncommitted derived totals for the next refresh. Persisted
+rollups, partitions, schemas, and report totals keep their existing format.
+
 Transcript history and search lanes likewise retire surplus workers after 30
 seconds idle. Each lane keeps one worker until its existing five-minute idle
 retirement, which waits for logical reader leases to be released. Surplus

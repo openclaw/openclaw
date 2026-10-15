@@ -6,12 +6,10 @@ import {
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
-  assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   pollProviderOperationJson,
-  postJsonRequest,
-  readProviderJsonObjectResponse,
+  postJsonResponse,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
@@ -315,7 +313,7 @@ export function buildNovitaVideoGenerationProvider(): VideoGenerationProvider {
           request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
         });
       const endpoint = `/v3/async/${model}`;
-      const { response, release } = await postJsonRequest({
+      const submitted = await postJsonResponse({
         url: `${baseUrl}${endpoint}`,
         headers,
         body,
@@ -323,25 +321,14 @@ export function buildNovitaVideoGenerationProvider(): VideoGenerationProvider {
         fetchFn: fetch,
         allowPrivateNetwork,
         dispatcherPolicy,
+        errorLabel: "Novita video generation failed",
+        errorOptions: { bodyTimeoutMs: timeoutMs, requestHeaders: headers },
+        readOptions: { timeoutMs },
+        objectResponse: true,
       });
-      let taskId: string;
-      try {
-        await assertOkOrThrowHttpError(response, "Novita video generation failed", {
-          bodyTimeoutMs: timeoutMs,
-          requestHeaders: headers,
-        });
-        const submitted = await readProviderJsonObjectResponse(
-          response,
-          "Novita video generation failed",
-          { timeoutMs },
-        );
-        const id = normalizeOptionalString(submitted.task_id);
-        if (!id) {
-          throw new Error("Novita video generation response missing task_id");
-        }
-        taskId = id;
-      } finally {
-        await release();
+      const taskId = normalizeOptionalString(submitted.task_id);
+      if (!taskId) {
+        throw new Error("Novita video generation response missing task_id");
       }
       const pollUrl = new URL(`${baseUrl}/v3/async/task-result`);
       pollUrl.searchParams.set("task_id", taskId);

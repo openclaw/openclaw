@@ -23,9 +23,9 @@ import {
   resolveUiConversationIdentity,
   resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
+import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
 import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
 import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
-import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import {
   CHAT_ROUTE_READY_EVENT,

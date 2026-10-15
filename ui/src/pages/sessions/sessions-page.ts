@@ -56,7 +56,7 @@ import {
 import { requestSessionInvolvement } from "../../lib/sessions/session-requests.ts";
 import { searchVisibleSessionTranscripts } from "../../lib/sessions/transcript-search.ts";
 import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
-import { ControllerHost, SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { ControllerHost, SubscriptionsController } from "../../lib/subscriptions-controller.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { ensureSessionAgentIdentities, sessionAgentIdentityById } from "./agent-scope.ts";
 import { SessionsPageArchive } from "./archive-actions.ts";

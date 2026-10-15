@@ -9,11 +9,9 @@ import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
-  assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   pollProviderOperationJson,
-  postJsonRequest,
-  readProviderJsonResponse,
+  postJsonResponse,
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
@@ -258,7 +256,7 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
           ),
         });
 
-      const { response, release } = await postJsonRequest({
+      const submitted = await postJsonResponse<DeepInfraVideoJob>({
         url: `${baseUrl}/videos`,
         headers,
         body: buildDeepInfraVideoBody(req, model),
@@ -269,17 +267,8 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
         fetchFn: fetch,
         allowPrivateNetwork,
         dispatcherPolicy,
+        errorLabel: "DeepInfra video generation failed",
       });
-      let submitted: DeepInfraVideoJob;
-      try {
-        await assertOkOrThrowHttpError(response, "DeepInfra video generation failed");
-        submitted = await readProviderJsonResponse<DeepInfraVideoJob>(
-          response,
-          "DeepInfra video generation failed",
-        );
-      } finally {
-        await release();
-      }
 
       const jobId = normalizeOptionalString(submitted.id);
       if (!jobId) {

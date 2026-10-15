@@ -19,7 +19,7 @@ import {
   ControllerHost,
   SubscriptionsController,
   viewState,
-} from "../../../lit/subscriptions-controller.ts";
+} from "../../../lib/subscriptions-controller.ts";
 import {
   canCallDreamingMethod,
   copyDreamingArchivePath,

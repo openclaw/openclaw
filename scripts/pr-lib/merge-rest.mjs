@@ -911,7 +911,7 @@ async function main([
   const observing = ["observe", "observe-admission", "observe-prior-ci"].includes(mode);
   const priorCiObservation = mode === "observe-prior-ci";
   requireEvidence(
-    (observing || ["checks", "preview", "merge"].includes(mode)) &&
+    (observing || ["checks", "preview", "projection", "merge"].includes(mode)) &&
       /^[1-9][0-9]*$/.test(prValue ?? "") &&
       Number.isSafeInteger(Number(prValue)) &&
       extra.length === 0 &&
@@ -925,6 +925,37 @@ async function main([
   const repo = parseMergeRepository(repository);
   const pr = Number(prValue);
   const body = mode === "merge" ? mergeBody(bodySnapshot) : undefined;
+  if (mode === "projection") {
+    const response = parseGithubResponse(
+      execPrGh(apiArgs(repo, `/pulls/${pr}`, ["--include"]), { encoding: "utf8" }, "plain"),
+    );
+    const record = response.body;
+    requireEvidence(
+      response.status === "200" &&
+        record?.number === pr &&
+        [true, false, null].includes(record.mergeable) &&
+        MERGE_STATES.has(record.mergeable_state),
+      "invalid mergeability hint",
+    );
+    process.stdout.write(
+      `${JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              mergeable:
+                record.mergeable === null
+                  ? "UNKNOWN"
+                  : record.mergeable
+                    ? "MERGEABLE"
+                    : "CONFLICTING",
+              mergeStateStatus: record.mergeable_state.toUpperCase(),
+            },
+          },
+        },
+      })}\n`,
+    );
+    return;
+  }
   if (priorCiObservation) {
     const { observation } = await withPriorCiObservation(repo, pr, {
       prepare: async () => undefined,
@@ -1036,9 +1067,14 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
         : String(error.stderr || error.message).trim(),
     );
     if (
-      ["observe", "observe-admission", "observe-prior-ci", "checks", "preview"].includes(
-        process.argv[2],
-      ) &&
+      [
+        "observe",
+        "observe-admission",
+        "observe-prior-ci",
+        "checks",
+        "preview",
+        "projection",
+      ].includes(process.argv[2]) &&
       (error.code === "OPENCLAW_REST_MERGED_RECEIPT_UNAVAILABLE" ||
         (process.argv[2] !== "observe-prior-ci" &&
           (error.coreQuotaExhausted || error.code === "OPENCLAW_REST_UNSUPPORTED")))

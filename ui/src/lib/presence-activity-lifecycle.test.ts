@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
-import { createPresenceActivityController } from "./presence-activity-controller.ts";
-import type { SolidController, SolidControllerHost } from "./solid-controller-host.ts";
+import { createPresenceActivityLifecycle } from "./presence-activity-lifecycle.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -13,15 +12,6 @@ it("schedules only the next person expiry and clears hidden or disconnected work
   vi.setSystemTime(1_000_000);
   const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   const refresh = vi.fn();
-  let lifecycle: SolidController = {};
-  const host: SolidControllerHost = {
-    addController: (controller) => {
-      lifecycle = controller;
-    },
-    removeController: vi.fn(),
-    requestUpdate: refresh,
-    updateComplete: Promise.resolve(true),
-  };
   let viewers = [
     {
       id: "person",
@@ -29,8 +19,8 @@ it("schedules only the next person expiry and clears hidden or disconnected work
       entries: [{ ts: Date.now(), lastActivityAt: Date.now() - 119_000 }],
     },
   ];
-  const controller = createPresenceActivityController(host, () => viewers);
-  lifecycle.hostConnected?.();
+  const controller = createPresenceActivityLifecycle(() => viewers, refresh);
+  controller.connect();
   refresh.mockClear();
   controller.sync();
   controller.sync();
@@ -50,13 +40,13 @@ it("schedules only the next person expiry and clears hidden or disconnected work
   expect(vi.getTimerCount()).toBe(0);
   viewers = [{ ...viewers[0]!, entries: [{ ts: Date.now(), lastActivityAt: Date.now() }] }];
   controller.sync();
-  lifecycle.hostDisconnected?.();
+  controller.disconnect();
   expect(vi.getTimerCount()).toBe(0);
   refresh.mockClear();
-  lifecycle.hostConnected?.();
+  controller.connect();
   expect(refresh).toHaveBeenCalledOnce();
   expect(vi.getTimerCount()).toBe(1);
   vi.advanceTimersByTime(120_000);
   expect(refresh).toHaveBeenCalledTimes(2);
-  lifecycle.hostDisconnected?.();
+  controller.disconnect();
 });
