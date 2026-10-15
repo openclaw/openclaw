@@ -14,7 +14,7 @@ import {
   resolveAssistantMediaPolicy,
 } from "./assistant-media-policy.js";
 
-// Placement transport is independent of the durable session metadata under test.
+// mock-isolation: The core test worker cannot host the unrelated placement broker.
 vi.mock("./session-worker-placement-context.js", () => ({
   resolveSessionWorkerPlacementContext: () => ({
     workerSessionPlacementService: {
