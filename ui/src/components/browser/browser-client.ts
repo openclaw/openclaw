@@ -246,7 +246,11 @@ export async function listBrowserTabs(client: BrowserRequestClient) {
   const tabs = Array.isArray(result?.tabs)
     ? result.tabs.flatMap((tab) => normalizeTab(tab) ?? [])
     : [];
-  return { running: result?.running === true, tabs };
+  return {
+    running: result?.running === true,
+    tabs,
+    canAutoResizeViewport: result?.canAutoResizeViewport === true,
+  };
 }
 
 export async function startBrowser(client: BrowserRequestClient): Promise<void> {
@@ -450,11 +454,15 @@ export async function scrollBrowserBy(
   const scrolls = (value) => value === "auto" || value === "scroll" || value === "overlay";
   const canScroll = (el) => {
     const style = getComputedStyle(el);
+    const flexDirection = style.display.endsWith("flex") ? style.flexDirection : "";
+    const maxY = el.scrollHeight - el.clientHeight;
+    const reversedY = flexDirection === "column-reverse";
     const y = dy !== 0 && scrolls(style.overflowY) &&
-      (dy > 0 ? el.scrollTop + el.clientHeight < el.scrollHeight : el.scrollTop > 0);
+      (dy > 0 ? el.scrollTop < (reversedY ? 0 : maxY) : el.scrollTop > (reversedY ? -maxY : 0));
     const maxX = el.scrollWidth - el.clientWidth;
-    const minLeft = style.direction === "rtl" ? -maxX : 0;
-    const maxLeft = style.direction === "rtl" ? 0 : maxX;
+    const reversedX = (style.direction === "rtl") !== (flexDirection === "row-reverse");
+    const minLeft = reversedX ? -maxX : 0;
+    const maxLeft = reversedX ? 0 : maxX;
     const x = dx !== 0 && scrolls(style.overflowX) &&
       (dx > 0 ? el.scrollLeft < maxLeft : el.scrollLeft > minLeft);
     return x || y;

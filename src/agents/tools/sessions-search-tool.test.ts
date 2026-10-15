@@ -215,6 +215,77 @@ describe("sessions_search tool", () => {
     expect(searched).toEqual([requester]);
   });
 
+  it("drops buffered hits whose channel authority changes during a later search", async () => {
+    const requester = "agent:main:slack:channel:c111:thread:2.101";
+    const firstSibling = "agent:main:slack:channel:c111:thread:2.102";
+    const secondSibling = "agent:main:slack:channel:c111:thread:2.103";
+    const makeRow = (key: string, to: string) => ({
+      key,
+      agentId: "main",
+      chatType: "channel" as const,
+      space: "t111",
+      origin: { provider: "slack", chatType: "channel" as const },
+      deliveryContext: { channel: "slack", accountId: "default", to },
+    });
+    const requesterRow = makeRow(requester, "channel:c111");
+    const admittedFirst = makeRow(firstSibling, "channel:c111");
+    const reassignedFirst = makeRow(firstSibling, "channel:c222");
+    const secondRow = makeRow(secondSibling, "channel:c111");
+    let currentFirst = admittedFirst;
+    const searched: string[] = [];
+    const tool = createSessionsSearchTool({
+      config: { tools: { sessions: { visibility: "channel" } } },
+      agentSessionKey: requester,
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        if (request.method === "sessions.list") {
+          return {
+            sessions: [requesterRow, admittedFirst, secondRow],
+            hasMore: false,
+          } as T;
+        }
+        if (request.method === "sessions.describe") {
+          const key = (request.params as { key?: string }).key;
+          if (key === firstSibling) {
+            return { session: currentFirst } as T;
+          }
+          if (key === secondSibling) {
+            return { session: secondRow } as T;
+          }
+          return { session: requesterRow } as T;
+        }
+        const keys = (request.params as { sessionKeys?: string[] }).sessionKeys ?? [];
+        searched.push(...keys);
+        if (keys.includes(secondSibling)) {
+          currentFirst = reassignedFirst;
+        }
+        return {
+          results: keys.map((key) =>
+            hit({
+              sessionKey: key,
+              snippet:
+                key === firstSibling
+                  ? "BUFFERED REASSIGNED CHANNEL SECRET"
+                  : "same channel context",
+            }),
+          ),
+        } as T;
+      },
+    });
+
+    const result = await tool.execute("channel-search-final-revalidation", {
+      query: "context",
+    });
+
+    expect(searched).toEqual([requester, firstSibling, secondSibling]);
+    expect(JSON.stringify(result.details)).not.toContain("BUFFERED REASSIGNED CHANNEL SECRET");
+    expect(result.details).toMatchObject({
+      results: [
+        expect.objectContaining({ sessionKey: requester }),
+        expect.objectContaining({ sessionKey: secondSibling }),
+      ],
+    });
+  });
+
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   it("rejects route reassignment after description but before transcript I/O", async () => {
     const requester = "agent:main:slack:channel:c111:thread:3.001";

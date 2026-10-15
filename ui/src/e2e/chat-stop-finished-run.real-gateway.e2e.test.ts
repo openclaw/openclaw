@@ -223,7 +223,12 @@ suite.define(() => {
         };
         const shouldWithholdNotification = (frame: Frame) => {
           const payload = frame.payload;
-          if (!runId || frame.type !== "event" || payload?.sessionKey !== sessionKey) {
+          if (
+            !runId ||
+            frame.type !== "event" ||
+            !payload ||
+            (payload.sessionKey ?? payload.session?.key) !== sessionKey
+          ) {
             return false;
           }
           if (
@@ -313,13 +318,6 @@ suite.define(() => {
                       capturedSessionId = requestedSessionId;
                       knownRunIds.add(captured);
                     }
-                    if (
-                      frame.method === "chat.abort" &&
-                      frame.params?.sessionKey === sessionKey &&
-                      frame.params?.runId === runId
-                    ) {
-                      withholdCompletionNotifications = false;
-                    }
                   }
                   server.send(message);
                 });
@@ -351,26 +349,22 @@ suite.define(() => {
                     const historySession = frame.payload?.sessionInfo;
                     const abortIndex = sent.findIndex((entry) => entry.method === "chat.abort");
                     const hasPreStopTerminalHistory =
+                      withholdCompletionNotifications &&
                       request !== undefined &&
                       ["chat.startup", "chat.history"].includes(request.method ?? "") &&
                       request.params?.sessionKey === sessionKey &&
                       historySession?.key === sessionKey &&
-                      historySession.lastRunId === runId &&
                       historySession.hasActiveRun === false &&
-                      historySession.status === "done" &&
                       (abortIndex < 0 || sent.indexOf(request) < abortIndex);
                     const hasTerminalDescriptor =
-                      (request?.method === "sessions.describe" &&
+                      withholdCompletionNotifications &&
+                      ((request?.method === "sessions.describe" &&
                         request.params?.key === sessionKey &&
-                        session?.lastRunId === runId &&
-                        session?.status === "done") ||
-                      (request?.method === "sessions.list" &&
-                        frame.payload?.sessions?.some(
-                          (row) =>
-                            row.key === sessionKey &&
-                            row.lastRunId === runId &&
-                            row.status === "done",
-                        ));
+                        session?.hasActiveRun === false) ||
+                        (request?.method === "sessions.list" &&
+                          frame.payload?.sessions?.some(
+                            (row) => row.key === sessionKey && row.hasActiveRun === false,
+                          )));
                     if (
                       delayTerminalDescriptors &&
                       runId &&
@@ -378,8 +372,8 @@ suite.define(() => {
                       frame.ok === true &&
                       (hasTerminalDescriptor || hasPreStopTerminalHistory)
                     ) {
-                      // Pre-Stop history also settles ownership. Keep its real reply held
-                      // until recovery; only history requested after Stop can prove recovery.
+                      // Even compact idle rows retire ownership without status or lastRunId.
+                      // Only history requested after Stop can prove recovery.
                       delayedTerminalDescriptors += 1;
                       if (hasPreStopTerminalHistory) {
                         delayedTerminalHistories += 1;
@@ -593,6 +587,7 @@ suite.define(() => {
                   "Recovered ownership requires a post-Stop authoritative history response",
                 ).toBe(true);
                 delayTerminalDescriptors = false;
+                withholdCompletionNotifications = false;
                 for (const deliver of deferredDescriptors.splice(0)) {
                   deliver();
                 }

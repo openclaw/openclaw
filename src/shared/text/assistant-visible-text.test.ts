@@ -17,6 +17,23 @@ it("keeps an invisible stream pending until visible text arrives and honors repl
   expect(stream.replace("\u2060")).toEqual({ text: "", delta: null });
 });
 
+it.each([1, 7, 32])(
+  "preserves Markdown and strips bracket payloads in %i-character chunks",
+  (size) => {
+    const literal = '[read]\n{"path":"example.txt"}\n[/read]';
+    const visible = `[guide](https://example.test)\n\n\`\`\`text\n${literal}\n\`\`\`\n\nAfter`;
+    const raw = `${visible}\n[tool:read]{"path":"hidden.txt"}\nDone`;
+    const stream = createTextProjection(assistantVisibleTextFilters("delivery", true));
+    for (let offset = 0; offset < raw.length; offset += size) {
+      const prefix = raw.slice(0, offset + size);
+      expect(stream.append(raw.slice(offset, offset + size)).text).toBe(
+        sanitizeAssistantVisibleTextWithProfile(prefix, "delivery", true),
+      );
+    }
+    expect(stream.text).toBe(`${visible}\nDone`);
+  },
+);
+
 it.each([
   " \t\n",
   "\u0085",

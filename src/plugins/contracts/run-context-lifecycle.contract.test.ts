@@ -392,6 +392,74 @@ describe("plugin run context lifecycle", () => {
     ).toBeUndefined();
   });
 
+  it.each(
+    ["end", "error"].flatMap((phase) => [
+      { phase, payload: undefined },
+      { phase, payload: "metadata" as const },
+    ]),
+  )(
+    "cleans up a filtered terminal $phase event with payload=$payload after pending handlers settle",
+    async ({ phase, payload }) => {
+      const pending = createDeferredCore();
+      const handle = vi.fn<
+        Parameters<OpenClawPluginApi["registerAgentEventSubscription"]>[0]["handle"]
+      >(async (_event, ctx) => {
+        ctx.setRunContext("seen", { active: true });
+        await pending.promise;
+        ctx.setRunContext("late", { active: true });
+      });
+      const { config, registry } = createPluginRegistryFixture();
+      registerTestPlugin({
+        registry,
+        config,
+        record: createPluginRecord({ id: "filtered-terminal" }),
+        register(api) {
+          api.agent.events.registerAgentEventSubscription({
+            id: "starts",
+            streams: ["tool", "lifecycle"],
+            phases: ["start"],
+            payload,
+            handle,
+          });
+        },
+      });
+      setActivePluginRegistry(registry.registry);
+      emitAgentEvent({
+        runId: "run-filtered-terminal",
+        stream: "tool",
+        data: { phase: "start" },
+      });
+      emitAgentEvent({
+        runId: "run-filtered-terminal",
+        stream: "lifecycle",
+        data: { phase },
+      });
+      expect(handle).toHaveBeenCalledTimes(1);
+      expect(
+        getPluginRunContext({
+          pluginId: "filtered-terminal",
+          get: { runId: "run-filtered-terminal", namespace: "seen" },
+        }),
+      ).toEqual({ active: true });
+      expect(
+        setPluginRunContext({
+          pluginId: "filtered-terminal",
+          patch: { runId: "run-filtered-terminal", namespace: "closed", value: true },
+        }),
+      ).toBe(false);
+      pending.resolve();
+      await waitForPluginEventHandlers();
+      for (const namespace of ["seen", "late", "closed"]) {
+        expect(
+          getPluginRunContext({
+            pluginId: "filtered-terminal",
+            get: { runId: "run-filtered-terminal", namespace },
+          }),
+        ).toBeUndefined();
+      }
+    },
+  );
+
   it("preserves run context until async terminal event subscriptions settle", async () => {
     let releaseTerminalHandler: (() => void) | undefined;
     let terminalHandlerSawContext: unknown;

@@ -26,7 +26,7 @@ export type SessionActorStoredState = {
     identities: Map<string, Selectable<DB["transcript_event_identities"]>>;
     active: Map<number, Selectable<DB["session_transcript_active_events"]>>;
     navigation: Array<SessionTreeEntry & { seq: number }>;
-    /** Only payloads acquired by this residency are retained; older bodies remain bounded reads. */
+    /** Current transaction's append bodies; committed receipts own them after settlement. */
     payloads: Map<number, { event: unknown; serializedBytes: number }>;
     contextMetadata?: SessionTranscriptContextMetadata;
   };

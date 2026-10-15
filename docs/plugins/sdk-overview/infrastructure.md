@@ -125,8 +125,8 @@ update warning; callers using only the existing synchronous guard remain support
 For runtime storage, use the owning domain's awaited operations or
 `openOpenClawAgentSqliteWorkerStoreV2`; see
 [native SQLite migration](/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes).
-The following `sqlite-runtime` callback helper is deprecated compatibility until
-the next Plugin SDK major. Awaiting admission does not move its SQL off the
+The following `sqlite-runtime` callback helper is deprecated compatibility through
+2026-12-31. Awaiting admission does not move its SQL off the
 caller's thread.
 
 `runSqliteImmediateTransaction(db, prepare, options?)` from
@@ -317,7 +317,7 @@ provides explicit worker-owned `prepare()` for creation, and checks live
 authority at transaction and commit admission. `executeExisting` leaves missing
 storage absent. See the [migration example](/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes).
 Released raw native callbacks retain their ordering and warn on use until their
-removal in the next Plugin SDK major.
+removal in the first January 2027 stable release.
 
 Use `openSqliteWorkerStore<Operations>` from
 `openclaw/plugin-sdk/sqlite-runtime` to move a feature's SQLite lifecycle off the

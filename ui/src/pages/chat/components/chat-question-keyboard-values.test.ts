@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
-import { renderComposerQuestionDock } from "./chat-composer-question.tsx";
+import { renderComposerQuestionDock } from "./chat-composer-question.test-support.ts";
 import { questionPanelIn } from "./chat-question-card.test-support.ts";
 import type { QuestionPanelProps } from "./chat-question-card.ts";
 

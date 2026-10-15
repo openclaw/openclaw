@@ -10,6 +10,103 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("keeps interrupted agent updates distinct from unsent human messages", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
+      async ({ page }) => {
+        const sessionKey = "agent:main:dashboard:agent-update-proof";
+        const sessionId = "agent-update-proof-session";
+        const session = {
+          key: sessionKey,
+          sessionId,
+          kind: "direct",
+          label: "Mobile layout",
+          status: "done",
+          updatedAt: 1_000,
+        };
+        const update = {
+          role: "user",
+          content: "Verification passed on phone and desktop. Ready to land.",
+          timestamp: 1_000,
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+          senderSession: {
+            sessionKey: "agent:main:dashboard:verification",
+            agentId: "main",
+            label: "Verification",
+          },
+          __openclaw: { id: "pending:agent-update" },
+        };
+        const blockedReason =
+          "Agent updates not retried after restart: current session permissions do not allow automatic delivery.";
+        const history = {
+          messages: [
+            { role: "user", content: "Please apply the mobile layout changes.", timestamp: 100 },
+            {
+              role: "assistant",
+              content: "The mobile layout changes are ready. Waiting for the verification update.",
+              timestamp: 200,
+            },
+            {
+              role: "custom",
+              customType: "session-send-recovery-blocked",
+              content: blockedReason,
+              display: true,
+              excludeFromContext: true,
+              timestamp: 500,
+            },
+          ],
+          sessionId,
+          sessionInfo: session,
+          pendingInputs: {
+            items: [
+              {
+                id: "agent-update",
+                runId: "verification-update",
+                acceptedAt: 1_000,
+                state: "interrupted",
+                message: update,
+              },
+            ],
+            total: 1,
+          },
+        };
+        const gateway = await installMockGateway(page, {
+          sessionKey,
+          sessionInfo: session,
+          sessions: [session],
+          methodResponses: {
+            "chat.startup": history,
+            "chat.history": history,
+            "sessions.list": chatSessionListResponse([session]),
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await gateway.waitForRequest("chat.startup");
+        await page
+          .getByText("The mobile layout changes are ready. Waiting for the verification update.", {
+            exact: true,
+          })
+          .waitFor();
+        await page.getByText(blockedReason, { exact: true }).waitFor();
+        await captureUiProof(suite, page, "agent-update-recovery", "retained-update.png");
+        await page
+          .getByText("Delivery interrupted. This saved agent update is not scheduled to retry.", {
+            exact: true,
+          })
+          .waitFor();
+        expect(await page.getByText(/copy it and send again/u).count()).toBe(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        await page.reload();
+        await page
+          .getByText("Delivery interrupted. This saved agent update is not scheduled to retry.", {
+            exact: true,
+          })
+          .waitFor();
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      },
+    );
+  });
+
   it("shows another client's accepted follow-up during an active turn and promotes it once", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },

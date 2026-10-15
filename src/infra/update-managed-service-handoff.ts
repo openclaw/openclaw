@@ -33,7 +33,6 @@ import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 import {
   readControlPlaneUpdateSentinelMeta,
   MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE,
-  UPDATE_RUN_ID_ENV,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "./update-control-plane-sentinel.js";
 import { applyDevUpdateTargetEnv } from "./update-dev-target.js";
@@ -272,95 +271,6 @@ process.on("SIGTERM", () => {
   finishBeforeParkNotice?.("disconnected");
   wakeTermination?.();
 });
-
-async function enterTriageAfterUpdate(continuation) {
-  if (terminationRequested) return;
-  if (
-    !ownsManagedUpdateLease() ||
-    managedUpdateLease.action.kind !== "update" ||
-    params.serviceRecovery?.kind !== "systemd" ||
-    typeof process.execve !== "function"
-  ) {
-    appendLog("automatic triage continuation unavailable; run openclaw triage manually");
-    return;
-  }
-  const primary = await inspectSystemdService(params.serviceRecovery.unit);
-  if (terminationRequested) return;
-  if (
-    primary?.Id !== params.serviceRecovery.unit ||
-    primary.LoadState !== "loaded" ||
-    !parkedServiceFragment ||
-    primary.FragmentPath !== parkedServiceFragment ||
-    !ownsManagedUpdateLease()
-  ) {
-    appendLog(
-      "automatic triage could not verify the installed service after update restoration; run openclaw triage manually",
-    );
-    return;
-  }
-  const scopeUnit = params.scopeUnit.replace(/^openclaw-update-/, "openclaw-triage-");
-  const action = {
-    kind: "triage", phase: "reserved",
-    lifetime: { kind: "native", unit: params.serviceRecovery.unit, scope: scopeUnit, placement: { kind: "pending" } },
-  };
-  // execve replaces this process without running its finally; finish the
-  // original update before transferring installation ownership to triage.
-  await finishManagedUpdateRun();
-  if (terminationRequested) return;
-  if (!ownsManagedUpdateLease()) {
-    appendLog("automatic triage lost its completed update owner; run openclaw triage manually");
-    return;
-  }
-  let retargeted;
-  try {
-    retargeted = leaseStore.retarget(managedUpdateLease, continuation.failure.installationRoot, action);
-  } catch (error) {
-    appendLog("automatic triage destination admission failed: " + String(error) + "; run openclaw triage manually");
-    return;
-  }
-  if (!retargeted) {
-    appendLog("automatic triage lost its completed update owner; run openclaw triage manually");
-    return;
-  }
-  if (retargeted.kind === "busy") {
-    appendLog("automatic triage already owned for the installed destination; retaining the original update failure");
-    return;
-  }
-  managedUpdateLease = retargeted.lease;
-  params.updateLeaseKey = retargeted.lease.key;
-  // Pre-attachment work keeps update semantics; no past STOP is inferred. Native
-  // attachment starts triage cancellation, before readiness or any fixing action.
-  // Close this outer restoration permanently before entering that revocable scope.
-  restorationArmed = false;
-  Object.assign(params, {
-    action: "triage",
-    runId: undefined,
-    triageTransition: true,
-    failure: continuation.failure,
-    commandArgv: continuation.commandArgv,
-    commandLabel: "openclaw triage (automatic)",
-    scopeUnit,
-    primaryFragment: primary.FragmentPath,
-  });
-  fs.writeFileSync(process.argv[2], JSON.stringify(params), { mode: 0o600 });
-  const command = params.systemdRun;
-  const argv = [
-    command,
-    "--user",
-    "--scope",
-    "--collect",
-    "--unit=" + scopeUnit,
-    "--property=PartOf=" + params.serviceRecovery.unit,
-    process.execPath,
-    ...params.runtimeArgs,
-    process.argv[1],
-    process.argv[2],
-  ];
-  const triageEnv = { ...process.env };
-  delete triageEnv[${JSON.stringify(UPDATE_RUN_ID_ENV)}];
-  if (terminationRequested || !ownsManagedUpdateLease()) return;
-  process.execve(command, argv, triageEnv);
-}
 
 function isLaunchdNotLoaded(result) {
   return /no such process|could not find service|not found/i.test(result.stderr || result.stdout);
@@ -829,7 +739,6 @@ async function collectUpdateFailureTriage() {
   }
 }
 
-let automaticRequested = false;
 
 (async () => {
   leaseStore = await prepareManagedHandoffLeaseStore({
@@ -1051,7 +960,6 @@ let automaticRequested = false;
       if (exit.signal || exit.code !== 0) finalExitCode = exit.code || 1;
       return;
     }
-    automaticRequested = Boolean(exit.continuation);
     if (updateCancelled || activationRejected) {
       const reason = updateCancelled ? "managed-service-handoff-cancelled" : activationRejected;
       // No parked acknowledgement authorized a swap. Recovery waits for any
@@ -1149,7 +1057,6 @@ let automaticRequested = false;
       finalExitCode = previousGeneration && restored ? 1 : exit.code ||
         (childStatus === "skipped" && restored && !exit.signal && !reportedFailure ? 0 : 1);
     }
-    if (exit.continuation && !exit.signal && !terminationRequested) await enterTriageAfterUpdate(exit.continuation);
   } catch (err) {
     appendLog("handoff failed: " + (err && err.stack ? err.stack : String(err)));
     const reason = err?.code === "owner_required" ? "owner_required" : "managed-service-handoff-helper-failed";
@@ -1168,7 +1075,7 @@ let automaticRequested = false;
       foregroundRespawn = false;
       finalExitCode = 1;
     }
-    if (params.action === "update" && !automaticRequested && !terminationRequested) await collectUpdateFailureTriage();
+    if (params.action === "update" && !terminationRequested) await collectUpdateFailureTriage();
     releaseManagedUpdateLease();
     cleanupSensitiveFiles();
     stopTriageScope();
@@ -1359,7 +1266,7 @@ async function spawnManagedServiceUpdateHandoff(
     triageContextPath,
     triageInputPath,
     triageContextCommand: formatInstallationTargetCommand(
-      ["openclaw", "triage", "--update-result", triageContextPath],
+      ["openclaw", "triage", "--run", "--update-result", triageContextPath],
       installationTarget,
       { env: serviceEnv },
     ),

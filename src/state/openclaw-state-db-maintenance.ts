@@ -1,9 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
+  collectSqliteSchemaIssues,
+  getCanonicalSqliteNamedIndexContracts,
   type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
@@ -37,7 +42,11 @@ import {
   tableHasColumn,
 } from "./openclaw-state-db-schema-helpers.js";
 import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
-import { migratePortableIdentityColumnsV22 } from "./openclaw-state-db-schema-v22-columns.js";
+import { migratePredicateColumnsV21 } from "./openclaw-state-db-schema-v21-columns.js";
+import {
+  migratePortableIdentityColumnsV22,
+  STATE_CURSOR_TABLES_V22,
+} from "./openclaw-state-db-schema-v22-columns.js";
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
@@ -48,6 +57,7 @@ import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import {
   getOpenClawStateRuntimeSchema,
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
+  STATE_RUNTIME_SCHEMA_COMPATIBILITY,
 } from "./openclaw-state-schema-compatibility.js";
 import {
   readStateSchemaPublicationBlocker,
@@ -154,7 +164,7 @@ type OpenClawStateMigrationVersion = (typeof STATE_MIGRATION_VERSIONS)[number];
 
 /** Require canonical shared-state ownership without requiring the latest schema. */
 export function assertOpenClawStateDatabaseOwner(
-  database: DatabaseSync,
+  database: EngineConnection,
   options: { pathname: string },
 ): { schema_version?: unknown } {
   const admitted = getStateSchemaVersionAdmission(database);
@@ -190,10 +200,13 @@ export function assertOpenClawStateDatabaseOwner(
 
 /** Require the canonical shared-state owner and schema before offline file maintenance. */
 export function assertOpenClawStateDatabaseForMaintenance(
-  database: DatabaseSync,
+  database: EngineConnection,
   options: { pathname: string; schemaVersions?: StateSchemaVersionFacts },
   readTable?: SqliteTableContractReader,
 ): void {
+  if (isPostgresSqlConnection(database)) {
+    requireNativeDatabaseFile("postgres", "repair");
+  }
   const userVersion = assertSupportedStateSchemaVersion(
     database,
     options.pathname,
@@ -390,15 +403,45 @@ function migrateGitHubPublicationRequesterAuthority(
   return changed;
 }
 
+const statePredicateColumnMigration = {
+  version: 21,
+  tables: ["meeting_transcript_sessions", "meeting_transcript_summaries", "delivery_queue_entries"],
+  columns: [
+    ...[
+      "source_account_id",
+      "source_guild_id",
+      "source_channel_id",
+      "source_meeting_url",
+      "source_thread_ts",
+      "source_file_id",
+      "metadata_agent_id",
+    ].map((column) => `meeting_transcript_sessions.${column}`),
+    "meeting_transcript_summaries.overview",
+    "delivery_queue_entries.retention_id_prefix",
+    "delivery_queue_entries.retention_max_age_ms",
+    "delivery_queue_entries.retention_max_entries",
+  ],
+  migrate: migratePredicateColumnsV21,
+  applied: "Derived meeting transcript selectors and bounded delivery retention columns (v21)",
+};
+const statePortableIdentityMigration = {
+  version: 22,
+  tables: ["acp_sessions", ...STATE_CURSOR_TABLES_V22],
+  columns: [
+    "acp_sessions.resume_agent_session_id",
+    "acp_sessions.resume_acpx_session_id",
+    ...STATE_CURSOR_TABLES_V22.map((table) => `${table}.cursor_id`),
+  ],
+  migrate: migratePortableIdentityColumnsV22,
+  applied: "Promoted portable ACP resume keys and cursor identities (v22)",
+};
+
 /** Version-gated column and row migrations, oldest first; each runs inside the caller's schema transaction. */
 export const versionedStateMigrations: ReadonlyArray<{
   migrate: (db: DatabaseSync, previousVersion: number) => boolean;
   applied: string;
 }> = [
-  {
-    migrate: migratePortableIdentityColumnsV22,
-    applied: "Promoted portable ACP resume keys and cursor identities (v22)",
-  },
+  statePortableIdentityMigration,
   { migrate: migrateJsonCanonicalWideRowsV13, applied: "Consolidated shared state tables (v13)" },
   {
     migrate: migrateCronCreatorNamespaces,
@@ -421,6 +464,61 @@ export const versionedStateMigrations: ReadonlyArray<{
     applied: "Recorded cron completion delivery attempt uncertainty (v20)",
   },
 ];
+
+/** Recent version migrations own only their tables; Doctor owns unrelated historical repair. */
+export function migrateBoundedStateSchema(
+  db: DatabaseSync,
+  previousVersion: number,
+): string[] | undefined {
+  const migrations = [statePredicateColumnMigration, statePortableIdentityMigration];
+  const pending = migrations.filter(({ version }) => version > previousVersion);
+  // An undeclared destination keeps the legacy full runner and full-backup requirement.
+  if (
+    previousVersion >= OPENCLAW_STATE_SCHEMA_VERSION ||
+    pending.length !== OPENCLAW_STATE_SCHEMA_VERSION - previousVersion
+  ) {
+    return undefined;
+  }
+  const tables = new Set(pending.flatMap((migration) => migration.tables));
+  const indexes = getCanonicalSqliteNamedIndexContracts(OPENCLAW_STATE_SCHEMA_SQL).filter((index) =>
+    tables.has(index.tableName),
+  );
+  // Older binaries can leave same-version repairs pending alongside a version change.
+  if (
+    tableExists(db, "cron_run_logs") ||
+    collectSqliteSchemaIssues(db, OPENCLAW_STATE_SCHEMA_SQL, {
+      ...STATE_RUNTIME_SCHEMA_COMPATIBILITY,
+      allowedMissingColumns: [
+        ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.allowedMissingColumns ?? []),
+        ...pending.flatMap((migration) => migration.columns),
+      ],
+      allowedMissingIndexes: [
+        ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.allowedMissingIndexes ?? []),
+        ...indexes.map((index) => index.name),
+      ],
+      excludedIndexes: [
+        ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.excludedIndexes ?? []),
+        // v22 replaces these historical expression indexes during its column backfill.
+        "idx_acp_sessions_resume_agent",
+        "idx_acp_sessions_resume_acpx",
+      ],
+    }).length > 0
+  ) {
+    return undefined;
+  }
+  const changes: string[] = [];
+  for (const migration of pending) {
+    migration.migrate(db, previousVersion);
+    changes.push(migration.applied);
+  }
+  for (const index of indexes) {
+    if (tableExists(db, index.tableName)) {
+      const create = index.unique ? "CREATE UNIQUE INDEX" : "CREATE INDEX";
+      db.exec(`${create} IF NOT EXISTS ${index.name} ${index.definition};`);
+    }
+  }
+  return changes;
+}
 
 export function runStateSchemaMigrationTransaction<T>(
   db: DatabaseSync,

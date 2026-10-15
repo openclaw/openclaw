@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.entry.js";
+import {
+  loadSessionEntryReadOnly,
+  patchSessionEntryCore,
+} from "../config/sessions/session-accessor.entry.js";
 import { readSessionTranscriptWatermark } from "../config/sessions/session-accessor.sqlite-transcript-watermark.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.transcript-turn.js";
 import { appendTranscriptEvent } from "../config/sessions/session-accessor.transcript.js";
@@ -52,17 +55,18 @@ describe("Activity recap freshness after transcript writes", () => {
       prepareModel: async () => preparedActivityRecapModel,
       completeModel: complete,
     });
-  const awaitPublication = async (start: () => unknown) => {
+  const awaitPublication = async <T>(start: () => T | Promise<T>) => {
     const published = createDeferred();
     changed.mockImplementation(() => {
       if (view()?.state === "current") {
         published.resolve();
       }
     });
-    await start();
+    const result = await start();
     await withinTest(published.promise, testSignal);
     // The publication probe reads fixture state synchronously; detach it before SQL observation.
     changed.mockReset();
+    return result;
   };
 
   beforeEach(async ({ signal }) => {
@@ -78,6 +82,50 @@ describe("Activity recap freshness after transcript writes", () => {
   afterEach(async () => {
     await service.dispose();
     await testState.cleanup();
+  });
+
+  it("keeps committed recap progress across stale requests and summarizes new activity once", async () => {
+    await messages(1);
+    await patchSessionEntryCore(scope, () => ({
+      activitySummary: {
+        version: 1,
+        formatRevision: 1,
+        text: "Earlier work.",
+        updatedAt: 1,
+        sessionId: scope.sessionId,
+        lifecycleRevision: "lifecycle-1",
+        ...readSessionTranscriptWatermark(scope),
+        leafEntryId: "message-0",
+        coveredMessages: 1,
+        totalMessages: 1,
+        omittedContent: false,
+      },
+    }));
+    // A batched ensure can retain this entry while another request finishes its recap.
+    const requestedEntry = read()!;
+    await awaitPublication(() => service.ensure(target, requestedEntry));
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(complete.mock.calls[0]![0].prompt)).toMatchObject({
+      previousRecap: "Earlier work.",
+      messages: [],
+    });
+
+    for (let request = 0; request < 3; request += 1) {
+      const response = await awaitPublication(() => service.ensure(target, requestedEntry));
+      expect(response.text).toBe("Completed the requested work.");
+      expect(complete).toHaveBeenCalledTimes(1);
+    }
+
+    await messages(1, 1);
+    await awaitPublication(() => service.ensure(target, requestedEntry));
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(complete.mock.calls[1]![0].prompt)).toMatchObject({
+      previousRecap: "Completed the requested work.",
+      messages: ["assistant: Outcome 1"],
+    });
+    await awaitPublication(() => service.ensure(target, requestedEntry));
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(read()?.activitySummary).toMatchObject({ coveredMessages: 2, totalMessages: 2 });
   });
 
   it("prepares recap freshness off thread and observes an in-process transcript append", async () => {

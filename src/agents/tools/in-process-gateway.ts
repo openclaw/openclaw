@@ -30,12 +30,14 @@ import {
   runWithOperatorToolGatewayContinuationContext,
 } from "../../gateway/server-plugin-in-process-dispatch.js";
 import type { TrustedSessionCreation } from "../../gateway/session-creation-provenance.js";
+import { bindSessionSendDeliveryContext } from "../../gateway/session-send-delivery.js";
 import { isGatewayWorkerApprovalMethod } from "../../infra/approval-gateway-runtime-methods.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { readQuestionDispatchCapability } from "../harness/host-private-capabilities.js";
+import type { ReplyExpectation } from "../reply-completion.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
@@ -73,6 +75,8 @@ type AgentToolGatewayRequest = Pick<
   | "scopes"
   | "timeoutMs"
 > & {
+  /** In-process result intake can finish without owing another answer. */
+  replyExpectation?: ReplyExpectation;
   agentRunTracking?: GatewayAgentRunTaskOwner;
   agentToolCaller?: TrustedAgentToolCaller;
   /** Target policy checked at the mutation boundary, not after its own committed change. */
@@ -274,6 +278,7 @@ async function callAgentToolGatewayRequestBound<T>(
       agentRunTracking: _agentRunTracking,
       agentToolCaller: _agentToolCaller,
       sessionMutationCommitGuard: _sessionMutationCommitGuard,
+      replyExpectation: _replyExpectation,
       ...wireRequest
     } = request;
     return await runBoundInProcessGatewayCall(
@@ -319,6 +324,7 @@ async function callAgentToolGatewayRequestBound<T>(
   }
   const dispatchOptions = {
     prepareDispatchCurrent: request.prepareDispatchCurrent,
+    ...(request.replyExpectation ? { replyExpectation: request.replyExpectation } : {}),
     forceSyntheticClient: true,
     operatorRoleActor: { kind: "system" as const },
     ...(request.agentRunTracking ? { agentRunTracking: request.agentRunTracking } : {}),
@@ -388,15 +394,19 @@ export function bindAgentToolGatewayRequest(options?: {
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
   const runInCallerContext = AsyncLocalStorage.snapshot();
   return async <T>(request: AgentToolGatewayRequest): Promise<T> =>
-    await runInCallerContext(() =>
-      callAgentToolGatewayRequestBound<T>(
-        request,
-        resolveGatewayContext,
-        agentToolGatewayRuntimeIdentities.get(request),
-        assertCallerCurrent,
-        (!resolver && !admitted) ||
-          (options?.hostedOnly === true && admitted?.localEmbedded === true),
-        options?.revalidateOnCompletion,
+    // Caller authority was captured when the tool was bound; durable delivery
+    // facts are created later for this exact invocation, not that earlier scope.
+    await runInCallerContext(
+      bindSessionSendDeliveryContext(() =>
+        callAgentToolGatewayRequestBound<T>(
+          request,
+          resolveGatewayContext,
+          agentToolGatewayRuntimeIdentities.get(request),
+          assertCallerCurrent,
+          (!resolver && !admitted) ||
+            (options?.hostedOnly === true && admitted?.localEmbedded === true),
+          options?.revalidateOnCompletion,
+        ),
       ),
     );
 }

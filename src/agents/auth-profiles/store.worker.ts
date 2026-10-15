@@ -15,21 +15,24 @@ import { personalCredentialPublication } from "../../state/user-model-account-au
 import {
   encodeUserModelAuthProfile,
   readUserModelAuthProfile,
-  readUserModelAuthProfileInDatabase,
   updateUserModelAuthProfile,
 } from "../../state/user-model-accounts.js";
 import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
+import {
+  enrollAuthProfileAuthorizationInDatabase,
+  type AuthProfileAuthorizationEnrollment,
+} from "./authorization-enrollment.js";
 import { bootstrapSharedAuthStoreInWorker } from "./shared-store-bootstrap.worker.js";
 import { readAuthProfileRows } from "./sqlite-json.js";
 import { isMissingDatabasePath } from "./sqlite-read-pool.js";
-import { updateAuthProfileStoreInDatabase } from "./store-update-kernel.js";
 import { sendAuthProfileUpdateValue } from "./store-update-transfer.js";
+import { updateAuthProfileStoreInDatabase } from "./store-update.worker.js";
 import type {
   AuthProfileUsageInput,
   AuthProfileUsageResult,
   AuthStoreUpdateInput,
 } from "./store.worker-contract.js";
-import type { AuthProfileCredential, AuthProfileRowRead, UserModelAuthProfile } from "./types.js";
+import type { AuthProfileRowRead, UserModelAuthProfile } from "./types.js";
 import { recordAuthProfileUsageInDatabase } from "./usage-kernel.js";
 import type {
   PersonalAuthProfileUsageReduction,
@@ -39,29 +42,22 @@ import { reduceAuthProfileFailure } from "./usage-reduction.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
 
 export const authProfileOperations = {
-  "authProfiles.bootstrap": bootstrapSharedAuthStoreInWorker,
-  "authProfiles.personalAccept": (
-    input: { profileId: string; credential: AuthProfileCredential },
-    { stateOptions },
-  ): boolean => {
+  "authProfiles.enrollAuthorization": (
+    input: AuthProfileAuthorizationEnrollment,
+    { open, stateOptions },
+  ) => {
+    const database = open();
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        if (
-          !isDeepStrictEqual(
-            readUserModelAuthProfileInDatabase(db, input.profileId)?.credential,
-            input.credential,
-          )
-        ) {
-          return false;
-        }
+        const result = enrollAuthProfileAuthorizationInDatabase(db, "shared-state", input);
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-        return true;
+        return result;
       },
-      stateOptions(),
-      { operationLabel: "auth-profiles.personal-accept" },
+      { ...stateOptions(), database },
     );
   },
+  "authProfiles.bootstrap": bootstrapSharedAuthStoreInWorker,
   "authProfiles.personalReplace": (
     input: { profileId: string; expected: UserModelAuthProfile; next: UserModelAuthProfile },
     { open, stateOptions },
@@ -138,10 +134,14 @@ export const authProfileOperations = {
         const previous = profile.usageStats;
         const next =
           input.reduction.kind === "success"
-            ? resetAuthProfileFailureState(previous ?? {}, {
-                lastUsed: input.reduction.lastUsed,
-                lastProbeAt: now,
-              })
+            ? resetAuthProfileFailureState(
+                previous ?? {},
+                {
+                  lastUsed: input.reduction.lastUsed,
+                  lastProbeAt: now,
+                },
+                input.reduction.modelId,
+              )
             : reduceAuthProfileFailure(profile.credential, previous, input.reduction, now);
         if (!next) {
           return false;

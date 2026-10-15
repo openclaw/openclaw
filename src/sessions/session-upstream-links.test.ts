@@ -16,6 +16,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createSessionInitialization } from "./session-initialization.js";
 import { registerSessionStateWatch } from "./session-state-events.js";
 import {
@@ -79,7 +80,8 @@ describe("session upstream links", () => {
     const options = createDatabaseOptions();
     const key = "agent:main:adopted:retained";
     upsertLink(key, "codex", options);
-    const { db, path: databasePath } = openOpenClawStateDatabase(options);
+    const { db: connection, path: databasePath } = openOpenClawStateDatabase(options);
+    const db = requireNativeSqliteDatabase(connection);
     const read = (sessionKey = key, agentId = "main") =>
       runSqliteReadOperationSync(db, () =>
         readSessionUpstreamLinkInDatabase(db, sessionKey, agentId),

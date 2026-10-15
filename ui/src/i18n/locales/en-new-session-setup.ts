@@ -5,6 +5,19 @@ import { en } from "./en.ts";
 const enNewSessionSetup = {
   newSession: {
     openClawWorker: "OpenClaw worker",
+    deviceFolder: "Existing folder on device",
+    deviceFolderDescription:
+      "Work in place on the selected device. Files are not copied to the Gateway.",
+    deviceFolderPath: "Absolute path on device",
+    deviceFolderPathPlaceholder: "/path/to/existing/folder",
+    deviceFolderUnavailable:
+      "This device cannot use an existing folder right now. Check its connection and session-hosting support, or choose another workspace.",
+    deviceFolderRuntimeUnsupported:
+      "Existing device folders require a worker-turn runtime. Choose a compatible model/runtime or another workspace; your folder path is kept.",
+    deviceFolderPathRequired:
+      "Enter an absolute path to an existing folder on the selected device.",
+    deviceFolderAttachmentsUnsupported:
+      "Existing device folders cannot receive attachments. Remove them, or choose another workspace.",
     requiredWorkerHint: "Say what you’d like to work on.",
     requiredWorker: "Worker",
     requiredWorkerUnavailable:
@@ -162,6 +175,8 @@ const enNewSessionSetup = {
     checkoutCloudFrom: "From {branch}",
     checkoutRepository: "Remote checkout",
     checkoutRepositoryFrom: "Remote checkout from {branch}",
+    checkoutRequiresWorktree: "Use an isolated worktree for this project and agent",
+    checkoutCheckUnavailable: "Checkout unavailable. Select the project again to retry",
     checkoutRemoteLocked: "Devices and cloud run in a worktree",
     local: "Local",
     folderPlaceholder: "Agent workspace",

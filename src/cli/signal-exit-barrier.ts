@@ -166,8 +166,11 @@ function handleCliSignal(signal: CliExitSignal): void {
 
 const onCliSigint = () => handleCliSignal("SIGINT");
 const onCliSigterm = () => handleCliSignal("SIGTERM");
-const onCliSigpipe = () => {
-  if (cliSignalOwners > 0) {
+// Any EPIPE write raises SIGPIPE, including a child's closed stdin, so the
+// signal only keeps Node's ignore disposition; EPIPE on our output decides exit.
+const onCliSigpipe = () => {};
+const onCliOutputError = (error: NodeJS.ErrnoException) => {
+  if (error.code === "EPIPE" && cliSignalOwners > 0) {
     exitAfterSignalExitBarriers(141);
   }
 };
@@ -181,6 +184,9 @@ export function installCliDoctorSignalExitHandlers(): void {
   cliDoctorSignalOwner = true;
   if (!process.listeners("SIGPIPE").includes(onCliSigpipe)) {
     process.on("SIGPIPE", onCliSigpipe);
+    // Run before console capture's generic EPIPE exit so closed output reports 141.
+    process.stdout.prependListener("error", onCliOutputError);
+    process.stderr.prependListener("error", onCliOutputError);
   }
 }
 

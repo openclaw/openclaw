@@ -406,8 +406,10 @@ it.each([
     });
     const panel = await mountAttachment({ title, mimeType }, request);
     await customElements.whenDefined("openclaw-chat-html-preview");
-    await expect.poll(() => panel.querySelector("openclaw-chat-html-preview")).not.toBeNull();
-    await expect.poll(() => panel.querySelector("iframe")).not.toBeNull();
+    await waitForSolid(() =>
+      expect(panel.querySelector("openclaw-chat-html-preview")).not.toBeNull(),
+    );
+    await waitForSolid(() => expect(panel.querySelector("iframe")).not.toBeNull());
     const frame = panel.querySelector("iframe");
     expect(panel.querySelector("h1, script, style")).toBeNull();
     expect(panel.querySelector("pre")?.hidden).toBe(true);
@@ -429,12 +431,11 @@ it.each([
       "/__openclaw__/assistant-media?mediaTicket=text-preview",
     );
     Reflect.set(panel, "embedSandboxMode", "strict");
-    await expect
-      .poll(() => {
-        const current = panel.querySelector("iframe");
-        return current !== null && current !== frame;
-      })
-      .toBe(true);
+    await waitForSolid(() => {
+      const current = panel.querySelector("iframe");
+      expect(current).not.toBeNull();
+      expect(current).not.toBe(frame);
+    });
     const strictFrame = panel.querySelector("iframe")!;
     expect(strictFrame.hasAttribute("srcdoc")).toBe(false);
     expect(strictFrame.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin allow-forms");
@@ -449,7 +450,7 @@ it.each([
         },
       }),
     );
-    await expect.poll(() => post.mock.calls.length).toBe(1);
+    await waitForSolid(() => expect(post).toHaveBeenCalledOnce());
     expect(post.mock.calls[0]![0].params).toEqual({
       html: text,
       renderId: expect.any(String),

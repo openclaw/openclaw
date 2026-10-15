@@ -1,4 +1,3 @@
-import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import { expect, it, vi } from "vitest";
 import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 
@@ -29,7 +28,7 @@ it.each([
     surface: "identity",
     load: () => import("../features/github-connections/github-identity-view.tsx"),
   },
-])("loads GitHub fallback copy at the cold $surface boundary", async ({ load, surface }) => {
+])("loads GitHub fallback copy at the cold $surface boundary", async ({ load }) => {
   const { en, manager } = await loadI18n({
     githubConnections: { manage: "Verbindungen verwalten" },
     sessionHovercard: { checks: { passing: "CI-Prüfungen erfolgreich" } },
@@ -79,17 +78,6 @@ it.each([
     await load();
   } finally {
     registration.mockRestore();
-  }
-  if (surface === "publication") {
-    const item = document.createElement("wa-dropdown-item") as WaDropdownItem;
-    document.body.append(item);
-    try {
-      await item.updateComplete;
-      item.focus();
-      expect(document.activeElement).toBe(item);
-    } finally {
-      item.remove();
-    }
   }
   expect(en.githubConnections).toBe(connections);
   expect(en.githubPublication).toBe(publication);

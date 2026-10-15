@@ -9,16 +9,21 @@ import type {
 import { WizardSession } from "../../../../src/wizard/session.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { ModelAuthStatusResult, WizardNextResult } from "../../api/types.ts";
+import type { ModelAuthStatusResult } from "../../api/types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ModelProviderLoginController } from "./login-controller.ts";
 import { ModelProviderLoginView } from "./login-view.tsx";
 import {
+  loginHarness,
+  openPicker,
+  selectProvider,
+  chooseLogin,
+  openLogin,
+} from "./model-providers-page.login.test-support.ts";
+import {
   appendPage,
   unmountPage,
-  clickLoginChoice,
-  createHarness,
   type ModelProvidersPageTestElement,
   startSelectedLogin,
   submitCredential,
@@ -29,124 +34,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
-
-function loginHarness(
-  options: {
-    capabilities?: ModelAuthStatusResult["providerCapabilities"];
-    providers?: ModelAuthStatusResult["providers"];
-    saved?: boolean;
-  } = {},
-) {
-  const harness = createHarness("writer");
-  const { context, request } = harness;
-  const originalRequest = request.getMockImplementation()!;
-  let saved = options.saved ?? false;
-  let stepShown = false;
-  const answer = deferred<WizardNextResult>();
-  const cancel = deferred<{ status: "running" | "cancelled" }>();
-  const status = deferred<{ status: "cancelled" }>();
-  const authStatus = (): ModelAuthStatusResult => ({
-    ts: 1,
-    providers:
-      options.providers ??
-      (saved
-        ? [
-            {
-              provider: "example",
-              displayName: "Example provider",
-              status: "ok",
-              profiles: [{ profileId: "example:new", type: "api_key", status: "ok" }],
-            },
-          ]
-        : []),
-    providerCapabilities: options.capabilities ?? [
-      {
-        provider: "example",
-        apiKeySupported: true,
-        quickApiKeySetup: true,
-        loginOptions: [
-          {
-            id: "example-browser",
-            brandId: "example",
-            label: "Example browser sign-in",
-            kind: "oauth",
-            featured: true,
-          },
-          {
-            id: "example-secret",
-            brandId: "example",
-            label: "Example API key",
-            groupLabel: "Example provider",
-            hint: "Use your Example account key",
-            kind: "secret",
-            featured: false,
-          },
-        ],
-      },
-    ],
-  });
-  request.mockImplementation(async (method: string) => {
-    switch (method) {
-      case "models.authStatus":
-        return authStatus();
-      case "models.authLogin":
-        return { done: false, status: "running" };
-      case "wizard.next":
-        if (!stepShown) {
-          stepShown = true;
-          return {
-            done: false,
-            status: "running",
-            step: { id: "credential", type: "text", sensitive: true, message: "Enter your key" },
-          };
-        }
-        return answer.promise.then((result) => {
-          saved = result.done && result.status === "done";
-          return result;
-        });
-      case "wizard.cancel":
-        return cancel.promise;
-      case "wizard.status":
-        return status.promise;
-      default:
-        return originalRequest(method);
-    }
-  });
-  context.runtimeConfig.runExternalMutation = async (task, mutationOptions) => {
-    if (mutationOptions?.canDispatch?.() === false) {
-      return { ok: false, reason: "rejected", error: "Sign-in owner changed" };
-    }
-    const value = await task(context.gateway.snapshot.client!);
-    return { ok: true, value, refresh: { ok: true } };
-  };
-  return { ...harness, answer, cancel, status };
-}
-
-async function openPicker(page: ModelProvidersPageTestElement) {
-  await waitForSolid(() => expect(page.state.data?.updatedAt).toEqual(expect.any(Number)));
-  await waitForSolid(() =>
-    expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(false),
-  );
-  page.querySelector<HTMLButtonElement>("[data-models-connect]")!.click();
-  await page.updateComplete;
-}
-
-async function selectProvider(page: ModelProvidersPageTestElement, provider: string) {
-  page.querySelector<HTMLButtonElement>(`[data-models-login-provider="${provider}"]`)!.click();
-  await page.updateComplete;
-}
-
-async function chooseLogin(page: ModelProvidersPageTestElement, choice = "example-secret") {
-  await openPicker(page);
-  await selectProvider(page, "example");
-  clickLoginChoice(page, choice);
-}
-
-async function openLogin(page: ModelProvidersPageTestElement, choice = "example-secret") {
-  await openPicker(page);
-  await selectProvider(page, "example");
-  await startSelectedLogin(page, choice);
-}
 
 async function searchProviders(page: ModelProvidersPageTestElement, query: string) {
   const input = page.querySelector<HTMLInputElement>("[data-models-login-search]")!;
@@ -165,6 +52,76 @@ function providerChoices(page: Pick<ParentNode, "querySelectorAll">) {
 }
 
 describe("Models provider login", () => {
+  it.each([false, true])("connects Muse Code (setup: %s)", async (setup) => {
+    vi.spyOn(window, "open").mockReturnValue(null);
+    const { context, request, answer } = loginHarness({
+      capabilities: [
+        {
+          provider: "meta",
+          apiKeySupported: true,
+          quickApiKeySetup: true,
+          loginOptions: [
+            {
+              id: "meta/muse-code",
+              brandId: "meta",
+              label: "Muse Code",
+              kind: "device-code",
+              featured: true,
+              requiresSetup: true,
+            },
+          ],
+        },
+      ],
+    });
+    const page = appendPage(context);
+    if (setup) {
+      await waitForSolid(() => expect(page.state.data?.updatedAt).toEqual(expect.any(Number)));
+      page.querySelector<HTMLButtonElement>("[data-model-readiness] button")!.click();
+      await page.updateComplete;
+    } else {
+      await openPicker(page);
+    }
+    await selectProvider(page, "meta");
+    if (!setup) {
+      expect(page.renderRoot.textContent).toContain(
+        "Sign in and enable this provider for this agent without changing the active model.",
+      );
+    }
+    await startSelectedLogin(page, "meta/muse-code");
+    expect(request).toHaveBeenCalledWith(
+      "models.authLogin",
+      {
+        sessionId: expect.any(String),
+        authChoice: "meta/muse-code",
+        agentId: "writer",
+        ...(setup ? { selectModel: true } : {}),
+      },
+      { timeoutMs: null },
+    );
+    const authReads = request.mock.calls.filter(([name]) => name === "models.authStatus").length;
+    answer.resolve({
+      done: true,
+      status: "done",
+      modelActivation: { modelRef: "meta/muse-spark-1.3" },
+    });
+    await submitCredential(page);
+    await waitForSolid(() =>
+      expect(page.renderRoot.textContent).toContain(
+        setup
+          ? "Account verified and selected for this agent's default model."
+          : "Muse Code: Provider enabled. The active model has not changed.",
+      ),
+    );
+    if (!setup) {
+      expect(page.renderRoot.textContent).not.toContain("selected for this agent");
+    }
+    await waitForSolid(() =>
+      expect(
+        request.mock.calls.filter(([name]) => name === "models.authStatus").length,
+      ).toBeGreaterThan(authReads),
+    );
+  });
+
   it.each([
     { kind: "oauth", cancel: false, submit: false },
     { kind: "oauth", cancel: false, submit: true },
@@ -688,7 +645,7 @@ describe("Models provider login", () => {
   });
 
   it("shows accounts from the selected provider's credential owner before another login", async () => {
-    const { context, request } = loginHarness({
+    const { context, request, answer } = loginHarness({
       capabilities: [
         {
           provider: "example-owner",
@@ -776,6 +733,30 @@ describe("Models provider login", () => {
     expect(profiles[1]?.textContent).toContain("Expiring");
     expect(dialog.textContent).not.toContain("other-provider@example.invalid");
     expect(request.mock.calls.some(([method]) => method === "models.authLogin")).toBe(false);
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method, ...args) => {
+      if (method !== "models.authStatus") {
+        return originalRequest(method, ...args);
+      }
+      return {
+        ts: 2,
+        providers: [
+          {
+            provider: "example-owner",
+            displayName: "Example provider",
+            status: "ok",
+            profiles: [
+              {
+                profileId: "example:new",
+                type: "oauth",
+                status: "ok",
+                email: "new-account@example.invalid",
+              },
+            ],
+          },
+        ],
+      };
+    });
     await startSelectedLogin(page, "example-browser");
     expect(request).toHaveBeenCalledWith(
       "models.authLogin",
@@ -786,6 +767,10 @@ describe("Models provider login", () => {
       },
       { timeoutMs: null },
     );
+    answer.resolve({ done: true, status: "done" });
+    await submitCredential(page);
+    await waitForSolid(() => expect(card.textContent).toContain("new-account@example.invalid"));
+    expect(card.textContent).not.toContain("same-account@example.invalid");
   });
 
   it("preserves quick API-key setup alongside browser login", async () => {

@@ -520,6 +520,9 @@ export async function recoverGatewaySession(params: {
               ? { communication: { ...currentSource.communication } }
               : {}),
             ...(currentSource.spawnedCwd ? { spawnedCwd: currentSource.spawnedCwd } : {}),
+            ...(currentSource.deviceFolder
+              ? { deviceFolder: { ...currentSource.deviceFolder } }
+              : {}),
             ...(currentSource.execHost ? { execHost: currentSource.execHost } : {}),
             ...(currentSource.execNode ? { execNode: currentSource.execNode } : {}),
             ...(currentSource.execCwd ? { execCwd: currentSource.execCwd } : {}),

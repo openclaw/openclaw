@@ -32,16 +32,35 @@ async function nextFrame(page: Page) {
   );
 }
 
-// The same performUpdate boundary used by the campaign's browser-init census.
-// Counting all tags also exposes work transferred from a host into its children.
+// Lit updates retain timing data; pane connections also count the Solid host.
 async function installRenderProbe(page: Page) {
   await page.addInitScript(() => {
     const counts = new Map<string, RenderCount>();
     window.chatBootRenderCounts = counts;
     const patched = new WeakSet<object>();
     const instances = new WeakSet<object>();
+    const recordInstance = (element: HTMLElement) => {
+      const count = counts.get(element.localName) ?? {
+        updates: 0,
+        milliseconds: 0,
+        instances: 0,
+      };
+      if (!instances.has(element)) {
+        instances.add(element);
+        count.instances += 1;
+      }
+      counts.set(element.localName, count);
+      return count;
+    };
     const define = customElements.define.bind(customElements);
     customElements.define = (name, constructor, options) => {
+      if (name === "openclaw-chat-pane") {
+        const connected = constructor.prototype.connectedCallback;
+        constructor.prototype.connectedCallback = function (this: HTMLElement) {
+          recordInstance(this);
+          return connected.call(this);
+        };
+      }
       let prototype = constructor.prototype;
       while (prototype && !Object.hasOwn(prototype, "performUpdate")) {
         prototype = Object.getPrototypeOf(prototype);
@@ -50,21 +69,13 @@ async function installRenderProbe(page: Page) {
         patched.add(prototype);
         const update = prototype.performUpdate;
         prototype.performUpdate = function (this: HTMLElement) {
-          const count = counts.get(this.localName) ?? {
-            updates: 0,
-            milliseconds: 0,
-            instances: 0,
-          };
+          const count = recordInstance(this);
           const start = performance.now();
           try {
             return update.call(this);
           } finally {
             count.updates += 1;
             count.milliseconds += performance.now() - start;
-            if (!instances.has(this)) {
-              instances.add(this);
-              count.instances += 1;
-            }
             counts.set(this.localName, count);
           }
         };

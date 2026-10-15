@@ -12,7 +12,6 @@ import { CheckoutChip } from "./checkout-chip.tsx";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import {
   environmentPlacementRuntime,
-  environmentDeviceDisabledReason,
   environmentCloudDisabledReason,
 } from "./hosted-environments.ts";
 import "../../components/agent-select-registration.ts";
@@ -21,7 +20,7 @@ import { resolveProjectChip } from "./project-chip.ts";
 import { ProjectChip } from "./project-chip.tsx";
 import type { AgentSelectOptions, NewSessionPlaceControlsOptions } from "./target-controls.ts";
 import { NewSessionTerminalHost } from "./terminal-start-view.tsx";
-import { resolveWhereChip, type WhereChipOptions } from "./where-chip.ts";
+import { draftWhereChipParams, resolveWhereChip, type WhereChipOptions } from "./where-chip.ts";
 import { WhereChip } from "./where-chip.tsx";
 
 registerNewSessionSetupEnglish();
@@ -84,6 +83,7 @@ export function RequiredSessionPlacement(props: { gateway: DraftGatewayState }) 
 
 export function NewSessionPlaceControls(props: { params: NewSessionPlaceControlsOptions }) {
   const folderValue = liveValue(() => props.params.place.folder);
+  const deviceFolderValue = liveValue(() => props.params.place.deviceFolder?.path ?? "");
   const view = createMemo(() => {
     const { context, data, gateway, place, submitting, pendingPlacement, requestUpdate } =
       props.params;
@@ -101,23 +101,9 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
           workspaceRoots: place.knownWorkspaceRoots(),
           isAdmin: place.isAdmin(),
         });
-    const whereState = resolveWhereChip({
-      hostedEnvironment: place.hostedEnvironment
-        ? { ...place.hostedEnvironment, id: place.modelControl.resolveAgentRuntime()!.id }
-        : undefined,
-      environments: place.canWrite() ? gateway.environments : [],
-      cloudProfiles,
-      cloudProfileId: place.cloudProfileId,
-      machineClass,
-      os,
-      deviceId: place.deviceId,
-      autoDevice: place.autoDevice,
-      devicePlacement: environmentPlacementRuntime(place.modelControl)?.devicePlacement,
-      deviceDisabledReason:
-        environmentDeviceDisabledReason(place.modelControl) ?? gateway.deviceCatalogDisabledReason,
-    });
+    const whereState = resolveWhereChip(draftWhereChipParams(place, gateway, cloudProfiles));
     const projectState = resolveProjectChip({
-      folder: place.folder,
+      folder: place.deviceFolder?.path ?? place.folder,
       workspace: place.workspacePath(),
       projectId: browser.projectId,
       selectedRemoteProject: browser.remoteProject,
@@ -206,7 +192,9 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
     },
   }));
   const projectParams = createMemo((): ProjectChipOptions => ({
-    state: view().projectState,
+    state: props.params.place.deviceFolder
+      ? { ...view().projectState, label: t("newSession.deviceFolder") }
+      : view().projectState,
     browseAvailable: props.params.place.browseAvailable(),
     isAdmin: props.params.place.isAdmin(),
     canWrite: props.params.place.canWrite(),
@@ -238,6 +226,11 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
     onNewWorkspace: props.params.place.remotePlacement
       ? () => props.params.place.selectNewWorkspace()
       : undefined,
+    deviceFolder: Boolean(props.params.place.deviceFolder),
+    deviceFolderDisabledReason: props.params.place.deviceFolderRuntimeUnsupportedReason,
+    onDeviceFolder: props.params.place.deviceFolderOffered
+      ? () => props.params.place.selectDeviceFolder()
+      : undefined,
     gatewayLabel: view().gatewayLabel,
     submitting: props.params.submitting,
     pendingPlacement: props.params.pendingPlacement,
@@ -265,6 +258,7 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
     folderLabel: view().projectState.label,
     worktree: props.params.place.worktree,
     worktreeAvailable: props.params.place.worktreeAvailable(),
+    currentCheckoutUnavailableReason: props.params.place.currentCheckoutUnavailableReason,
     repositoryUnavailable: props.params.place.repository.kind === "unavailable",
     branches: view().branches,
     branchesLoading: props.params.place.repository.kind === "checking",
@@ -316,6 +310,24 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
           ) : (
             <ProjectChip params={projectParams()} />
           )}
+          {props.params.place.deviceFolder ? (
+            <label class="new-session-page__select new-session-page__menu-field new-session-page__device-folder">
+              <span>{t("newSession.deviceFolderPath")}</span>
+              <input
+                aria-label={t("newSession.deviceFolderPath")}
+                placeholder={t("newSession.deviceFolderPathPlaceholder")}
+                ref={deviceFolderValue}
+                disabled={props.params.submitting || props.params.pendingPlacement}
+                onInput={(event) =>
+                  props.params.place.setDeviceFolderPath(event.currentTarget.value)
+                }
+              />
+              <span class="muted">
+                {props.params.place.deviceFolderRuntimeUnsupportedReason ??
+                  t("newSession.deviceFolderDescription")}
+              </span>
+            </label>
+          ) : undefined}
           {props.params.place.checkoutVisible &&
           !(view().nativeTerminal && props.params.place.terminalOnNode) ? (
             <CheckoutChip params={checkoutParams()} />

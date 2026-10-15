@@ -137,6 +137,23 @@ and does not change admission, ordering, or warning thresholds.
 The Gateway records a bounded, payload-free stability stream by default when
 diagnostics are enabled. It captures operational facts, not content.
 
+Child-process spawn samples use bounded command families and operation labels.
+Known owners distinguish agent exec launches (`agent.exec`), shell environment
+snapshots (`shell.snapshot`), and service relay helpers (`service.relay`).
+Additional owners distinguish CLI backends (`agent.cli`), isolated file reads
+(`agent.file-read`), service-manager commands (`service.manager`), native worktree
+writes (`worktree.filesystem`), retired checkout deletion (`worktree.cleanup`),
+and temporary pack cleanup (`worktree.maintenance`).
+Relays launched for agent exec retain `agent.exec` as their owner.
+Native PTY exec launches use the same counter after successful admission.
+Windows PTYs publish their PID asynchronously, so attribution waits for the first
+output or exit without delaying the terminal.
+Unscoped launches use fixed classifications such as `unscoped.shell-command`,
+`unscoped.runtime`, or `unscoped.gh`; arguments, script text,
+and paths never become labels. Linux OOM-protection exec wrappers report the
+logical target command, since the spawn broker can omit the wrapper shell.
+Counts represent successful admitted launches, not a census of grandchildren.
+
 Gateway RPC diagnostics retain exact core and registered plugin method names,
 including `node.invoke.result` and `workboard.cards.list`; unregistered request
 names fold into `other` (dedicated worker ingress uses `unknown`). The method
@@ -177,16 +194,16 @@ The Gateway also emits an always-on `main-thread stall` warning after a synchron
 callback blocks for more than one second. Each line names the longest-running
 known task segment from scheduled jobs, diagnostic phases, timeline spans, or
 worker message handling, with elapsed and task milliseconds. Time awaiting I/O
-does not count as task execution. A task label expires when its callback returns
-or its returned promise settles; detached work does not retain a completed startup
-phase's label. Unknown callbacks use `task=unattributed`;
-process suspension can also produce an unattributed delay. Reporting is bounded
-to eight pending stalls, with an omitted count if that limit is exceeded. This
-requires neither an inspector connection nor a sampling profiler.
-
-Detailed attribution of asynchronous continuations requires Node's `async_hooks`
-callback boundaries. Bun currently reports explicit synchronous task scopes and
-otherwise retains unattributed delay warnings.
+does not count as task execution. Labels cover the synchronous portion of explicit
+task scopes. Asynchronous continuations and unknown callbacks use best-effort unattributed
+delay warnings from the event-loop sampler; the Gateway does not install
+process-wide async hooks to time every promise continuation. During healthy idle
+windows, the native histogram is disabled: an unscoped stall that finishes before
+the next sampling deadline can go unreported. Explicit task scopes and overdue
+idle wakes remain observable. Process suspension
+can also produce an unattributed delay. Reporting is bounded to eight pending
+named stalls, with an omitted count if that limit is exceeded. These warnings
+require neither an inspector connection nor a sampling profiler.
 
 Startup phases emit `diagnostic.phase.completed` events with wall-clock and
 whole-process CPU timing, including worker and native threads. Phase CPU can
@@ -522,7 +539,7 @@ JavaScript isolate without taking a whole-heap snapshot:
 ```bash
 openclaw gateway call diagnostics.heapProfile --params '{}' --timeout 30000 --json
 openclaw gateway call diagnostics.heapProfile --params '{"durationMs":10000,"samplingIntervalBytes":32768}' --timeout 45000 --json
-openclaw gateway call diagnostics.heapProfile --params '{"includeObjectsCollectedByMajorGC":true,"includeObjectsCollectedByMinorGC":true}' --timeout 30000 --json
+openclaw gateway call diagnostics.heapProfile --params '{"includeCollected":true}' --timeout 30000 --json
 ```
 
 The RPC supports Node and OpenClaw's Bun runtime. It defaults to five seconds and an average sampling interval of
@@ -534,7 +551,8 @@ collect more samples at greater CPU and memory cost. Choose a CLI timeout longer
 than the requested capture. The critical-memory warning points to this RPC;
 pressure never starts a capture automatically.
 
-The optional booleans `includeObjectsCollectedByMajorGC` and
+`includeCollected: true` enables both collected-object flags. Explicit per-GC
+flags override the shorthand. The optional booleans `includeObjectsCollectedByMajorGC` and
 `includeObjectsCollectedByMinorGC` both default to `false`. Enable both to retain
 samples of objects collected during the window and attribute transient allocation
 churn. Retaining collected samples can increase profiler memory use.
@@ -700,9 +718,22 @@ When a task pool recreates an idle-retired Worker within five minutes, it keeps
 one replacement warm for five minutes of inactivity. Other slots retain their
 normal idle timeout. Node Code Mode likewise retains at most one completed
 Worker for five minutes, reusing it only when its runtime entry and heap limit
-match. Warm task workers still collect released payloads in place; critical
+match. Code Mode relies on V8's normal garbage collection rather than inspector
+collection at idle task boundaries. Other warm task workers still collect released payloads in place; critical
 pressure, cancellation, rotation, and shutdown retain their existing cleanup
 paths. No configuration setting is needed.
+
+## Garbage collection metrics
+
+The [GC histogram](/gateway/prometheus#garbage-collection-duration) separates minor
+scavenges, major mark/sweep/compact collections, incremental work, and weak-reference
+processing. Counts and elapsed durations are grouped by main thread or bounded
+worker script kind, without per-GC log lines. Instrumented workers use their
+existing memory telemetry port and observe GC only while an exporter is interested.
+Worker GC batches ride the next heap sample (normally every 30 seconds), with a
+flush after 256 pending samples or on orderly worker shutdown. Individual collection counts and durations
+are preserved; worker histogram updates can lag by one sampling interval.
+Workers without that port are not covered; a missing series does not mean zero GC.
 
 ## RPC response size and heap changes
 

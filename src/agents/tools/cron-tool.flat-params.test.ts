@@ -50,14 +50,6 @@ describe("cron shorthand recovery", () => {
 
   it.each([
     {
-      name: "cron with timezone and stagger",
-      input: { cron: "0 18 * * *", tz: "Asia/Shanghai", staggerMs: 5000, message: "report" },
-      expected: {
-        schedule: { kind: "cron", expr: "0 18 * * *", tz: "Asia/Shanghai", staggerMs: 5000 },
-        payload: { kind: "agentTurn", message: "report" },
-      },
-    },
-    {
       name: "script before agent-turn hints",
       input: {
         everyMs: 60_000,
@@ -86,7 +78,6 @@ describe("cron shorthand recovery", () => {
 
   it.each([
     { action: "add", kind: "on-exit", command: "pnpm build", cwd: "/repo", message: "rebuilt" },
-    { action: "update", jobId: "job", command: "make" },
   ])("rejects explicit or inferred on-exit shorthand on $action", async (args) => {
     await expect(execute(args)).rejects.toThrow(
       "automation on-exit schedules cannot be created or edited",

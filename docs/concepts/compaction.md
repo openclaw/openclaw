@@ -112,6 +112,7 @@ Before compacting, OpenClaw automatically reminds the agent to save important no
     - `input exceeds the maximum number of tokens`
     - `input token count exceeds the maximum number of input tokens` (Bedrock)
     - `input is too long for the model`
+    - `` `inputs` must have less than N tokens `` and `` `inputs` tokens + `max_new_tokens` must be <= N `` (Hugging Face TGI; output-only `max_new_tokens` limits do not trigger compaction)
     - `ollama error: context length exceeded`
 
   </Accordion>
@@ -146,6 +147,10 @@ Client-side compaction in the built-in OpenClaw runtime passes focus to both old
 Automatic session title generation runs in the background and does not block manual compaction. Gateway compaction requests promptly refuse admitted turns and accepted queued work. Once foreground admission has ended, a completed reply that is still saving or cleaning up can take up to 15 seconds to settle before the request rechecks the session. In-band commands exclude their own execution from this wait, but still wait for other completed writers.
 
 Client-side manual compaction uses `agents.defaults.compaction.keepRecentTokens` (default: 20,000) as its cut-point budget and keeps that recent tail in rebuilt context.
+
+The session's per-model `contextTokens` cap does not shrink the summarization
+model's native `contextWindow`. A small active-input budget still applies to
+normal turns, while the summarizer uses its own window to read older history.
 
 When the built-in OpenClaw runtime has prepared the foreground request,
 client-side automatic compaction also accounts for its system prompt, tool

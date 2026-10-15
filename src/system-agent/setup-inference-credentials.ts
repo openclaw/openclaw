@@ -4,8 +4,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
-import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
+import { ensureModelSelectionRuntimePlugins } from "../commands/runtime-plugin-install.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -44,7 +44,11 @@ import {
   waitForProviderAuth,
 } from "./setup-inference-core.js";
 import { prepareCustomSetupCredentials } from "./setup-inference-custom.js";
-import { projectSetupInferenceConfig, withCodexHomeScope } from "./setup-model-selection.js";
+import {
+  prepareSetupModelRuntime,
+  projectSetupInferenceConfig,
+  withCodexHomeScope,
+} from "./setup-model-selection.js";
 import {
   withSetupProviderAuthMethod,
   type SetupProviderAuthMethod,
@@ -220,20 +224,36 @@ async function stagePreparedCandidate(
     codex?.enabled === true &&
     isRecord(appServer) &&
     (appServer.homeScope === "user" || appServer.homeScope === "agent");
+  const preparedRuntime = prepareSetupModelRuntime({
+    config: params.config,
+    modelRef,
+    agentId: ctx.routeAgentId,
+    agentRuntimeId: params.agentRuntimeId ?? params.result.agentRuntimeId,
+  });
   const agentRuntimeId =
-    params.agentRuntimeId ??
-    resolveModelRuntimePolicy({
-      config: params.config,
-      provider: ref.provider,
-      modelId: ref.model,
-      agentId: ctx.routeAgentId,
-    }).policy?.id ??
-    (preparedCodexSignIn ? "codex" : "openclaw");
+    preparedRuntime.agentRuntimeId ?? (preparedCodexSignIn ? "codex" : "openclaw");
   // A new sign-in belongs to OpenClaw even when the previous route shared Codex's home.
   let preparedConfig =
     params.credentialState === "new" && agentRuntimeId === "codex"
-      ? withCodexHomeScope(params.config, "agent")
-      : params.config;
+      ? withCodexHomeScope(preparedRuntime.config, "agent")
+      : preparedRuntime.config;
+  if (params.credentialState === "new" && agentRuntimeId !== "openclaw") {
+    throwIfSetupInferenceCancelled(ctx.params);
+    const installed = await ensureModelSelectionRuntimePlugins({
+      cfg: preparedConfig,
+      model: modelRef,
+      agentId: ctx.routeAgentId,
+      workspaceDir: ctx.workspace,
+      prompter: ctx.params.prompter ?? createQuickstartNotePrompter(ctx.params.runtime),
+      runtime: ctx.params.runtime,
+      beforePersistentEffect: ctx.beforePersistentEffect,
+      beforePersistentApply: () => throwIfSetupInferenceCancelled(ctx.params),
+    });
+    if (!installed.ok) {
+      return { error: installed.message };
+    }
+    preparedConfig = installed.cfg;
+  }
   if (profile && params.credentialState === "new") {
     const saved = await saveSetupCredential({
       profile,
@@ -275,7 +295,7 @@ async function stagePreparedCandidate(
     agentRuntimeId,
     authProfileId: profile?.profileId,
     pluginId,
-    pendingPluginInstalls: params.pendingPluginInstalls,
+    pendingPluginInstalls: preparedConfig.plugins?.installs ?? params.pendingPluginInstalls,
   };
 }
 
@@ -514,6 +534,7 @@ export async function stageProviderAuthCandidate(
         setDefaultModel: false,
         preserveExistingDefaultModel: true,
         signal: params.signal,
+        assertCurrent: () => throwIfSetupInferenceCancelled(params),
         isRemote: params.isRemoteProviderAuth ?? params.surface === "gateway",
         beforePersistentEffect: ctx.beforePersistentEffect,
       },

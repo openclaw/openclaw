@@ -84,13 +84,15 @@ describe("parsePollStart", () => {
 describe("buildPollStartContent", () => {
   it("preserves the requested multiselect cap instead of widening to all answers", () => {
     const content = buildPollStartContent({
-      question: "Lunch?",
-      options: ["Pizza", "Sushi", "Tacos"],
+      question: " Lunch? ",
+      options: [" Pizza ", " ", "Sushi", "Tacos"],
       maxSelections: 2,
     });
 
     expect(content["m.poll.start"]?.max_selections).toBe(2);
     expect(content["m.poll.start"]?.kind).toBe("m.poll.undisclosed");
+    expect(content["m.text"]).toBe("Lunch?\n1. Pizza\n2. Sushi\n3. Tacos");
+    expect(content["org.matrix.msc1767.text"]).toBe("Lunch?\n1. Pizza\n2. Sushi\n3. Tacos");
   });
 });
 

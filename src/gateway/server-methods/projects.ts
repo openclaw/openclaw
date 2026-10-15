@@ -10,6 +10,7 @@ import {
   validateProjectsAddParams,
   type ProjectSummary,
   validateProjectsListParams,
+  validateProjectsCheckoutOptionsParams,
   validateProjectsRegisterParams,
   validateProjectsRemoveParams,
   validateProjectsSearchRemoteParams,
@@ -56,7 +57,10 @@ import {
   authorizeOperatorScopesForMethod,
   authorizeOperatorScopesForRequiredScope,
 } from "../method-scopes.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { searchRemoteProjects } from "../project-github-search.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
+import { resolveSessionCreateAgentId } from "../session-request-agent.js";
 import {
   getSessionRowProjection,
   requireSessionRowProjection,
@@ -428,8 +432,8 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         if (client?.authenticatedUserProfile?.profileId || (params.includeObserved && canWrite())) {
           projection = requireSessionRowProjection(context);
           do {
-            await projection.prepareSelection();
-          } while (projection.needsSelectionPreparation());
+            await projection.prepareSelection({ metadataOnly: true });
+          } while (projection.needsSelectionPreparation({ metadataOnly: true }));
           if (getSessionRowProjection(context) !== projection || projection.state.cfg !== cfg) {
             throw new Error(
               "Session projection changed while preparing the listing. Retry the request.",
@@ -521,6 +525,70 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         diagnostics?.finish();
       }
     },
+    "projects.checkoutOptions": defineValidatedGatewayHandler(
+      "projects.checkoutOptions",
+      validateProjectsCheckoutOptionsParams,
+      async ({ params, respond, context, client, signal, hasCurrentClientAuthority }) => {
+        const cfg = context.getRuntimeConfig();
+        const profileId = client?.authenticatedUserProfile?.profileId;
+        const selected = resolveSessionCreateAgentId(cfg, { agentId: params.agentId });
+        if (!selected.ok) {
+          respond(false, undefined, selected.error);
+          return;
+        }
+        const assertCurrent = () => {
+          signal?.throwIfAborted();
+          if (
+            hasCurrentClientAuthority?.() === false ||
+            context.getRuntimeConfig() !== cfg ||
+            client?.authenticatedUserProfile?.profileId !== profileId
+          ) {
+            throw new Error("Project access changed; select the project again.");
+          }
+        };
+        const denied = authorizeGatewaySessionCreation({ cfg, agentId: selected.agentId, client });
+        if (denied) {
+          respond(false, undefined, denied);
+          return;
+        }
+        assertCurrent();
+        const { resolveSessionProjectCheckoutOptions } =
+          await import("../session-worktree-preparation.js");
+        const options = await resolveSessionProjectCheckoutOptions({
+          cfg,
+          projectId: params.projectId,
+          targetAgentId: selected.agentId,
+          resolveSandboxRequired: () =>
+            resolveCreatorSandbox(cfg, resolveOperatorSessionCreation(client)) === "required",
+          assertCurrent,
+          signal,
+        });
+        assertCurrent();
+        const currentDenial = authorizeGatewaySessionCreation({
+          cfg,
+          agentId: selected.agentId,
+          client,
+        });
+        if (currentDenial) {
+          respond(false, undefined, currentDenial);
+          return;
+        }
+        const canCreate = authorizeOperatorScopesForMethod(
+          "sessions.create",
+          client?.connect.scopes ?? [],
+        ).allowed;
+        respond(
+          true,
+          { current: canCreate && options.current, worktree: canCreate && options.worktree },
+          undefined,
+        );
+      },
+      () =>
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "Checkout availability could not be checked. Select the project again.",
+        ),
+    ),
     "projects.register": defineValidatedGatewayHandler(
       "projects.register",
       validateProjectsRegisterParams,

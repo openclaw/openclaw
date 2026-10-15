@@ -50,6 +50,7 @@ export function createSessionRowPublication(owner: {
           publishedSource: row.publishedSource,
           storedEntry: entry,
           sharingEntry: entry,
+          entryAcquisitionPending: true,
         });
         return;
       }
@@ -340,17 +341,14 @@ export function subscribeSessionRowPublications({
         ) {
           continue;
         }
-        row.databaseFactsRevision++;
-        row.pendingDatabaseFacts = undefined;
-        if (row.retainedDatabaseFacts) {
-          row.retainedDatabaseFacts = {
+        records.invalidateDatabaseFacts(
+          row,
+          row.retainedDatabaseFacts && {
             ...row.retainedDatabaseFacts,
             runtimeOwnership: undefined,
             runtimeOwnershipDependencies: undefined,
-          };
-        }
-        row.preparedRuntimeOwnership = undefined;
-        row.runtimeOwnershipDependencies = undefined;
+          },
+        );
         dirty.add(records.identity(row));
         changed.push(row);
       }

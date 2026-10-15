@@ -475,6 +475,8 @@ describe("createWebhookHandler", () => {
     expect(message.commandAuthorized).toBe(true);
     expect(message.chatUserId).toBe("123");
     expect(resolveLegacyWebhookNameToChatUserId).not.toHaveBeenCalled();
+    expect(JSON.stringify(vi.mocked(log.info).mock.calls)).not.toContain("Hello from json");
+    expect(log.info).toHaveBeenCalledWith("Message from json-user (123): len=15");
   });
 
   it("rejects malformed application/json with a stable parser error", async () => {

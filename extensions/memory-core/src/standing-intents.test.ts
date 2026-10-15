@@ -158,6 +158,17 @@ describe("standing intents", () => {
       kind: "result",
       value: [{ id: "cancelled", status: "cancelled" }],
     });
+    const preciseExpiry = 1_790_000_000_001;
+    worker.execute({
+      type: "create",
+      input: { ...row, id: "precise-expiry", expires_at: preciseExpiry },
+    });
+    expect(worker.execute({ type: "sweep", input: { nowMs: preciseExpiry - 1 } })).toMatchObject({
+      nextDueAt: preciseExpiry,
+    });
+    expect(worker.execute({ type: "sweep", input: { nowMs: preciseExpiry } })).toMatchObject({
+      nextDueAt: Infinity,
+    });
     worker.execute({ type: "create", input: { ...row, id: "large-expiry", expires_at: 2 ** 60 } });
     expect(() => worker.execute({ type: "sweep", input: { nowMs: 15_000 } })).not.toThrow();
     worker.execute({
@@ -295,6 +306,56 @@ describe("standing intents", () => {
     const stored = await listStandingIntents({ agentId: "main", nowMs: 2_000 });
     expect(stored.map((intent) => intent.id)).toEqual([created.id]);
     expect(stored[0]).toMatchObject({ status: "done", fireCount: 1 });
+  });
+
+  it.each([
+    ["3", 3],
+    [3, 3],
+    ["5", 5],
+    [undefined, 3],
+  ])("creates an intent with maxFires=%j", async (maxFires, expected) => {
+    const execute = createStandingIntentExecutor({
+      agentId: "main",
+      provider: "qa-channel",
+      senderId: "owner-1",
+    });
+    const result = parseToolJson(
+      await execute("create-integer-options", {
+        action: "create",
+        description: "Review the release.",
+        triggerKeywords: ["release"],
+        maxFires,
+        cooldownSeconds: "0",
+      }),
+    );
+    expect(result.intent).toMatchObject({ maxFires: expected, cooldownSeconds: 0 });
+    expect(await listStandingIntents({ agentId: "main" })).toMatchObject([
+      { maxFires: expected, cooldownSeconds: 0 },
+    ]);
+  });
+
+  it.each([
+    ["maxFires", "abc", "positive"],
+    ["maxFires", "3.5", "positive"],
+    ["maxFires", "3fires", "positive"],
+    ["maxFires", "-1", "positive"],
+    ["maxFires", "0", "positive"],
+    ["maxFires", "9007199254740992", "positive"],
+    ["cooldownSeconds", "-1", "non-negative"],
+  ])("rejects invalid %s=%s with an integer error", async (field, value, range) => {
+    const execute = createStandingIntentExecutor({
+      agentId: "main",
+      provider: "qa-channel",
+      senderId: "owner-1",
+    });
+    await expect(
+      execute("create-invalid-integer", {
+        action: "create",
+        description: "Review the release.",
+        triggerKeywords: ["release"],
+        [field]: value,
+      }),
+    ).rejects.toThrow(`${field} must be a ${range} integer`);
   });
 
   it("injects owner-created intents and skips rows without a known creator", async () => {

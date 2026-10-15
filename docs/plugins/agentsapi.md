@@ -97,6 +97,21 @@ plugin makes it available; the model's `agentRuntime` setting selects it for
 conversations. See [runtime configuration](/plugins/sdk-agent-harness/runtime-config)
 for provider and per-agent model settings.
 
+### Shared model tuning
+
+Agents API uses its own native context management. Shared OpenClaw settings
+`responsesServerCompaction` and `responsesCompactThreshold` do not prevent
+selecting it, but they do not control hosted compaction (including when
+`responsesServerCompaction` is `false`). They keep their existing behavior when
+you use the same model with the OpenClaw runtime. Model capability metadata such
+as `supportsTemperature` and `codeMode` also does not require an exact native
+implementation.
+
+This is best-effort tuning compatibility, not permission to drop request policy.
+Custom endpoints, authentication, headers, request parameters, and storage
+behavior still require a runtime that can honor them; Agents API continues to
+require its official API-key route.
+
 ### 3. Start a conversation and try a task
 
 In the Control UI, open **New session → Environments** and select

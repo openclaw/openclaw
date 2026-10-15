@@ -54,7 +54,7 @@ import {
 } from "./chat-message-confirmation.ts";
 import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.types.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
-import type { ChatSendStatusActions } from "./chat-message-send-status.ts";
+import type { ChatSendStatusActions } from "./chat-message-send-status-view.tsx";
 import type { ReplyMessageStatus } from "./chat-reply-preview.ts";
 import {
   handleChatSelectionPointerUp,
@@ -155,7 +155,6 @@ export type ChatThreadProps = ChatSendStatusActions &
     startupLabel?: string;
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
-    onChangeFailureModel?: (runId: string) => void;
     failureActionsRunId?: string;
     waitingApproval?: boolean;
     questionPrompts?: readonly QuestionPrompt[];

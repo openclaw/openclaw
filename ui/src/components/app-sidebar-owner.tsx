@@ -31,14 +31,17 @@ import "../styles/app-sidebar.css";
 import "../styles/sidebar-rail.css";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import { renderSessionListToolbar } from "./app-sidebar-session-filter-summary.tsx";
-import { renderSessionList } from "./app-sidebar-session-list-render.tsx";
+import { renderSessionList as SessionList } from "./app-sidebar-session-list-render.tsx";
 import type {
   SidebarNarrationSyncInput,
   SidebarSessionNarrationController,
 } from "./app-sidebar-session-narration.ts";
 import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
-import { renderSessionTree, visibleSessionChildren } from "./app-sidebar-session-row-render.tsx";
+import {
+  renderSessionTree as SessionTree,
+  visibleSessionChildren,
+} from "./app-sidebar-session-row-render.tsx";
 import {
   loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarCatalogGrouping,
@@ -70,17 +73,6 @@ import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
 import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
 
 export class AppSidebarOwner extends AppSidebarSessionNavigationElement implements SessionListHost {
-  private teamOnlineExpandedValue = false;
-  get teamOnlineExpanded(): boolean {
-    return this.teamOnlineExpandedValue;
-  }
-  set teamOnlineExpanded(value: boolean) {
-    if (Object.is(this.teamOnlineExpandedValue, value)) {
-      return;
-    }
-    this.teamOnlineExpandedValue = value;
-    this.requestUpdate();
-  }
   override sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
   override sidebarTools: ReadonlyMap<string, SidebarToolActivity> = new Map();
   override sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
@@ -101,7 +93,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.sessionProjection.restoreChildrenDisplay(rows);
     this.people.sortMode = model.peopleSortMode;
     this.people.statusFilter = model.peopleStatusFilter;
-    this.teamOnlineExpanded = model.onlineExpanded;
+    this.people.presenceFilter = model.peoplePresenceFilter;
     sidebarOnlineOrder(this).restore(model.onlineUsers, new Map(model.onlineCounts));
   }
 
@@ -123,7 +115,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     this.sessionProjection.restoreChildrenDisplay([]);
     sidebarOnlineOrder(this).clear();
     this.people.resetView();
-    this.teamOnlineExpanded = false;
+    this.people.setPresenceFilter("online");
   }
 
   sidebarSnapshotSettled(): boolean {
@@ -500,13 +492,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   renderPinnedSidebarSession(session: () => SidebarRecentSession): JSX.Element {
-    const row = renderSessionTree({
-      host: this,
-      get session() {
-        return session();
-      },
-      listItem: false,
-    });
+    const row = <SessionTree host={this} session={session()} listItem={false} />;
     return (
       <Show when={this.sidebarAgentsMode === "roster"} fallback={row}>
         {renderSidebarPinnedSession(this, session)}
@@ -548,59 +534,29 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         }
       },
     );
-    const nativeList = renderSessionList({
-      host: host(),
-      get empty() {
-        return visibleSessions().length === 0;
-      },
-      get sections() {
-        return sections();
-      },
-      get nativeSessionsHaveMore() {
-        return host().sessionData.sessionsResult?.hasMore === true;
-      },
-      get nativeSessionsLoading() {
-        return host().sessionData.sessionsLoading;
-      },
-      get catalogRenderer() {
-        return host().catalogRenderer;
-      },
-      catalogs: {
-        get catalogs() {
-          return catalogs();
-        },
-        get basePath() {
-          return host().basePath;
-        },
-        get routeSessionKey() {
-          return catalogRouteSessionKey();
-        },
-        get newSessionAgentId() {
-          return expandedAgentId();
-        },
-        get mainKey() {
-          return host().sessionMainKey();
-        },
-        get loadingMoreCatalogIds() {
-          return host().sessionData.loadingMoreSessionCatalogIds;
-        },
-        get projectGrouping() {
-          return host().catalogProjectGrouping;
-        },
-        get liveRows() {
-          return host().catalogLiveRows();
-        },
-        get toSidebarSession() {
-          return navigationState().toSidebarSession;
-        },
-        get catalogOpenTarget() {
-          return host().catalogOpenTarget;
-        },
-        get terminalAvailable() {
-          return host().terminalAvailable;
-        },
-      },
-    });
+    const nativeList = (
+      <SessionList
+        host={host()}
+        empty={visibleSessions().length === 0}
+        sections={sections()}
+        nativeSessionsHaveMore={host().sessionData.sessionsResult?.hasMore === true}
+        nativeSessionsLoading={host().sessionData.sessionsLoading}
+        catalogRenderer={host().catalogRenderer}
+        catalogs={{
+          catalogs: catalogs(),
+          basePath: host().basePath,
+          routeSessionKey: catalogRouteSessionKey(),
+          newSessionAgentId: expandedAgentId(),
+          mainKey: host().sessionMainKey(),
+          loadingMoreCatalogIds: host().sessionData.loadingMoreSessionCatalogIds,
+          projectGrouping: host().catalogProjectGrouping,
+          liveRows: host().catalogLiveRows(),
+          toSidebarSession: navigationState().toSidebarSession,
+          catalogOpenTarget: host().catalogOpenTarget,
+          terminalAvailable: host().terminalAvailable,
+        }}
+      />
+    );
     return (
       <Show when={host().sidebarAgentsMode === "roster"} fallback={nativeList}>
         <SidebarAgentRoster
@@ -700,8 +656,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                 )}
               </Show>
             </div>
-            <div class="sidebar-shell__footer">
-              <Show when={this.devGitBranch}>
+            <Show when={this.devGitBranch}>
+              <div class="sidebar-shell__footer">
                 <openclaw-tooltip prop:content={this.devGitBranch ?? undefined}>
                   <div class="sidebar-footer-branch">
                     <span class="sidebar-footer-branch__icon" aria-hidden="true">
@@ -710,8 +666,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                     <span class="sidebar-footer-branch__name">{this.devGitBranch}</span>
                   </div>
                 </openclaw-tooltip>
-              </Show>
-            </div>
+              </div>
+            </Show>
           </div>
           {menus}
         </aside>

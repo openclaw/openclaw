@@ -10,6 +10,7 @@ import {
   setWorktreePreparationTemplate,
   startWorktreePreparationPhase,
 } from "../worktrees/preparation-timing.js";
+import { bindSandboxInputStager, getSandboxInputStager } from "./input-staging.js";
 import type { SandboxConfig, SandboxContext } from "./types.js";
 
 /** A writable project is an exact managed projection, never a role-policy override. */
@@ -70,7 +71,7 @@ export async function prepareLocalSandboxWorkspace(params: {
         path.relative(owner.worktree.path, params.workspaceDir ?? owner.worktree.path),
       ),
       assertCurrent: owner.assertCurrent,
-      provision: async <T>(run: () => Promise<T>) =>
+      provision: async <T>(run: () => Promise<T>, signal?: AbortSignal) =>
         await withLocalWorkspaceProjection(
           owner,
           async () => {
@@ -79,7 +80,7 @@ export async function prepareLocalSandboxWorkspace(params: {
             owner.assertCurrent();
             return result;
           },
-          { provision: true },
+          { provision: true, signal },
         ),
       checkpoint: async () => {
         await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
@@ -109,35 +110,43 @@ export function bindLocalSandboxWorkspace(
     };
   }
   const shell = backend.runShellCommand.bind(backend);
-  backend.runShellCommand = async (params) => {
-    // Path preparation can await host and container probes after tool entry.
-    projection.assertCurrent();
-    return await shell(params);
-  };
+  backend.runShellCommand = (params) =>
+    projection.provision(async () => {
+      // A preceding background command may still have the runtime paused for checkpointing.
+      params.signal?.throwIfAborted();
+      projection.assertCurrent();
+      return await shell(params);
+    }, params.signal);
   const build = backend.buildExecSpec.bind(backend);
   const finalize = backend.finalizeExec?.bind(backend);
   backend.buildExecSpec = async (params) => {
-    projection.assertCurrent();
-    const spec = await build(params);
+    let spec: Awaited<ReturnType<typeof build>> | undefined;
     try {
-      projection.assertCurrent();
-    } catch (error) {
-      await finalize?.({
-        status: "failed",
-        exitCode: null,
-        timedOut: false,
-        token: spec.finalizeToken,
+      // Release preparation custody before the command's background lifetime begins.
+      return await projection.provision(async () => {
+        projection.assertCurrent();
+        spec = await build(params);
+        projection.assertCurrent();
+        const assertCurrent = spec.assertCurrent;
+        return {
+          ...spec,
+          assertCurrent: () => {
+            projection.assertCurrent();
+            assertCurrent?.();
+          },
+        };
       });
+    } catch (error) {
+      if (spec) {
+        await finalize?.({
+          status: "failed",
+          exitCode: null,
+          timedOut: false,
+          token: spec.finalizeToken,
+        });
+      }
       throw error;
     }
-    const assertCurrent = spec.assertCurrent;
-    return {
-      ...spec,
-      assertCurrent: () => {
-        projection.assertCurrent();
-        assertCurrent?.();
-      },
-    };
   };
   backend.finalizeExec = async (params) => {
     await finalize?.(params);
@@ -172,5 +181,11 @@ export function bindLocalSandboxWorkspace(
   }
   if (createFileExclusive) {
     bridge.createFileExclusive = (params) => mutate(() => createFileExclusive(params));
+  }
+  const stageInput = getSandboxInputStager(bridge);
+  if (stageInput) {
+    bindSandboxInputStager(bridge, (params) =>
+      mutate(() => projection.provision(() => stageInput(params), params.signal)),
+    );
   }
 }

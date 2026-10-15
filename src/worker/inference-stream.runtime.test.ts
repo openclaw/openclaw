@@ -180,6 +180,28 @@ it("keeps text and thinking content and signatures in their own stream blocks", 
   }
 });
 
+it.each([62_500, null])(
+  "retains provider retry floor %s when a worker error becomes an assistant failure",
+  async (retryAfterMs) => {
+    const fixture = createAdapterFixture();
+    fixture.start.mockResolvedValue({
+      type: "error",
+      reason: "provider-error",
+      message: "429: rate_limit_exceeded",
+      retryAfterMs,
+    });
+    try {
+      const result = await fixture
+        .stream({ modelRef, context: { messages: [] }, options: {} })
+        .result();
+      expect(result).toMatchObject({ stopReason: "error", retryAfterMs });
+      expect(isWorkerTranscriptMessageFrameSafe(result)).toBe(true);
+    } finally {
+      fixture.client.dispose();
+    }
+  },
+);
+
 it.each([
   ["text", "end", { type: "text_end", contentIndex: 0 }],
   ["thinking", "delta", { type: "thinking_delta", contentIndex: 0, delta: "wrong block" }],

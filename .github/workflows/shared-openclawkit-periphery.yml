@@ -73,6 +73,15 @@ jobs:
               "scripts/ios-write-swift-filelist.mts",
               "scripts/ios-write-version-xcconfig.sh",
               "test/scripts/periphery-intersection.test.ts",
+              ":(exclude)apps/ios/README.md",
+              ":(exclude)apps/ios/AGENTS.md",
+              ":(exclude)apps/ios/DESIGN.md",
+              ":(exclude)apps/ios/CHANGELOG.md",
+              ":(exclude)apps/ios/VERSIONING.md",
+              ":(exclude)apps/ios/fastlane/SETUP.md",
+              ":(exclude)apps/ios/fastlane/metadata/README.md",
+              ":(exclude)apps/macos/README.md",
+              ":(exclude)apps/macos/AGENTS.md",
             ], { ignoreReturnCode: true, silent: true });
             if (result.exitCode !== 0 && result.exitCode !== 1) {
               throw new Error(`git diff failed with exit code ${result.exitCode}`);

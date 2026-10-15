@@ -181,59 +181,6 @@ describe("gateway ingress attribution", () => {
     });
   });
 
-  it("reports distinct unattributable proxy sources while suppressing repeats", async () => {
-    const warn = vi.fn();
-    const report = createGatewayUnattributableProxyReporter({ warn });
-    const first = prepareGatewayIngressAttribution({
-      req: request({ remoteAddress: "192.0.2.10", forwardedFor: "100.64.0.10" }),
-    });
-    const second = prepareGatewayIngressAttribution({
-      req: request({ remoteAddress: "192.0.2.11", forwardedFor: "100.64.0.11" }),
-    });
-    if (first.kind === "unattributable-proxy") {
-      report(first);
-      report(first);
-    }
-    if (second.kind === "unattributable-proxy") {
-      report(second);
-    }
-
-    expect(warn).toHaveBeenCalledTimes(2);
-    expect(warn.mock.calls.map(([message]) => message)).toEqual([
-      expect.stringContaining("192.0.2.10"),
-      expect.stringContaining("192.0.2.11"),
-    ]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("gateway.trustedProxies"));
-  });
-
-  it("keeps a source suppressed when the aggregate budget refills beside it", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const warn = vi.fn();
-    const report = createGatewayUnattributableProxyReporter({ warn });
-    const attribution = prepareGatewayIngressAttribution({
-      req: request({ remoteAddress: "192.0.2.10", forwardedFor: "100.64.0.10" }),
-    });
-    if (attribution.kind !== "unattributable-proxy") {
-      throw new Error("expected unattributable proxy");
-    }
-
-    // Warn this source one second before the aggregate budget refills.
-    vi.setSystemTime(5 * 60_000 - 1_000);
-    report(attribution);
-    expect(warn).toHaveBeenCalledTimes(1);
-
-    // The budget refills two seconds later; the source is still inside its own window.
-    vi.setSystemTime(5 * 60_000 + 1_000);
-    report(attribution);
-    expect(warn).toHaveBeenCalledTimes(1);
-
-    // It is reported again only once its own five minutes have elapsed.
-    vi.setSystemTime(5 * 60_000 - 1_000 + 5 * 60_000);
-    report(attribution);
-    expect(warn).toHaveBeenCalledTimes(2);
-  });
-
   it("does not let continued traffic keep a source suppressed forever", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

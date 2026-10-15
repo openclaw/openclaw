@@ -480,6 +480,13 @@ app update provides a newer Bun, choose **Use bundled runtime…** again to swit
 The CLI owns service installation on both Linux and Windows; macOS Tauri keeps
 its existing behavior, separate from the native macOS app.
 Switching an existing Gateway's runtime leaves its CLI launcher unchanged.
+After successful activation and Gateway health checks, the app records the
+previous selection in its existing managed launcher marker and collects obsolete
+runtime seeds. It keeps the current and previous selections, the launcher's
+runtime and package, paths referenced by the installed service or its runtime pin,
+and seeds containing live executables. Failed activations never collect seeds.
+Unreadable references or process inventories defer collection, as do independent
+CLI launchers without a managed marker for the rollback selection.
 
 ## Updates
 
@@ -575,8 +582,8 @@ admitted fork release as the native macOS app and CI. Build-time downloads
 verify the release checksums, committed hashes, executable architecture, and fork
 revision. The app copies verified resource bytes to an immutable directory under
 `~/.openclaw/tools/desktop-runtime`; services never reference a temporary AppImage
-mount. Immutable runtime directories are retained, including every directory
-referenced by an existing service. On Linux, Node remains installation/build tooling.
+mount. Healthy runtime activations reclaim unused immutable directories under the
+retention policy above. On Linux, Node remains installation/build tooling.
 Fresh local setup also selects bundled Bun for the app-installed CLI launcher.
 
 Linux resources carry a fixed `OPENCLAW-BUN-RUNTIME-V1` header so linuxdeploy

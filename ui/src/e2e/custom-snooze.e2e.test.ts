@@ -147,7 +147,7 @@ suite.define(() => {
           await custom.waitFor();
           const menuRows = await chooser.evaluate((element) =>
             [...element.parentElement!.children]
-              .filter((item) => item.localName === "wa-dropdown-item")
+              .filter((item) => item.matches('[role^="menuitem"]'))
               .map((item) => item.textContent?.trim()),
           );
           expect(menuRows.at(-1)).toBe("Choose another time");

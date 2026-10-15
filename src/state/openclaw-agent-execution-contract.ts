@@ -26,6 +26,8 @@ export type AgentDatabaseNativeStore = SqliteWorkerStore<AgentDatabaseOperations
 export type AgentDatabaseExecutionScope = Pick<AgentDatabaseNativeStore, "execute">;
 
 export type OpenClawAgentDatabaseExecution = OpenClawAgentDatabaseAdmissionExecution & {
+  /** Observe the next terminal native/admission loss after accepted work settles; excludes idle retirement. */
+  onTerminal(listener: (reason: Error) => void): () => void;
   /** The accepted native receipt; reading this never adopts the current pathname. */
   readonly fileIdentity: AgentDatabaseExecutionFileIdentity | undefined;
   /** Accept the admitted native handle used by a synchronous SDK operation. */
@@ -80,7 +82,6 @@ export type AgentDatabaseNativeGeneration = {
     assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing?: boolean,
     signal?: AbortSignal,
-    readmitSchema?: boolean,
   ): Promise<T | undefined>;
   close(): Promise<void>;
 };

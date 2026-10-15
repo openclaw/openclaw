@@ -1,6 +1,7 @@
 // Discord tests pin guild/channel ScopeTree policy precedence.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { setDiscordChannelPolicyBindings } from "./channel-policy-state.js";
 import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
@@ -11,6 +12,102 @@ function createCfg(discord: Record<string, unknown>): OpenClawConfig {
 }
 
 describe("discord group policy", () => {
+  afterEach(() => {
+    setDiscordChannelPolicyBindings("default", []);
+    setDiscordChannelPolicyBindings("work", []);
+  });
+
+  it.each(["ops", "#ops", "2026"])("binds resolved name key %s to its channel id", (channelKey) => {
+    const cfg = createCfg({
+      guilds: {
+        guild: {
+          requireMention: true,
+          tools: { deny: ["exec"] },
+          channels: {
+            [channelKey]: {
+              requireMention: false,
+              tools: { allow: ["exec"] },
+              toolsBySender: { "id:alice": { allow: ["privileged"] } },
+            },
+          },
+        },
+      },
+    });
+    setDiscordChannelPolicyBindings("default", [
+      { guildKey: "guild", channelKey, channelId: "246" },
+    ]);
+    const context = { cfg, groupSpace: "guild", groupChannel: `#${channelKey.replace(/^#/, "")}` };
+
+    // A thread or renamed channel can share the display name, but not the resolved id.
+    expect(resolveDiscordGroupToolPolicy({ ...context, groupId: "999" })).toEqual({
+      deny: ["exec"],
+    });
+    expect(
+      resolveDiscordGroupToolPolicy({ ...context, groupId: "999", senderId: "alice" }),
+    ).toEqual({ deny: ["exec"] });
+    expect(resolveDiscordGroupRequireMention({ ...context, groupId: "999" })).toBe(true);
+    expect(resolveDiscordGroupToolPolicy({ ...context, groupId: "246" })).toEqual({
+      allow: ["exec"],
+    });
+    expect(resolveDiscordGroupRequireMention({ ...context, groupId: "246" })).toBe(false);
+    expect(
+      resolveDiscordGroupToolPolicy({ ...context, groupId: "246", senderId: "alice" }),
+    ).toEqual({ allow: ["privileged"] });
+    // The bound channel keeps its entry after its own rename.
+    expect(
+      resolveDiscordGroupToolPolicy({ ...context, groupId: "246", groupChannel: "#general" }),
+    ).toEqual({ allow: ["exec"] });
+  });
+
+  it("keeps unresolved name keys matching by name within their own account", () => {
+    const guilds = {
+      guild: {
+        requireMention: true,
+        tools: { deny: ["exec"] },
+        channels: { ops: { requireMention: false, tools: { allow: ["exec"] } } },
+      },
+    };
+    setDiscordChannelPolicyBindings("work", [
+      { guildKey: "guild", channelKey: "ops", channelId: "246" },
+    ]);
+    const context = {
+      cfg: createCfg({ guilds, accounts: { work: { guilds } } }),
+      groupSpace: "guild",
+      groupId: "999",
+      groupChannel: "#ops",
+    };
+
+    expect(resolveDiscordGroupToolPolicy(context)).toEqual({ allow: ["exec"] });
+    expect(resolveDiscordGroupRequireMention(context)).toBe(false);
+    expect(resolveDiscordGroupToolPolicy({ ...context, accountId: "work" })).toEqual({
+      deny: ["exec"],
+    });
+  });
+
+  it("prefers an id entry over a matching name entry", () => {
+    setDiscordChannelPolicyBindings("default", [
+      { guildKey: "guild", channelKey: "ops", channelId: "246" },
+    ]);
+    const context = {
+      cfg: createCfg({
+        guilds: {
+          guild: {
+            channels: {
+              "246": { requireMention: true, tools: { deny: ["exec"] } },
+              ops: { requireMention: false, tools: { allow: ["exec"] } },
+            },
+          },
+        },
+      }),
+      groupSpace: "guild",
+      groupId: "246",
+      groupChannel: "#ops",
+    };
+
+    expect(resolveDiscordGroupToolPolicy(context)).toEqual({ deny: ["exec"] });
+    expect(resolveDiscordGroupRequireMention(context)).toBe(true);
+  });
+
   it("prefers a channel sender policy over the guild plain policy", () => {
     const cfg = createCfg({
       guilds: {

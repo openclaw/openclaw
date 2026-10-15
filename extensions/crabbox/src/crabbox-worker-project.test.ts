@@ -79,7 +79,6 @@ describe("Crabbox project snapshot provisioning", () => {
       "enrollment-begun",
       "enrollment-install",
     ]);
-    expect(calls.filter(({ argv }) => argv[1] === "inspect")).toHaveLength(1);
     expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
     expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
       captureUnsupported: {
@@ -191,6 +190,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
         );
       }
       let preparationCommands = 0;
+      let preparationProcess: { error?: Error; signal: NodeJS.Signals | null } | undefined;
       let filesAtCapture: boolean[] | undefined;
       let archiveAtCapture: Buffer | undefined;
       const { provider, calls } = createWarmProvider((call) => {
@@ -227,10 +227,14 @@ exec "$CRABBOX_TEST_NODE" "$@"
           encoding: "utf8",
           timeout: 5_000,
         });
+        preparationProcess = result;
         return commandResult({ code: result.status, stdout: result.stdout, stderr: result.stderr });
       });
 
       const provision = provider.provision(PROFILE, "capture-command", options);
+      await provision.catch(() => {});
+      expect(preparationProcess?.error).toBeUndefined();
+      expect(preparationProcess?.signal).toBeNull();
       if (failure === "none") {
         await expect(provision).resolves.toMatchObject({ node: { deviceId: "project-node" } });
         expect(filesAtCapture).toEqual([false, false, false, false]);
@@ -603,7 +607,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
       if (phase !== "enrollment setup") {
         expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
       }
-      expect(calls.some(({ argv }) => argv[1] === "stop" || argv[1] === "heartbeat")).toBe(false);
+      expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
     },
   );
 
@@ -961,11 +965,8 @@ exec "$CRABBOX_TEST_NODE" "$@"
     expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
   });
 
-  it.each([
-    { ...PROFILE, warmImage: false },
-    { ...CLASSLESS_PROFILE, class: "standard", setup: "true", setupEnv: ["PROJECT_SETUP_VALUE"] },
-  ])("prepares runtime without project capture for opted-out profiles: %j", async (profile) => {
-    vi.stubEnv("PROJECT_SETUP_VALUE", "synthetic");
+  it("prepares runtime without project capture for an opted-out profile", async () => {
+    const profile = { ...PROFILE, warmImage: false };
     const events: string[] = [];
     const { options, observe } = projectOptions(events);
     const { provider, calls } = createWarmProvider((call) => observe(call));

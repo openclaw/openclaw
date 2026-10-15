@@ -9,6 +9,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { closeOpenClawStateDatabaseByPath } from "./openclaw-state-db-cache.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
@@ -167,12 +168,12 @@ describe("personal model accounts", () => {
     const aliceCurrent = captureUserProfileModelAccountLinksAuthority(admission, alice.id);
     const bobCurrent = captureUserProfileModelAccountLinksAuthority(admission, bob.id);
     const { db } = openOpenClawStateDatabase(options);
-    db.setAuthorizer(() => constants.SQLITE_DENY);
+    requireNativeSqliteDatabase(db).setAuthorizer(() => constants.SQLITE_DENY);
     try {
       expect(aliceCurrent()).toBe(true);
       expect(bobCurrent()).toBe(true);
     } finally {
-      db.setAuthorizer(null);
+      requireNativeSqliteDatabase(db).setAuthorizer(null);
     }
     expect(() =>
       runOpenClawStateWriteTransaction(() => {
@@ -224,7 +225,7 @@ describe("personal model accounts", () => {
             .where("id", "=", kind === "missing target" ? source.id : target.id),
         );
       }
-      db.setAuthorizer((action, table, column) =>
+      requireNativeSqliteDatabase(db).setAuthorizer((action, table, column) =>
         action === constants.SQLITE_READ && table === "user_profiles" && column === "avatar"
           ? constants.SQLITE_DENY
           : constants.SQLITE_OK,
@@ -249,7 +250,7 @@ describe("personal model accounts", () => {
           ).toThrow("owner is unavailable");
         }
       } finally {
-        db.setAuthorizer(null);
+        requireNativeSqliteDatabase(db).setAuthorizer(null);
       }
     },
   );

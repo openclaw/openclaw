@@ -63,13 +63,17 @@ If the Gateway's request queue is full, automatic sidebar session discovery keep
 
 While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Home and System busyness open directly in their destination panels, with working headers and Close controls while the content loads. Brief loads do not flash placeholders; slower loads show placeholders inside the panel, and load errors offer Retry in the same place. The rest of the page stays usable. Drag the System busyness title bar to move the panel; its position is remembered in this browser. You can also focus the title bar and use the arrow keys (Shift moves farther). Compact/expanded transitions animate briefly, respect reduced motion, and keep the panel inside the window. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
 
-The selected chat loads before automatic sidebar session lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error.
+The selected chat loads before automatic sidebar session lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error. Accepted new sessions refresh the visible sidebar immediately, including **Involving me** and owner filters, without waiting for the chat to finish loading or the agent to finish working.
 
 Use **Snooze → Choose another time** in a session menu to pick a future date and time in your browser’s local time zone. After a successful snooze, **Custom** shows that exact date and time in other session menus for one hour. Choosing another custom time replaces it; presets and Undo leave the remembered choice unchanged. The browser stores this choice separately for each Gateway and signed-in account, and removes it when it expires or the wake time passes. If browser storage is unavailable, the choice remains reusable only in the current page.
+
+The chat header’s **Details** panel groups session information into collapsible sections separated by subtle dividers. **Environment** shows the workspace name, branch, worktree, execution device, and model. Absolute workspace paths stay out of the panel text and tooltips; use **Copy path** when you need the full path, copy the branch, or open **Show session files** to browse the workspace. **Context** shows the current context usage and latest input/output token counts when available. Approximate usage keeps its `~` marker. **Changes** keeps pull requests, change totals, checks, and available publication actions together. Background tasks, automations, participants, and task progress retain their existing session-scoped actions. On wide conversations, Details docks beside the transcript; narrower conversations use a dismissible popover below the header. On desktop, use the **Details** toggle to open or close the panel; mobile keeps a close button inside the panel.
 
 Session details share concurrent reads across the sidebar, chat, and resource panels. Returning to an unchanged session reuses its details on the same connection. Session changes, explicit refreshes, and reconnects fetch current details; failed reads remain retryable.
 
 Sidebar pull-request indicators reuse the last known snapshot. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
+
+In the chat’s **Changes** panel, gutter chevrons fold complete functions, classes, and other language-supported multiline blocks within a file. Everything starts expanded, including edits. A folded placeholder shows the hidden line count and additions/deletions; click it to expand. Split and unified views share the same folds. The file menu offers **Collapse Code**, **Collapse Functions and Classes**, and **Expand Code**, separately from collapsing whole files. Incomplete source, omitted gaps, unsupported languages, and oversized previews stay expanded. Changing the patch resets code folds.
 
 Background pull-request comparisons use local Git objects and never fetch missing history or blobs. If a partial clone lacks objects needed for the comparison, statistics can remain unavailable until those objects are fetched. A timed-out comparison skips its dependent checks, keeps the branch visible without statistics or a Create PR link, and logs a warning to fetch repository history and retry.
 
@@ -99,7 +103,7 @@ Closed Terminal, Browser, and Desktop panels initialize when you open them rathe
 
 Minimizing and reopening the Dashboard side panel preserves loaded MCP Apps and their unsaved in-app input while the app lease remains valid.
 
-Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. Configuration and command changes refresh commands; catalog and session lifecycle changes refresh affected model choices. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
+Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. Configuration and command changes refresh commands; catalog and session lifecycle changes refresh affected model choices. Agent-specific catalog changes retain other agents’ cached choices and pending catalog requests. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
 
 Metadata refreshes wait for an in-progress model-runtime replacement to publish. An agent whose model runtime is unavailable does not interrupt commands or model choices for healthy agents; its metadata becomes available when its owner publishes.
 
@@ -157,6 +161,13 @@ messages. This changes only presentation, not stored messages or run ownership.
 When an incoming message causes an unstarted tool call to be skipped, its card
 and work summary show **Skipped**, including after reloading the conversation.
 Approval blocks and tool failures keep their separate outcomes.
+
+Failed replies show **Try again** at the right of the heading. A compact
+**Copy error** icon beside the title appears on hover or keyboard focus, and
+stays visible on touch devices. **Details** appears only when the diagnostic
+contains more than the visible summary. To change models, use the model picker
+in the composer; retrying continues from the existing conversation without
+replaying the original request.
 
 The chat header keeps **Share**, **Layout**, and the session menu together.
 **Layout** contains focus, split, swap, panel selection, and dock-position actions,
@@ -304,7 +315,7 @@ Auth is supplied during the WebSocket handshake via:
 
 Gateway auth runs before device pairing. A direct loopback connection does not bypass token or password auth. The login screen and **Settings → Gateway** use one **Gateway secret** field: paste the token or type the password. After a successful connection, the UI keeps the secret in session storage for the current browser tab and Gateway origin only when the Gateway reports token auth. Passwords stay in memory and are never persisted. After pairing, the browser can use its stored per-device token on later connections.
 
-When a plugin embeds the Control UI through [remote ingress](/plugins/sdk-gateway-ingress), its live grant admits the browser's signed device identity without a shared credential. The browser saves the returned device token for later connections and retries once without it if it is rejected. Embedded pages stay connected to the serving Gateway, hide Gateway URL and shared-secret controls, and do not register a service worker. Connection failures remain visible in the app without a token/password login screen.
+When a plugin such as [MCP Relay](/plugins/mcp-relay) embeds the Control UI through [remote ingress](/plugins/sdk-gateway-ingress), its live grant admits the browser's signed device identity without a shared credential. Access is bound to the grant's principal and capped by its access limit. The browser stores no device token; every reconnect is admitted by the live grant again. Embedded pages stay connected to the serving Gateway, hide Gateway URL and shared-secret controls, and do not register a service worker. Connection failures remain visible in the app without a token/password login screen.
 
 An embedder that supplies linked Gateways adds them to the identity menu's **Gateway** section. Select a Gateway to switch the embedded page, choose **Set as primary** when available, or open **Gateway settings…** in the host. The host owns the list, primary choice, and navigation. Native window actions, native Gateway keyboard shortcuts, and native reconnect actions are unavailable in embedded mode.
 

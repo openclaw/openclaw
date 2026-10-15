@@ -1,5 +1,4 @@
 import { existsSync } from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 // Persists short-lived gateway restart intent for supervisor SIGTERM handoff.
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
@@ -39,6 +38,7 @@ import {
 } from "./restart-intent-payload.js";
 import type { GatewayRestartIntent } from "./restart-lifecycle.types.js";
 import { spawnPsSync } from "./spawn-ps.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -323,7 +323,7 @@ export function writeGatewayServiceRestartIntentSync(opts: {
 
 function writeGatewayRestartIntentForTargetSync(
   opts: Omit<Parameters<typeof writeGatewayRestartIntentSync>[0], "targetPid">,
-  resolveTargetPid: (db: DatabaseSync) => number | undefined,
+  resolveTargetPid: (db: EngineConnection) => number | undefined,
   assertCurrent?: () => void,
 ): boolean {
   const env = opts.env ?? process.env;

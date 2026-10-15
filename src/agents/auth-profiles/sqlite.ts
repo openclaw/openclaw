@@ -9,6 +9,7 @@ import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
+import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { agentDatabaseLifecycle } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -30,6 +31,15 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
+import {
+  prepareAuthProfileAuthorizationWrite,
+  readAuthProfileAuthorizationLifetimes,
+} from "./authorization-lifetime.js";
+import {
+  fenceAuthProfileAuthorizationWrite,
+  publishAuthProfileAuthorization,
+} from "./authorization-observation.js";
+import { AUTH_STORE_VERSION } from "./constants.js";
 import { withAuthProfileCredentialOwner } from "./credential-write-custody.js";
 import {
   getPreparedSharedAuthStoreOwnership,
@@ -364,10 +374,65 @@ function mutateAuthProfileCell(
   deleteRow = false,
 ): void {
   const kind = resolveAuthProfileDatabaseKind(agentDir, database);
-  const write = (owner: AuthProfileDatabase) =>
-    deleteRow
-      ? deleteAuthProfileJsonCell(owner.db, target, kind)
-      : writeAuthProfileJsonCell(owner.db, target, kind, payload);
+  const write = (owner: AuthProfileDatabase) => {
+    let next = payload;
+    let remove = deleteRow;
+    if (target === "store") {
+      const previous = inspectAuthProfileJsonCell(owner.db, target, kind);
+      if (previous.status === "unreadable") {
+        throw new Error("Auth profile credential store is unreadable");
+      }
+      const raw = previous.status === "readable" ? previous.raw : undefined;
+      if (remove && Object.keys(readAuthProfileAuthorizationLifetimes(raw)).length) {
+        // Preserve enrolled selection tombstones through credential removal.
+        next = { version: AUTH_STORE_VERSION, profiles: {} };
+        remove = false;
+      }
+      if (!remove) {
+        next = prepareAuthProfileAuthorizationWrite(raw, next);
+      }
+    }
+    let settleAuthorization: ReturnType<typeof fenceAuthProfileAuthorizationWrite> | undefined;
+    const fenceAuthorization = () => {
+      settleAuthorization ??= fenceAuthProfileAuthorizationWrite(owner.path);
+    };
+    // Autocommit has no later prepareCommit phase; fence before its native effect.
+    if (target === "store" && !owner.db.isTransaction) {
+      fenceAuthorization();
+    }
+    try {
+      if (remove) {
+        deleteAuthProfileJsonCell(owner.db, target, kind);
+      } else {
+        writeAuthProfileJsonCell(owner.db, target, kind, next);
+      }
+      if (target === "store") {
+        const publish = () => {
+          publishAuthProfileAuthorization(owner.path, remove ? undefined : next);
+          settleAuthorization?.(true);
+        };
+        // The supplied connection retains its outer transaction/savepoint owner. Unknown
+        // settlement must invalidate facts even when post-commit notifications are discarded.
+        if (
+          !stageSqliteTransactionState(owner.db, {
+            stage() {},
+            prepareCommit: fenceAuthorization,
+            commit: publish,
+            rollback: () => settleAuthorization?.(true),
+            invalidate() {
+              fenceAuthorization();
+              settleAuthorization?.(false);
+            },
+          })
+        ) {
+          publish();
+        }
+      }
+    } catch (error) {
+      settleAuthorization?.(false);
+      throw error;
+    }
+  };
   if (database) {
     write(database);
   } else {

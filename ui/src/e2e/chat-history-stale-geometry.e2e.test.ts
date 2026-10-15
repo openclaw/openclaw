@@ -198,12 +198,6 @@ suite.define(() => {
       await page.setViewportSize({ height: 2_400, width: 1_400 });
       await page.reload();
 
-      await page.getByText("Restored message 18", { exact: true }).waitFor();
-      await waitForChatScrollIdle(page);
-      expect(await gateway.getRequests("chat.history")).toHaveLength(historyRequestsBeforeReload);
-      await page.locator(".chat-pane-cache__pane--active .chat-thread").hover();
-      await page.mouse.wheel(0, -1000);
-
       const requests = await waitForRequests(
         gateway,
         "chat.history",

@@ -4,7 +4,7 @@ import type { MessageReactionSummary } from "../../../../../packages/gateway-pro
 /* @vitest-environment jsdom */
 import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { createMessageGroup } from "./chat-message.test-support.ts";
 
 const reactions: MessageReactionSummary[] = [
@@ -87,7 +87,7 @@ async function customEntry() {
     picker,
     root,
     onReact,
-    input: root.querySelector<HTMLInputElement>('[aria-label="Emoji"]')!,
+    input: root.querySelector<HTMLInputElement>(".emoji-search-panel__search")!,
   };
 }
 
@@ -137,16 +137,29 @@ describe("transcript message reactions", () => {
     expect(onReact).toHaveBeenLastCalledWith("message-1", "🚀", false);
   });
 
-  it.each(["abc", "👍👀"])("rejects custom input %s and accepts a single emoji", async (value) => {
+  it("searches emoji by name and selects the first match on Enter", async () => {
     const { root, onReact, input } = await customEntry();
-    input.value = value;
+    input.value = ":banana";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     flush();
     expect(onReact).not.toHaveBeenCalled();
-    expect(input.value).toBe(value);
-    expect(input.getAttribute("aria-invalid")).toBe("true");
-    expect(root.querySelector(".hint")?.textContent).toContain("single emoji");
+    expect(pickerButton(root, "banana")?.textContent).toBe("🍌");
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(onReact).toHaveBeenLastCalledWith("message-1", "🍌", false);
+  });
+
+  it("shows an empty state for unmatched text and applies a pasted emoji", async () => {
+    const { root, onReact, input } = await customEntry();
+    for (const value of ["zzqx", "👍👀"]) {
+      input.value = value;
+      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      flush();
+      expect(onReact).not.toHaveBeenCalled();
+      expect(root.querySelector(".emoji-search-panel__empty")?.textContent).toBe(
+        "No matching emoji",
+      );
+    }
     input.value = " 🦞 ";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     expect(onReact).toHaveBeenLastCalledWith("message-1", "🦞", false);

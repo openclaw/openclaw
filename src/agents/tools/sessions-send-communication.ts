@@ -12,6 +12,7 @@ import {
   readInProcessSubagentResume,
 } from "../../gateway/in-process-subagent-resume.js";
 import { requestSessionCommunicationApproval } from "../../gateway/session-communication-approval.js";
+import { withSessionSendDelivery } from "../../gateway/session-send-delivery.js";
 import { assertParentSubagentResumeSuccessorCurrent } from "../../gateway/session-subagent-resume.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -46,6 +47,9 @@ import {
   resolveSessionToolAccess,
 } from "./sessions-access.js";
 
+/** A current permission decision rejected delivery, rather than an unavailable dependency. */
+export class SessionCommunicationDeniedError extends Error {}
+
 /** One prepared peer operation; identity bounds never choose its completion route. */
 export async function prepareSessionsSendCommunication(params: {
   config: OpenClawConfig;
@@ -65,6 +69,8 @@ export async function prepareSessionsSendCommunication(params: {
   /** Creates empty metadata through the caller's existing creation owner, never model input. */
   ensureTarget?: (assertCurrent: () => void) => Promise<CommunicationEndpoint>;
   signal?: AbortSignal;
+  /** Recovery cannot ask for fresh consent on behalf of an ended sender turn. */
+  allowApproval?: boolean;
   assertSourceCurrent?: () => void;
   assertAccessCurrent?: () => void;
   callGateway: AgentToolGatewayRequestCaller;
@@ -169,6 +175,8 @@ export async function prepareSessionsSendCommunication(params: {
     );
     if (
       !selected.length ||
+      // Metadata notifications (including worker turn claims) do not replace stored policy.
+      (!change.facts && !change.factsInvalidated) ||
       change.facts?.kind === "unchanged" ||
       change.facts?.kind === "participants" ||
       change.facts?.kind === "category"
@@ -325,7 +333,7 @@ export async function prepareSessionsSendCommunication(params: {
         });
         assertSource();
         if (!decision.allowed) {
-          throw new Error(
+          throw new SessionCommunicationDeniedError(
             formatSessionToolAccessDenial(decision, {
               action: "send",
               targetSessionKey: target[0]!.sessionKey,
@@ -371,7 +379,7 @@ export async function prepareSessionsSendCommunication(params: {
           ownedTask,
         });
         if (!result.allowed) {
-          throw new Error(result.error);
+          throw new SessionCommunicationDeniedError(result.error);
         }
         for (const approval of result.approvals) {
           approvals.set(
@@ -390,6 +398,11 @@ export async function prepareSessionsSendCommunication(params: {
     const initialPlan = plan();
     await refresh();
     const approve = async (approval: (typeof initialPlan.approvals)[number]) => {
+      if (params.allowApproval === false) {
+        throw new SessionCommunicationDeniedError(
+          "Session delivery requires fresh human communication approval.",
+        );
+      }
       await refresh();
       if (!context || (!assertCaller && !params.assertSourceCurrent)) {
         throw new Error("Human communication approval requires a live admitted Gateway caller.");
@@ -472,9 +485,11 @@ export async function prepareSessionsSendCommunication(params: {
       }
     };
     await refresh();
-    const callGateway: AgentToolGatewayRequestCaller = async (request) => {
+    const callGateway: AgentToolGatewayRequestCaller = async <T>(
+      request: Parameters<AgentToolGatewayRequestCaller>[0],
+    ) => {
       if (request.method !== "agent") {
-        return params.callGateway(request);
+        return params.callGateway<T>(request);
       }
       await refresh();
       if (
@@ -520,24 +535,61 @@ export async function prepareSessionsSendCommunication(params: {
           throw new Error("Approved communication input changed before admission.");
         }
       };
-      return params.callGateway(
-        bindInProcessSubagentResume(
+      const dispatch = () =>
+        params.callGateway<T>(
+          bindInProcessSubagentResume(
+            {
+              ...request,
+              params: input,
+              // A standalone transport can fence submission, never serialize a host capability.
+              ...(context
+                ? { sessionMutationCommitGuard: assertAdmission }
+                : {
+                    assertDispatchCurrent: () => {
+                      request.assertDispatchCurrent?.();
+                      assertAdmission();
+                    },
+                  }),
+            },
+            resume,
+          ),
+        );
+      const sender = source[0]!;
+      // Task continuations keep their existing task owner. Ordinary peer input
+      // transfers to the Gateway pending-input owner, independent of the sender turn.
+      if (
+        context &&
+        !ownedTask &&
+        !resume &&
+        sender.entry &&
+        typeof request.params.idempotencyKey === "string" &&
+        inputProvenance?.sourceTool === "sessions_send"
+      ) {
+        return withSessionSendDelivery(
           {
-            ...request,
-            params: input,
-            // A standalone transport can fence submission, never serialize a host capability.
-            ...(context
-              ? { sessionMutationCommitGuard: assertAdmission }
-              : {
-                  assertDispatchCurrent: () => {
-                    request.assertDispatchCurrent?.();
-                    assertAdmission();
-                  },
-                }),
+            delivery: {
+              version: 1,
+              runId: request.params.idempotencyKey,
+              source: {
+                agentId: sender.agentId,
+                sessionKey: sender.sessionKey,
+                sessionId: sender.entry.sessionId,
+                lifecycleRevision: sender.entry.lifecycleRevision,
+              },
+              target: {
+                agentId: endpoint.agentId,
+                sessionKey: endpoint.sessionKey,
+                sessionId: endpoint.entry.sessionId,
+                lifecycleRevision: endpoint.entry.lifecycleRevision,
+              },
+              sandboxed,
+              message: dispatchMessage,
+            },
           },
-          resume,
-        ),
-      );
+          dispatch,
+        );
+      }
+      return dispatch();
     };
     return {
       assertCurrent,

@@ -1,9 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
+  sqliteStringSetEntries,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { agentProvenancePublication } from "./agent-provenance-publication.js";
 import type { AgentProvenance } from "./agent-provenance.types.js";
@@ -12,7 +13,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.gene
 type AgentProvenanceDatabase = Pick<OpenClawStateKyselyDatabase, "agent_provenance">;
 
 export function recordAgentProvenanceInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   provenance: AgentProvenance,
 ): void {
   const db = getNodeSqliteKysely<AgentProvenanceDatabase>(database);
@@ -52,7 +53,7 @@ export function agentProvenanceFromRow(
   };
 }
 
-export function listAgentProvenanceInDatabase(database: DatabaseSync): AgentProvenance[] {
+export function listAgentProvenanceInDatabase(database: EngineConnection): AgentProvenance[] {
   const db = getNodeSqliteKysely<AgentProvenanceDatabase>(database);
   return executeSqliteQuerySync(
     database,
@@ -62,7 +63,7 @@ export function listAgentProvenanceInDatabase(database: DatabaseSync): AgentProv
 
 /** Decode only requested provenance, in the caller's order, including its first error. */
 export function readAgentProvenanceBatchInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   agentIds: readonly string[],
 ): AgentProvenance[] {
   if (agentIds.length === 0) {
@@ -71,9 +72,7 @@ export function readAgentProvenanceBatchInDatabase(
   const db = getNodeSqliteKysely<AgentProvenanceDatabase>(database);
   const requestedIds = JSON.stringify(agentIds.map(normalizeAgentId));
   const query = db
-    .selectFrom((eb) =>
-      eb.fn<{ key: number; value: string }>("json_each", [eb.val(requestedIds)]).as("requested"),
-    )
+    .selectFrom(sqliteStringSetEntries(requestedIds).as("requested"))
     .innerJoin("agent_provenance", "agent_provenance.agent_id", "requested.value")
     .selectAll("agent_provenance")
     .orderBy("requested.key", "asc");

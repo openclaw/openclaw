@@ -359,7 +359,7 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
   --custom-model-id "qwen3.5:27b"
 ```
 
-`--custom-base-url` defaults to `http://127.0.0.1:11434`. `--custom-model-id` is optional; if omitted, onboarding uses Ollama's suggested defaults. Cloud model IDs such as `kimi-k2.5:cloud` also work here.
+`--custom-base-url` defaults to `http://127.0.0.1:11434`. `--custom-model-id` is optional; if omitted, onboarding uses Ollama's suggested defaults. Cloud model IDs such as `kimi-k2.6:cloud` also work here.
 
 Non-interactive llama.cpp against an existing `llama-server`:
 
@@ -475,7 +475,7 @@ Token-based model auth (used with `--auth-choice token`):
 
 Cloudflare AI Gateway: `--cloudflare-ai-gateway-account-id <id>`, `--cloudflare-ai-gateway-gateway-id <id>`.
 
-Daemon install control: `--no-install-daemon` / `--skip-daemon` (aliases; skip gateway service install), `--daemon-runtime <node|bun>` (default: `node`). Bun 1.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
+Daemon install control: `--no-install-daemon` / `--skip-daemon` (aliases; skip gateway service install), `--daemon-runtime <node|bun>` (default: `node`). Bun 1.4.3+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
 
 Skills: `--node-manager <npm|pnpm|bun>` (default `npm`), `--skip-skills`.
 

@@ -103,6 +103,11 @@ const SessionsSearchOutputSchema = Type.Union([
 type SanitizedSearchHit = Static<typeof SessionsSearchHitSchema>;
 type GatewaySearchHit = Partial<Record<keyof SanitizedSearchHit, unknown>>;
 
+type BufferedSearchHit = {
+  hit: SanitizedSearchHit;
+  revalidateCurrent?: () => Promise<void>;
+};
+
 type SearchSessionCandidate = {
   key: string;
   agentId?: string;
@@ -484,7 +489,7 @@ export function createSessionsSearchTool(opts?: {
         // Search excerpts are re-persisted in the caller transcript; incognito
         // sessions therefore stay absent even when the caller could otherwise see them.
         .filter((candidate) => !isIncognitoSessionKey(candidate.key));
-      const visibleHits: SanitizedSearchHit[] = [];
+      const bufferedHits: BufferedSearchHit[] = [];
       let indexing = false;
       let archivedTranscriptsExcluded = 0;
       let backendTruncated = false;
@@ -599,9 +604,28 @@ export function createSessionsSearchTool(opts?: {
               mainKey,
             });
             if (sanitized) {
-              visibleHits.push(sanitized);
+              bufferedHits.push({
+                hit: sanitized,
+                ...(revalidateCurrent ? { revalidateCurrent } : {}),
+              });
             }
           }
+        }
+      }
+      const finalAuthorizations = new Map<() => Promise<void>, boolean>();
+      const visibleHits: SanitizedSearchHit[] = [];
+      for (const buffered of bufferedHits) {
+        const revalidateCurrent = buffered.revalidateCurrent;
+        if (revalidateCurrent && !finalAuthorizations.has(revalidateCurrent)) {
+          try {
+            await revalidateCurrent();
+            finalAuthorizations.set(revalidateCurrent, true);
+          } catch {
+            finalAuthorizations.set(revalidateCurrent, false);
+          }
+        }
+        if (!revalidateCurrent || finalAuthorizations.get(revalidateCurrent) === true) {
+          visibleHits.push(buffered.hit);
         }
       }
       visibleHits.sort(compareSearchHits);

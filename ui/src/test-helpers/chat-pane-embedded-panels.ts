@@ -11,7 +11,7 @@ import {
   createSessionCapabilityFixture,
 } from "../pages/chat/chat-pane.test-support.ts";
 import { createPageState } from "../pages/chat/chat-state-page.ts";
-import type { ChatProps } from "../pages/chat/chat-view.ts";
+import type { ChatProps } from "../pages/chat/chat-view.tsx";
 import { renderChatDetailSlot } from "../pages/chat/components/chat-detail-slot.ts";
 import "../pages/chat/components/chat-detail-panel.tsx";
 import {

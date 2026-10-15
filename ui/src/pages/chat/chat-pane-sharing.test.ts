@@ -18,9 +18,11 @@ import type {
 } from "../../lib/sessions/session-capability.ts";
 import {
   createGatewayBrowserClientFixture,
+  createPaneHeaderWorkspaceFixture,
   createSessionCapabilityFixture,
   createSessionContext,
   createTestChatPane,
+  getPaneTestRuntime,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -173,6 +175,29 @@ const mutations = [
 ] as const;
 
 describe("public session sharing", () => {
+  it.each(["operator.sessions.read", "operator.sessions.write"])(
+    "does not publish sharing hydration while rendering a header with %s",
+    (scope) => {
+      const request = vi.fn();
+      const { pane, state } = createSharingTestChatPane({
+        client: createGatewayBrowserClientFixture({ request }),
+        sessions: createSessionCapabilityFixture(),
+      });
+      const row = sessionRow();
+      setSharingAuthorization(pane, { scopes: [scope] });
+      const states = pane.sessionSharingStates;
+      const updates = vi.spyOn(getPaneTestRuntime(pane), "requestUpdate");
+      const workspace = createPaneHeaderWorkspaceFixture(state);
+
+      pane.renderPaneHeader(workspace, row, false, undefined, false, null);
+      pane.renderPaneHeader(workspace, row, false, undefined, false, null);
+
+      expect(pane.sessionSharingStates).toBe(states);
+      expect(request).not.toHaveBeenCalled();
+      expect(updates).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([true, false])(
     "confirms publication, copies a mounted link (advertised=%s), and revokes independently of team visibility",
     async (advertised) => {

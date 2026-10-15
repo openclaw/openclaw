@@ -577,18 +577,13 @@ async function performPreparedGatewaySessionReset({
       if (parentAcpError) {
         return { ok: false, error: parentAcpError };
       }
-      const pluginCleanup = await runPluginHostCleanup({
+      await runPluginHostCleanup({
         cfg,
         registry: resetPluginRegistry,
         reason: "reset",
         sessionKey: target.canonicalKey,
         skipPersistentSessionState: true,
       });
-      for (const failure of pluginCleanup.failures) {
-        logVerbose(
-          `plugin host cleanup failed for ${failure.pluginId}/${failure.hookId}: ${String(failure.error)}`,
-        );
-      }
       await closeChildAcpRuntimesForParent({
         cfg,
         parentKey: parentSessionKey,
@@ -860,7 +855,7 @@ async function performPreparedGatewaySessionReset({
               : params.clearExecBinding
                 ? undefined
                 : currentEntry?.execCwd,
-            ...(params.armSessionDiffBaselineCapture && !nextExecNode
+            ...(params.armSessionDiffBaselineCapture && !nextExecNode && !currentEntry?.deviceFolder
               ? {
                   sessionDiffBaselineCapture: createSessionDiffBaselineCaptureClaim(),
                 }
@@ -898,6 +893,8 @@ async function performPreparedGatewaySessionReset({
               : (preparedLifecycle?.worktree ?? currentEntry?.worktree),
             repositoryWorkspaceId:
               preparedLifecycle?.repositoryWorkspaceId ?? currentEntry?.repositoryWorkspaceId,
+            // Placement can be retired by reset; the logical chat must still stay on its device.
+            deviceFolder: currentEntry?.deviceFolder ? { ...currentEntry.deviceFolder } : undefined,
             ...creationStamp,
             delivery: currentEntry?.delivery,
             pendingDeliveryNotice: currentEntry?.pendingDeliveryNotice,

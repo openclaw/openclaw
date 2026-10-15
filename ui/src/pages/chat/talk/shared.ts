@@ -522,7 +522,8 @@ export async function submitRealtimeTalkConsult(params: {
   };
   const abortRun = () => {
     aborted = true;
-    if (run) {
+    // Relay lifetimes belong to the Gateway; aborting this browser wait must not cancel them.
+    if (run && !params.relaySessionId) {
       void ctx.client.request("chat.abort", {
         sessionKey: run.agentSessionKey,
         agentId: run.agentId,
@@ -544,7 +545,7 @@ export async function submitRealtimeTalkConsult(params: {
       return;
     }
     // Cancellation must not hide the acknowledgement that owns the Gateway run.
-    // Once the run id arrives, abortRun() can cancel the exact started consult.
+    // Once the run id arrives, direct transports can cancel the exact started consult.
     run = await ctx.client.request<TalkClientToolCallResult>("talk.client.toolCall", {
       sessionKey: ctx.sessionKey,
       ...(ctx.voiceSessionId ? { voiceSessionId: ctx.voiceSessionId } : {}),

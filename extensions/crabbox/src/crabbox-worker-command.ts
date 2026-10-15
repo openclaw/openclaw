@@ -7,6 +7,10 @@ import { CRABBOX_STOP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const MAX_COMMAND_DETAIL_CHARS = 512;
 
+export function sanitizeCrabboxNotice(text: string): string {
+  return sliceUtf16Safe(redactToolPayloadText(text).replace(/\s+/gu, " ").trim(), 0, 512);
+}
+
 export type LeaseCommandContext = { binary: string; id: string; provider: string };
 
 export function leaseRunArgs(
@@ -37,6 +41,8 @@ export type CrabboxCommandRunner = (
   argv: string[],
   options: {
     killProcessTree: boolean;
+    requireProcessTreeExtinction?: boolean;
+    killGraceMs?: number;
     env?: NodeJS.ProcessEnv;
     input?: string | Uint8Array;
     maxOutputBytes: number;

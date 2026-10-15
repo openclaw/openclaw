@@ -907,9 +907,7 @@ openclaw-pending-session-create {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  width: auto;
-  white-space: nowrap;
+  width: 24px;
   height: 24px;
   padding: 0;
   border-radius: var(--radius-full);
@@ -3080,9 +3078,9 @@ openclaw-chat-ci-details {
 
   .agent-chat__input--chat .context-ring {
     justify-content: center;
-    width: auto;
+    width: var(--chat-composer-control-size);
     height: var(--chat-composer-chip-height);
-    gap: 5px;
+    gap: 0;
     padding-inline: 0;
   }
 

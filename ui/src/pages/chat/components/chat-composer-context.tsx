@@ -71,7 +71,7 @@ function latestAssistantProvider(messages: unknown[] | undefined): string | null
   return null;
 }
 
-function getContextNoticeViewModel(session: GatewaySessionRow | undefined) {
+export function getContextNoticeViewModel(session: GatewaySessionRow | undefined) {
   const used = asNonNegativeFiniteNumber(session?.totalTokens);
   const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(session);
   if (used === undefined || !limit) {
@@ -341,7 +341,6 @@ export function ContextNotice(props: ContextNoticeProps) {
                 stroke-dashoffset={dashOffset().toFixed(2)}
               />
             </svg>
-            <span>{t("chat.composer.contextUsage.label")}</span>
           </summary>
           <wa-popup data-anchored-overlay>
             <section

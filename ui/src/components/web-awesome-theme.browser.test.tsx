@@ -1,11 +1,13 @@
 import "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js";
 import "@awesome.me/webawesome/dist/components/option/option.js";
 import "@awesome.me/webawesome/dist/components/select/select.js";
+import "@awesome.me/webawesome/dist/components/tab-group/tab-group.js";
+import "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js";
+import "@awesome.me/webawesome/dist/components/tab/tab.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { renderSidebarIdentityMenu } from "./app-sidebar-identity-menu.tsx";
-import "./web-awesome-tabs.ts";
 import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "../styles/base.css";
 import "../styles/layout.css";
@@ -122,7 +124,7 @@ describe.runIf("__vitest_browser__" in globalThis)("shared control theme inherit
             canPairDevice: true,
             basePath: "",
             gatewayVersion: "test",
-            updateAttentionDismissed: true,
+            updateAvailable: true,
             canRetryConnection: false,
             themeMode: "dark",
             triggerWidth: 250,

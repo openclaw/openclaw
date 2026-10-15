@@ -3,7 +3,6 @@ import type { SolidRouteProps } from "../../app-route-types.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
 import { renderLazyViewError } from "../../components/lazy-view-error.ts";
 import { renderSessionBackground } from "../../components/session-background-view.ts";
-import "../../components/web-awesome-popover.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -52,10 +51,13 @@ export function NewSessionRoute(props: SolidRouteProps<NewSessionRouteData>) {
 
 const pageOwners = new WeakMap<PageHost, NewSessionPageOwner>();
 
-function DraftBlock(props: { page: () => NewSessionPageOwner; revision: () => object }) {
+function DraftBlock(props: {
+  page: () => NewSessionPageOwner;
+  revision: () => object;
+  options: () => ReturnType<NewSessionPageOwner["composerOptions"]>;
+}) {
   const submission = () => props.page().submission;
   const place = () => props.page().place;
-  const options = createMemo(() => props.page().composerOptions());
   const placeOptions = createMemo((): NewSessionPlaceControlsOptions => ({
     context: props.page().context,
     data: props.page().data,
@@ -162,7 +164,11 @@ function DraftBlock(props: { page: () => NewSessionPageOwner; revision: () => ob
         />
       </Show>
       <NewSessionComposer
-        options={Object.assign(options(), { permissionControl, dictationStatus, voiceControl })}
+        options={Object.assign(props.options(), {
+          permissionControl,
+          dictationStatus,
+          voiceControl,
+        })}
       />
       <Show when={!catalog.isTarget(props.page().data)}>
         <NewSessionIncognitoNotice active={submission().visibility === "incognito"} />
@@ -181,9 +187,11 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
     revision();
     return owner;
   };
+  // Both draft presentations share one preparation per revision, not one per binding.
+  const options = createMemo(() => page().composerOptions());
   // The retained Lit slot must not republish identical Solid inputs on each
   // draft edit; the revision accessor already carries the changed state.
-  const draftProps = { page, revision };
+  const draftProps = { page, revision, options };
   createEffect(revision, () =>
     untrack(() => {
       owner.updated();
@@ -208,6 +216,12 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
       owner.submission.setVisibility(visibility),
   };
   const completed = () => page().submission.completedSubmission;
+  const creationComposer = createMemo(() => {
+    const submission = page().submission;
+    const composer = submission.creationComposer;
+    // Rollback restores the initial composer; keep a second one only for retained input.
+    return submission.pendingMessage || composer?.hasInput ? composer : undefined;
+  });
   const userId = () => {
     const identity = page().context?.gateway.snapshot.selfUser?.identity;
     return identity?.type === "profile" ? identity.id : null;
@@ -270,13 +284,13 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
                 />
               }
             >
-              <DraftBlock page={page} revision={revision} />
+              <DraftBlock page={page} revision={revision} options={options} />
             </Show>
           )}
           onOpenImage={owner.setImageLightbox}
         />
         <CreationComposer
-          composer={page().submission.creationComposer}
+          composer={creationComposer()}
           onOpenImage={owner.setImageLightbox}
           renderRevision={revision()}
         />

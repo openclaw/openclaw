@@ -29,7 +29,7 @@ type LoginControllerOptions = {
   };
   canStart: () => boolean;
   canContinue: () => boolean;
-  refresh: () => Promise<unknown>;
+  refresh: (providerId?: string) => Promise<unknown>;
   onDiscover?: () => void;
   onApiKey?: (provider: string) => void;
   getManualProviders?: () => SystemAgentSetupDetectResult["manualProviders"];
@@ -42,6 +42,7 @@ export class ModelProviderLoginController {
         providers?: string[];
         providerId: string;
         query: string;
+        allowSetup: boolean;
         isCurrent: () => boolean;
       } & (
         | { phase: "loading" }
@@ -57,7 +58,8 @@ export class ModelProviderLoginController {
   private mutationActive = false;
   private refreshWarning: string | null = null;
   private message: ModelProviderRowMessage | undefined;
-  private mode: "auth" | "activate" = "auth";
+  private mode: "auth" | "activate" | "access" = "auth";
+  private providerId: string | undefined;
   private readonly runner: ModelSetupWizardRunner;
   private readonly wizard: WizardLoginController;
 
@@ -183,18 +185,27 @@ export class ModelProviderLoginController {
     });
   }
 
-  private loginProviders(providers?: string[], authStatus = this.options.getScope().authStatus) {
+  private loginProviders(
+    providers?: string[],
+    authStatus = this.options.getScope().authStatus,
+    allowSetup = false,
+  ) {
     return buildLoginProviders({
       providers,
       authStatus,
       allowQuickApiKey: Boolean(this.options.onApiKey),
-      manualProviders: this.options.onManualProvider
-        ? this.options.getManualProviders?.()
-        : undefined,
+      manualProviders:
+        allowSetup && this.options.onManualProvider
+          ? this.options.getManualProviders?.()
+          : undefined,
     });
   }
 
-  async open(providers?: string[], authChoice?: string): Promise<void> {
+  async open(
+    providers?: string[],
+    authChoice?: string,
+    { allowSetup = Boolean(this.options.onManualProvider) }: { allowSetup?: boolean } = {},
+  ): Promise<void> {
     if (!this.options.canStart() || this.busy) {
       return;
     }
@@ -216,7 +227,7 @@ export class ModelProviderLoginController {
         this.options.canContinue()
       );
     };
-    const picker = { providers, providerId: "", query: "", isCurrent };
+    const picker = { providers, providerId: "", query: "", isCurrent, allowSetup };
     this.picker = { ...picker, phase: "loading" };
     this.focusPicker = null;
     this.message = undefined;
@@ -229,7 +240,7 @@ export class ModelProviderLoginController {
           signal: controller.signal,
         }));
       if (isCurrent()) {
-        const available = this.loginProviders(providers, authStatus);
+        const available = this.loginProviders(providers, authStatus, allowSetup);
         const provider = authChoice
           ? available.find((group) => group.choices.some((option) => option.id === authChoice))
           : providers && available.length === 1
@@ -275,6 +286,7 @@ export class ModelProviderLoginController {
     this.refreshWarning = null;
     this.message = undefined;
     this.mode = "auth";
+    this.providerId = undefined;
     // Cleanup addresses the original connection and wizard only. Late replies
     // cannot publish credentials or errors into another agent's view.
     this.wizard.reset();
@@ -307,7 +319,7 @@ export class ModelProviderLoginController {
 
   get wizardViewProps() {
     return this.wizard.viewProps({
-      mode: this.mode,
+      mode: this.mode === "access" ? "auth" : this.mode,
       busy: this.mutationActive,
       refreshWarning: this.refreshWarning,
     });
@@ -321,7 +333,9 @@ export class ModelProviderLoginController {
     const canSelect = () =>
       this.picker === picker && picker.phase === "ready" && picker.isCurrent();
     const groups =
-      picker.phase === "ready" ? this.loginProviders(picker.providers, picker.authStatus) : [];
+      picker.phase === "ready"
+        ? this.loginProviders(picker.providers, picker.authStatus, picker.allowSetup)
+        : [];
     const provider = groups.find((group) => group.id === picker.providerId);
     const accounts =
       provider && picker.phase === "ready"
@@ -366,9 +380,11 @@ export class ModelProviderLoginController {
       discoverDisabled: !picker.isCurrent(),
       description: recovery
         ? t("modelProviders.login.useAccountDescription", { model: recovery.model })
-        : this.options.onManualProvider
+        : picker.allowSetup
           ? t("modelProviders.login.setupDescription")
-          : t("modelProviders.login.description"),
+          : provider?.choices.some((choice) => choice.requiresSetup)
+            ? t("modelProviders.login.nativeDescription")
+            : t("modelProviders.login.description"),
       onClose: () => this.reset(),
       onQuery: (value: string) => {
         picker.query = value;
@@ -391,11 +407,19 @@ export class ModelProviderLoginController {
           this.options.onManualProvider?.(selected.id);
           return;
         }
+        this.providerId = canonicalModelAuthProviderId(selected.authProvider);
         this.picker = null;
-        this.mode = "auth";
+        const selectingModel = picker.allowSetup && selected.requiresSetup;
+        this.mode = selectingModel ? "activate" : selected.requiresSetup ? "access" : "auth";
         this.refreshWarning = null;
         this.runner.prepareSignIn(selected.kind, selected.label);
-        void this.run(() => this.runner.start(selected.id, "models.authLogin"));
+        void this.run(() =>
+          this.runner.start(
+            selected.id,
+            "models.authLogin",
+            selectingModel ? { selectModel: true } : {},
+          ),
+        );
       },
       onApiKey: () => {
         if (!canSelect() || !provider?.apiKeyProvider) {
@@ -429,7 +453,7 @@ export class ModelProviderLoginController {
   }
 
   private async complete(completion: ModelSetupWizardCompletion): Promise<void> {
-    const activating = completion.startMethod === "openclaw.setup.activate.start";
+    const activating = this.mode === "activate";
     if (activating && !completion.modelActivation) {
       this.runner.fail(t("modelSetup.errors.activationFailed"));
       return;
@@ -440,7 +464,16 @@ export class ModelProviderLoginController {
       kind: "success",
       text: activating
         ? t("modelProviders.login.activated")
-        : [label, t("modelProviders.login.done")].filter(Boolean).join(": "),
+        : [
+            label,
+            t(
+              this.mode === "access"
+                ? "modelProviders.login.nativeDone"
+                : "modelProviders.login.done",
+            ),
+          ]
+            .filter(Boolean)
+            .join(": "),
       warning:
         [
           completion.modelActivation?.gatewayRestartRequired ? t("labsPage.restartRequired") : null,
@@ -450,7 +483,7 @@ export class ModelProviderLoginController {
           .join("\n") || undefined,
     };
     this.host.requestUpdate();
-    await this.options.refresh();
+    await this.options.refresh(this.providerId);
   }
 
   private async run(

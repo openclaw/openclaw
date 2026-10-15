@@ -23,13 +23,16 @@ import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   getGatewayContextLifetime,
   getPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import type { PluginServiceCronHost } from "../plugins/service-cron.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
-import { createServiceRegistration } from "../plugins/services.test-support.js";
+import {
+  createServiceRegistration,
+  createServiceCronHost as createCronHost,
+} from "../plugins/services.test-support.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -1267,7 +1270,14 @@ describe("startGatewayPostAttachRuntime", () => {
     loadedPluginRegistry.plugins.push(createPluginRecord({ id: "acpx", status: "loaded" }));
     const loaded = { pluginRegistry: loadedPluginRegistry, gatewayMethods: ["ping", "acp.spawn"] };
     const onStartupPluginsLoading = vi.fn();
-    const onStartupPluginsLoaded = vi.fn(() => attachment.promise);
+    const broadcast = vi.fn();
+    const onStartupPluginsLoaded = vi.fn(async () => {
+      const published = await attachment.promise;
+      if (published) {
+        setActivePluginRegistry(loadedPluginRegistry);
+      }
+      return published;
+    });
     const startGatewaySidecarsEntry = vi.fn(async (params: GatewaySidecarsParams) => {
       expect(params.pluginRegistry).toBe(loadedPluginRegistry);
       return 0;
@@ -1279,6 +1289,7 @@ describe("startGatewayPostAttachRuntime", () => {
           expect(onStartupPluginsLoading).toHaveBeenCalledOnce();
           return loaded;
         },
+        broadcast,
         onStartupPluginsLoading,
         onStartupPluginsLoaded,
         startupTrace: trace.startupTrace,
@@ -1290,9 +1301,15 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(onStartupPluginsLoaded).toHaveBeenCalledWith(loaded),
       );
       expect(startGatewaySidecarsEntry).not.toHaveBeenCalled();
+      expect(broadcast).not.toHaveBeenCalled();
       attachment.resolve(true);
       await runtime;
       expect(startGatewaySidecarsEntry).toHaveBeenCalledOnce();
+      expect(broadcast).toHaveBeenCalledWith(
+        "plugins.changed",
+        { generation: expect.any(Number) },
+        { dropIfSlow: true },
+      );
       expect(firstStartupLog().loadedPluginIds).toEqual(["acpx"]);
       expect(trace.details).toContainEqual({
         name: "plugins.runtime-post-bind",
@@ -3456,24 +3473,6 @@ describe("startGatewayPostAttachRuntime", () => {
       expect(ctx.abortSignal?.aborted).toBe(true);
     },
   );
-});
-
-const createCronHost = (): PluginServiceCronHost => ({
-  enqueueRun: vi.fn<PluginServiceCronHost["enqueueRun"]>(),
-  status: vi.fn<PluginServiceCronHost["status"]>(async () => ({
-    enabled: true,
-    triggersEnabled: true,
-    storePath: "/synthetic/openclaw.sqlite",
-    storage: "sqlite",
-    sqlitePath: "/synthetic/openclaw.sqlite",
-    jobs: 0,
-    nextWakeAtMs: null,
-  })),
-  list: vi.fn<PluginServiceCronHost["list"]>(),
-  add: vi.fn<PluginServiceCronHost["add"]>(),
-  update: vi.fn<PluginServiceCronHost["update"]>(),
-  remove: vi.fn<PluginServiceCronHost["remove"]>(),
-  removeStaleJobFamily: vi.fn<PluginServiceCronHost["removeStaleJobFamily"]>(),
 });
 
 function createPostAttachRuntimeDeps(

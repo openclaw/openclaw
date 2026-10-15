@@ -112,9 +112,9 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
   const diagnostics = startSessionCatalogRequestDiagnostics();
   let finishInitialProjection: (() => void) | undefined;
   try {
-    while (projection.needsSelectionPreparation()) {
+    while (projection.needsSelectionPreparation({ metadataOnly: true })) {
       finishInitialProjection ??= diagnostics?.startWait("projection_initial");
-      await projection.prepareSelection();
+      await projection.prepareSelection({ metadataOnly: true });
     }
   } finally {
     finishInitialProjection?.();
@@ -219,7 +219,10 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
         subscriber,
         isProgressCurrent,
         client?.connectionSignal ?? signal,
-        () => (projection.needsSelectionPreparation() ? projection.prepareSelection() : undefined),
+        () =>
+          projection.needsSelectionPreparation({ metadataOnly: true })
+            ? projection.prepareSelection({ metadataOnly: true })
+            : undefined,
       );
     }
   };
@@ -251,9 +254,9 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     }
     let finishFinalProjection: (() => void) | undefined;
     try {
-      while (projection.needsSelectionPreparation()) {
+      while (projection.needsSelectionPreparation({ metadataOnly: true })) {
         finishFinalProjection ??= diagnostics?.startWait("projection_final");
-        await projection.prepareSelection();
+        await projection.prepareSelection({ metadataOnly: true });
       }
     } finally {
       finishFinalProjection?.();
@@ -386,9 +389,9 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     const result = await operation;
     let finishFinalProjection: (() => void) | undefined;
     try {
-      while (projection.needsSelectionPreparation()) {
+      while (projection.needsSelectionPreparation({ metadataOnly: true })) {
         finishFinalProjection ??= diagnostics?.startWait("projection_final");
-        await projection.prepareSelection();
+        await projection.prepareSelection({ metadataOnly: true });
       }
     } finally {
       finishFinalProjection?.();

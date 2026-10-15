@@ -2,8 +2,10 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import * as transportRegistry from "./qa-transport-registry.js";
 import * as scenarioModule from "./scenario.js";
 import { createQaSelfCheckScenario } from "./self-check-scenario.js";
 import type { QaSelfCheckResult } from "./self-check.js";
@@ -78,7 +80,7 @@ describe("runQaSelfCheckAgainstState", () => {
   });
 });
 
-describe("createQaSelfCheckScenario", () => {
+describe("self-check scenario execution", () => {
   function createSelfCheckHarness(delivery?: {
     directAccountId?: string;
     directTarget?: string;
@@ -146,8 +148,9 @@ describe("createQaSelfCheckScenario", () => {
     };
 
     return {
-      state,
+      state: testState,
       targets,
+      performAction,
       run: async () =>
         await scenarioModule.runQaScenario(createQaSelfCheckScenario({ waitTimeoutMs: 20 }), {
           state: testState,
@@ -155,6 +158,58 @@ describe("createQaSelfCheckScenario", () => {
         }),
     };
   }
+
+  it("joins acquired transport cleanup when writing the self-check report fails", async ({
+    signal,
+  }) => {
+    const { state, performAction } = createSelfCheckHarness();
+    const outputPath = tempDirs.make("qa-self-check-write-failure-");
+    const cleanupEntered = Promise.withResolvers<void>();
+    const releaseCleanup = Promise.withResolvers<void>();
+    const createTransport = transportRegistry.createQaTransportAdapter;
+    using _ = vi
+      .spyOn(transportRegistry, "createQaTransportAdapter")
+      .mockImplementation(async (context) => {
+        const acquired = await createTransport(context);
+        return {
+          ...acquired,
+          adapter: {
+            ...acquired.adapter,
+            handleAction: ({ action, args }) => performAction(action, args),
+          },
+          async cleanupWithoutGateway() {
+            cleanupEntered.resolve();
+            await releaseCleanup.promise;
+            await acquired.cleanupWithoutGateway();
+          },
+        };
+      });
+    let settled = false;
+    const run = runQaSelfCheckAgainstState({ state, cfg: {}, outputPath }).finally(() => {
+      settled = true;
+    });
+    void run.catch(() => undefined);
+    const failed = run.then(
+      () => "resolved",
+      (error: unknown) => {
+        expect(error).toMatchObject({ path: outputPath });
+        return "rejected";
+      },
+    );
+    try {
+      const phase = await withinTest(
+        Promise.race([cleanupEntered.promise.then(() => "cleanup"), failed]),
+        signal,
+      );
+      expect(phase).toBe("cleanup");
+      expect(settled).toBe(false);
+      releaseCleanup.resolve();
+      await expect(withinTest(failed, signal)).resolves.toBe("rejected");
+    } finally {
+      releaseCleanup.resolve();
+      await Promise.allSettled([run, failed]);
+    }
+  });
 
   it("runs every roundtrip and binds lifecycle actions to the seeded message thread", async () => {
     const { state, targets, run } = createSelfCheckHarness();

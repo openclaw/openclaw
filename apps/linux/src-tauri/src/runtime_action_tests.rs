@@ -540,3 +540,69 @@ fn detached_runtime_action_delivers_the_complete_error_to_its_presenter() {
         }
     }
 }
+
+#[test]
+fn healthy_activation_persists_previous_selection_and_failure_keeps_it() {
+    const CHILD: &str = "OPENCLAW_RETENTION_ACTIVATION_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", std::thread::current().name().unwrap()])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let fixture = Fixture::new();
+    let wrapper = fixture.canonical_launcher();
+    assert!(Command::new("/bin/cp")
+        .arg(Fixture::script())
+        .arg(&fixture.runtime().bun)
+        .status()
+        .unwrap()
+        .success());
+    fs::set_permissions(&fixture.runtime().bun, fs::Permissions::from_mode(0o700)).unwrap();
+    let cli = fixture.cli();
+    bind_runtime(&cli, &fixture.runtime(), Purpose::Gateway).unwrap();
+    fixture.write_state(&fixture.healthy());
+    let second = fixture.0.join("second-bun");
+    let third = fixture.0.join("third-bun");
+    for (index, path) in [&second, &third, &third].into_iter().enumerate() {
+        if index == 1 {
+            let mut wrapped = inspect(&cli).unwrap().0;
+            wrapped["service"]["command"]["programArguments"][0] =
+                serde_json::json!(fixture.runtime().bun);
+            fixture.write_state(&wrapped);
+        }
+        fs::write(path, "synthetic runtime").unwrap();
+        let runtime = BundledRuntime {
+            bun: path.clone(),
+            sqlite: None,
+        };
+        let mut healthy = fixture.healthy();
+        healthy["service"]["command"]["programArguments"][0] = serde_json::json!(path);
+        healthy["service"]["runtimeIntent"]["pin"]["path"] = serde_json::json!(path);
+        fs::write(fixture.0.join("healthy.json"), healthy.to_string()).unwrap();
+        activate(&cli, &runtime, &inspect(&cli).unwrap(), &|| true).unwrap();
+    }
+    let bytes = fs::read(&wrapper).unwrap();
+    let text = std::str::from_utf8(&bytes).unwrap();
+    let marker: Value =
+        serde_json::from_str(text.lines().nth(1).unwrap().strip_prefix(MARKER).unwrap()).unwrap();
+    assert_eq!(
+        marker.pointer("/retention/current"),
+        Some(&serde_json::json!(&third))
+    );
+    assert_eq!(
+        marker.pointer("/retention/previous"),
+        Some(&serde_json::json!(&second))
+    );
+    fs::write(fixture.0.join("healthy.json"), "invalid status").unwrap();
+    assert!(activate(&cli, &fixture.runtime(), &inspect(&cli).unwrap(), &|| true).is_err());
+    assert_eq!(fs::read(wrapper).unwrap(), bytes);
+}

@@ -1,9 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import {
-  executeWithCachedStatement,
-  registerNodeSqliteDisposeCallback,
-} from "./kysely-sync-cache-state.js";
+import { registerNodeSqliteDisposeCallback } from "./kysely-sync-cache-state.js";
+import type { EngineConnection } from "./sql-connection.js";
+import { isPostgresSqlConnection } from "./sql-connection.js";
 import {
   beginSqliteDatabaseAdmissionOperation,
   beginSqliteDatabaseWrite,
@@ -406,12 +405,15 @@ function trackSchemaChanges(
 }
 
 /** Local mutation witness; committed sibling writes use the physical admission revision. */
-export function readSqliteNativeMutationRevision(database: DatabaseSync): number | undefined {
-  return owners.get(database)?.mutationRevision;
+export function readSqliteNativeMutationRevision(database: EngineConnection): number | undefined {
+  return isPostgresSqlConnection(database) ? undefined : owners.get(database)?.mutationRevision;
 }
 
 /** Derived caches may retain reads from a tracked transaction until its first mutation. */
-export function hasUncommittedSqliteWrites(database: DatabaseSync): boolean {
+export function hasUncommittedSqliteWrites(database: EngineConnection): boolean {
+  if (isPostgresSqlConnection(database)) {
+    return database.isTransaction;
+  }
   const owner = owners.get(database);
   if (owner) {
     observeTransactionState(database, owner);
@@ -429,15 +431,21 @@ export function hasUncommittedSqliteWrites(database: DatabaseSync): boolean {
 }
 
 /** Reuse schema only through unchanged synchronous transaction work, never as write authority. */
-export function canReuseSqliteSchemaInTransaction(database: DatabaseSync): boolean {
+export function canReuseSqliteSchemaInTransaction(database: EngineConnection): boolean {
+  if (isPostgresSqlConnection(database)) {
+    return false;
+  }
   const owner = owners.get(database);
   return owner !== undefined && !owner.authorizerActive && database.isTransaction;
 }
 
 /** Reuse row facts only inside admitted reads, never during a native write or snapshot. */
 export function getSqliteReadOperationRevision(
-  database: DatabaseSync,
+  database: EngineConnection,
 ): SqliteReadOperationRevision | undefined {
+  if (isPostgresSqlConnection(database)) {
+    return undefined;
+  }
   if (database.isTransaction || getSqlitePinnedReadSnapshot(database)) {
     return undefined;
   }
@@ -447,8 +455,11 @@ export function getSqliteReadOperationRevision(
 
 /** Stable identity for row facts in the admitted operation's current SQLite snapshot. */
 export function getSqliteReadScopeRevision(
-  database: DatabaseSync,
+  database: EngineConnection,
 ): SqliteReadScopeRevision | undefined {
+  if (isPostgresSqlConnection(database)) {
+    return undefined;
+  }
   const owner = owners.get(database);
   if (owner) {
     observeTransactionState(database, owner);
@@ -503,7 +514,10 @@ export function getSqliteReadScopeRevision(
 }
 
 /** Reuse row facts only inside an admitted synchronous operation. */
-export function runSqliteReadOperationSync<T>(database: DatabaseSync, operation: () => T): T {
+export function runSqliteReadOperationSync<T>(database: EngineConnection, operation: () => T): T {
+  if (isPostgresSqlConnection(database)) {
+    return operation();
+  }
   const owner = owners.get(database);
   if (!owner || owner.authorizerActive) {
     return operation();
@@ -517,17 +531,6 @@ export function runSqliteReadOperationSync<T>(database: DatabaseSync, operation:
   } finally {
     owner.readDepth -= 1;
   }
-}
-
-/** Explicit offline verification only; runtime caches use owning-writer receipts. */
-export function readSqliteDataVersion(database: DatabaseSync): number {
-  const row = executeWithCachedStatement(database, "PRAGMA data_version", [], (statement) =>
-    statement.get(),
-  );
-  if (typeof row?.data_version !== "number") {
-    throw new Error("SQLite did not return a numeric PRAGMA data_version");
-  }
-  return row.data_version;
 }
 
 /** Install at native open, before callers can retain statements or install an authorizer. */
@@ -611,9 +614,12 @@ export function adoptSqliteSchemaFacts(database: DatabaseSync, facts: SqliteSche
 
 /** Consume the physical database's admitted facts and owner-published schema changes. */
 export function getAdmittedSqliteSchemaFacts(
-  database: DatabaseSync,
+  database: EngineConnection,
   validateUserVersion?: (userVersion: number) => void,
 ): SqliteSchemaFacts | undefined {
+  if (isPostgresSqlConnection(database)) {
+    return undefined;
+  }
   const owner = owners.get(database);
   // Dynamic authorizer decisions cannot be represented by a cached schema result.
   if (!owner?.admitted || owner.authorizerActive) {

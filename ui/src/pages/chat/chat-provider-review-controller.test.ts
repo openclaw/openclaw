@@ -1,24 +1,30 @@
 // @vitest-environment jsdom
-import { html, nothing, render } from "lit";
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import type { SessionRefreshOutcome } from "../../lib/sessions/session-capability.ts";
+import { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   makeChatHost,
   makeRequestMock,
   requestCalls,
   requireRecord,
 } from "./chat-host.test-support.ts";
-import { ChatProviderReviewController } from "./chat-provider-review-controller.ts";
+import {
+  ChatProviderReviewController,
+  ChatProviderReviewNotice,
+  ChatProviderReviewDialog,
+} from "./chat-provider-review-controller.tsx";
 
-const containers: HTMLElement[] = [];
+const containers: { element: HTMLElement; dispose: () => void }[] = [];
 afterEach(() => {
   for (const container of containers.splice(0)) {
-    render(nothing, container);
-    container.remove();
+    container.dispose();
+    container.element.remove();
   }
   vi.restoreAllMocks();
 });
@@ -51,21 +57,33 @@ function fixture(review = row.providerReview) {
     .spyOn(state.sessions, "reconcileMutation")
     .mockResolvedValue({ status: "refreshed" });
   const container = document.createElement("div");
-  containers.push(container);
   document.body.append(container);
+  const [revision, setRevision] = createSignal(0);
   const paint = () => {
     controller.sync(true);
-    render(html`${controller.notice()}${controller.dialog()}`, container);
+    setRevision((value) => value + 1);
+    flush();
   };
-  const controller = new ChatProviderReviewController(
-    {
-      addController() {},
-      removeController() {},
-      requestUpdate: paint,
-      updateComplete: Promise.resolve(true),
-    },
-    () => state,
+  const lifecycle = new ControllerHost();
+  const controller = new ChatProviderReviewController(lifecycle, () => state, paint);
+  const mounted = mountSolid(
+    () => [
+      createComponent(ChatProviderReviewNotice, {
+        controller,
+        get revision() {
+          return revision();
+        },
+      }),
+      createComponent(ChatProviderReviewDialog, {
+        controller,
+        get revision() {
+          return revision();
+        },
+      }),
+    ],
+    { container },
   );
+  containers.push({ element: container, dispose: mounted.unmount });
   paint();
   const click = (text: string) => {
     const button = [...container.querySelectorAll("button")].find(
@@ -97,6 +115,7 @@ function fixture(review = row.providerReview) {
     outcome,
     request,
     refresh,
+    lifecycle,
   };
 }
 
@@ -119,8 +138,8 @@ async function expectFreshRetry(f: ReturnType<typeof fixture>, first: Record<str
   await f.refresh.mock.results.at(-1)?.value;
 }
 
-it.each(["connection", "session", "review"] as const)(
-  "ignores a late continuation outcome after %s replacement",
+it.each(["connection", "session", "review", "disconnection"] as const)(
+  "ignores a late continuation outcome after %s changes",
   async (replacement) => {
     const f = fixture();
     await f.open();
@@ -144,6 +163,9 @@ it.each(["connection", "session", "review"] as const)(
       ],
       2,
     );
+    if (replacement === "disconnection") {
+      f.lifecycle.disconnect();
+    }
     f.paint();
     f.outcome.reject(new Error("Old connection failed"));
     await f.outcome.promise.catch(() => {});
@@ -183,6 +205,9 @@ it("requires explicit safe review, retains the pause, and retries status without
     .mockImplementationOnce(() => secondRefresh.promise);
   expect(f.calls()).toHaveLength(0);
   await f.open();
+  const dialog = f.container.querySelector("openclaw-modal-dialog");
+  f.paint();
+  expect(f.container.querySelector("openclaw-modal-dialog")).toBe(dialog);
   expect(f.container.textContent).toContain(row.providerReview!.explanation);
   expect(f.container.querySelector("img")).toBeNull();
   expect(f.container.querySelector("blockquote")?.textContent).toBe(

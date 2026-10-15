@@ -139,6 +139,9 @@
 }
 
 .chat-main__conversation {
+  /* Existing conversations spend height on the transcript; new chat keeps the
+     shared writing-surface floor. Mobile and short-pane floors remain local. */
+  --chat-composer-min-height: 88px;
   --chat-composer-top-margin: 8px;
   --chat-transcript-fade-height: 24px;
   --chat-footer-max-height: calc(100cqh - clamp(60px, 20cqh, 160px));
@@ -152,6 +155,13 @@
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
+}
+
+@media (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-main__conversation {
+    /* Inline menus keep their original space without shifting the transcript. */
+    --chat-composer-min-height: 112px;
+  }
 }
 
 .chat-footer {

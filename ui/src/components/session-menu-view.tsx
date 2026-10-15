@@ -50,6 +50,16 @@ type SubmenuProps = Inline & {
   title?: string;
 };
 
+const STANDARD_ITEMS = {
+  "copy-session-preview-link": ["sessionsView.copySessionPreviewLink", "link"],
+  "copy-markdown": ["sessionsView.copyMarkdown", "fileText"],
+  "copy-session-id": ["sessionsView.copySessionId", "copy"],
+  "open-new-tab": ["sessionsView.openNewTab", "externalLink"],
+  "open-new-window": ["sessionsView.openNewWindow", "monitor"],
+  "split-right": ["chat.splitView.splitRight", "columns2"],
+  "split-below": ["sessionsView.splitBelow", "panelBottomOpen"],
+} as const;
+
 export function useSessionMenuView(
   host: HTMLElement,
   actions: SessionMenuActions,
@@ -108,6 +118,18 @@ export function useSessionMenuView(
         />
       </Show>
     </SessionMenuItem>
+  );
+  const Items = (props: Inline & { kinds: readonly (keyof typeof STANDARD_ITEMS)[] }) => (
+    <For each={props.kinds}>
+      {(kind) => (
+        <Item
+          kind={kind}
+          label={t(STANDARD_ITEMS[kind][0])}
+          icon={STANDARD_ITEMS[kind][1]}
+          inline={props.inline}
+        />
+      )}
+    </For>
   );
 
   const Submenu = (props: SubmenuProps) => {
@@ -284,56 +306,18 @@ export function useSessionMenuView(
   const CopyOptions = (props: Inline) => (
     <>
       <Show when={state.navigationAllowed}>
-        <Item
-          kind="copy-session-preview-link"
-          label={t("sessionsView.copySessionPreviewLink")}
-          icon="link"
-          inline={props.inline}
-        />
+        <Items kinds={["copy-session-preview-link"]} inline={props.inline} />
       </Show>
-      <Item
-        kind="copy-markdown"
-        label={t("sessionsView.copyMarkdown")}
-        icon="fileText"
-        inline={props.inline}
-      />
-      <Item
-        kind="copy-session-id"
-        label={t("sessionsView.copySessionId")}
-        icon="copy"
-        inline={props.inline}
-      />
+      <Items kinds={["copy-markdown", "copy-session-id"]} inline={props.inline} />
     </>
   );
   const OpenOptions = (props: Inline) => (
     <>
       <Show when={state.navigationAllowed}>
-        <Item
-          kind="open-new-tab"
-          label={t("sessionsView.openNewTab")}
-          icon="externalLink"
-          inline={props.inline}
-        />
-        <Item
-          kind="open-new-window"
-          label={t("sessionsView.openNewWindow")}
-          icon="monitor"
-          inline={props.inline}
-        />
+        <Items kinds={["open-new-tab", "open-new-window"]} inline={props.inline} />
       </Show>
       <Show when={state.splitAllowed}>
-        <Item
-          kind="split-right"
-          label={t("chat.splitView.splitRight")}
-          icon="columns2"
-          inline={props.inline}
-        />
-        <Item
-          kind="split-below"
-          label={t("sessionsView.splitBelow")}
-          icon="panelBottomOpen"
-          inline={props.inline}
-        />
+        <Items kinds={["split-right", "split-below"]} inline={props.inline} />
       </Show>
       {options.renderOpenInExtra?.(props.inline ?? false)}
       <Show when={state.worktreePath}>
@@ -487,6 +471,19 @@ export function useSessionMenuView(
           label={t("sessionsView.copyLink")}
           icon="link"
           shortcut="c"
+        />
+      </Show>
+      <Show when={!batch() && state.session.placementAction}>
+        <Item
+          kind="move-session"
+          label={t(
+            state.session.placementAction === "dispatch"
+              ? "sessionsView.moveToCloud"
+              : state.session.placementAction === "retry"
+                ? "sessionsView.retrySessionMove"
+                : "sessionsView.moveSession",
+          )}
+          icon="cloud"
         />
       </Show>
       <Show when={batch()}>

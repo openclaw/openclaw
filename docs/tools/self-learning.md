@@ -62,7 +62,8 @@ The review forks the conversation through the finished turn and appends one
 instruction, reusing the foreground provider, model, auth profile, and tool
 schemas so the provider's prompt cache applies. Model fallbacks are disabled. It
 runs on the embedded OpenClaw harness under a private session that never
-appears in your transcript.
+appears in your transcript. It is internal system work, not a new user turn;
+user-only reply hooks, including Advisor admission, do not run for it.
 
 The review can look things up with `read`, `ls`, `view_image`, `web_search`,
 `web_fetch`, `sessions_history`, `sessions_search`, `memory_search`, and
@@ -167,7 +168,9 @@ can watch, steer, or stop it. Starting one does not change the learning mode.
 3. The session is an ordinary conversation, not cron, heartbeat, hook,
    subagent, or Incognito.
 4. Tool policy allows `skill_workshop` and the session is not sandboxed. In
-   `auto` mode, `openclaw doctor` reports the setting that hides it.
+   `auto` mode, `openclaw doctor` reports the setting that hides it unless a
+   matching deny intentionally opts the agent out. Denying `skill_workshop`
+   or `group:agents` opts that agent out without a Doctor warning.
 5. The Gateway stayed up and idle for the 30-second wait.
 
 A review that ran can still decide nothing is worth saving. That is the

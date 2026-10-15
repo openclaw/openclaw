@@ -12,10 +12,15 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: the session rail, the composer, and how the transcript renders.
 
-When the latest history page has no visible messages, for example because tool
-activity is hidden, the pane keeps **Show earlier** available. Scroll upward or
-select it to load earlier history; reloading does not fetch unrequested older
-pages. An incomplete history page does not show the new-chat welcome screen.
+When the visible conversation does not fill the chat pane, including when the
+latest history page is empty or tool activity is hidden, earlier history loads
+automatically after the layout settles. Filling stops once the prefetch margin
+is filled, after three automatic pages per open, when history ends, or when a
+request fails. A first page that already fills the viewport does not start this
+automatic loading. Scroll upward or select **Show earlier** to load more or retry.
+Hidden panes, background tabs, and programmatic or maintenance scrolling do not
+trigger automatic loading. An incomplete history page does not show the new-chat welcome
+screen.
 
 Enable **Settings → Labs → Speech bubbles** to try the experimental view (off by default).
 While enabled, Home uses bubbles by default. The session menu’s **View → Speech bubbles**
@@ -234,9 +239,11 @@ Session observation is enabled by default. Safe preamble headlines do not requir
 
 Session links in messages open inside the Control UI. This includes `agent:` keys,
 root-relative chat URLs, and URLs on the current origin or the Gateway's public origin
-when its applied configuration is loaded. Hovering a link shows the session card
-when the session is known locally. Unknown or ambiguous session references remain
-navigable without a card; links to other origins keep normal browser behavior.
+when its applied configuration is loaded. Links show the session's title, and hovering
+one shows its session card. Session URLs that are not in the loaded sidebar are
+resolved through the Gateway, including shortened IDs, using the same access rules as
+opening them. Missing, inaccessible, or ambiguous references stay plain navigable links
+without a card; links to other origins keep normal browser behavior.
 Document-relative hrefs are never session links; file references such as
 `src/utils/foo.ts` and `qa-café/index.md` retain workspace file handling, including
 Unicode names and percent-encoded Markdown link destinations. Explicit Markdown
@@ -271,6 +278,36 @@ repository with a commit. If it is not, the card keeps the prompt and lets you
 select a registered project or enter the correct repository path. Select
 **Start in a new worktree** again to continue; no child session is started for
 an invalid source folder.
+
+## Composer predictions
+
+Enable **Settings → Labs → Composer predictions** to try optional next-message
+suggestions. The experiment is off by default. After a reply finishes in the
+active conversation, OpenClaw can make one additional model request and show a
+possible follow-up as muted text in an empty composer. It may show no suggestion.
+It does not predict on every keystroke. Each active browser tab can make its own
+prediction request. Read-only, imported, and incognito conversations do not show
+predictions.
+
+Press **Tab** or select **Use suggestion** to copy the suggestion into your draft.
+This never sends it: you can edit or undo it before sending normally. **Escape**,
+**Dismiss suggestion**, or typing your own message dismisses it. Suggestions are
+not saved as messages or collaborator drafts until you accept them. Switching
+conversations, hiding the page, or starting another turn discards pending results.
+
+The Labs model selector offers:
+
+- **Utility model** (default): use the agent's configured utility model. A fast,
+  inexpensive model is usually the best fit for this short, optional task.
+- **Conversation model**: use the model selected for this conversation.
+- **Default model**: use the agent's configured default model, ignoring the
+  conversation's model override.
+
+Predictions use bounded recent text from the current conversation in an isolated,
+tool-free request. They cannot run tools, retrieve memory, or send messages. An
+unavailable selected model skips the suggestion rather than silently switching
+to another model. Enabling the experiment can add model usage and cost; existing
+model configuration, provider credentials, and session access rules still apply.
 
 ## Composer capability menu
 
@@ -469,7 +506,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - Image previews reserve their space while loading. New uploaded images retain their pixel dimensions in saved messages; older images without dimensions fit inside a stable 3:2 preview instead of shifting the surrounding conversation when they load. Open an image to view its full size.
     - Assistant/generated images are persisted as managed media references. New clients resolve their stable artifact ids through authenticated `artifacts.download` and receive short-lived, exact-resource media URLs, so reloads do not depend on raw base64 payloads or reusable credentials in image URLs. The chat uses bounded thumbnails and provides Open, Download, and Copy actions for the full image. These actions share the browser's bounded in-memory image cache, avoiding repeated full-image downloads while the image remains cached.
     - When rendering `chat.history`, the Control UI strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens. It omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply` or the heartbeat acknowledgement token `HEARTBEAT_OK`.
-    - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the canonical transcript replaces those local messages once the Gateway history catches up. Pending sends in shared sessions remain a single bubble while incremental history catches up, even when another participant's reply arrives first. Saved commentary also replaces its matching live item when incremental history arrives after completion, cancellation, or failure, keeping the progress text in its original place.
+    - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the saved transcript replaces those local messages once the Gateway history catches up. Pending sends in shared sessions remain a single bubble while incremental history catches up, even when another participant's reply arrives first. Saved commentary also replaces its matching live item when incremental history arrives after completion, cancellation, or failure, keeping the progress text in its original place.
     - Your pending prompt stays before its own saved assistant reply even when the reply arrives before history recovery finishes after reconnect; existing saved messages keep their transcript order.
     - Live `chat` events are delivery state, while `chat.history` is rebuilt from the durable session transcript. After tool-final events the Control UI reloads history and merges only a small optimistic tail; the transcript boundary is documented in [WebChat](/web/webchat). After an in-place `/clear` or `/reset`, fresh turns keep their user-before-reply order across live updates, incremental history catch-up, and reload.
     - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
@@ -617,6 +654,8 @@ pasted-text attachments. Older history without origin metadata recognizes
 `text/plain` attachments named `pasted-text-<digits>.txt` as pasted text.
 
 Uploaded attachments keep their original filenames on download, including spaces and Unicode characters.
+Document cards show a labeled **Download** action without hovering, both in the
+transcript and in the **Files** panel when no preview is available.
 Uploaded images also retain their names in accessible transcript image and image-viewer labels after sending and reloading; descriptive alt text takes precedence when provided.
 Select **Open** on an uploaded text attachment to read it directly in the **Files** side
 panel. Plain-text attachments, CSV, and JSON preserve line breaks and indentation. Markdown attachments render as documents

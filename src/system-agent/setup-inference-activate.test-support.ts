@@ -342,6 +342,7 @@ export async function fixture(
   return {
     activate,
     detect,
+    runWithMetadata: metadata.run,
     agentDir,
     before,
     config,
@@ -354,5 +355,6 @@ export async function fixture(
     login,
     prompter,
     deps,
+    pluginRegistry,
   };
 }

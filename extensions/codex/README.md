@@ -46,4 +46,11 @@ Settled-turn finalization uses the same configured Codex App Server transport as
 
 When settled-turn recovery rejects history, the `codex settled-turn finalization context capture failed` warning includes a stable `reason`, such as `item_limit`, `byte_limit`, `field_limit`, `unsupported_user_image`, or `snapshot_invalidated`. Unknown failures use `history_read_failed`. The warning excludes transcript content and exception text. Rejected history remains unavailable for finalization, and completed actions are never replayed.
 
+The `codex_app_server.item` agent-event stream includes native item lifecycle events
+and raw function, custom/code-mode, local-shell, and tool-search call receipts.
+Calls publish `phase: "started"` and recorded outputs publish `phase: "completed"`,
+correlated by `itemId` (the native `call_id`). Raw receipt events carry only phase,
+item ID, and type, not arguments or results. An outer code-mode call remains open
+even when its child command items have completed.
+
 See the [Codex harness](https://docs.openclaw.ai/plugins/codex-harness) and [Codex supervision](https://docs.openclaw.ai/plugins/codex-supervision) guides.

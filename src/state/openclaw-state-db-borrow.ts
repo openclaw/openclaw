@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   isOpenClawDatabaseMaintenanceResourceOwned,
@@ -28,7 +28,7 @@ export type StateDatabaseBorrowers = {
 /** The canonical cache supplies identity and custody; this owner manages its native references. */
 export function createStateDatabaseRetainer(
   state: {
-    borrowers: WeakMap<DatabaseSync, StateDatabaseBorrowers>;
+    borrowers: WeakMap<EngineConnection, StateDatabaseBorrowers>;
     cachedDatabases: Map<string, OpenClawStateDatabase>;
   },
   operations: {

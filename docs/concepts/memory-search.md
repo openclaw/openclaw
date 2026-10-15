@@ -11,6 +11,13 @@ read_when:
 wording differs from the original text. It chunks memory into small pieces and
 searches them with embeddings, keywords, or both.
 
+The result-count argument is `maxResults` (an integer of at least 1). The tool
+also accepts `max_results` and `limit` as aliases. If several are supplied,
+`maxResults` takes precedence over `max_results`, which takes precedence over
+`limit`, regardless of argument order. Only the selected value is validated;
+an invalid higher-priority value is rejected rather than falling back to a valid
+alias. The advertised tool schema continues to use `maxResults`.
+
 When indexing Markdown, the builtin engine attaches a heading-only chunk to the
 following content chunk. This keeps short headings from taking search result slots
 on their own while preserving section context and source line references. A final

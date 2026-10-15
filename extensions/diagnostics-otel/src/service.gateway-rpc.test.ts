@@ -633,7 +633,12 @@ test("retains event-loop and GC durations only as metrics with all preloaded SDK
           intervalMs,
           delayMaxMs,
         });
-        emitInternalDiagnosticEventForTest({ type: "diagnostic.gc", durationMs: delayMaxMs });
+        emitInternalDiagnosticEventForTest({
+          type: "diagnostic.gc",
+          kind: "scavenge",
+          thread: "main",
+          durationMs: delayMaxMs,
+        });
         await waitForDiagnosticEventsDrained();
       });
       await meterProvider.forceFlush();
@@ -648,7 +653,12 @@ test("retains event-loop and GC durations only as metrics with all preloaded SDK
         },
         "openclaw.gc.duration_ms": {
           unit: "ms",
-          points: [{ attributes: {}, value: { count, sum } }],
+          points: [
+            {
+              attributes: { "openclaw.gc.kind": "scavenge", "openclaw.gc.thread": "main" },
+              value: { count, sum },
+            },
+          ],
         },
       });
     }
@@ -666,9 +676,35 @@ test("retains event-loop and GC durations only as metrics with all preloaded SDK
       Object.values(sampleMetrics()).flatMap((metric) =>
         metric.points.map(({ attributes }) => attributes),
       ),
-    ).toEqual([{}, {}, {}]);
-    expect(deliveredSamples).toBe(6);
+    ).toEqual(
+      expect.arrayContaining([
+        {},
+        {},
+        { "openclaw.gc.kind": "scavenge", "openclaw.gc.thread": "main" },
+      ]),
+    );
+    emitInternalDiagnosticEventForTest({
+      type: "diagnostic.gc",
+      kind: "mark_sweep_compact",
+      thread: "code-mode-node.worker.js",
+      workerSlot: 2,
+      durationMs: 8,
+    });
+    await waitForDiagnosticEventsDrained();
+    await meterProvider.forceFlush();
+    expect(sampleMetrics()["openclaw.gc.duration_ms"]?.points).toContainEqual(
+      expect.objectContaining({
+        attributes: {
+          "openclaw.gc.kind": "mark_sweep_compact",
+          "openclaw.gc.thread": "code-mode-node.worker.js",
+          "openclaw.gc.worker_slot": 2,
+        },
+        value: expect.objectContaining({ count: 1, sum: 8 }),
+      }),
+    );
+    expect(deliveredSamples).toBe(7);
     expect(observedParents).toEqual([
+      undefined,
       undefined,
       undefined,
       undefined,

@@ -181,6 +181,13 @@ describe("voice consult registration authority", () => {
       const waiting = createDeferred();
       const resume = createDeferred();
       let pending: Promise<unknown> | undefined;
+      const registration = registerChatAbortController({
+        chatAbortControllers: context.chatAbortControllers,
+        runId: "queued-consult",
+        sessionId: "original-consult-session",
+        sessionKey: scope.sessionKey,
+        timeoutMs: 60_000,
+      });
       try {
         setTestEnvValue("OPENCLAW_STATE_DIR", successor);
         await voiceSessions.createOrResumeClientVoiceSession({
@@ -264,6 +271,7 @@ describe("voice consult registration authority", () => {
         if (relay) {
           await closeRelaySession(relay, "completed");
         }
+        registration.cleanup();
         await cleanupSessionStateForTest({ stateDir: successor, rootPath: successor });
       }
     },
@@ -689,9 +697,6 @@ describe("voice consult registration authority", () => {
           requester: composeSessionSourceAssertion(
             [authorized.authorization!.assertCurrent],
             (assertSource) => {
-              if (kind === "foreign") {
-                expect(inWorkerGrant).toBe(false);
-              }
               assertSource();
               workerAuthorityObserved ||= inWorkerGrant;
               nativeAuthorityObserved ||=
@@ -703,8 +708,8 @@ describe("voice consult registration authority", () => {
           ),
         });
         expect(schemaSql).toEqual([]);
-        expect(workerAuthorityObserved).toBe(kind === "incognito");
-        expect(nativeAuthorityObserved).toBe(kind === "foreign");
+        expect(workerAuthorityObserved).toBe(true);
+        expect(nativeAuthorityObserved).toBe(false);
         expect(
           clientVoiceSessionTesting.readRecord(target.agentId, "cold-native-voice"),
         ).toMatchObject({

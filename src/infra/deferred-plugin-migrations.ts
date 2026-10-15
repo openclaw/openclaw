@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync } from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -31,6 +30,7 @@ import {
 import { isTruthyEnvValue } from "./env.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { runWithSqliteCleanup, throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { invalidateSuccessfulMigrationCheckpointsInTransaction } from "./startup-migration-checkpoint.js";
@@ -165,7 +165,7 @@ export function mergeDeferredPluginMigration(
   };
 }
 
-function readPendingMigrationRows(database: DatabaseSync) {
+function readPendingMigrationRows(database: EngineConnection) {
   return executeSqliteQuerySync(
     database,
     getNodeSqliteKysely<Pick<DB, "migration_runs">>(database)
@@ -181,7 +181,7 @@ function pendingMigrationRecords(rows: ReturnType<typeof readPendingMigrationRow
   return rows.map((row) => deferredPluginMigrationSchema.parse(JSON.parse(row.report_json)));
 }
 
-function readPendingMigrationRecords(database: DatabaseSync) {
+function readPendingMigrationRecords(database: EngineConnection) {
   return tableExists(database, "migration_runs")
     ? pendingMigrationRecords(readPendingMigrationRows(database))
     : [];
@@ -192,7 +192,7 @@ export const deferredPluginMigrationReadOperations = {
     type: "plugins.deferredMigrations.read" as const,
     pending: readPendingMigrationRecords(db),
   }),
-} satisfies WorkerOperationHandlers<DatabaseSync>;
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
 function assertPendingGeneration(
   current: readonly DeferredPluginMigration[],
@@ -409,7 +409,7 @@ export type DeferredPluginMigrationRecordInput = {
 
 /** Native row transform; the worker owns its transaction and lease grants. */
 export function recordDeferredPluginMigrationsInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: Omit<DeferredPluginMigrationRecordInput, "env">,
 ) {
   const pendingById = new Map(

@@ -3,7 +3,7 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildChatItems } from "../chat-thread-build.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import {
@@ -89,6 +89,9 @@ describe("session activity", () => {
     expect(disclosure).not.toBeNull();
     expect(disclosure?.open).toBe(false);
     expect(disclosure?.querySelector("summary")?.textContent).toContain("Daily report");
+    expect(disclosure?.querySelector("summary a[data-cron-run-link]")?.getAttribute("href")).toBe(
+      "/automations?job=daily&run=execution",
+    );
     expect(container.textContent).not.toContain("Original receipt");
     expect(
       container.querySelector(".chat-avatar, .chat-group--forwarded, .chat-bubble"),
@@ -230,25 +233,28 @@ describe("session activity", () => {
       );
     draw();
     const disclosure = container.querySelector<HTMLDetailsElement>(".chat-session-activity");
-    expect(disclosure?.open).toBe(false);
-    expect(disclosure?.querySelector("summary")?.textContent).toContain("2 updates from");
-    expect(disclosure?.querySelector("summary")?.textContent).toContain("Visualize tool icons");
+    const summary = disclosure?.querySelector("summary");
+    if (!disclosure || !summary) {
+      throw new Error("expected disclosure");
+    }
+    // Lit part markers are bookkeeping; the rendered summary must not change on toggle.
+    const summaryMarkup = () => summary.innerHTML.replace(/<!--[^]*?-->/gu, "");
+    const collapsedMarkup = summaryMarkup();
+    expect(disclosure.open).toBe(false);
+    expect(summary.textContent?.replace(/\s+/gu, " ").trim()).toBe(
+      "2 updates from Visualize tool icons",
+    );
     expect(container.textContent).not.toContain("Original receipt");
     expect(
       container.querySelector(".chat-avatar, .chat-avatar-slot, .chat-group--forwarded"),
     ).toBeNull();
-    expect(disclosure?.querySelector("summary a")).toBeNull();
-    if (!disclosure) {
-      throw new Error("expected disclosure");
-    }
+    expect(summary.querySelector("a[data-session-key]")?.getAttribute("data-session-key")).toBe(
+      sourceKey,
+    );
     disclosure.open = true;
     disclosure.dispatchEvent(new Event("toggle"));
     expect(disclosure.querySelectorAll(".chat-reply-attribution")).toHaveLength(1);
-    expect(disclosure.querySelector("summary")?.textContent).not.toContain("2 updates from");
-    expect(disclosure.querySelector("summary")?.textContent).toContain("From");
-    expect(
-      disclosure.querySelector("summary a[data-session-key]")?.getAttribute("data-session-key"),
-    ).toBe(sourceKey);
+    expect(summaryMarkup()).toBe(collapsedMarkup);
     expect(
       disclosure.querySelector(".chat-session-activity__body .chat-reply-attribution"),
     ).toBeNull();

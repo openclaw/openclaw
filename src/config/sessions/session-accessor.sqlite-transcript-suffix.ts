@@ -80,6 +80,7 @@ function readTranscriptSuffixStorageRows(
       .select([
         "created_at",
         projectTranscriptRetainedDataSql(
+          database.db,
           transcriptEventJsonSql(database.db),
           retainedCustomDataIds,
         ).as("event_json"),
@@ -512,7 +513,10 @@ export function replaceSqliteTranscriptSuffixInTransaction(
             .onRef("event.session_id", "=", "identity.session_id")
             .onRef("event.seq", "=", "identity.seq"),
         )
-        .select([transcriptEventNavigationSql("event").as("event_json"), "identity.event_id"])
+        .select([
+          transcriptEventNavigationSql(database.db, "event").as("event_json"),
+          "identity.event_id",
+        ])
         .where("identity.session_id", "=", resolved.sessionId)
         .where("identity.seq", "<", plan.startSeq)
         .where("identity.message_idempotency_key", "is", null)

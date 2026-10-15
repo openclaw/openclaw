@@ -1,12 +1,19 @@
 import { MessageChannel, MessagePort, receiveMessageOnPort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
-import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
-import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
+import {
+  runSqliteImmediateTransactionSync,
+  type SqliteTransactionOptions,
+} from "../../infra/sqlite-transaction.js";
+import {
+  SQLITE_WORKER_MAX_MESSAGE_BYTES,
+  type SqliteWorkerCommand,
+} from "../../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -14,12 +21,17 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
-import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import {
+  readExactSessionEntryRow,
+  writeSessionEntry,
+} from "./session-accessor.sqlite-entry-store.js";
 import type {
   SessionActorHotState,
   SessionActorTarget,
   SessionActorOperations,
+  SessionActorOutcome,
+  SessionActorPhase,
+  SessionActorPhaseResults,
 } from "./session-actor-contract.js";
 import { createSessionActorWorker } from "./session-actor.worker.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
@@ -31,25 +43,16 @@ import { bindSqliteWorkerBackend as bindSharingBackend } from "./session-sharing
 type Command = SqliteWorkerCommand<SessionActorOperations>;
 export type Mutation = Exclude<Command, { type: "session.actor.read" }>;
 
-export const SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT = 34_000;
-
-export function seedSessionActorOutcomeTransferTranscript(
+export function seedSessionActorOutcomeTransferEntry(
   fixture: Pick<ReturnType<typeof createSessionCompoundWorkerFixture>, "database" | "scope">,
 ): void {
-  const keyPayload = "k".repeat(512);
-  const events = Array.from({ length: SESSION_ACTOR_TRANSFER_TEST_MESSAGE_COUNT }, (_, index) => ({
-    type: "message",
-    id: `bounded-message-${String(index).padStart(5, "0")}`,
-    parentId: index === 0 ? null : `bounded-message-${String(index - 1).padStart(5, "0")}`,
-    timestamp: "2026-01-01T00:00:01Z",
-    message: {
-      role: "user",
-      content: "Synthetic retained transcript identity for receipt transport coverage.",
-      idempotencyKey: `${String(index).padStart(5, "0")}:${keyPayload}`,
-    },
-  }));
+  // Transfer coverage needs a genuinely oversized result, not copied history indexes.
   runSqliteImmediateTransactionSync(fixture.database.db, () =>
-    appendTranscriptEventsInTransaction(fixture.database, fixture.scope, events),
+    writeSessionEntry(fixture.database, fixture.scope.sessionKey, {
+      sessionId: fixture.scope.sessionId,
+      updatedAt: 1,
+      skillsSnapshot: { prompt: "s".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES + 1024), skills: [] },
+    }),
   );
 }
 
@@ -73,15 +76,32 @@ function createFixture() {
     admit?: AgentWorkerOperationContext["admit"];
     withCommit?: (commit: () => void) => void;
     afterTransaction?: () => void;
+    transactionOptions?: SqliteTransactionOptions;
     transactions: number;
   } = { transactions: 0 };
+  let commitFacts: unknown;
+  let transferredOutcome: unknown;
+  let outcomeTransfer: ReturnType<typeof createSqliteWorkerTransferCollector> | undefined;
+  let lastReply: SessionActorOperations["session.actor.patch"]["output"] | undefined;
   const context: AgentWorkerOperationContext = {
     open: () => database,
     options: { agentId: "main", path: database.path },
-    admit: (stage, facts) => hooks.admit?.(stage, facts),
-    writeTransaction(_label, _owner, write) {
+    admit(stage, facts) {
+      hooks.admit?.(stage, facts);
+      if (
+        isRecord(facts) &&
+        isRecord(facts.publication) &&
+        facts.publication.kind === "session-actor-outcome"
+      ) {
+        outcomeTransfer?.accept(facts.publication.transfer);
+      }
+    },
+    writeTransaction(operationLabel, _owner, write, diagnosticContext) {
       hooks.transactions += 1;
       const result = runSqliteImmediateTransactionSync(database.db, () => write(database), {
+        ...hooks.transactionOptions,
+        operationLabel,
+        diagnosticContext,
         withCommit: (commit) => (hooks.withCommit ? hooks.withCommit(commit) : commit()),
       });
       hooks.afterTransaction?.();
@@ -103,6 +123,9 @@ function createFixture() {
     }
     if (received.kind === "native-commit" || received.kind === "native-settlement") {
       receipts.push(received);
+      if (received.kind === "native-commit" && isRecord(received.committed)) {
+        commitFacts = received.committed.facts;
+      }
       return;
     }
     // Preserve real admission exchanges while their native caller blocks on this isolate.
@@ -128,13 +151,37 @@ function createFixture() {
       }
       return value;
     },
-    mutate(command: Mutation) {
+    mutate(command: Mutation): SessionActorOutcome<SessionActorPhaseResults[SessionActorPhase]> {
+      commitFacts = undefined;
+      transferredOutcome = undefined;
+      outcomeTransfer = createSqliteWorkerTransferCollector("outcome", (value) => {
+        transferredOutcome = value;
+      });
       const value = execute(command);
       if (!("kind" in value)) {
         throw new Error("Actor mutation returned a read snapshot");
       }
-      return value;
+      lastReply = value;
+      if (value.kind !== "committed") {
+        return value;
+      }
+      const evidence =
+        isRecord(commitFacts) && commitFacts.kind === "session-actor-committed-transfer"
+          ? outcomeTransfer.completed && outcomeTransfer.id === commitFacts.transferId
+            ? transferredOutcome
+            : undefined
+          : commitFacts;
+      if (!isRecord(evidence) || evidence.kind !== "committed") {
+        throw new Error("Actor acknowledgement has no native committed outcome");
+      }
+      // The worker's native receipt is the typed outcome; the command reply carries only failure.
+      const committed = evidence as Extract<
+        SessionActorOutcome<SessionActorPhaseResults[SessionActorPhase]>,
+        { kind: "committed" }
+      >;
+      return value.failure ? { ...committed, failure: value.failure } : committed;
     },
+    reply: () => lastReply,
     participant(params: SessionParticipantRecordInput) {
       const backend = bindSharingBackend(undefined, {
         database: database.db,

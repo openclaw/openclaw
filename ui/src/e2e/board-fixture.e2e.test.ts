@@ -863,21 +863,21 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
         .evaluate(async (pane) => {
           const chatPane = pane as HTMLElement & {
-            hasUpdated?: boolean;
-            updateComplete?: Promise<boolean>;
+            transcriptReady: boolean;
+            updateComplete: Promise<unknown>;
           };
           await chatPane.updateComplete;
           const constructor = customElements.get("openclaw-chat-pane");
           return {
             connected: chatPane.isConnected,
-            hasUpdated: chatPane.hasUpdated,
+            transcriptReady: chatPane.transcriptReady,
             registered: constructor !== undefined,
             upgraded: constructor !== undefined && chatPane instanceof constructor,
           };
         });
       expect(paneState).toEqual({
         connected: true,
-        hasUpdated: true,
+        transcriptReady: true,
         registered: true,
         upgraded: true,
       });

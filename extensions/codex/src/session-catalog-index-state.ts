@@ -200,9 +200,6 @@ export class CodexCatalogPersistence {
   }
 
   put(row: CodexCatalogIndexRow): void {
-    if (!this.state || this.retired) {
-      return;
-    }
     this.queue(this.key(row.threadId), { version: 1, kind: "row", row });
   }
 

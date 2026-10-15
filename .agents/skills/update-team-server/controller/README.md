@@ -217,6 +217,15 @@ official mirror. Each candidate keeps its own shallow Git object database, with
 no alternates or dependency on the mirror after publication. Ancestry checks
 continue to use the full mirror before preparation.
 
+Capacity admission measures each release tree in one Python subprocess, keeping
+large metadata walks outside V8 after an optimized `lstatSync` loop crashed.
+It still budgets each entry's larger logical/allocated size, counts hardlinks
+separately for independent copies, does not follow symlinks, and rejects special
+files or filesystem crossings. Byte/inode reserves and shared-filesystem demand
+aggregation remain unchanged. Python 3 must be available to the controller;
+failed inventories refuse admission. This change requires ordinary complete-pair
+adoption and does not change the selected controller or Gateway runtime.
+
 The build account retains pnpm's content-addressed store under
 `OPENCLAW_TEAM_BUILD_HOME/cache/store` across candidates. The frozen lockfile and
 pnpm's integrity checks select package contents; `clone-or-copy` imports keep
@@ -304,7 +313,7 @@ publication is not a deployment or a request to restart the Gateway.
 
 ## Standalone tests
 
-Use disposable Linux with Node 24.16+ or 26.1+, Bun 1.4+, Bash, Python 3, GNU
+Use disposable Linux with Node 24.16+ or 26.1+, Bun 1.4.3+, Bash, Python 3, GNU
 coreutils, `flock`, and `/usr/bin/bwrap`. Full coverage requires root and working user/mount
 namespaces. Tests use synthetic temporary state, services, processes, and
 Gateways; they do not contact Team. Some boundary tests extract Bash functions;
