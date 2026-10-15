@@ -116,7 +116,7 @@ it("serves published models while single-flight native discovery is pending", as
 
 function createPicker(
   config: OpenClawConfig,
-  params: { sessionKey?: string; view?: "all" | "configured" } = {},
+  pickerParams: { sessionKey?: string; view?: "all" | "configured" } = {},
 ) {
   const context = createModelsListTestContext({ agentId: "pro", cfg: config, catalog: [] });
   registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
@@ -131,7 +131,13 @@ function createPicker(
     const respond = vi.fn();
     await modelsHandlers["models.list"]!({
       req: { type: "req", id: "native-demand", method: "models.list" },
-      params: { agentId: "pro", view: "all", includeDefaultModels: false, refresh, ...params },
+      params: {
+        agentId: "pro",
+        view: "all",
+        includeDefaultModels: false,
+        refresh,
+        ...pickerParams,
+      },
       respond,
       client: null,
       isWebchatConnect: () => false,
