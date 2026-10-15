@@ -1,16 +1,17 @@
 import type { FoldedItem, Turn, TurnOutcome } from "@muse-code/sdk";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { consumeTurn } from "./events.js";
 
 describe("Muse post-answer finalization", () => {
   it.each([false, true])(
     "keeps foreground tools active (tool=%s) while separating reminder work",
     async (withTool) => {
-      const reachedReminder = createDeferred();
-      const release = createDeferred();
+      const reachedReminder = createDeferred<void>();
+      const release = createDeferred<void>();
       const completed = createDeferred<TurnOutcome>();
       const order: string[] = [];
       const authStorage = AuthStorage.inMemory();
