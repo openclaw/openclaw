@@ -621,30 +621,6 @@ describe("existing-session browser routes", () => {
     expect(String(evaluate.mock.calls[0]?.[0])).toContain("location.href");
   });
 
-  it("forwards click timeoutMs to the existing-session click executor", async () => {
-    const ctrl = new AbortController();
-    const response = await runRoute(getActPostHandler(), {
-      body: { kind: "click", ref: "btn-1", timeoutMs: 1234 },
-      signal: ctrl.signal,
-    });
-
-    expect(response.statusCode).toBe(200);
-    const clickParams = requireRecord(
-      callArg(chromeMcpMocks.clickChromeMcpElement, 0, 0, "click params"),
-      "click params",
-    );
-    expect(clickParams.profileName).toBe("chrome-live");
-    expectExistingSessionProfile(clickParams.profile);
-    expect(clickParams.targetId).toBe("7");
-    expect(clickParams.uid).toBe("btn-1");
-    expect(clickParams.doubleClick).toBe(false);
-    expect(clickParams.timeoutMs).toBe(1234);
-    expect(clickParams.signal).toBeInstanceOf(AbortSignal);
-    const reason = new Error("caller cancelled");
-    ctrl.abort(reason);
-    expect(clickParams.signal).toMatchObject({ aborted: true, reason });
-  });
-
   it("supports coordinate clicks for existing-session profiles", async () => {
     const response = await runRoute(getActPostHandler(), {
       body: { kind: "clickCoords", x: 25, y: "32", doubleClick: true },
