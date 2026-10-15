@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   acquireModelCircuit,
@@ -42,9 +43,26 @@ function recordFailures(count: number, startAt = 1_000): void {
   recordRouteFailures(ROUTE, count, startAt);
 }
 
+// Real event-loop work: the circuit samples utilization over each attempt's
+// own interval, so saturation must happen between acquire and record.
+async function saturateEventLoop(ms = 150): Promise<void> {
+  const end = performance.now() + ms;
+  while (performance.now() < end) {
+    // Busy-wait on purpose; yielding would let the loop go idle.
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+function idleEventLoop(ms = 150): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function acquireBurst(now: number) {
+  return Array.from({ length: modelCircuitInternals.FAILURE_THRESHOLD }, () => requireAttempt(now));
+}
+
 afterEach(() => {
   modelCircuitInternals.modelCircuitStates.clear();
-  modelCircuitInternals.setHostSaturationProbeForTests();
 });
 
 describe("model fallback circuit", () => {
@@ -160,31 +178,60 @@ describe("model fallback circuit", () => {
     expect(probe.wasHalfOpen).toBe(false);
   });
 
-  it("ignores timeout failures while the host event loop is saturated", () => {
-    modelCircuitInternals.setHostSaturationProbeForTests(() => true);
+  // Regression: the first timeout burst on a fresh process used to be counted
+  // because no earlier sample existed yet (production: every route "timed
+  // out" within ~100ms while providers answered HTTP 200).
+  it("keeps the circuit closed for a saturated timeout burst at startup", async () => {
+    const burst = acquireBurst(1_000);
+    await saturateEventLoop();
 
-    for (let index = 0; index < modelCircuitInternals.FAILURE_THRESHOLD * 2; index += 1) {
+    for (const attempt of burst) {
+      expect(recordModelCircuitFailure(attempt, "timeout", 1_001)).toBeNull();
+    }
+
+    expect(acquireAt(1_002).type).toBe("attempt");
+    expect(modelCircuitInternals.modelCircuitStates.size).toBe(0);
+  });
+
+  it("still opens for timeouts on an idle host", async () => {
+    const burst = acquireBurst(1_000);
+    await idleEventLoop();
+
+    for (const attempt of burst) {
+      recordModelCircuitFailure(attempt, "timeout", 1_001);
+    }
+
+    expect(acquireAt(1_002).type).toBe("open");
+  });
+
+  it("ignores timeout failures while the host event loop is saturated", async () => {
+    for (let index = 0; index <= modelCircuitInternals.FAILURE_THRESHOLD; index += 1) {
       const now = 1_000 + index;
-      expect(recordModelCircuitFailure(requireAttempt(now), "timeout", now)).toBeNull();
+      const attempt = requireAttempt(now);
+      await saturateEventLoop();
+      expect(recordModelCircuitFailure(attempt, "timeout", now)).toBeNull();
     }
 
     expect(acquireAt(2_000).type).toBe("attempt");
     expect(modelCircuitInternals.modelCircuitStates.size).toBe(0);
   });
 
-  it("still counts non-timeout failures while the host event loop is saturated", () => {
-    modelCircuitInternals.setHostSaturationProbeForTests(() => true);
+  it("still counts non-timeout failures while the host event loop is saturated", async () => {
+    const burst = acquireBurst(1_000);
+    await saturateEventLoop();
 
-    recordFailures(modelCircuitInternals.FAILURE_THRESHOLD);
+    for (const attempt of burst) {
+      recordModelCircuitFailure(attempt, "overloaded", 1_001);
+    }
 
-    expect(acquireAt(2_000).type).toBe("open");
+    expect(acquireAt(1_002).type).toBe("open");
   });
 
-  it("releases a half-open lease without penalty for a saturated-host timeout", () => {
+  it("releases a half-open lease without penalty for a saturated-host timeout", async () => {
     recordFailures(modelCircuitInternals.FAILURE_THRESHOLD);
     const trialAt = 1_000 + modelCircuitInternals.INITIAL_OPEN_MS + 10;
     const trial = requireAttempt(trialAt);
-    modelCircuitInternals.setHostSaturationProbeForTests(() => true);
+    await saturateEventLoop();
 
     expect(recordModelCircuitFailure(trial, "timeout", trialAt)).toBeNull();
 

@@ -14,7 +14,8 @@ const MAX_OPEN_MS = 15 * 60_000;
 const STATE_TTL_MS = 24 * 60 * 60_000;
 const MAX_TRACKED_ROUTES = 256;
 const HOST_SATURATION_ELU = 0.9;
-const HOST_SATURATION_SAMPLE_MS = 5_000;
+// Shorter intervals give no usable utilization (near-zero spans read as 1.0).
+const HOST_SATURATION_MIN_SAMPLE_MS = 100;
 const SUPPRESSION_LOG_INTERVAL_MS = 30_000;
 
 const CIRCUIT_FAILURE_REASONS = new Set<FailoverReason>([
@@ -36,11 +37,15 @@ type ModelCircuitState = {
   generation: number;
 };
 
+type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;
+
 export type ModelCircuitAttempt = {
   key: string;
   wasHalfOpen: boolean;
   /** State generation observed when this attempt was acquired. */
   generation: number;
+  /** Event-loop snapshot taken when the attempt started; see wasHostSaturatedDuring. */
+  loadSample?: EventLoopUtilization;
 };
 
 /**
@@ -70,37 +75,38 @@ const modelCircuitStates = new Map<string, ModelCircuitState>();
 // classified as timeouts regardless of provider health (observed in
 // production: every configured route "timed out" within 100ms of each other
 // while the providers were returning HTTP 200 in 2-12s). Counting those
-// self-inflicted timeouts opens circuits for healthy routes, so they are
-// excluded while a rolling event-loop-utilization sample is at or above the
-// threshold. Real provider faults (overloaded, rate_limit, server_error)
-// still count on a saturated host.
-type EluSample = {
-  at: number;
-  snapshot: ReturnType<typeof performance.eventLoopUtilization>;
-  recent: number;
-};
-let eluSample: EluSample | undefined;
-
-function defaultHostSaturationProbe(now: number): boolean {
+// self-inflicted timeouts opens circuits for healthy routes, so a timeout is
+// excluded when event-loop utilization over that attempt's own interval is at
+// or above the threshold. Measuring per attempt covers a burst that arrives
+// before any shared sample exists. Real provider faults (overloaded,
+// rate_limit, server_error) still count on a saturated host.
+function startLoadSample(): EventLoopUtilization | undefined {
   try {
-    if (typeof performance.eventLoopUtilization !== "function") {
+    return performance.eventLoopUtilization();
+  } catch {
+    return undefined;
+  }
+}
+
+function wasHostSaturatedDuring(attempt: ModelCircuitAttempt): boolean {
+  if (!attempt.loadSample) {
+    return false;
+  }
+  try {
+    const load = performance.eventLoopUtilization(attempt.loadSample);
+    if (load.active + load.idle < HOST_SATURATION_MIN_SAMPLE_MS) {
       return false;
     }
-    if (!eluSample) {
-      eluSample = { at: now, snapshot: performance.eventLoopUtilization(), recent: 0 };
-      return false;
-    }
-    if (now - eluSample.at >= HOST_SATURATION_SAMPLE_MS) {
-      const recent = performance.eventLoopUtilization(eluSample.snapshot).utilization;
-      eluSample = { at: now, snapshot: performance.eventLoopUtilization(), recent };
-    }
-    return eluSample.recent >= HOST_SATURATION_ELU;
+    return load.utilization >= HOST_SATURATION_ELU;
   } catch {
     return false;
   }
 }
 
-let hostSaturationProbe: (now: number) => boolean = defaultHostSaturationProbe;
+function newAttempt(key: string, wasHalfOpen: boolean, generation: number): ModelCircuitAttempt {
+  return { key, wasHalfOpen, generation, loadSample: startLoadSample() };
+}
+
 let lastSuppressionLogAt = 0;
 
 function shouldLogSuppression(now: number): boolean {
@@ -173,17 +179,14 @@ export function acquireModelCircuit(params: {
   pruneCircuitStates(now);
   const state = modelCircuitStates.get(key);
   if (!state || state.openUntil <= 0) {
-    return {
-      type: "attempt",
-      attempt: { key, wasHalfOpen: false, generation: currentGeneration(key) },
-    };
+    return { type: "attempt", attempt: newAttempt(key, false, currentGeneration(key)) };
   }
   if (state.openUntil > now || state.halfOpenInFlight) {
     return { type: "open", error: formatOpenError(state, now), reason: state.lastReason };
   }
   state.halfOpenInFlight = true;
   state.lastTouchedAt = now;
-  return { type: "attempt", attempt: { key, wasHalfOpen: true, generation: state.generation } };
+  return { type: "attempt", attempt: newAttempt(key, true, state.generation) };
 }
 
 /**
@@ -209,11 +212,11 @@ export function acquireModelCircuitLastRouteProbe(params: {
   // so its success could not close the circuit and its failure could not
   // reopen it with backoff.
   if (!state || (state.openUntil <= now && !state.halfOpenInFlight)) {
-    return { key, wasHalfOpen: false, generation: currentGeneration(key) };
+    return newAttempt(key, false, currentGeneration(key));
   }
   state.halfOpenInFlight = true;
   state.lastTouchedAt = now;
-  return { key, wasHalfOpen: true, generation: state.generation };
+  return newAttempt(key, true, state.generation);
 }
 
 export function releaseModelCircuitAttempt(attempt: ModelCircuitAttempt | undefined): boolean {
@@ -301,7 +304,7 @@ function recordModelCircuitFailure(
     return clearIneligibleHalfOpen(attempt, now);
   }
 
-  if (reason === "timeout" && hostSaturationProbe(now)) {
+  if (reason === "timeout" && wasHostSaturatedDuring(attempt)) {
     // Self-inflicted timeout on a saturated host: release any recovery lease
     // without penalty and do not count the failure.
     releaseModelCircuitAttempt(attempt);
@@ -360,12 +363,6 @@ export function recordCandidateCircuitFailure(params: {
   }
 }
 
-/** @internal – test-only override for the host-saturation probe. */
-function setHostSaturationProbeForTests(probe?: (now: number) => boolean): void {
-  hostSaturationProbe = probe ?? defaultHostSaturationProbe;
-  lastSuppressionLogAt = 0;
-}
-
 /** @internal – exposed for focused state-machine tests only. */
 export const modelCircuitInternals = {
   modelCircuitStates,
@@ -380,5 +377,4 @@ export const modelCircuitInternals = {
   pruneCircuitStates,
   recordModelCircuitSuccess,
   recordModelCircuitFailure,
-  setHostSaturationProbeForTests,
 } as const;
