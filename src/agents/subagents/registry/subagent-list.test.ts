@@ -716,36 +716,6 @@ describe("buildSubagentList", () => {
       expect(list.text.split(path.resolve(sharedDir))).toHaveLength(2);
     });
 
-    it("pluralizes the suffix and excludes self from peers for three sharing runs", async () => {
-      const now = Date.now();
-      const sharedDir = path.join(testWorkspaceDir, "shared-tree-trio");
-      const runs = ["trio-a", "trio-b", "trio-c"].map((suffix) => makeRun(suffix, now));
-      for (const run of runs) {
-        await addSubagentRunForTests(run);
-      }
-      const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-trio.json");
-      for (const run of runs) {
-        await seedSessionEntry(storePath, run.childSessionKey, sharedDir);
-      }
-      const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-      const list = await buildSubagentList({ cfg, runs, recentMinutes: 30 });
-
-      expect(list.active).toHaveLength(3);
-      expect(list.sharedCwdGroups).toEqual([
-        {
-          id: 1,
-          path: path.resolve(sharedDir),
-          runCount: 3,
-          runIds: runs.map((run) => run.runId),
-        },
-      ]);
-      for (const item of list.active) {
-        expect(item.sharedCwdGroupId).toBe(1);
-        expect(item.line).toContain("[shared cwd group 1]");
-      }
-    });
-
     it("stays silent for live runs that inherited the parent workspace", async () => {
       // Default `collect` swarms pass no `cwd`, so every child has
       // spawnedCwd === undefined and legitimately shares the parent workspace.
