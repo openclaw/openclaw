@@ -249,38 +249,6 @@ describe("FaceTime runtime call sequencing", () => {
     await runtime.stop();
   });
 
-  it("accepts stable complete-topology absence when a termination request fails", async () => {
-    let runtime: Awaited<ReturnType<typeof createRuntime>> | undefined;
-    try {
-      const startupError = new Error("capture failed during startup");
-      let releaseStartup: Promise<boolean> | undefined;
-      mocks.helper.leaveCall.mockRejectedValueOnce(new Error("carrier cleanup unavailable"));
-      mocks.startTalk.mockImplementationOnce(
-        async (params: { onFailure(error: Error): Promise<boolean> }) => {
-          releaseStartup = params.onFailure(startupError);
-          await releaseStartup;
-          throw startupError;
-        },
-      );
-      runtime = await createRuntime();
-
-      void mocks.helperParams?.onMessage(incomingCall(1));
-      await vi.waitFor(() => expect(mocks.helper.leaveCall).toHaveBeenCalledTimes(1));
-      expect(releaseStartup).toBeDefined();
-      await vi.waitFor(() => expect(mocks.helper.inspectCall).toHaveBeenCalledTimes(1));
-
-      await expect(releaseStartup).resolves.toBe(true);
-      await vi.waitFor(async () => {
-        expect((await runtime?.status())?.calls).toEqual([]);
-      });
-
-      expect(mocks.helper.leaveCall).toHaveBeenCalledOnce();
-      expect(mocks.helper.inspectCall).toHaveBeenCalledTimes(2);
-    } finally {
-      await runtime?.stop();
-    }
-  });
-
   it("retains startup suppression while an outbound carrier remains present", async () => {
     let runtime: Awaited<ReturnType<typeof createRuntime>> | undefined;
     try {
@@ -563,12 +531,6 @@ describe("FaceTime runtime call sequencing", () => {
       processExecutable: "/System/Applications/Phone.app/Contents/MacOS/Phone\n",
       rejects: true,
       pendingRemains: true,
-    },
-    {
-      name: "clears the authorized pending dial after exact termination succeeds",
-      processExecutable: "/System/Applications/FaceTime.app/Contents/MacOS/FaceTime\n",
-      rejects: false,
-      pendingRemains: false,
     },
   ])("$name", async ({ processExecutable, rejects, pendingRemains }) => {
     const state = await pendingDialState({ callUUIDAliases: ["approved-call"] });

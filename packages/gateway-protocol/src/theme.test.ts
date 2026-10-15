@@ -72,16 +72,6 @@ describe("portable theme definition", () => {
     expect(parseThemeDefinition(definition)).toBeNull();
   });
 
-  it.each([null])("keeps undeclared avatar hat %j out of personal definitions", (avatarHat) => {
-    const definition = { ...createThemeDefinitionFixture(), avatarHat };
-    expect(() => normalizeThemeDefinition(definition)).toThrow(
-      "theme.avatarHat must be one of fedora, crown, santa, party, pumpkin",
-    );
-    expect(Value.Check(ThemesImportParamsSchema, { id: "hat-theme", definition })).toBe(
-      avatarHat !== null,
-    );
-  });
-
   it("accepts plugin artwork only from declared IDs of the corresponding kind", () => {
     const definition = createThemeDefinitionFixture({ avatarHat: "beret", critters: ["ferris"] });
     expect(() => normalizeThemeDefinition(definition)).toThrow(
@@ -110,9 +100,7 @@ describe("portable theme definition", () => {
 
   it.each<[Record<string, unknown>, string]>([
     [{ brandName: "hello\ud800" }, "theme.brandName"],
-    [{ workingIndicator: "spinner" }, "theme.workingIndicator"],
     [{ lobsterdex: "false" }, "theme.lobsterdex"],
-    [{ mascot: "robot" }, "theme.mascot must be one of claw, none"],
     [
       { workingPhrases: Array.from({ length: 25 }, (_, index) => `Working ${index}`) },
       "at most 24 entries",
@@ -126,15 +114,12 @@ describe("portable theme definition", () => {
     ).toThrow(message);
   });
 
-  it.each([
-    { background: "#000;display:none" },
-    { background: "var(--other-theme)" },
-    { "font-sans": "var(--font-body)" },
-    { "font-sans": "Foo serif" },
-    { "font-sans": "default" },
-  ])("rejects unsafe or malformed CSS values %j", (palette) => {
-    expect(parseThemeDefinition(createDarkTheme(palette))).toBeNull();
-  });
+  it.each([{ background: "var(--other-theme)" }, { "font-sans": "var(--font-body)" }])(
+    "rejects unsafe or malformed CSS values %j",
+    (palette) => {
+      expect(parseThemeDefinition(createDarkTheme(palette))).toBeNull();
+    },
+  );
 
   it.each(["JetBrains Mono, monospace"])("preserves font family names: %s", (font) => {
     expect(

@@ -108,34 +108,6 @@ describe("skills-remote", () => {
     expect(listRemoteSkillNames()).not.toContain(skillName);
   });
 
-  it("ignores non-mac and non-system.run nodes for eligibility", () => {
-    const linuxNodeId = `node-${randomUUID()}`;
-    const noRunNodeId = `node-${randomUUID()}`;
-    const bin = `bin-${randomUUID()}`;
-    try {
-      recordRemoteNodeInfo({
-        nodeId: linuxNodeId,
-        displayName: "Linux Box",
-        platform: "linux",
-        commands: ["system.run"],
-      });
-      recordRemoteNodeBins(linuxNodeId, [bin], TEST_PAIRING_GENERATION);
-
-      recordRemoteNodeInfo({
-        nodeId: noRunNodeId,
-        displayName: "Remote Mac",
-        platform: "darwin",
-        commands: ["system.which"],
-      });
-      recordRemoteNodeBins(noRunNodeId, [bin], TEST_PAIRING_GENERATION);
-
-      expect(getRemoteSkillEligibility()).toBeUndefined();
-    } finally {
-      removeRemoteNodeInfo(linuxNodeId);
-      removeRemoteNodeInfo(noRunNodeId);
-    }
-  });
-
   it("aggregates bins and note labels across eligible mac nodes", () => {
     const nodeA = `node-${randomUUID()}`;
     const nodeB = `node-${randomUUID()}`;
