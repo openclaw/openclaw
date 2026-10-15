@@ -4,13 +4,16 @@ import { AgentSelectionRequiredError } from "../agent-scope-config.js";
 import { resolveRestartRecoveryDispatchTarget } from "./main-session-restart-recovery-target.js";
 
 const io = vi.hoisted(() => ({ resolve: vi.fn(), warn: vi.fn() }));
-vi.mock("../../gateway/session-store-key.js", () => ({
+vi.mock("../../gateway/session-store-key.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/session-store-key.js")>()),
   resolveSessionStoreIdentity: io.resolve,
 }));
-vi.mock("../subagents/registry/subagent-registry-read.js", () => ({
+vi.mock("../subagents/registry/subagent-registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../subagents/registry/subagent-registry-read.js")>()),
   listSubagentRunsForRequester: () => [],
 }));
-vi.mock("./main-session-restart-recovery-shared.js", () => ({
+vi.mock("./main-session-restart-recovery-shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./main-session-restart-recovery-shared.js")>()),
   mainSessionRecoveryLog: { warn: io.warn },
 }));
 

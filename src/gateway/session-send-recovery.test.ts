@@ -24,28 +24,42 @@ const io = vi.hoisted(() => ({
   load: vi.fn(),
   report: vi.fn(),
 }));
-vi.mock("../agents/main-session-recovery/main-session-restart-recovery-shared.js", () => ({
-  discoverRestartRecoveryStoreTargets: io.discover,
-}));
-vi.mock("../config/sessions/session-entry-read-maintenance.js", () => ({
+vi.mock(
+  "../agents/main-session-recovery/main-session-restart-recovery-shared.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../agents/main-session-recovery/main-session-restart-recovery-shared.js")
+    >()),
+    discoverRestartRecoveryStoreTargets: io.discover,
+  }),
+);
+vi.mock("../config/sessions/session-entry-read-maintenance.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../config/sessions/session-entry-read-maintenance.js")
+  >()),
   readPendingInputRecoveryEntriesInWorker: io.entries,
 }));
-vi.mock("../config/sessions/session-pending-input-history.js", () => ({
+vi.mock("../config/sessions/session-pending-input-history.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-pending-input-history.js")>()),
   listSessionPendingInputs: io.pending,
 }));
-vi.mock("../config/sessions/session-pending-input-source.js", () => ({
+vi.mock("../config/sessions/session-pending-input-source.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-pending-input-source.js")>()),
   readPendingInputSource: io.source,
 }));
-vi.mock("../config/sessions/session-accessor.js", () => ({
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
   appendSessionTranscriptReport: io.report,
 }));
-vi.mock("../config/sessions/transcript-write-context.js", () => ({
+vi.mock("../config/sessions/transcript-write-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/transcript-write-context.js")>()),
   withSessionTranscriptWriteAssertion: (_scope: unknown, guard: () => void, run: () => unknown) => {
     guard();
     return run();
   },
 }));
-vi.mock("./session-utils-store-worker.js", () => ({
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
   resolveGatewaySessionStoreTargetInWorker: io.load,
 }));
 
