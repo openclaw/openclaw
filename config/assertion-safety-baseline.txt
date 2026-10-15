@@ -244,13 +244,12 @@ extensions/discord/src/internal/rest-errors.ts	1
 extensions/discord/src/internal/structures.ts	7
 extensions/discord/src/internal/undefined-fields.ts	1
 extensions/discord/src/internal/voice.ts	1
-extensions/discord/src/markdown.ts	4
+extensions/discord/src/markdown.ts	1
 extensions/discord/src/monitor/agent-components.plugin-interactive.ts	1
 extensions/discord/src/monitor/channel-access.ts	1
 extensions/discord/src/monitor/exec-approvals.ts	1
 extensions/discord/src/monitor/gateway-metadata.ts	6
 extensions/discord/src/monitor/gateway-plugin.ts	2
-extensions/discord/src/monitor/gateway-supervisor.ts	1
 extensions/discord/src/monitor/ingress.ts	6
 extensions/discord/src/monitor/message-channel-info.ts	1
 extensions/discord/src/monitor/message-forwarded.ts	5
@@ -930,7 +929,6 @@ extensions/whatsapp/src/channel-outbound.ts	1
 extensions/whatsapp/src/connection-controller-runtime-context.ts	1
 extensions/whatsapp/src/connection-controller.ts	2
 extensions/whatsapp/src/connection-owner.ts	1
-extensions/whatsapp/src/group-config-path.ts	3
 extensions/whatsapp/src/inbound/durable-payload.ts	2
 extensions/whatsapp/src/inbound/extract.ts	10
 extensions/whatsapp/src/inbound/group-metadata-cache.ts	3
