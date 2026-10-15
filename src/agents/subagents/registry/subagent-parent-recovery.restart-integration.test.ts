@@ -64,7 +64,7 @@ vi.mock("../../../gateway/session-utils.fs.js", () => ({
 }));
 
 describe("subagent parent recovery — durable yielded continuation", () => {
-  const fixture = useSubagentRestartRecoveryFixture();
+  const fixture = useSubagentRestartRecoveryFixture({ reuseDatabaseWorkers: true });
   const { activateGatewayRuntime, dispatchAgent, gatewayRuntime } = fixture;
 
   it.each([

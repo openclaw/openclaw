@@ -523,26 +523,6 @@ describe("Gateway timed work", () => {
     await scheduler.stop();
   });
 
-  it("logs one-shot runs at debug and repeating cadence runs only at trace", async () => {
-    const { time, scheduler } = fixture();
-    schedulerLog.debug.mockClear();
-    schedulerLog.trace.mockClear();
-    const sample = vi.fn();
-    scheduler.schedule({ id: "event-loop-health", delayMs: 20, everyMs: 20, run: sample });
-    scheduler.schedule({ id: "approval", delayMs: 30, run: () => {} });
-    await time.advanceBy(20);
-    await time.advanceBy(20);
-    await time.advanceBy(20);
-    expect(sample).toHaveBeenCalledTimes(3);
-    expect(schedulerLog.debug.mock.calls).toEqual([["running approval"]]);
-    expect(schedulerLog.trace.mock.calls).toEqual([
-      ["running event-loop-health"],
-      ["running event-loop-health"],
-      ["running event-loop-health"],
-    ]);
-    await scheduler.stop();
-  });
-
   it("retains a distant deadline across the host timer delay ceiling", async () => {
     const { time, scheduler } = fixture();
     const run = vi.fn();

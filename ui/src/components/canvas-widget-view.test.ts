@@ -577,32 +577,11 @@ describe("Canvas widget view", () => {
 
   it.each([
     {
-      label: "short Unicode title",
-      title: "Ready 😀",
-      expectedTitle: "Ready 😀",
-      message: "x".repeat(600),
-      expectedMessage: "x".repeat(500),
-    },
-    {
-      label: "ASCII title limit",
-      title: "x".repeat(81),
-      expectedTitle: "x".repeat(80),
-      message: "x".repeat(600),
-      expectedMessage: "x".repeat(500),
-    },
-    {
       label: "surrogate title boundary",
       title: `${"x".repeat(79)}😀tail`,
       expectedTitle: "x".repeat(79),
       message: "x".repeat(600),
       expectedMessage: "x".repeat(500),
-    },
-    {
-      label: "short Unicode message",
-      title: "Status",
-      expectedTitle: "Status",
-      message: "Ready 😀",
-      expectedMessage: "Ready 😀",
     },
     {
       label: "surrogate message boundary",

@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createQaBundledPluginsDir,
   resolveQaOwnerPluginIdsForProviderIds,
-  resolveQaRuntimeHostVersion,
 } from "./bundled-plugin-staging.js";
 import { readQaLiveProviderConfigOverrides } from "./providers/live-config.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
@@ -209,11 +208,11 @@ describe("qa bundled plugin dir", () => {
         });
       }
       await expect(
-        resolveQaRuntimeHostVersion({
-          repoRoot: f.repoRoot,
+        createQaBundledPluginsDir({
+          ...f,
           allowedPluginIds: ["memory-core", "qa-channel"],
         }),
-      ).resolves.toBe(expected);
+      ).resolves.toMatchObject({ runtimeHostVersion: expected });
     },
   );
 });

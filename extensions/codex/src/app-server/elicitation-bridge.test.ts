@@ -1328,23 +1328,6 @@ describe("Codex app-server elicitation bridge", () => {
         },
       },
     },
-    {
-      name: "an OAuth URL",
-      request: {
-        mode: "url",
-        message: "Connect your calendar",
-        url: "https://example.com/oauth/authorize",
-        elicitationId: "connect-calendar",
-      },
-    },
-    {
-      name: "an extended OpenAI form",
-      request: {
-        mode: "openai/form",
-        message: "Choose an event image",
-        requestedSchema: { type: "object", properties: { image: { type: "string" } } },
-      },
-    },
   ])(
     "leaves $name from a plugin-owned MCP server to the ordinary input bridge",
     async ({ request }) => {

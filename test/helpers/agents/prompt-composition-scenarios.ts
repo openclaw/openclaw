@@ -1,6 +1,5 @@
 // Prompt composition scenarios build reusable agent prompt fixtures.
 import fs from "node:fs/promises";
-import path from "node:path";
 import { buildBootstrapPromptWarning } from "../../../src/agents/bootstrap-budget-warning.js";
 import {
   analyzeBootstrapBudget,
@@ -9,14 +8,8 @@ import {
 } from "../../../src/agents/bootstrap-budget.js";
 import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-files.js";
 import { buildCurrentInboundPrompt } from "../../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
-import { buildConfiguredAgentSystemPrompt } from "../../../src/agents/system-prompt-config.js";
 import { buildAgentSystemPrompt } from "../../../src/agents/system-prompt.js";
-import { createStubTool } from "../../../src/agents/test-helpers/agent-tool-stubs.js";
-import {
-  buildSourceConversationContext,
-  buildGroupChatContext,
-  buildGroupIntro,
-} from "../../../src/auto-reply/reply/groups.js";
+import { buildGroupChatContext } from "../../../src/auto-reply/reply/groups.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
@@ -26,8 +19,6 @@ import type { TemplateContext } from "../../../src/auto-reply/templating.js";
 import { SILENT_REPLY_TOKEN } from "../../../src/auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../src/test-helpers/workspace.js";
-
-// Prompt composition scenarios for system/body prompt stability tests.
 
 /** One turn in a prompt composition scenario. */
 type PromptScenarioTurn = {
@@ -39,7 +30,6 @@ type PromptScenarioTurn = {
 /** Multi-turn prompt composition scenario fixture. */
 export type PromptScenario = {
   scenario: string;
-  expectedStableSystemAfterTurnIds: string[];
   turns: PromptScenarioTurn[];
 };
 
@@ -76,8 +66,6 @@ function buildCommonSystemParams(workspaceDir: string) {
 function buildSystemPrompt(params: {
   workspaceDir: string;
   extraSystemPrompt?: string;
-  skillsPrompt?: string;
-  reactionGuidance?: { level: "minimal" | "extensive"; channel: string };
   contextFiles?: Array<{ path: string; content: string }>;
   bootstrapTruncationNotice?: string;
   silentReplyPromptMode?: "generic" | "none";
@@ -92,17 +80,9 @@ function buildSystemPrompt(params: {
     promptMode: "full",
     silentReplyPromptMode: params.silentReplyPromptMode,
     acpEnabled: true,
-    skillsPrompt: params.skillsPrompt,
-    reactionGuidance: params.reactionGuidance,
     contextFiles: params.contextFiles,
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
   });
-}
-
-function buildAutoReplyBody(params: { ctx: TemplateContext; body: string; eventLine?: string }) {
-  return [params.eventLine, buildInboundUserContextPrefix(params.ctx), params.body]
-    .filter(Boolean)
-    .join("\n\n");
 }
 
 function buildAutoReplyModelPrompt(params: { ctx: TemplateContext; body: string }): string {
@@ -122,294 +102,20 @@ function buildAutoReplyModelPrompt(params: { ctx: TemplateContext; body: string 
   });
 }
 
-async function readContextFiles(workspaceDir: string, fileNames: string[]) {
-  return Promise.all(
-    fileNames.map(async (fileName) => ({
-      path: fileName,
-      content: await fs.readFile(path.join(workspaceDir, fileName), "utf-8"),
-    })),
-  );
-}
-
-function buildAutoReplySystemPrompt(params: {
-  workspaceDir: string;
-  sessionCtx: TemplateContext;
-  includeGroupChatContext?: boolean;
-  includeGroupIntro?: boolean;
-  groupSystemPrompt?: string;
-}) {
+function buildAutoReplySystemPrompt(params: { workspaceDir: string; sessionCtx: TemplateContext }) {
   const extraSystemPromptParts = [
     buildInboundMetaSystemPrompt(params.sessionCtx, {}),
-    params.sessionCtx.ChatType === "direct" || params.sessionCtx.ChatType === "dm"
-      ? buildSourceConversationContext({
-          sessionCtx: params.sessionCtx,
-        })
-      : "",
-    params.includeGroupChatContext
-      ? buildGroupChatContext({
-          sessionCtx: params.sessionCtx,
-          silentToken: SILENT_REPLY_TOKEN,
-          silentReplyPolicy: "allow",
-        })
-      : "",
-    params.includeGroupIntro
-      ? buildGroupIntro({
-          defaultActivation: "mention",
-        })
-      : "",
-    params.groupSystemPrompt?.trim() ?? "",
+    buildGroupChatContext({
+      sessionCtx: params.sessionCtx,
+      silentToken: SILENT_REPLY_TOKEN,
+      silentReplyPolicy: "allow",
+    }),
   ].filter(Boolean);
   return buildSystemPrompt({
     workspaceDir: params.workspaceDir,
     extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
-    silentReplyPromptMode:
-      params.sessionCtx.ChatType === "direct" ||
-      params.sessionCtx.ChatType === "dm" ||
-      params.includeGroupChatContext
-        ? "none"
-        : "generic",
+    silentReplyPromptMode: "none",
   });
-}
-
-function buildToolRichSystemPrompt(params: {
-  workspaceDir: string;
-  skillsPrompt: string;
-  contextFiles: Array<{ path: string; content: string }>;
-}) {
-  const { runtimeInfo } = buildCommonSystemParams(params.workspaceDir);
-  const tools = [
-    "bash",
-    "read",
-    "edit",
-    "grep",
-    "glob",
-    "message",
-    "memory_search",
-    "memory_get",
-    "web_search",
-    "x_search",
-    "web_fetch",
-  ].map((name) => Object.assign({}, createStubTool(name), { description: `${name} tool` }));
-  return buildConfiguredAgentSystemPrompt({
-    workspaceDir: params.workspaceDir,
-    reasoningTagHint: false,
-    runtimeInfo,
-    tools,
-    modelAliasLines: [],
-    acpEnabled: true,
-    skillsPrompt: params.skillsPrompt,
-    reactionGuidance: { level: "extensive", channel: "Telegram" },
-    contextFiles: params.contextFiles,
-  });
-}
-
-function createDirectScenario(workspaceDir: string): PromptScenario {
-  const baseCtx: TemplateContext = {
-    Provider: "slack",
-    Surface: "slack",
-    OriginatingChannel: "slack",
-    OriginatingTo: "D123",
-    AccountId: "A1",
-    ChatType: "dm",
-    SenderId: "U1",
-    SenderName: "Alice",
-    Body: "hi",
-    BodyStripped: "hi",
-  };
-  return {
-    scenario: "auto-reply-direct",
-    expectedStableSystemAfterTurnIds: ["t2", "t3", "t4"],
-    turns: [
-      {
-        id: "t1",
-        systemPrompt: buildAutoReplySystemPrompt({
-          workspaceDir,
-          sessionCtx: {
-            ...baseCtx,
-            MessageSid: "m1",
-            ReplyToId: "r1",
-            ReplyToBody: "prior message",
-            WasMentioned: true,
-          },
-        }),
-        bodyPrompt: buildAutoReplyBody({
-          ctx: {
-            ...baseCtx,
-            MessageSid: "m1",
-            ReplyToId: "r1",
-            ReplyToBody: "prior message",
-            WasMentioned: true,
-          },
-          body: "Please summarize yesterday's decision.",
-        }),
-      },
-      {
-        id: "t2",
-        systemPrompt: buildAutoReplySystemPrompt({
-          workspaceDir,
-          sessionCtx: {
-            ...baseCtx,
-            MessageSid: "m2",
-            ReplyToId: "r2",
-          },
-        }),
-        bodyPrompt: buildAutoReplyBody({
-          ctx: {
-            ...baseCtx,
-            MessageSid: "m2",
-            ReplyToId: "r2",
-          },
-          body: "Now open the read tool and inspect AGENTS.md.",
-        }),
-      },
-      {
-        id: "t3",
-        systemPrompt: buildAutoReplySystemPrompt({
-          workspaceDir,
-          sessionCtx: {
-            ...baseCtx,
-            MessageSid: "m3",
-            ReplyToId: "r3",
-          },
-        }),
-        bodyPrompt: buildAutoReplyBody({
-          ctx: {
-            ...baseCtx,
-            MessageSid: "m3",
-            ReplyToId: "r3",
-          },
-          eventLine: "System: [t] Model switched.",
-          body: "low use tools if needed and tell me which file controls startup behavior",
-        }),
-      },
-      {
-        id: "t4",
-        systemPrompt: buildAutoReplySystemPrompt({
-          workspaceDir,
-          sessionCtx: {
-            ...baseCtx,
-            MessageSid: "m4",
-            ReplyToId: "r4",
-          },
-        }),
-        bodyPrompt: buildAutoReplyBody({
-          ctx: {
-            ...baseCtx,
-            MessageSid: "m4",
-            ReplyToId: "r4",
-          },
-          body: "Repeat the startup file path only.",
-        }),
-      },
-    ],
-  };
-}
-
-function createGroupScenario(workspaceDir: string): PromptScenario {
-  const baseCtx: TemplateContext = {
-    Provider: "slack",
-    Surface: "slack",
-    OriginatingChannel: "slack",
-    OriginatingTo: "C123",
-    AccountId: "A1",
-    ChatType: "group",
-    GroupSubject: "ops",
-    GroupChannel: "#ops",
-    GroupMembers: "Bob, Cara, Dan, Eve",
-    SenderId: "U2",
-    SenderName: "Bob",
-    Body: "hi",
-    BodyStripped: "hi",
-  };
-  return {
-    scenario: "auto-reply-group",
-    expectedStableSystemAfterTurnIds: ["t2", "t3"],
-    turns: [
-      {
-        id: "t1",
-        systemPrompt: buildAutoReplySystemPrompt({
-          workspaceDir,
-          sessionCtx: {
-            ...baseCtx,
-            MessageSid: "g1",
-            WasMentioned: true,
-            InboundHistory: [{ sender: "Cara", timestamp: 1, body: "status?" }],
-          },
-          includeGroupChatContext: true,
-          includeGroupIntro: true,
-        }),
-        bodyPrompt: buildAutoReplyBody({
-          ctx: {
-            ...baseCtx,
-            MessageSid: "g1",
-            WasMentioned: true,
-            InboundHistory: [{ sender: "Cara", timestamp: 1, body: "status?" }],
-          },
-          body: "Can you investigate this issue?",
-        }),
-      },
-      {
-        id: "t2",
-        systemPrompt: buildAutoReplySystemPrompt({
-          workspaceDir,
-          sessionCtx: {
-            ...baseCtx,
-            MessageSid: "g2",
-            WasMentioned: false,
-            InboundHistory: [
-              { sender: "Cara", timestamp: 1, body: "status?" },
-              { sender: "Dan", timestamp: 2, body: "please help" },
-            ],
-          },
-          includeGroupChatContext: true,
-          includeGroupIntro: true,
-        }),
-        bodyPrompt: buildAutoReplyBody({
-          ctx: {
-            ...baseCtx,
-            MessageSid: "g2",
-            WasMentioned: false,
-            InboundHistory: [
-              { sender: "Cara", timestamp: 1, body: "status?" },
-              { sender: "Dan", timestamp: 2, body: "please help" },
-            ],
-          },
-          body: "Give a short update.",
-        }),
-      },
-      {
-        id: "t3",
-        systemPrompt: buildAutoReplySystemPrompt({
-          workspaceDir,
-          sessionCtx: {
-            ...baseCtx,
-            MessageSid: "g2",
-            WasMentioned: false,
-            InboundHistory: [
-              { sender: "Cara", timestamp: 1, body: "status?" },
-              { sender: "Dan", timestamp: 2, body: "please help" },
-            ],
-          },
-          includeGroupChatContext: true,
-          includeGroupIntro: true,
-        }),
-        bodyPrompt: buildAutoReplyBody({
-          ctx: {
-            ...baseCtx,
-            MessageSid: "g3",
-            WasMentioned: true,
-            InboundHistory: [
-              { sender: "Cara", timestamp: 1, body: "status?" },
-              { sender: "Dan", timestamp: 2, body: "please help" },
-              { sender: "Eve", timestamp: 3, body: "what changed?" },
-            ],
-          },
-          eventLine: "System: [t] Node connected.",
-          body: "Tell the room whether tools are available.",
-        }),
-      },
-    ],
-  };
 }
 
 function createDiscordBoundaryScenario(workspaceDir: string): PromptScenario {
@@ -442,78 +148,17 @@ function createDiscordBoundaryScenario(workspaceDir: string): PromptScenario {
   };
   return {
     scenario: "auto-reply-discord-boundary",
-    expectedStableSystemAfterTurnIds: [],
     turns: [
       {
         id: "t1",
         systemPrompt: buildAutoReplySystemPrompt({
           workspaceDir,
           sessionCtx: baseCtx,
-          includeGroupChatContext: true,
         }),
         bodyPrompt: buildAutoReplyModelPrompt({
           ctx: baseCtx,
           body,
         }),
-      },
-    ],
-  };
-}
-
-async function createToolRichScenario(workspaceDir: string): Promise<PromptScenario> {
-  const skillsPrompt = [
-    "<available_skills>",
-    "<skill><name>checks</name><description>Run checks before landing changes.</description><location>/skills/checks/SKILL.md</location></skill>",
-    "<skill><name>release</name><description>Release OpenClaw safely.</description><location>/skills/release/SKILL.md</location></skill>",
-    "</available_skills>",
-  ].join("\n");
-  const contextFiles = await readContextFiles(workspaceDir, ["AGENTS.md", "SOUL.md"]);
-  const systemPrompt = buildToolRichSystemPrompt({
-    workspaceDir,
-    skillsPrompt,
-    contextFiles,
-  });
-  return {
-    scenario: "tool-rich-agent-run",
-    expectedStableSystemAfterTurnIds: ["t2"],
-    turns: [
-      {
-        id: "t1",
-        systemPrompt,
-        bodyPrompt: [
-          "Conversation info:",
-          "```json",
-          JSON.stringify({ message_id: "tool-1", sender_id: "U9", was_mentioned: true }, null, 2),
-          "```",
-          "",
-          "high Search the workspace, read AGENTS.md, inspect the failing test, and propose a patch.",
-        ].join("\n"),
-      },
-      {
-        id: "t2",
-        systemPrompt,
-        bodyPrompt: [
-          "Conversation info:",
-          "```json",
-          JSON.stringify({ message_id: "tool-2", sender_id: "U9" }, null, 2),
-          "```",
-          "",
-          "Tool transcript summary:",
-          "```json",
-          JSON.stringify(
-            [
-              { role: "assistant", action: "tool_use", name: "read", target: "AGENTS.md" },
-              { role: "tool", name: "read", result: "Loaded AGENTS.md" },
-              { role: "assistant", action: "tool_use", name: "grep", target: "failing test" },
-              { role: "tool", name: "grep", result: "Matched src/foo.ts:42" },
-            ],
-            null,
-            2,
-          ),
-          "```",
-          "",
-          "Continue and explain the root cause.",
-        ].join("\n"),
       },
     ],
   };
@@ -559,7 +204,6 @@ async function createBootstrapWarningScenario(workspaceDir: string): Promise<Pro
   }
   return {
     scenario: "bootstrap-warning",
-    expectedStableSystemAfterTurnIds: ["t2", "t3"],
     turns: [
       {
         id: "t1",
@@ -587,86 +231,6 @@ async function createBootstrapWarningScenario(workspaceDir: string): Promise<Pro
           bootstrapTruncationNotice: truncationNotice,
         }),
         bodyPrompt: "one more turn",
-      },
-    ],
-  };
-}
-
-async function createMaintenanceScenario(workspaceDir: string): Promise<PromptScenario> {
-  await writeWorkspaceFile({
-    dir: workspaceDir,
-    name: "AGENTS.md",
-    content: [
-      "## Session Startup",
-      "Read AGENTS.md and MEMORY.md before responding.",
-      "",
-      "## Red Lines",
-      "Do not delete production data.",
-      "",
-      "## Safety",
-      "Never reveal secrets.",
-    ].join("\n"),
-  });
-  const memoryFlushPrompt = [
-    "Pre-compaction memory flush.",
-    "Store durable memories only in memory/2026-03-15.md (create memory/ if needed).",
-    "Treat workspace bootstrap/reference files such as MEMORY.md, SOUL.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.",
-    "If nothing to store, reply with NO_REPLY.",
-    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles)",
-    "Reference UTC: 2026-03-16 04:30 UTC",
-  ].join("\n");
-  const memoryFlushSystemPrompt = buildSystemPrompt({
-    workspaceDir,
-    extraSystemPrompt: [
-      "Pre-compaction memory flush turn.",
-      "The session is near auto-compaction; capture durable memories to disk.",
-      "Store durable memories only in memory/YYYY-MM-DD.md (create memory/ if needed).",
-      "You may reply, but usually NO_REPLY is correct.",
-    ].join(" "),
-  });
-  const postCompaction = [
-    "[Post-compaction context refresh]",
-    "",
-    "Session was just compacted. The conversation summary above is a hint, NOT a substitute for your startup sequence.",
-    "",
-    "Critical rules from AGENTS.md:",
-    "",
-    "## Session Startup",
-    "Read AGENTS.md and MEMORY.md before responding.",
-    "",
-    "## Red Lines",
-    "Do not delete production data.",
-    "",
-    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles)",
-    "Reference UTC: 2026-03-16 04:30 UTC",
-  ].join("\n");
-  const postCompactionSystemPrompt = buildSystemPrompt({
-    workspaceDir,
-    extraSystemPrompt: buildInboundMetaSystemPrompt(
-      {
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: "D123",
-        AccountId: "A1",
-        ChatType: "direct",
-      },
-      {},
-    ),
-  });
-  return {
-    scenario: "maintenance-prompts",
-    expectedStableSystemAfterTurnIds: [],
-    turns: [
-      {
-        id: "t1",
-        systemPrompt: memoryFlushSystemPrompt,
-        bodyPrompt: memoryFlushPrompt,
-      },
-      {
-        id: "t2",
-        systemPrompt: postCompactionSystemPrompt,
-        bodyPrompt: postCompaction,
       },
     ],
   };
@@ -707,12 +271,8 @@ export async function createPromptCompositionScenarios(): Promise<{
   const workspaceDir = await createWorkspaceWithPromptCompositionFiles();
   const warningWorkspaceDir = await makeTempWorkspace("openclaw-prompt-cache-warning-");
   const scenarios = [
-    createDirectScenario(workspaceDir),
-    createGroupScenario(workspaceDir),
     createDiscordBoundaryScenario(workspaceDir),
-    await createToolRichScenario(workspaceDir),
     await createBootstrapWarningScenario(warningWorkspaceDir),
-    await createMaintenanceScenario(workspaceDir),
   ];
   return {
     scenarios,

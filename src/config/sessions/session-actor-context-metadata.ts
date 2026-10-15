@@ -12,6 +12,7 @@ export function projectSessionActorContextMetadata(
   const { active, coldArchive, contextMetadata, identities, navigation, payloads, projection } =
     actor.transcript;
   if (
+    !actor.transcript.complete ||
     coldArchive ||
     !contextMetadata ||
     !projection ||
@@ -97,6 +98,9 @@ export function seedSessionActorContextMetadata(
     serialized_bytes: number;
   }>,
 ): void {
+  if (!actor.transcript.complete) {
+    return;
+  }
   const rows = stored.flatMap((row) => {
     const active = actor.transcript.active.get(row.seq);
     return active?.context_eligible === 1

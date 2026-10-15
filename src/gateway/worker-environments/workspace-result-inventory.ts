@@ -65,11 +65,12 @@ export type StagedWorkerArtifactInventory = {
   changedEntries: WorkerWorkspaceManifestEntry[];
   changes: SessionDiffFile[];
   preview?: Uint8Array;
+  downloadObjectId?: string;
 };
 
 export type WorkspaceArtifactReadOperations = {
   "workspace.artifacts": {
-    input: { root: string; ref: string; previewPath?: string };
+    input: { root: string; ref: string; previewPath?: string; downloadPath?: string };
     output: StagedWorkerArtifactInventory;
   };
 };

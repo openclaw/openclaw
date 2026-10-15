@@ -186,8 +186,31 @@ export class SqliteDatabaseAdmissionRegistry {
     if (count !== (change === 1 ? 1 : 0)) {
       return false;
     }
+    if (change === -1) {
+      this.retireUnreferenced(record);
+    }
     this.publish(record);
     return true;
+  }
+
+  private retireUnreferenced(record: Admission): void {
+    if (
+      threadId !== 0 ||
+      [...record.references.values()].some(
+        (references) => Atomics.load(new Int32Array(references), 0) > 0,
+      )
+    ) {
+      return;
+    }
+    // Closed metadata releases its payloads; only explicit retirement closes descriptor custody.
+    Atomics.compareExchange(
+      new Int32Array(record.generation),
+      SqliteDatabaseGenerationSlot.retired,
+      0,
+      2,
+    );
+    record.facts.clear();
+    record.writeScopes.clear();
   }
 
   releaseWorker(owner: number): void {
@@ -199,15 +222,13 @@ export class SqliteDatabaseAdmissionRegistry {
       }
       // Zero permits a live worker to reopen; negative cells cannot be revived by old snapshots.
       const priorReferences = Atomics.exchange(new Int32Array(references), 0, -1);
+      this.retireUnreferenced(record);
       // Native close settles receipts before releasing the worker's final reference.
       if (priorReferences <= 0) {
         continue;
       }
       advanceSqliteDatabaseGeneration(record, "writeRevision");
       advanceSqliteDatabaseGeneration(record, "unscopedWriteRevision");
-      // A worker can commit DDL before its outer native call publishes admission receipts.
-      advanceSqliteDatabaseGeneration(record, "schemaRevision");
-      advanceSqliteDatabaseGeneration(record, "factRevision");
     }
     this.publish();
   }
@@ -301,7 +322,9 @@ export class SqliteDatabaseAdmissionRegistry {
     // Another isolate can retire shared custody. Reclaim it at publication, not on every request.
     for (const current of this.records.values()) {
       if (isSqliteDatabaseAdmissionRetired(current)) {
-        this.descriptors.delete(current.identity);
+        if (readSqliteDatabaseGeneration(current, "retired") === 1) {
+          this.descriptors.delete(current.identity);
+        }
         this.forget(current.identity);
         continue;
       }
@@ -478,7 +501,9 @@ export class SqliteDatabaseAdmissionRegistry {
         record.hostRevision = incoming.hostRevision;
         changed = true;
       }
-      if (changed) {
+      // Only the host has every borrower's reference cell; worker snapshots can omit later peers.
+      this.retireUnreferenced(record);
+      if (changed || isSqliteDatabaseAdmissionRetired(record)) {
         changedRecords.add(record);
       }
     }

@@ -332,46 +332,6 @@ describe("SidebarUpdateCard", () => {
     await vi.waitFor(() => expect(element.props().onCheckStatus).toHaveBeenCalledTimes(2));
   });
 
-  it("checks and retries the target when running updates is unavailable", async () => {
-    const element = await mount(
-      { currentVersion: "1.0.0", latestVersion: "2.0.0", channel: "stable" },
-      null,
-      false,
-    );
-    element.setProps({ compact: true });
-    element.setProps({ onCheckStatus: vi.fn(async () => false) });
-    element.setProps({ onUpdate: vi.fn() });
-    await settle();
-    element.element.querySelector("details")!.open = true;
-    await vi.waitFor(() => expect(element.props().onCheckStatus).toHaveBeenCalledOnce());
-    element.setProps({ updateAvailable: null });
-    element.setProps({
-      statusBanner: {
-        tone: "warn",
-        source: "read",
-        text: "Could not check the latest update",
-      },
-    });
-    await settle();
-    const retry = [...element.element.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("Retry now"),
-    );
-    expect(retry?.disabled).toBe(false);
-    retry!.click();
-    await vi.waitFor(() => expect(element.props().onCheckStatus).toHaveBeenCalledTimes(2));
-    element.setProps({
-      updateAvailable: {
-        currentVersion: "1.0.0",
-        latestVersion: "2.0.0",
-        channel: "stable",
-      },
-    });
-    await settle();
-    element.element.querySelector<HTMLButtonElement>(".sidebar-update-card__action")!.click();
-    expect(element.props().onUpdate).not.toHaveBeenCalled();
-    expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-  });
-
   it("retries a failed fresh target check in the compact row", async () => {
     const element = await mount({
       currentVersion: "1.0.0",

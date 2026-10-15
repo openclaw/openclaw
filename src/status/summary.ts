@@ -70,39 +70,24 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (!entry) {
     return [];
   }
-  const flags: string[] = [];
-  const think = entry?.thinkingLevel;
-  if (typeof think === "string" && think.length > 0) {
-    flags.push(`think:${think}`);
+  const stringFlag = (label: string, value: unknown) =>
+    typeof value === "string" && value.length > 0 ? `${label}:${value}` : undefined;
+  let fastFlag: string | undefined;
+  if (entry.fastMode === "auto" || entry.fastMode === "ultrafast") {
+    fastFlag = `fast:${entry.fastMode}`;
+  } else if (typeof entry.fastMode === "boolean") {
+    fastFlag = entry.fastMode ? "fast" : "fast:off";
   }
-  const verbose = entry?.verboseLevel;
-  if (typeof verbose === "string" && verbose.length > 0) {
-    flags.push(`verbose:${verbose}`);
-  }
-  if (entry?.fastMode === "auto" || entry?.fastMode === "ultrafast") {
-    flags.push(`fast:${entry.fastMode}`);
-  } else if (typeof entry?.fastMode === "boolean") {
-    flags.push(entry.fastMode ? "fast" : "fast:off");
-  }
-  const reasoning = entry?.reasoningLevel;
-  if (typeof reasoning === "string" && reasoning.length > 0) {
-    flags.push(`reasoning:${reasoning}`);
-  }
-  const elevated = entry?.elevatedLevel;
-  if (typeof elevated === "string" && elevated.length > 0) {
-    flags.push(`elevated:${elevated}`);
-  }
-  if (entry?.systemSent) {
-    flags.push("system");
-  }
-  if (entry?.abortedLastRun) {
-    flags.push("aborted");
-  }
-  const sessionId = entry.sessionId;
-  if (typeof sessionId === "string" && sessionId.length > 0) {
-    flags.push(`id:${sessionId}`);
-  }
-  return flags;
+  return [
+    stringFlag("think", entry.thinkingLevel),
+    stringFlag("verbose", entry.verboseLevel),
+    fastFlag,
+    stringFlag("reasoning", entry.reasoningLevel),
+    stringFlag("elevated", entry.elevatedLevel),
+    entry.systemSent ? "system" : undefined,
+    entry.abortedLastRun ? "aborted" : undefined,
+    stringFlag("id", entry.sessionId),
+  ].filter((flag): flag is string => flag !== undefined);
 };
 
 function compareSessionCandidatesByUpdatedAt(

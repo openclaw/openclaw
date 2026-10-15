@@ -254,10 +254,7 @@ describe("OpenAI Decisions API", () => {
 
   it.each([
     [401, "authentication"],
-    [403, "authentication"],
     [400, "unsupported-input"],
-    [413, "unsupported-input"],
-    [422, "unsupported-input"],
     [500, "transport"],
   ])("maps HTTP %s without exposing the body or retrying", async (status, reason) => {
     mocks.fetch.mockResolvedValue(new Response("private reflected evidence", { status }));

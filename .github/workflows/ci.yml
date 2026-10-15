@@ -3354,7 +3354,7 @@ jobs:
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@90ad2b35f69faf97585ad74d28fa006d2739b7af # v7.0.0 + post-release fixes
         with:
           go-version: "1.27.1"
           cache: false

@@ -66,6 +66,23 @@ function sessionsYieldTurn(message = "Waiting for subagent completion.") {
 }
 
 describe("dedupeLatestChildCompletionRows", () => {
+  it("retains independent agents' children when they share a raw session key", () => {
+    const children = ["main", "research"].map((childAgentId, index) => ({
+      runId: `${childAgentId}-run`,
+      childSessionKey: "global",
+      childAgentId,
+      generation: index + 1,
+      task: `${childAgentId} task`,
+      createdAt: 1_000,
+      execution: {},
+    }));
+
+    expect(dedupeLatestChildCompletionRows(children).map((child) => child.runId)).toEqual([
+      "main-run",
+      "research-run",
+    ]);
+  });
+
   it("prefers the newer generation when child runs share a creation timestamp", () => {
     const childSessionKey = "agent:main:subagent:reused";
     const older = {

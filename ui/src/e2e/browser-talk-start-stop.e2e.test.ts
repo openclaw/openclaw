@@ -995,7 +995,10 @@ suite.define(() => {
             .getRequests("talk.session.close")
             .then((requests) => requests.map((request) => request.params)),
         )
-        .toEqual([{ sessionId: staleRelaySessionId }, { sessionId: currentRelaySessionId }]);
+        .toEqual([
+          { sessionId: staleRelaySessionId },
+          { sessionId: currentRelaySessionId, disposition: "abort" },
+        ]);
     });
   });
 

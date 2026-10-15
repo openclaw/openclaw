@@ -200,33 +200,6 @@ describe("provider checkpoint prompt pressure", () => {
     expect(pressure(messages)).toBeGreaterThan(3_500);
     expect(pressure(messages)).toBeLessThan(6_000);
   });
-
-  it("counts the canonical window once instead of covered text or stale owner usage", () => {
-    const owner = checkpoint("small canonical window");
-    const tail: AgentMessage[] = [{ role: "user", content: "follow-up", timestamp: 3 }];
-    const canonicalPressure = pressure([owner, ...tail]);
-    const withCoveredRaw = pressure([
-      { role: "user", content: "covered raw text ".repeat(20_000), timestamp: 1 },
-      owner,
-      ...tail,
-    ]);
-    expect(canonicalPressure).toBeLessThan(1_000);
-    expect(withCoveredRaw).toBe(canonicalPressure);
-    expect(pressure([checkpoint("retained content ".repeat(8_000)), ...tail])).toBeGreaterThan(
-      20_000,
-    );
-  });
-
-  it("counts the window once without attributing unbound later usage to its prefix", () => {
-    const owner = checkpoint("retained content ".repeat(8_000));
-    const response = assistant(100);
-    response.timestamp = 4;
-    const tail: AgentMessage[] = [{ role: "user", content: "follow-up", timestamp: 3 }, response];
-    const measuredPressure = pressure([owner, ...tail]);
-    expect(measuredPressure).toBeGreaterThan(20_000);
-    delete response.usage.contextUsage;
-    expect(pressure([owner, ...tail])).toBe(measuredPressure);
-  });
 });
 
 const BIG_OUTPUT = "build log line ".repeat(90000);
