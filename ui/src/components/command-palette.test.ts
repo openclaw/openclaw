@@ -340,45 +340,45 @@ describe("CommandPalette search", () => {
     },
   );
 
-  it.each([{ name: "60 Unicode code points", prompt: "🦞".repeat(60) }])(
-    "preserves $name as a prompt without sending searches",
-    async ({ prompt }) => {
-      const request = vi.fn(async (_method: string) => ({ models: [], results: [] }));
-      const { gateway } = createGateway(true, { methods: ["sessions.search"], request });
-      const list = vi.fn(async () => null);
-      const { palette } = await mountPalette(createContext(gateway, list));
+  it.each([
+    { name: "60 Unicode code points", prompt: "🦞".repeat(60) },
+    { name: "an internal newline", prompt: "plugins\nsettings" },
+  ])("preserves $name as a prompt without sending searches", async ({ prompt }) => {
+    const request = vi.fn(async (_method: string) => ({ models: [], results: [] }));
+    const { gateway } = createGateway(true, { methods: ["sessions.search"], request });
+    const list = vi.fn(async () => null);
+    const { palette } = await mountPalette(createContext(gateway, list));
 
-      await enterQuery(palette, prompt);
-      await vi.advanceTimersByTimeAsync(200);
-      await palette.updateComplete;
+    await enterQuery(palette, prompt);
+    await vi.advanceTimersByTimeAsync(200);
+    await palette.updateComplete;
 
-      const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
-      expect(input.value).toBe(prompt);
-      expect(list).not.toHaveBeenCalled();
-      expect(request).not.toHaveBeenCalled();
-      expectPalettePromptMode(palette);
-      for (const key of ["ArrowUp", "ArrowDown"]) {
-        const arrow = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
-        input.dispatchEvent(arrow);
-        expect(arrow.defaultPrevented).toBe(false);
-      }
-      const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
-      input.dispatchEvent(enter);
-      expect(enter.defaultPrevented).toBe(true);
-      expect(palette.onNavigate).not.toHaveBeenCalled();
-      expect(palette.onSelectSession).not.toHaveBeenCalled();
-      expect(input.value).toBe(prompt);
+    const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
+    expect(input.value).toBe(prompt);
+    expect(list).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    expectPalettePromptMode(palette);
+    for (const key of ["ArrowUp", "ArrowDown"]) {
+      const arrow = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      input.dispatchEvent(arrow);
+      expect(arrow.defaultPrevented).toBe(false);
+    }
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    input.dispatchEvent(enter);
+    expect(enter.defaultPrevented).toBe(true);
+    expect(palette.onNavigate).not.toHaveBeenCalled();
+    expect(palette.onSelectSession).not.toHaveBeenCalled();
+    expect(input.value).toBe(prompt);
 
-      input.value = "plugins";
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      await vi.advanceTimersByTimeAsync(200);
-      await palette.updateComplete;
-      expect(list).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ search: "plugins" }));
-      expect(palette.querySelector('[inert][aria-hidden="true"]')).toBeNull();
-      expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
-      expect(findPaletteOption(palette, "Plugins", true)).toBeDefined();
-    },
-  );
+    input.value = "plugins";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(200);
+    await palette.updateComplete;
+    expect(list).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ search: "plugins" }));
+    expect(palette.querySelector('[inert][aria-hidden="true"]')).toBeNull();
+    expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
+    expect(findPaletteOption(palette, "Plugins", true)).toBeDefined();
+  });
 
   it.each(["🦞"])(
     "keeps the current mode between 50 and 60 code points (%s)",

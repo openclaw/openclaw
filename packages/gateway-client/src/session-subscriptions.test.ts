@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayProtocolRequestTimeoutError } from "./protocol-request.js";
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+} from "./protocol-request.js";
 import {
   GatewaySessionMessageSubscriptionCoordinator,
   getGatewaySessionMessageSubscriptionCoordinator,
@@ -15,6 +18,32 @@ afterEach(() => {
 });
 
 describe("GatewaySessionMessageSubscriptionCoordinator", () => {
+  it("shares one in-flight wire subscription across canonical session aliases", async () => {
+    const { client, request } = createClient();
+    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client, {
+      keysEquivalent: (left, right) =>
+        left.replace("agent:main:main", "main") === right.replace("agent:main:main", "main"),
+    });
+
+    const [first, second] = await Promise.all([
+      coordinator.acquire("main"),
+      coordinator.acquire("agent:main:main"),
+    ]);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(first).not.toBe(second);
+    expect(first).toEqual({ key: "main", agentId: null });
+    expect(second).toEqual({ key: "main", agentId: null });
+
+    await coordinator.release(first);
+    expect(request).toHaveBeenCalledOnce();
+    await coordinator.release(second);
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.unsubscribe", {
+      subscriptionId: expect.any(String),
+      key: "main",
+    });
+  });
+
   it.each([
     {
       name: "configured main",
@@ -162,6 +191,43 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps a timed-out final unsubscribe retryable on its original lease", async () => {
+    vi.useFakeTimers();
+    const { client, request } = createStalledRequestClient("sessions.messages.unsubscribe", "main");
+    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
+    const subscription = await coordinator.acquire("main");
+    let failure: unknown;
+
+    void coordinator.release(subscription).catch((error: unknown) => {
+      failure = error;
+    });
+    await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+
+    expect(failure).toBeInstanceOf(GatewayProtocolRequestTimeoutError);
+    await expect(coordinator.release(subscription)).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    new GatewayProtocolRequestError({ retryable: true }),
+    new GatewayProtocolRequestTimeoutError({
+      method: "sessions.messages.unsubscribe",
+      timeoutMs: 30_000,
+      requestSent: false,
+    }),
+  ])("shares an observer when the failed unsubscribe did not commit: %s", async (error) => {
+    const { client, request } = createClient();
+    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
+    const original = await coordinator.acquire("main");
+    request.mockRejectedValueOnce(error);
+    await expect(coordinator.release(original)).rejects.toBe(error);
+    const replacement = await coordinator.acquire("main");
+    await coordinator.release(original);
+    expect(request).toHaveBeenCalledTimes(2);
+    await coordinator.release(replacement);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
   it("coalesces concurrent releases of the final lease", async () => {
     const unsubscribe = createDeferred<unknown>();
     const { client, request } = createClient(async (method, params) =>
@@ -278,6 +344,41 @@ describe("GatewaySessionMessageSubscriptionCoordinator", () => {
     expect(
       request.mock.calls.filter(([method]) => method === "sessions.messages.unsubscribe"),
     ).toHaveLength(1);
+  });
+
+  it("preserves the plain observer when an approval upgrade is unauthorized", async () => {
+    let rejectApproval = true;
+    const { client, request } = createClient(async (method, params) => {
+      if (method === "sessions.messages.unsubscribe") {
+        return {};
+      }
+      if (params.includeApprovals && rejectApproval) {
+        throw new Error("operator.approvals scope required");
+      }
+      return {
+        key: params.key,
+        ...(params.includeApprovals ? { approvalReplay: { approvals: [] } } : {}),
+      };
+    });
+    const coordinator = new GatewaySessionMessageSubscriptionCoordinator(client);
+    const plain = await coordinator.acquire("main");
+
+    await expect(coordinator.acquire("main", { includeApprovals: true })).rejects.toThrow(
+      "operator.approvals scope required",
+    );
+    expect(request).toHaveBeenCalledTimes(2);
+
+    const anotherPlain = await coordinator.acquire("main");
+    expect(request).toHaveBeenCalledTimes(2);
+
+    rejectApproval = false;
+    await expect(coordinator.acquire("main", { includeApprovals: true })).resolves.toMatchObject({
+      includeApprovals: true,
+      approvalReplay: { approvals: [] },
+    });
+    expect(request).toHaveBeenCalledTimes(3);
+    await coordinator.release(plain);
+    await coordinator.release(anotherPlain);
   });
 
   it("lets concurrent plain observers recover when the first approval request is unauthorized", async () => {

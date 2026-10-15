@@ -311,6 +311,38 @@ function button(page: ReturnType<typeof mountPage>, label: string) {
   );
 }
 
+it("recovers empty-board facts through one plugin refresh of the selected people view", async () => {
+  const page = sessionsPage();
+  const sessions = page.result.sessions.splice(0);
+  await page.connect();
+  const statuses = () =>
+    [...page.container.querySelectorAll('[role="status"]')].map((entry) =>
+      entry.textContent?.trim(),
+    );
+  expect(statuses()).toContain(page.result.warning);
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(0);
+
+  peoplePicker(page).onSelect("me");
+  await vi.advanceTimersByTimeAsync(0);
+  page.request.mockClear();
+  page.result.sessions.push(...sessions);
+  page.result.sessions[0]!.observerDigest!.headline = "New canonical headline";
+  delete page.result.warning;
+  page.fixture.emit("session.observer", { sessionKey: "agent:main:working", revision: 1 });
+  page.fixture.emit("plugin.workboard.changed", { epoch: "facts", revision: 1 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
+  expect(statuses()).toEqual([]);
+  expect(page.reads()).toBe(1);
+  expect(page.container.textContent).toContain("New canonical headline");
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(page.reads()).toBe(1);
+  expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true, involvingMe: true },
+  });
+});
+
 it("skips unchanged board events, preserves tiles on conditional reads and rereads after reconnect", async () => {
   const page = sessionsPage();
   const revision = { epoch: "sessions", revision: 1, boardId: "sessions", scope: "everyone" };
@@ -461,6 +493,31 @@ it("renders session columns, owner avatars and canonical facts without card cont
   expect(page.container.textContent).not.toContain("Fix retries");
 });
 
+it("pins a dragged session and rereads the selected people view", async () => {
+  const page = sessionsPage();
+  await page.connect();
+  peoplePicker(page).onSelect("me");
+  await vi.advanceTimersByTimeAsync(0);
+  const tile = expectDefined(page.container.querySelector("[data-session-key]"), "session tile");
+  tile.dispatchEvent(new Event("dragstart", { bubbles: true }));
+  await vi.advanceTimersByTimeAsync(0);
+  expectDefined(
+    page.container.querySelector('[data-session-column="done"]'),
+    "destination",
+  ).dispatchEvent(new Event("drop", { bubbles: true, cancelable: true }));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.move", {
+    boardId: "sessions",
+    sessionKey: "agent:main:working",
+    columnId: "done",
+  });
+  expect(page.request).toHaveBeenLastCalledWith("workboard.sessionsBoard.read", {
+    boardId: "sessions",
+    view: { includePeople: true, involvingMe: true },
+  });
+  expect(page.request.mock.calls.some(([method]) => method === "workboard.cards.move")).toBe(false);
+});
+
 it("links up to four pull requests by state without opening or dragging the session", async () => {
   const page = sessionsPage();
   page.result.sessions[0]!.pullRequests = [
@@ -518,11 +575,11 @@ it("links up to four pull requests by state without opening or dragging the sess
   });
 });
 
-it.each([
-  { kind: "sessions", destination: "current" },
-  { kind: "sessions", destination: "another board" },
-  { kind: "sessions", destination: "hidden" },
-])(
+it.each(
+  (["cards", "sessions"] as const).flatMap((kind) =>
+    (["current", "another board", "hidden"] as const).map((destination) => ({ kind, destination })),
+  ),
+)(
   "registers and pins a created $kind board while preserving $destination navigation",
   async ({ kind, destination }) => {
     const page = sessionsPage();
@@ -629,6 +686,33 @@ it("does not overwrite concurrent column edits when only renaming a sessions boa
     page.request.mock.calls.some(([method]) => method === "workboard.sessionsBoard.update"),
   ).toBe(false);
   expect(page.container.textContent).toContain("Newer column label");
+});
+
+it("saves a fallback-only edit without changing other session column fields", async () => {
+  const page = sessionsPage();
+  await page.connect();
+  button(page, "Edit board").click();
+  await vi.advanceTimersByTimeAsync(0);
+  const form = expectDefined(
+    page.container.querySelector<HTMLFormElement>(".workboard-board-draft"),
+    "board editor",
+  );
+  expectDefined(
+    form.querySelector<HTMLInputElement>('[data-column-id="working"] input[type="radio"]'),
+    "working fallback",
+  ).click();
+  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.update", {
+    boardId: "sessions",
+    patch: {
+      columns: [
+        { ...page.board.sessions.columns[0], fallback: true },
+        { ...page.board.sessions.columns[1], fallback: false },
+      ],
+    },
+  });
 });
 
 it("validates session columns inline and preserves their ids and rules when labels change", async () => {

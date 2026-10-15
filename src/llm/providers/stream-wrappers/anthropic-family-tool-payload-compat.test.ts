@@ -55,6 +55,34 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
       tool: { type: "function", function: { name: "lookup", strict: null } },
       definition: { name: "lookup", strict: null },
     },
+    {
+      label: "raw tool with boolean strict",
+      tool: { name: "lookup", parameters: querySchema(), strict: false },
+      definition: { name: "lookup", parameters: querySchema(), strict: false },
+    },
+    {
+      label: "raw tool with null strict",
+      tool: { name: "lookup", parameters: querySchema(), strict: null },
+      definition: { name: "lookup", parameters: querySchema() },
+    },
+    {
+      label: "input_schema taking precedence over parameters",
+      tool: { name: "lookup", input_schema: querySchema(), parameters: emptySchema() },
+      definition: { name: "lookup", parameters: querySchema() },
+    },
+    {
+      label: "parameters fallback for a nonobject input_schema",
+      tool: { name: "lookup", input_schema: null, parameters: querySchema() },
+      definition: { name: "lookup", parameters: querySchema() },
+    },
+    {
+      label: "schema-backed custom tool without function strict",
+      tool: {
+        type: "custom",
+        custom: { name: "lookup", input_schema: querySchema(), strict: true },
+      },
+      definition: { name: "lookup", parameters: querySchema() },
+    },
   ])("preserves $label projection", ({ tool, definition }) => {
     expect(runWrapper({ tools: [tool] })?.tools).toEqual([
       { type: "function", function: definition },
@@ -227,6 +255,38 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
         },
       },
     ]);
+  });
+
+  it("preserves provider metadata on existing OpenAI function tools", () => {
+    const payload = runWrapper({
+      tools: [
+        {
+          type: "function",
+          cache_control: { type: "ephemeral" },
+          function: {
+            name: "lookup",
+            parameters: emptySchema(),
+            description: "Lookup",
+          },
+        },
+      ],
+      tool_choice: { type: "function", function: { name: "lookup" } },
+    });
+
+    expect(payload).toEqual({
+      tools: [
+        {
+          type: "function",
+          cache_control: { type: "ephemeral" },
+          function: {
+            name: "lookup",
+            parameters: emptySchema(),
+            description: "Lookup",
+          },
+        },
+      ],
+      tool_choice: { type: "function", function: { name: "lookup" } },
+    });
   });
 
   it("projects custom tools and named custom choices as OpenAI functions", () => {

@@ -223,46 +223,50 @@ describe("doctor runtime tool schema checks", () => {
     expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
   });
 
-  it("defers MCP with published updater IN_PROGRESS=1 markers", async () => {
-    const check = createCoreHealthChecks().find(
-      (candidate) => candidate.id === "core/doctor/runtime-tool-schemas",
-    );
-    expect(check).toBeDefined();
-    const findings = await check!.detect({
-      mode: "doctor",
-      runtime: { log() {}, error() {}, exit() {} },
-      env: {
-        ...process.env,
-        OPENCLAW_UPDATE_IN_PROGRESS: "1",
-        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
-      },
-      cfg: {
-        agents: { entries: { alpha: {}, beta: {} } },
-        mcp: {
-          servers: {
-            local: { command: "npx", args: ["-y", "fixture-mcp"] },
-            remote: { transport: "streamable-http", url: "https://mcp.example.test" },
-            disabled: { command: "fixture-disabled", enabled: false },
+  it.each(["1", "0"])(
+    "defers MCP with published updater IN_PROGRESS=%s markers",
+    async (inProgress) => {
+      const check = createCoreHealthChecks().find(
+        (candidate) => candidate.id === "core/doctor/runtime-tool-schemas",
+      );
+      expect(check).toBeDefined();
+      const findings = await check!.detect({
+        mode: inProgress === "1" ? "doctor" : "lint",
+        runtime: { log() {}, error() {}, exit() {} },
+        // The published driver clears IN_PROGRESS for lint but retains the parent marker.
+        env: {
+          ...process.env,
+          OPENCLAW_UPDATE_IN_PROGRESS: inProgress,
+          OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+        },
+        cfg: {
+          agents: { entries: { alpha: {}, beta: {} } },
+          mcp: {
+            servers: {
+              local: { command: "npx", args: ["-y", "fixture-mcp"] },
+              remote: { transport: "streamable-http", url: "https://mcp.example.test" },
+              disabled: { command: "fixture-disabled", enabled: false },
+            },
           },
         },
-      },
-    });
-    expect(mocks.createBundleMcpToolRuntime).not.toHaveBeenCalled();
-    expect(mocks.createOpenClawCodingTools).toHaveBeenCalledTimes(2);
-    expect(findings).toEqual(
-      ["local", "remote"].map((serverName) =>
-        expect.objectContaining({
-          checkId: "core/doctor/runtime-tool-schemas",
-          severity: "warning",
-          path: `mcp.servers.${serverName}`,
-          message: expect.stringContaining(
-            "openclaw doctor --lint --only core/doctor/runtime-tool-schemas",
-          ),
-        }),
-      ),
-    );
-    expect(exitCodeFromFindings(findings, "error")).toBe(0);
-  });
+      });
+      expect(mocks.createBundleMcpToolRuntime).not.toHaveBeenCalled();
+      expect(mocks.createOpenClawCodingTools).toHaveBeenCalledTimes(2);
+      expect(findings).toEqual(
+        ["local", "remote"].map((serverName) =>
+          expect.objectContaining({
+            checkId: "core/doctor/runtime-tool-schemas",
+            severity: "warning",
+            path: `mcp.servers.${serverName}`,
+            message: expect.stringContaining(
+              "openclaw doctor --lint --only core/doctor/runtime-tool-schemas",
+            ),
+          }),
+        ),
+      );
+      expect(exitCodeFromFindings(findings, "error")).toBe(0);
+    },
+  );
 
   it("preserves the catalog transport when building runtime models", async () => {
     const transport = {
@@ -490,6 +494,16 @@ describe("doctor runtime tool schema checks", () => {
       }),
     );
     expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("filters MCP diagnostics through server-level deny policy", async () => {
+    mockBundleDiagnostic();
+    await expect(
+      collectRuntimeToolSchemaFindings({
+        tools: { deny: ["fuzzplugin__*"] },
+        ...mcpConfig(),
+      }),
+    ).resolves.toEqual([]);
   });
 
   it.each([

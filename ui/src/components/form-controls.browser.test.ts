@@ -132,6 +132,33 @@ afterAll(async () => {
 });
 
 describeBrowserLayout("form controls and app chrome styles", () => {
+  it("removes the mask layer from layout when the value is revealed", async () => {
+    await withBrowserPage(desktopContext.newPage(), async (page) => {
+      await setFixture(
+        page,
+        `<span
+          class="oc-sensitive-input"
+          data-sensitive-input
+          data-sensitive-mask-ready="true"
+          data-revealed="true"
+        >
+          <span class="oc-sensitive-mask" data-sensitive-mask hidden>
+            <span data-sensitive-mask-text>*******************************</span>
+          </span>
+          <input type="text" value="fake-client-secret-for-ui-proof" />
+          <button class="oc-sensitive-toggle" type="button" aria-label="Hide value">◎</button>
+        </span>`,
+        'data-theme-mode="light"',
+      );
+
+      const state = await page.locator("[data-sensitive-mask]").evaluate((mask) => ({
+        hidden: (mask as HTMLElement).hidden,
+        display: getComputedStyle(mask).display,
+      }));
+      expect(state).toEqual({ hidden: true, display: "none" });
+    });
+  });
+
   it("keeps MCP remove glyphs proportionate to settings buttons", async () => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
       await setFixture(
@@ -162,7 +189,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     });
   });
 
-  it.each(["custom-light", "dark"] as const)(
+  it.each(["custom-light", "dark", "light"] as const)(
     "preserves action fill and foreground contrast on hover in %s mode",
     async (theme) => {
       const primary = theme === "custom-light";
@@ -216,7 +243,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     },
   );
 
-  it.each(["dark"] as const)(
+  it.each(["dark", "light"] as const)(
     "keeps disabled buttons visually settled on hover and press in %s mode",
     async (theme) => {
       await withBrowserPage(desktopContext.newPage(), async (page) => {
@@ -275,7 +302,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     },
   );
 
-  it.each([393, 768])("keeps long copy beside its tile at %ipx", async (width) => {
+  it.each([393, 768, 1200])("keeps long copy beside its tile at %ipx", async (width) => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
       await page.setViewportSize({ width, height: 1000 });
       const description =
@@ -619,6 +646,13 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     {
       label: "native macOS",
       nativeClass: "openclaw-native-macos",
+      merged: false,
+      search: "hidden",
+    },
+    { label: "native nav", nativeClass: "openclaw-native-nav", merged: false, search: "hidden" },
+    {
+      label: "native web chrome",
+      nativeClass: "openclaw-native-web-chrome",
       merged: false,
       search: "hidden",
     },

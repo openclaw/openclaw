@@ -109,25 +109,27 @@ describe("Plugin link reader panel", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each([["Merged", "accent", "2026-09-23T12:31:58Z"]] as const)(
-    "shows the %s event date beside its badge",
-    async (label, tone, timestamp) => {
-      const document = {
-        ...item(),
-        createdAt: "2026-09-23T11:08:47Z",
-        updatedAt: "2026-09-25T01:00:00Z",
-        badge: { label, tone, timestamp },
-      };
-      const panel = await mount(vi.fn().mockResolvedValue(document));
-      open(panel);
-      await expectTitle(panel, document.title);
-      const time = panel.querySelector(".lr-content:not([hidden]) time");
-      const expected = timestamp ?? document.createdAt;
-      expect(time?.getAttribute("datetime")).toBe(expected);
-      expect(time?.textContent?.trim()).toBe(new Date(expected).toLocaleString());
-      expect(panel.querySelector(".lr-state")?.textContent?.trim()).toBe(label);
-    },
-  );
+  it.each([
+    ["Merged", "accent", "2026-09-23T12:31:58Z"],
+    ["Closed", "negative", "2026-09-24T09:15:00Z"],
+    ["Open", "positive", undefined],
+    ["Draft", "neutral", undefined],
+  ] as const)("shows the %s event date beside its badge", async (label, tone, timestamp) => {
+    const document = {
+      ...item(),
+      createdAt: "2026-09-23T11:08:47Z",
+      updatedAt: "2026-09-25T01:00:00Z",
+      badge: { label, tone, timestamp },
+    };
+    const panel = await mount(vi.fn().mockResolvedValue(document));
+    open(panel);
+    await expectTitle(panel, document.title);
+    const time = panel.querySelector(".lr-content:not([hidden]) time");
+    const expected = timestamp ?? document.createdAt;
+    expect(time?.getAttribute("datetime")).toBe(expected);
+    expect(time?.textContent?.trim()).toBe(new Date(expected).toLocaleString());
+    expect(panel.querySelector(".lr-state")?.textContent?.trim()).toBe(label);
+  });
 
   it("resolves document images through the reader, deduplicates attachments, and preserves source links", async () => {
     const url = "https://images.example/attachment.png";
@@ -226,6 +228,7 @@ describe("Plugin link reader panel", () => {
   it.each([
     { url: "https://images.example/wrong.png", dataUrl: "data:image/png;base64,aW1hZ2U=" },
     { url: "https://images.example/image.png", dataUrl: "data:image/svg+xml;base64,PHN2Zz4=" },
+    { url: "https://images.example/image.png", dataUrl: "https://images.example/credentialed.png" },
   ])(
     "falls back only to the original anonymous image URL after an invalid response: $dataUrl",
     async (response) => {
@@ -246,7 +249,7 @@ describe("Plugin link reader panel", () => {
     },
   );
 
-  it.each([false])(
+  it.each([false, true])(
     "preserves typing focus while opening and settling a reader (embedded: %s)",
     async (embedded) => {
       const composer = document.createElement("textarea");
@@ -302,6 +305,45 @@ describe("Plugin link reader panel", () => {
       expect(request).toHaveBeenCalledTimes(2);
     },
   );
+
+  it("receives embedded intents only from its owner and never writes standalone geometry", async () => {
+    const request = vi.fn(async (_method: string, params?: unknown) => requestedItem(params));
+    const first = await mount(request, {
+      embedded: true,
+      presented: true,
+      sessionKey: "session-a",
+    });
+    const second = await mount(request, {
+      embedded: true,
+      presented: true,
+      sessionKey: "session-b",
+    });
+    const broadcast = new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, {
+      detail: { url: itemUrl(1), open: true },
+      cancelable: true,
+    });
+    window.dispatchEvent(broadcast);
+    await Promise.all([first.updateComplete, second.updateComplete]);
+    expect(broadcast.defaultPrevented).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+
+    open(first);
+    await expectTitle(first, "Item 1");
+    expect(second.querySelector("h1")).toBeNull();
+    expect(first.querySelector(".bp--embedded")).not.toBeNull();
+    expect(first.querySelector("resizable-divider")).toBeNull();
+    expect(localStorage.getItem(storageKey)).toBeNull();
+
+    const standalone = await mount(request);
+    open(standalone, itemUrl(2));
+    await expectTitle(standalone, "Item 2");
+    first.tabsInHeader = !first.tabsInHeader;
+    await first.updateComplete;
+    second.remove();
+    expect(document.documentElement.style.getPropertyValue("--oc-link-reader-reserve-right")).toBe(
+      "560px",
+    );
+  });
 
   it("retains embedded tab history while hidden, and fences work from a previous session", async () => {
     const stale = deferredDetail();
@@ -516,6 +558,22 @@ describe("Plugin link reader panel", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps at most 30 history entries in this mounted panel", async () => {
+    const panel = await mount(
+      vi.fn(async (_method: string, params?: unknown) => requestedItem(params)),
+    );
+    for (let number = 1; number <= 31; number++) {
+      open(panel, itemUrl(number));
+      await expectTitle(panel, "Item " + number);
+    }
+    for (let number = 30; number >= 2; number--) {
+      button(panel, "Back").click();
+      await expectTitle(panel, "Item " + number);
+    }
+    expect(button(panel, "Back").disabled).toBe(true);
+    expect(button(panel, "Forward").disabled).toBe(false);
+  });
+
   it("aborts superseded requests and ignores old navigation and client responses", async () => {
     const first = deferredDetail();
     const second = deferredDetail();
@@ -620,6 +678,10 @@ describe("Plugin link reader panel", () => {
   });
 
   it.each([
+    {
+      error: new Error("not available"),
+      message: "Try again or open the original",
+    },
     {
       error: new GatewayRequestError({
         code: "UNAVAILABLE",

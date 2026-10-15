@@ -329,6 +329,47 @@ describe("registerSlackAgentEvents", () => {
     },
   );
 
+  it.each(["agent_session_stopped", "agent_session_title_changed"])(
+    "reads a recorded Assistant thread owner after restart for %s",
+    async (type) => {
+      const harness = createSessionEventHarness();
+      harness.ctx.isSlackAgentView = async () => false;
+      await harness.recordSession({
+        sessionKey: "agent:main:main:thread:1712345678.000001",
+        peerId: "U123",
+        threadId: "1712345678.000001",
+      });
+      harness.readThread.mockResolvedValue({
+        ok: true,
+        messages: [{ metadata: { event_type: "assistant_thread_context", event_payload: {} } }],
+      });
+      await harness.getHandler(type)?.({
+        event: {
+          type,
+          channel: "D123",
+          thread_ts: "1712345678.000001",
+          user: "U123",
+          event_ts: "1712345679.000001",
+          title: "Assistant session",
+          streaming_message_ts: [],
+        },
+        body: {},
+      });
+      const sessionKey = "agent:main:main:thread:1712345678.000001";
+      if (type === "agent_session_stopped") {
+        expect(slashMocks.dispatchMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ctx: expect.objectContaining({ CommandTargetSessionKey: sessionKey }),
+          }),
+        );
+      } else {
+        expect(prepareSessionEntryPatch).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionKey }),
+        );
+      }
+    },
+  );
+
   it("reports a failed thread lookup without stopping another DM session or clearing its status", async () => {
     const harness = createSessionEventHarness();
     harness.ctx.isSlackAgentView = async () => false;
