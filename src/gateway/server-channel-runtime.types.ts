@@ -1,13 +1,5 @@
-// Gateway channel lifecycle options and read-only runtime snapshot types.
+// Read-only channel runtime snapshots and per-account lifecycle options.
 import type { ChannelId, ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
-import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import type { SubsystemLogger } from "../logging/subsystem.js";
-import type { PluginRegistry } from "../plugins/registry.js";
-import type { PluginRuntimeChannel } from "../plugins/runtime/types-channel.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { GatewayContextResolver } from "./server-methods/types.js";
 
 export type ChannelRuntimeSnapshotOptions = {
   channelId?: ChannelId;
@@ -54,23 +46,4 @@ export type StopChannelOptions = {
   routeHandoff?: boolean;
   /** Report unfinished cleanup to the caller after the bounded stop attempt. */
   strict?: boolean;
-};
-
-export type ChannelManagerOptions = {
-  scheduler: GatewayScheduler;
-  getRuntimeConfig: () => OpenClawConfig;
-  getPluginRegistry: () => PluginRegistry;
-  resolveGatewayContext?: GatewayContextResolver;
-  channelLogs: Partial<Record<ChannelId, SubsystemLogger>>;
-  channelRuntimeEnvs: Partial<Record<ChannelId, RuntimeEnv>>;
-  /** Supply the complete createPluginRuntime().channel surface; partial stubs are unsupported. */
-  channelRuntime?: PluginRuntimeChannel;
-  /** Resolve the same complete surface only when a channel account starts. */
-  resolveChannelRuntime?: () => PluginRuntimeChannel | Promise<PluginRuntimeChannel>;
-  startupTrace?: { measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T> };
-  deferStartupAccountStartsUntil?: Promise<void>;
-  getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
-  ambientAutostartSuppressedChannelIds?: ReadonlySet<string>;
-  tryRecoverAutostartSuppression?: () => boolean;
-  isClosing?: () => boolean;
 };

@@ -79,9 +79,9 @@ import {
   type ChannelAccountLifetime,
   type ChannelAccountStopOutcome,
 } from "./server-channel-account-lifetime.js";
+import type { ChannelManagerOptions } from "./server-channel-manager.types.js";
 import type {
   ChannelAccountStartOutcome,
-  ChannelManagerOptions,
   ChannelRuntimeSnapshot,
   ChannelRuntimeSnapshotOptions,
   StartChannelOptions,
