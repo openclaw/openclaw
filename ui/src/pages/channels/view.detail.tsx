@@ -200,7 +200,11 @@ export function renderChannelDetail(params: {
     ),
   );
   return (
-    <openclaw-modal-dialog label={params.label} onModal-cancel={() => params.onClose()}>
+    <openclaw-modal-dialog
+      label={params.label}
+      style={{ "--openclaw-modal-width": "680px" }}
+      onModal-cancel={() => params.onClose()}
+    >
       <div class="channels-detail">
         <div class="channels-detail__header">
           <LitContent
@@ -211,23 +215,6 @@ export function renderChannelDetail(params: {
             }
           />
           <div class="channels-detail__header-actions">
-            <a
-              class="btn btn--sm"
-              href={channelDocsUrl(params.channelId)}
-              target="_blank"
-              rel="noreferrer"
-            >
-              {t("common.docs")}
-            </a>
-            <button
-              type="button"
-              class="btn btn--sm"
-              title={params.props.canAdmin ? "" : t("channels.hub.adminRequired")}
-              disabled={!params.props.canAdmin}
-              onClick={() => params.onSetup()}
-            >
-              {t("channels.hub.runSetup")}
-            </button>
             <button
               type="button"
               class="btn channels-detail__close"
@@ -269,6 +256,26 @@ export function renderChannelDetail(params: {
             />
           )}
         </div>
+
+        <openclaw-modal-actions class="channels-detail__footer">
+          <a
+            class="btn btn--sm"
+            href={channelDocsUrl(params.channelId)}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {t("common.docs")}
+          </a>
+          <button
+            type="button"
+            class="btn btn--sm"
+            title={params.props.canAdmin ? "" : t("channels.hub.adminRequired")}
+            disabled={!params.props.canAdmin}
+            onClick={() => params.onSetup()}
+          >
+            {t("channels.hub.runSetup")}
+          </button>
+        </openclaw-modal-actions>
       </div>
     </openclaw-modal-dialog>
   );

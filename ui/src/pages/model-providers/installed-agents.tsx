@@ -7,7 +7,6 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import {
   SettingsEmpty,
-  SettingsLoadingSkeleton,
   SettingsSection,
   SettingsStatus,
   SettingsToggleRow,
@@ -66,6 +65,10 @@ export class InstalledAgentsController {
 
   private get loading(): boolean {
     return this.request !== null;
+  }
+
+  get initialized(): boolean {
+    return !this.available() || this.agents !== null || this.error !== null;
   }
 
   hostUpdate(): void {
@@ -379,14 +382,7 @@ export class InstalledAgentsController {
                   </div>
                 </div>
               </Show>
-              <Show
-                when={view().agents !== null}
-                fallback={
-                  <Show when={!view().error}>
-                    <SettingsLoadingSkeleton rows={4} />
-                  </Show>
-                }
-              >
+              <Show when={view().agents !== null}>
                 <For
                   each={view().agents ?? []}
                   keyed={(agent) => agent.id}
