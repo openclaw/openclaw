@@ -17,6 +17,7 @@ import {
   type RequiredParamGroup,
 } from "./agent-tools.params.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
+import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type {
   ToolCallSummary,
@@ -506,7 +507,24 @@ export function handleToolExecutionStart(
             questionId,
             questions,
             config: ctx.params.config,
-            send: publishPrompt,
+            send: async (payload) => {
+              const delivered = await publishPrompt(payload);
+              if (
+                delivered !== false &&
+                toolName === "ask_user" &&
+                !ctx.state.unsubscribed &&
+                payload.text?.trim()
+              ) {
+                ctx.state.messagingToolSentTexts.push(payload.text);
+                ctx.state.messagingToolSentTextsNormalized.push(
+                  normalizeTextForComparison(payload.text),
+                );
+                // The confirmed prompt is progress. Its marker has no payload to replay as a final reply.
+                ctx.state.messagingToolSourceReplyPayloads.push({ sourceReplyFinal: false });
+                ctx.trimMessagingToolSent();
+              }
+              return delivered;
+            },
           });
         })
         .then(

@@ -180,6 +180,7 @@ export function completeEmbeddedAttemptResult(
     yieldDetected: input.lifecycle.readYieldState().yieldDetected,
     yieldAcknowledgment: input.lifecycle.readYieldState().yieldAcknowledgment,
     yieldMessageWaitRegistered: input.lifecycle.readYieldState().yieldMessageWaitRegistered,
+    runtimeContinuationStarted: input.prepared.toolBase.runtimeContinuationStarted || undefined,
     didDeliverSourceReplyViaMessageTool: hasDeliveredSourceReply(),
   };
   const terminal = projectAgentRunAttemptTerminal(state.terminal);

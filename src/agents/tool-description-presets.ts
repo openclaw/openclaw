@@ -174,9 +174,11 @@ export function describeSessionStatusTool(): string {
 }
 
 /** Describes the ask_user tool and its decision-only use policy. */
-export function describeAskUserTool(): string {
+export function describeAskUserTool(options?: { durableHandoff?: boolean }): string {
   return [
-    "Ask the human user 1-3 structured questions and wait for their answer; `multiSelect` allows picking several options and `timeoutSeconds` bounds the wait.",
+    options?.durableHandoff
+      ? "Ask the human user 1-3 structured questions; `multiSelect` allows picking several options and `timeoutSeconds` bounds the answer deadline. Durably accepted ordinary questions hand off this turn for an authorized new turn after settlement; other questions wait inline."
+      : "Ask the human user 1-3 structured questions and wait for their answer; `multiSelect` allows picking several options and `timeoutSeconds` bounds the wait.",
     "Use only when blocked on a decision genuinely theirs that cannot be resolved from the request, code, or sensible defaults; never ask whether to proceed or confirm a plan.",
     "Ask exactly one question per call unless several answers must be submitted together; one single-select question uses native controls on supported messaging channels.",
     "Put every selectable choice in `options`, never only in the question text. Put the recommended option first and suffix its label with ` (Recommended)`.",

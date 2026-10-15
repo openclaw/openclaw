@@ -447,7 +447,20 @@ type AgentSessionWriterAdmissionSnapshot = {
 };
 
 export async function assertAgentHarnessRunAdmission(
-  params: RunEmbeddedAgentParams,
+  params: Pick<
+    RunEmbeddedAgentParams,
+    | "abortSignal"
+    | "admittedRunContext"
+    | "agentHarnessId"
+    | "agentId"
+    | "config"
+    | "modelSelectionLocked"
+    | "replyOperation"
+    | "sessionId"
+    | "sessionKey"
+    | "sessionPersistence"
+    | "sessionTarget"
+  >,
   runtimeScope?: SessionTranscriptRuntimeScope,
 ): Promise<AgentSessionWriterAdmissionSnapshot | undefined> {
   if (params.sessionPersistence === "detached") {

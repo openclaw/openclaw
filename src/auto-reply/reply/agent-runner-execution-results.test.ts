@@ -351,6 +351,19 @@ describe("executeAgentTurn: result and tool delivery", () => {
     },
   );
 
+  it("preserves the existing no-send result through the embedded tool callback", async () => {
+    const onToolResult = vi.fn(async () => false);
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await expect(params.onToolResult?.({ text: "expired question" })).resolves.toBe(false);
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const input = createMinimalRunAgentTurnParams({ opts: { onToolResult } });
+    expect((await executeAgentTurn(input)).kind).toBe("success");
+    await Promise.all(input.pendingToolTasks);
+    expect(onToolResult).toHaveBeenCalledOnce();
+  });
+
   it("delivers streamed tool results in callback order even when dispatch latency differs", async () => {
     const deliveryOrder: string[] = [];
     const onToolResult = vi.fn(async (payload: { text?: string }) => {

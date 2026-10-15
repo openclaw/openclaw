@@ -285,17 +285,20 @@ export async function runEmbeddedFallbackCandidate(
                   turn.replyOperation?.recordActivity();
                   const { text, skip } = params.presentation.normalizeStreamingText(payload);
                   if (skip) {
-                    return;
+                    return false;
                   }
                   if (text !== undefined) {
                     await turn.typingSignals.signalTextDelta(text);
                   }
-                  await turn.opts?.onToolResult?.({ ...payload, text });
+                  return await turn.opts?.onToolResult?.({ ...payload, text });
                 });
                 // Keep later results best-effort while exposing this delivery to awaiting owners.
-                toolResultChain = delivery.catch((err: unknown) => {
-                  logVerbose(`tool result delivery failed: ${String(err)}`);
-                });
+                toolResultChain = delivery.then(
+                  () => {},
+                  (err: unknown) => {
+                    logVerbose(`tool result delivery failed: ${String(err)}`);
+                  },
+                );
                 const task = toolResultChain.finally(() => {
                   turn.pendingToolTasks.delete(task);
                 });

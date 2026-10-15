@@ -59,3 +59,37 @@ export function writeOpenAiResponsesText(
   ];
   writeOpenAiResponsesSse(response, events);
 }
+
+export function writeOpenAiResponsesFunctionCalls(
+  response: ServerResponse,
+  params: {
+    responseId: string;
+    calls: readonly { id: string; call_id: string; name: string; arguments: string }[];
+  },
+): void {
+  const output = params.calls.map((call) => ({ ...call, type: "function_call" }));
+  const events: Record<string, unknown>[] = output.flatMap((item, output_index) => [
+    {
+      type: "response.output_item.added",
+      output_index,
+      item: { ...item, arguments: "" },
+    },
+    {
+      type: "response.function_call_arguments.delta",
+      output_index,
+      item_id: item.id,
+      delta: item.arguments,
+    },
+    { type: "response.output_item.done", output_index, item },
+  ]);
+  events.push({
+    type: "response.completed",
+    response: {
+      id: params.responseId,
+      status: "completed",
+      output,
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    },
+  });
+  writeOpenAiResponsesSse(response, events);
+}

@@ -17,11 +17,11 @@ import { buildAgentHarnessQuestionPromptPayload } from "../harness/user-input-br
 /** Tools whose call opens a question a person must answer before the turn continues. */
 export type QuestionPromptToolName = "ask_user" | "secrets";
 
-/** Publishes one prompt into the originating conversation. */
+/** Publishes one prompt into the originating conversation; false means it was not sent. */
 export type QuestionPromptSend = (
   payload: ReplyPayload,
   options?: { signal?: AbortSignal },
-) => void | Promise<void>;
+) => boolean | void | Promise<boolean | void>;
 
 /** A run's own way to show a question prompt, plus the channel it would appear in. */
 export type QuestionPromptDelivery = {
@@ -90,10 +90,14 @@ export async function sendQuestionToolPrompt(params: {
   signal?: AbortSignal;
 }): Promise<void> {
   const { questionId, questions } = params;
-  const send: QuestionPromptSend = (payload) =>
-    runWithQuestionChannelDeliveries([questionId], () =>
+  const send: QuestionPromptSend = async (payload) => {
+    const delivered = await runWithQuestionChannelDeliveries([questionId], () =>
       params.signal ? params.send(payload, { signal: params.signal }) : params.send(payload),
     );
+    if (delivered === false) {
+      throw new Error("question prompt delivery was suppressed");
+    }
+  };
   if (params.toolName === "secrets") {
     const binding = questions[0]?.secretStore;
     if (!binding) {

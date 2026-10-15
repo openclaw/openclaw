@@ -3,6 +3,7 @@ import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.j
 import { ReplyDispatchDeliveryError } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
+import { gatewayStub, validArgs } from "./ask-user-tool.gateway.test-fixture.js";
 import {
   cancelAskUserPromptDelivery,
   createAskUserTool,
@@ -14,10 +15,6 @@ import {
 } from "./ask-user-tool.js";
 import { resetPendingAskUserQuestionsForTest } from "./ask-user-tool.test-support.js";
 
-type GatewayCall = Extract<
-  NonNullable<Parameters<typeof createAskUserTool>[0]["gatewayCall"]>,
-  (...args: never[]) => unknown
->;
 type SentPrompt = Parameters<
   NonNullable<Parameters<typeof createAskUserTool>[0]["questionPrompt"]>["send"]
 >[0];
@@ -26,50 +23,6 @@ const replyDispatchOutcomeModuleUrl = new URL(
   "../../auto-reply/reply/reply-dispatch-outcome.ts",
   import.meta.url,
 ).href;
-
-const validArgs = {
-  questions: [
-    {
-      id: "deploy_target",
-      header: "Deployment target",
-      question: "Where should this deploy?",
-      options: [
-        { label: "Staging (Recommended)", description: "Safer default" },
-        { label: "Production" },
-      ],
-    },
-  ],
-};
-
-function gatewayStub(
-  implementation: (
-    method: string,
-    opts: Record<string, unknown>,
-    params: Record<string, unknown>,
-    extra?: { signal?: AbortSignal },
-  ) => Promise<unknown>,
-) {
-  const started = {
-    "question.request": createDeferred(),
-    "question.waitAnswer": createDeferred(),
-  };
-  const mock = vi.fn((...args: Parameters<typeof implementation>) => {
-    const response = implementation(...args);
-    const [method] = args;
-    // Callback setup has completed, but the owner's later prompt-delivery phase
-    // is not implied by starting either RPC.
-    if (method === "question.request" || method === "question.waitAnswer") {
-      started[method].resolve();
-    }
-    return response;
-  });
-  return {
-    mock,
-    call: mock as unknown as GatewayCall,
-    waitForCall: (method: keyof typeof started) =>
-      withTestTimeout(started[method].promise, 1_000, `ask_user did not start ${method}`),
-  };
-}
 
 function requestedQuestionId(mock: ReturnType<typeof gatewayStub>["mock"]): string {
   const requestCall = mock.mock.calls.find(([method]) => method === "question.request");
@@ -462,7 +415,7 @@ describe("ask_user execution", () => {
       gatewayCall: gateway.call,
     });
     const first = tool.execute("call-first", validArgs);
-    await gateway.waitForCall("question.waitAnswer");
+    await gateway.waitForCall("question.waitAnswer", first);
     expect(finishWait).toBeTypeOf("function");
 
     await expect(tool.execute("call-second", validArgs)).rejects.toThrow(
@@ -491,7 +444,7 @@ describe("ask_user execution", () => {
       sessionKey: "agent:main:abort",
       gatewayCall: gateway.call,
     }).execute("call-abort", validArgs, controller.signal);
-    await gateway.waitForCall("question.waitAnswer");
+    await gateway.waitForCall("question.waitAnswer", pending);
     expect(gateway.mock.mock.calls.some((call) => call[0] === "question.waitAnswer")).toBe(true);
     const questionId = requestedQuestionId(gateway.mock);
 
@@ -521,7 +474,7 @@ describe("ask_user execution", () => {
       sessionKey: "agent:main:register-abort",
       gatewayCall: gateway.call,
     }).execute("call-register-abort", validArgs, controller.signal);
-    await gateway.waitForCall("question.request");
+    await gateway.waitForCall("question.request", pending);
     expect(gateway.mock.mock.calls.some((call) => call[0] === "question.request")).toBe(true);
     const questionId = requestedQuestionId(gateway.mock);
 
@@ -563,7 +516,7 @@ describe("ask_user execution", () => {
       validArgs,
       controller.signal,
     );
-    await gateway.waitForCall("question.request");
+    await gateway.waitForCall("question.request", pending);
     expect(finishRegistration).toBeTypeOf("function");
 
     controller.abort(new Error("stop before registration completed"));
@@ -605,7 +558,7 @@ describe("ask_user execution", () => {
       "call-register-image",
       validArgs,
     );
-    await gateway.waitForCall("question.request");
+    await gateway.waitForCall("question.request", pending);
     expect(finishRegistration).toBeTypeOf("function");
     const questionId = requestedQuestionId(gateway.mock);
     const steer = vi.fn(async () => undefined);
@@ -841,7 +794,7 @@ describe("ask_user execution", () => {
       sessionKey: "agent:main:claim",
       gatewayCall: gateway.call,
     }).execute("call-claim", validArgs);
-    await gateway.waitForCall("question.waitAnswer");
+    await gateway.waitForCall("question.waitAnswer", pending);
     expect(finishWait).toBeTypeOf("function");
     const questionId = requestedQuestionId(gateway.mock);
     const steer = vi.fn(async () => undefined);
@@ -909,7 +862,7 @@ describe("ask_user execution", () => {
       `call-${suffix}`,
       validArgs,
     );
-    await gateway.waitForCall("question.waitAnswer");
+    await gateway.waitForCall("question.waitAnswer", pending);
     expect(finishWait).toBeTypeOf("function");
     const questionId = requestedQuestionId(gateway.mock);
     const steer = vi.fn(async () => undefined);
@@ -989,7 +942,7 @@ describe("ask_user execution", () => {
       "call-resolve-loss",
       validArgs,
     );
-    await gateway.waitForCall("question.waitAnswer");
+    await gateway.waitForCall("question.waitAnswer", pending);
     expect(finishWait).toBeTypeOf("function");
     const steer = vi.fn(async () => undefined);
     const persistApproved = vi.fn(async () => undefined);
@@ -1032,7 +985,7 @@ describe("ask_user execution", () => {
       sessionKey: "agent:main:terminal-race",
       gatewayCall: gateway.call,
     }).execute("call-terminal-race", validArgs);
-    await gateway.waitForCall("question.waitAnswer");
+    await gateway.waitForCall("question.waitAnswer", pending);
     expect(finishWait).toBeTypeOf("function");
     const steer = vi.fn(async () => undefined);
 

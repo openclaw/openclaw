@@ -217,6 +217,7 @@ export function projectSettledProviderFailureAttempt(
     setup: { sessionAgentId: "main" },
     lifecycle: { readYieldState: () => ({ yieldDetected: false }) },
     prepared: {
+      toolBase: { runtimeContinuationStarted: false },
       bootstrap: { bootstrapPromptWarning: {} },
       systemPrompt: { systemPromptReport: undefined },
       sessionRuntime: {

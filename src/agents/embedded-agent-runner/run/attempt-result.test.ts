@@ -21,6 +21,7 @@ import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-pr
 import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
 import { completeEmbeddedAttemptResult, createAttemptCarryover } from "./attempt-result.js";
 import { resolveSettledToolTerminalContinuationInstruction } from "./incomplete-turn-recovery.js";
+import { hasYieldContinuationEvidence } from "./incomplete-turn-resolution.js";
 import { buildPayloads } from "./payloads.test-helpers.js";
 import { normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
 import type { EmbeddedRunAttemptResult, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
@@ -50,6 +51,7 @@ function createResultFixture(params?: {
   yieldDetected?: boolean;
   yieldAcknowledgment?: string;
   yieldMessageWaitRegistered?: boolean;
+  runtimeContinuationStarted?: boolean;
   assistantTexts?: readonly string[];
   allowedToolNames?: string[];
   toolMetas?: Array<{
@@ -152,6 +154,7 @@ function createResultFixture(params?: {
       }),
     },
     prepared: {
+      toolBase: { runtimeContinuationStarted: params?.runtimeContinuationStarted ?? false },
       toolCatalog: {
         toolSearchRunPlan: { liveAllowedToolNames: new Set(params?.allowedToolNames) },
       },
@@ -543,6 +546,11 @@ describe("attempt result projection", () => {
       });
     },
   );
+
+  it("retains native question custody as continuation evidence for the yielded attempt", () => {
+    const result = completeResult({ yieldDetected: true, runtimeContinuationStarted: true });
+    expect(hasYieldContinuationEvidence(result)).toBe(true);
+  });
 
   it("defaults missing replay metadata to replay-unsafe", () => {
     const attempt = completeResult();
