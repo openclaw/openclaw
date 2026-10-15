@@ -48,7 +48,7 @@ const RETIRED_XAI_MODELS = modelTable({
   "grok-4.3": "grok-4-fast-reasoning grok-4-1-fast-reasoning grok-4-0709",
   "grok-imagine-image-quality": "grok-imagine-image-pro",
 });
-const RETIRED_OPENAI_MODELS = modelTable({
+const LEGACY_CODEX_AND_COPILOT_MODELS = modelTable({
   "gpt-5.3-codex": "gpt-5.2-codex gpt-5.1-codex gpt-5-codex",
   "gpt-5.5-pro": "gpt-5-pro gpt-5.2-pro",
   "gpt-5.4-nano": "gpt-4.1-nano gpt-5-nano",
@@ -169,12 +169,10 @@ function canonicalizeKnownModelRef(value: string): string | null {
       ? applyRetiredModelTable(normalizedModel, RETIRED_GROQ_MODELS)
       : normalizedProvider === "xai"
         ? applyRetiredModelTable(normalizedModel, RETIRED_XAI_MODELS)
-        : normalizedProvider === "openai" ||
-            normalizedProvider === "openai-codex" ||
-            normalizedProvider === "github-copilot"
+        : normalizedProvider === "openai-codex" || normalizedProvider === "github-copilot"
           ? applyRetiredModelTable(
               normalizedModel,
-              RETIRED_OPENAI_MODELS,
+              LEGACY_CODEX_AND_COPILOT_MODELS,
               normalizedProvider === "openai-codex" ? RETIRED_CODEX_MODEL_OVERRIDES : undefined,
             )
           : undefined;

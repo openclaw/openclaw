@@ -81,27 +81,27 @@ async function writeBillingFixture(
 
 describe("Doctor model billing route migration", () => {
   it.each([
-    { multiagent: false, successor: "gpt-5.6-luna" },
-    { multiagent: true, successor: "gpt-5.4-mini" },
+    { multiagent: false, successor: "gpt-5.6-sol" },
+    { multiagent: true, successor: "gpt-5.6-sol" },
   ])(
     "records inherited billing changes once (multiagent: $multiagent)",
     async ({ multiagent, successor }) => {
       await withDoctorConfigPreflightHome(async (home) => {
-        const { configPath } = await writeBillingFixture(home, "gpt-4o-mini", {
+        const { configPath } = await writeBillingFixture(home, "gpt-5-chat-latest", {
           defaults: {
-            model: "openai/gpt-5.4",
-            models: { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } },
-            heartbeat: { model: "openai/gpt-4o-mini" },
-            subagents: { model: "openai/gpt-4o-mini" },
+            model: "openai/gpt-5.6-sol",
+            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+            heartbeat: { model: "openai/gpt-5-chat-latest" },
+            subagents: { model: "openai/gpt-5-chat-latest" },
           },
           ...(multiagent ? { ownership: "explicit" } : {}),
           entries: multiagent
             ? {
                 main: { heartbeat: {} },
                 metered: {
-                  heartbeat: { model: "openai/gpt-5.4" },
-                  subagents: { model: "openai/gpt-5.4" },
-                  models: { "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } } },
+                  heartbeat: { model: "openai/gpt-5.6-sol" },
+                  subagents: { model: "openai/gpt-5.6-sol" },
+                  models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } } },
                 },
               }
             : { main: {} },
@@ -112,7 +112,7 @@ describe("Doctor model billing route migration", () => {
         await observeDoctorConfigStep("write-config-health", () =>
           runWriteConfigHealth(ctx, { runPostWriteRepairs: false }),
         );
-        const expectedRoute = `openai/gpt-4o-mini via metered API-key profile openai:default -> openai/${successor} via subscription/OAuth profile openai:chatgpt-default.`;
+        const expectedRoute = `openai/gpt-5-chat-latest via metered API-key profile openai:default -> openai/${successor} via subscription/OAuth profile openai:chatgpt-default.`;
         expect(ctx.updateWarnings).toEqual([
           expect.stringContaining(
             `Billing route changed for agents.defaults.heartbeat.model (agent main): ${expectedRoute}`,

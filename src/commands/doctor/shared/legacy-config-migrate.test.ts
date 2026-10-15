@@ -1237,7 +1237,7 @@ describe("legacy model compat migrate", () => {
     });
     expect(res.config?.models?.providers?.google?.models?.[0]?.id).toBe("gemini-3.1-pro-preview");
     expect(res.config?.models?.providers?.myproxy?.models?.[0]?.id).toBe(canonical);
-    expect(res.config?.models?.providers?.openai?.models?.[0]?.id).toBe("gpt-5.5");
+    expect(res.config?.models?.providers?.openai?.models?.[0]?.id).toBe("gpt-4o");
   });
 
   it("canonicalizes persisted OpenAI GPT-5.6 aliases without affecting GitHub Copilot", () => {
@@ -1319,19 +1319,19 @@ describe("legacy model compat migrate", () => {
       agents: {
         defaults: {
           models: {
-            "openai/gpt-4o": {
+            "github-copilot/gpt-4o": {
               params: {
                 reasoning: { effort: "high", budget: 100 },
                 tags: ["stable"],
-                fallbacks: ["openai/gpt-4"],
+                fallbacks: ["github-copilot/gpt-4"],
               },
               streaming: false,
             },
-            "openai/gpt-4": {
+            "github-copilot/gpt-4": {
               params: {
                 reasoning: { effort: "low", summary: "auto" },
                 tags: ["stable"],
-                fallbacks: ["openai/gpt-5.5"],
+                fallbacks: ["github-copilot/gpt-5.5"],
               },
               alias: "legacy-four",
             },
@@ -1341,26 +1341,26 @@ describe("legacy model compat migrate", () => {
     });
 
     expect(res.config?.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.5": {
+      "github-copilot/gpt-5.5": {
         params: {
           reasoning: { effort: "high", budget: 100, summary: "auto" },
           tags: ["stable"],
-          fallbacks: ["openai/gpt-5.5"],
+          fallbacks: ["github-copilot/gpt-5.5"],
         },
         streaming: false,
         alias: "legacy-four",
       },
     });
     expect(res.changes.filter((change) => change.includes("Merged"))).toEqual([
-      'Merged config.agents.defaults.models key "openai/gpt-4" into "openai/gpt-5.5"; kept existing values for conflicting fields: params.reasoning.effort.',
+      'Merged config.agents.defaults.models key "github-copilot/gpt-4" into "github-copilot/gpt-5.5"; kept existing values for conflicting fields: params.reasoning.effort.',
     ]);
   });
 
   it("filters blocked keys recursively from both model collision sides", () => {
     const raw =
-      '{"agents":{"defaults":{"models":{"openai/gpt-5.5":{"__proto__":{"polluted":true},"alias":"canonical-five","params":{"nested":{"__proto__":{"polluted":true},"model":"openai/gpt-4o"}}},"openai/gpt-4":{"alias":"legacy-four","__proto__":{"polluted":true},"streaming":false,"params":{"nested":{"__proto__":{"polluted":true},"added":true}}}}}}}';
+      '{"agents":{"defaults":{"models":{"github-copilot/gpt-5.5":{"__proto__":{"polluted":true},"alias":"canonical-five","params":{"nested":{"__proto__":{"polluted":true},"model":"github-copilot/gpt-4o"}}},"github-copilot/gpt-4":{"alias":"legacy-four","__proto__":{"polluted":true},"streaming":false,"params":{"nested":{"__proto__":{"polluted":true},"added":true}}}}}}}';
     const res = migrateLegacyConfigForTest(JSON.parse(raw));
-    const merged = res.config?.agents?.defaults?.models?.["openai/gpt-5.5"] as Record<
+    const merged = res.config?.agents?.defaults?.models?.["github-copilot/gpt-5.5"] as Record<
       string,
       unknown
     >;
@@ -1375,14 +1375,14 @@ describe("legacy model compat migrate", () => {
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
     expect(merged).toEqual({
       alias: "canonical-five",
-      params: { nested: { model: "openai/gpt-5.5", added: true } },
+      params: { nested: { model: "github-copilot/gpt-5.5", added: true } },
       streaming: false,
     });
   });
 
   it("does not invoke prototype setters when copying the rewritten config root", () => {
     const raw = JSON.parse(
-      '{"__proto__":{"polluted":true},"agents":{"defaults":{"model":"openai/gpt-4"}}}',
+      '{"__proto__":{"polluted":true},"agents":{"defaults":{"model":"github-copilot/gpt-4"}}}',
     ) as Record<string, unknown>;
     const res = migrateLegacyConfigForTest(raw);
     const config = res.config as unknown as Record<string, unknown>;
@@ -1390,7 +1390,7 @@ describe("legacy model compat migrate", () => {
     expect(Object.getPrototypeOf(config)).toBe(Object.prototype);
     expect(Object.hasOwn(config, "__proto__")).toBe(true);
     expect(config.polluted).toBeUndefined();
-    expect(res.config?.agents?.defaults?.model).toBe("openai/gpt-5.5");
+    expect(res.config?.agents?.defaults?.model).toBe("github-copilot/gpt-5.5");
   });
 
   it("reports malformed scalar collisions without claiming equal values conflict", () => {
@@ -1398,18 +1398,18 @@ describe("legacy model compat migrate", () => {
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.5": false,
-            "openai/gpt-4": true,
-            "openai/gpt-4o": false,
+            "github-copilot/gpt-5.5": false,
+            "github-copilot/gpt-4": true,
+            "github-copilot/gpt-4o": false,
           },
         },
       },
     });
 
-    expect(res.config?.agents?.defaults?.models?.["openai/gpt-5.5"]).toBe(false);
+    expect(res.config?.agents?.defaults?.models?.["github-copilot/gpt-5.5"]).toBe(false);
     expect(res.changes.filter((change) => change.includes("Merged"))).toEqual([
-      'Merged config.agents.defaults.models key "openai/gpt-4" into "openai/gpt-5.5"; kept existing values for conflicting fields: value.',
-      'Merged config.agents.defaults.models key "openai/gpt-4o" into "openai/gpt-5.5".',
+      'Merged config.agents.defaults.models key "github-copilot/gpt-4" into "github-copilot/gpt-5.5"; kept existing values for conflicting fields: value.',
+      'Merged config.agents.defaults.models key "github-copilot/gpt-4o" into "github-copilot/gpt-5.5".',
     ]);
   });
 

@@ -4,6 +4,43 @@ import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.rost
 import { migrateLegacyConfigForTest } from "./legacy-config-migrate.apply.test-support.js";
 
 describe("legacy model compat migrate", () => {
+  it("preserves OpenAI selections until the retirement owner can evaluate their route", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini@openai:work",
+            fallbacks: ["openai/gpt-4o", "openai/gpt-5.1", "openai/gpt-5-chat-latest"],
+          },
+          modelPolicy: { allow: ["openai/gpt-4.1-mini", "openai/gpt-5.1"] },
+          models: { "openai/gpt-4.1-mini": { alias: "small", params: { temperature: 0.2 } } },
+        },
+      },
+      models: {
+        providers: {
+          openai: { models: [{ id: "gpt-4.1-mini", name: "Small" }] },
+        },
+      },
+    };
+    const result = migrateLegacyConfigForTest(raw);
+    const config = result.config ?? raw;
+
+    expect(config.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-4.1-mini@openai:work",
+      fallbacks: ["openai/gpt-4o", "openai/gpt-5.1", "openai/gpt-5-chat-latest"],
+    });
+    expect(config.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "openai/gpt-4.1-mini",
+      "openai/gpt-5.1",
+    ]);
+    expect(config.agents?.defaults?.models).toEqual({
+      "openai/gpt-4.1-mini": { alias: "small", params: { temperature: 0.2 } },
+    });
+    expect(config.models?.providers?.openai?.models).toEqual([
+      { id: "gpt-4.1-mini", name: "Small" },
+    ]);
+  });
+
   it("upgrades the retired xAI quality image slug without pinning active aliases", () => {
     const raw: OpenClawConfigWithLegacyRoster = {
       agents: {
@@ -138,10 +175,10 @@ describe("legacy model compat migrate", () => {
         "kilocode/anthropic/claude-sonnet-4",
         "amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
         "openai/gpt-5.5",
-        "openai/gpt-5.5",
-        "openai/gpt-5.4-mini",
-        "openai/gpt-5.4-mini",
-        "openai/gpt-5.3-codex",
+        "openai/gpt-4o",
+        "openai/gpt-4.1-mini",
+        "openai/gpt-5.1-codex-mini",
+        "openai/gpt-5.2-codex",
         "openai-codex/gpt-5.5",
         "openai-codex/gpt-5.4-mini",
         "github-copilot/gpt-5.5",
@@ -162,7 +199,7 @@ describe("legacy model compat migrate", () => {
       "anthropic/claude-haiku-4-5": { alias: "haiku" },
       "anthropic/claude-sonnet-4-6": { alias: "current-sonnet" },
       "github-copilot/claude-opus-4.7": { alias: "copilot-opus" },
-      "openai/gpt-5.5-pro": { alias: "old-pro" },
+      "openai/gpt-5.2-pro": { alias: "old-pro" },
       "github-copilot/gpt-5.4-mini": { alias: "old-mini" },
     });
     expect(res.config).toHaveProperty("plugins.entries.lossless-claw.config", {

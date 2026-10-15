@@ -401,7 +401,30 @@ describe("manifest model suppression", () => {
     );
   });
 
-  it("keeps the OpenAI API route available while retiring the ChatGPT route", () => {
+  it.each([
+    { id: "gpt-5.4", hosts: ["chatgpt.com"], successor: "gpt-5.6-terra" },
+    ...[
+      { id: "gpt-5-chat-latest", successor: "gpt-5.6-sol" },
+      { id: "gpt-5.1-codex-mini", successor: "gpt-5.6-terra" },
+      { id: "gpt-5.2-chat-latest", successor: "gpt-5.6-sol" },
+    ].map(({ id, successor }) => ({
+      id,
+      successor,
+      hosts: [
+        "api.openai.com",
+        "us.api.openai.com",
+        "eu.api.openai.com",
+        "au.api.openai.com",
+        "ca.api.openai.com",
+        "jp.api.openai.com",
+        "in.api.openai.com",
+        "sg.api.openai.com",
+        "kr.api.openai.com",
+        "gb.api.openai.com",
+        "ae.api.openai.com",
+      ],
+    })),
+  ])("retires $id only on its declared OpenAI routes", ({ id, hosts, successor }) => {
     const manifest = JSON.parse(
       fs.readFileSync(
         new URL("../../extensions/openai/openclaw.plugin.json", import.meta.url),
@@ -410,11 +433,19 @@ describe("manifest model suppression", () => {
     );
     mocks.loadPluginMetadataSnapshot.mockReturnValue(createMetadataSnapshot([manifest]));
     const resolver = buildManifestBuiltInModelSuppressionResolver({ env: process.env });
-    const input = { provider: "openai", id: "gpt-5.4" };
-    expect(resolver({ ...input, baseUrl: "https://chatgpt.com/backend-api" })).toMatchObject({
-      retirement: { replacedBy: "gpt-5.6-terra" },
-    });
-    for (const baseUrl of [undefined, "https://api.openai.com/v1", "https://proxy.example/v1"]) {
+    const input = { provider: "openai", id };
+    for (const host of hosts) {
+      expect(resolver({ ...input, baseUrl: `https://${host}/v1` }), host).toMatchObject({
+        retirement: { replacedBy: successor },
+      });
+      for (const active of ["gpt-4.1-mini", "gpt-4o", "gpt-4.1-nano", "gpt-5.1"]) {
+        expect(
+          resolver({ provider: "openai", id: active, baseUrl: `https://${host}/v1` }),
+        ).toBeUndefined();
+      }
+    }
+    const sibling = hosts.includes("api.openai.com") ? "chatgpt.com" : "api.openai.com";
+    for (const baseUrl of [undefined, `https://${sibling}/v1`, "https://proxy.example/v1"]) {
       expect(resolver({ ...input, baseUrl })).toBeUndefined();
     }
   });

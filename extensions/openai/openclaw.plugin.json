@@ -334,6 +334,174 @@
     "suppressions": [
       {
         "provider": "openai",
+        "model": "gpt-5-codex",
+        "reason": "OpenAI shut down gpt-5-codex on its API on 2026-07-23. See https://developers.openai.com/api/docs/deprecations.",
+        "retirement": { "replacedBy": "gpt-5.6-sol" },
+        "when": {
+          "baseUrlHosts": [
+            "api.openai.com",
+            "us.api.openai.com",
+            "eu.api.openai.com",
+            "au.api.openai.com",
+            "ca.api.openai.com",
+            "jp.api.openai.com",
+            "in.api.openai.com",
+            "sg.api.openai.com",
+            "kr.api.openai.com",
+            "gb.api.openai.com",
+            "ae.api.openai.com"
+          ]
+        }
+      },
+      {
+        "provider": "openai",
+        "model": "gpt-5.1-codex",
+        "reason": "OpenAI shut down gpt-5.1-codex on its API on 2026-07-23. See https://developers.openai.com/api/docs/deprecations.",
+        "retirement": { "replacedBy": "gpt-5.6-sol" },
+        "when": {
+          "baseUrlHosts": [
+            "api.openai.com",
+            "us.api.openai.com",
+            "eu.api.openai.com",
+            "au.api.openai.com",
+            "ca.api.openai.com",
+            "jp.api.openai.com",
+            "in.api.openai.com",
+            "sg.api.openai.com",
+            "kr.api.openai.com",
+            "gb.api.openai.com",
+            "ae.api.openai.com"
+          ]
+        }
+      },
+      {
+        "provider": "openai",
+        "model": "gpt-5.2-codex",
+        "reason": "OpenAI shut down gpt-5.2-codex on its API on 2026-07-23. See https://developers.openai.com/api/docs/deprecations.",
+        "retirement": { "replacedBy": "gpt-5.6-sol" },
+        "when": {
+          "baseUrlHosts": [
+            "api.openai.com",
+            "us.api.openai.com",
+            "eu.api.openai.com",
+            "au.api.openai.com",
+            "ca.api.openai.com",
+            "jp.api.openai.com",
+            "in.api.openai.com",
+            "sg.api.openai.com",
+            "kr.api.openai.com",
+            "gb.api.openai.com",
+            "ae.api.openai.com"
+          ]
+        }
+      },
+      {
+        "provider": "openai",
+        "model": "gpt-5.1-codex-max",
+        "reason": "OpenAI shut down gpt-5.1-codex-max on its API on 2026-07-23. See https://developers.openai.com/api/docs/deprecations.",
+        "retirement": { "replacedBy": "gpt-5.6-sol" },
+        "when": {
+          "baseUrlHosts": [
+            "api.openai.com",
+            "us.api.openai.com",
+            "eu.api.openai.com",
+            "au.api.openai.com",
+            "ca.api.openai.com",
+            "jp.api.openai.com",
+            "in.api.openai.com",
+            "sg.api.openai.com",
+            "kr.api.openai.com",
+            "gb.api.openai.com",
+            "ae.api.openai.com"
+          ]
+        }
+      },
+      {
+        "provider": "openai",
+        "model": "gpt-5.1-codex-mini",
+        "reason": "OpenAI shut down gpt-5.1-codex-mini on its API on 2026-07-23. See https://developers.openai.com/api/docs/deprecations.",
+        "retirement": { "replacedBy": "gpt-5.6-terra" },
+        "when": {
+          "baseUrlHosts": [
+            "api.openai.com",
+            "us.api.openai.com",
+            "eu.api.openai.com",
+            "au.api.openai.com",
+            "ca.api.openai.com",
+            "jp.api.openai.com",
+            "in.api.openai.com",
+            "sg.api.openai.com",
+            "kr.api.openai.com",
+            "gb.api.openai.com",
+            "ae.api.openai.com"
+          ]
+        }
+      },
+      {
+        "provider": "openai",
+        "model": "gpt-5-chat-latest",
+        "reason": "OpenAI shut down gpt-5-chat-latest on its API on 2026-07-23. See https://developers.openai.com/api/docs/deprecations.",
+        "retirement": { "replacedBy": "gpt-5.6-sol" },
+        "when": {
+          "baseUrlHosts": [
+            "api.openai.com",
+            "us.api.openai.com",
+            "eu.api.openai.com",
+            "au.api.openai.com",
+            "ca.api.openai.com",
+            "jp.api.openai.com",
+            "in.api.openai.com",
+            "sg.api.openai.com",
+            "kr.api.openai.com",
+            "gb.api.openai.com",
+            "ae.api.openai.com"
+          ]
+        }
+      },
+      {
+        "provider": "openai",
+        "model": "gpt-5.1-chat-latest",
+        "reason": "OpenAI shut down gpt-5.1-chat-latest on its API on 2026-07-23. See https://developers.openai.com/api/docs/deprecations.",
+        "retirement": { "replacedBy": "gpt-5.6-sol" },
+        "when": {
+          "baseUrlHosts": [
+            "api.openai.com",
+            "us.api.openai.com",
+            "eu.api.openai.com",
+            "au.api.openai.com",
+            "ca.api.openai.com",
+            "jp.api.openai.com",
+            "in.api.openai.com",
+            "sg.api.openai.com",
+            "kr.api.openai.com",
+            "gb.api.openai.com",
+            "ae.api.openai.com"
+          ]
+        }
+      },
+      {
+        "provider": "openai",
+        "model": "gpt-5.2-chat-latest",
+        "reason": "OpenAI shut down gpt-5.2-chat-latest on its API on 2026-08-10. See https://developers.openai.com/api/docs/deprecations.",
+        "retirement": { "replacedBy": "gpt-5.6-sol" },
+        "when": {
+          "baseUrlHosts": [
+            "api.openai.com",
+            "us.api.openai.com",
+            "eu.api.openai.com",
+            "au.api.openai.com",
+            "ca.api.openai.com",
+            "jp.api.openai.com",
+            "in.api.openai.com",
+            "sg.api.openai.com",
+            "kr.api.openai.com",
+            "gb.api.openai.com",
+            "ae.api.openai.com"
+          ]
+        }
+      },
+      {
+        "provider": "openai",
         "model": "gpt-5.4",
         "reason": "GPT-5.4 has retired from the ChatGPT-account Codex route.",
         "retirement": { "replacedBy": "gpt-5.6-terra" },
