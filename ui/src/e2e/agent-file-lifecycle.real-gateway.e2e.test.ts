@@ -282,9 +282,11 @@ catalogSuite.define(() => {
           }
 
           await publish("published");
-          await openPicker(picker);
           await expect
-            .poll(() => picker.locator('[role="option"][data-value="fixture/published"]').count())
+            .poll(async () => {
+              await openPicker(picker);
+              return picker.locator('[role="option"][data-value="fixture/published"]').count();
+            })
             .toBe(1);
           expect(
             await picker.locator('[role="option"][data-value="fixture/retiring"]').count(),
@@ -357,7 +359,10 @@ catalogSuite.define(() => {
           rejectCatalog = false;
           await publish("recovered");
           await expect
-            .poll(() => picker.locator('[role="option"][data-value="fixture/recovered"]').count())
+            .poll(async () => {
+              await openPicker(picker);
+              return picker.locator('[role="option"][data-value="fixture/recovered"]').count();
+            })
             .toBe(1);
           await error.waitFor({ state: "hidden" });
           expect(await selected()).toBe("fixture/selected");
