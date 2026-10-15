@@ -89,4 +89,17 @@ describe("config tier coverage", () => {
     const common = leaves.filter((path) => response.uiHints[path]?.advanced === false);
     expect(common).toMatchSnapshot();
   });
+
+  it("documents the Appearance-owned interface language preference", () => {
+    type DocumentedNode = {
+      title?: string;
+      description?: string;
+      properties?: Record<string, DocumentedNode>;
+    };
+    const root = schema as unknown as DocumentedNode;
+    const locale = root.properties?.ui?.properties?.prefs?.properties?.locale;
+    expect(locale?.title).toBe("Interface language");
+    expect(locale?.description).toContain("browser or system language");
+    expect(locale?.description).toContain("agents.defaults.userTimezone");
+  });
 });

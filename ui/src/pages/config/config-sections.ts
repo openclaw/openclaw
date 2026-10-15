@@ -1,6 +1,8 @@
 // Advanced renders without an include list: it shows every section that has no
 // curated home (config-page computes its exclude list).
 // Each curated page opens at its first section.
+import type { JsonSchema } from "../../lib/config-form-utils.ts";
+
 const CONFIG_PAGES = [
   ["communications", ["messages", "tts", "transcripts"]],
   ["appearance", ["__appearance__", "ui"]],
@@ -73,4 +75,45 @@ export function configSelectionFromSearch(pageId: ConfigPageId, search: string):
     return defaultConfigSelection(pageId);
   }
   return normalizeConfigSelection(pageId, section, null);
+}
+
+// Config leaf paths a curated settings control owns. The generic schema form and settings
+// search must skip them, or the setting gets a second, unexplained home: Settings →
+// Appearance → Language owns `ui.prefs.locale`, whose raw string schema would otherwise
+// render as a bare empty "Locale" text box (and produce a dead-end search hit).
+const CURATED_SETTINGS_OWNED_LEAF_PATHS: readonly string[] = ["ui.prefs.locale"];
+
+function omitLeafPath(schema: JsonSchema, segments: readonly string[]): JsonSchema {
+  const [segment, ...rest] = segments;
+  const child = segment === undefined ? undefined : schema.properties?.[segment];
+  if (segment === undefined || !schema.properties || !child) {
+    return schema;
+  }
+  const nextProperties: Record<string, JsonSchema> = { ...schema.properties };
+  if (rest.length === 0) {
+    delete nextProperties[segment];
+  } else {
+    nextProperties[segment] = omitLeafPath(child, rest);
+  }
+  const required = schema.required?.filter((key) => Object.hasOwn(nextProperties, key));
+  return { ...schema, properties: nextProperties, ...(required ? { required } : {}) };
+}
+
+/**
+ * Removes curated-owner leaf paths from a schema. `prefix` is the config path of the schema
+ * root: `""` for the whole config, or a section key such as `"ui"` for a section schema.
+ */
+export function omitCuratedOwnedConfigLeaves(schema: JsonSchema, prefix = ""): JsonSchema {
+  let next = schema;
+  for (const path of CURATED_SETTINGS_OWNED_LEAF_PATHS) {
+    const relative = prefix
+      ? path.startsWith(`${prefix}.`)
+        ? path.slice(prefix.length + 1)
+        : null
+      : path;
+    if (relative) {
+      next = omitLeafPath(next, relative.split("."));
+    }
+  }
+  return next;
 }
