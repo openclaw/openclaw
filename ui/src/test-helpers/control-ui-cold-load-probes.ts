@@ -12,6 +12,7 @@ export function installColdLoadProbes(
     requestBytes: number;
     responseBytes: number;
     ms: number;
+    dispatchMs?: number;
     params: unknown;
     stack: string | undefined;
   }> = [];
@@ -369,6 +370,7 @@ export function installColdLoadProbes(
     "openclaw-app-shell",
   ]);
   let liveStartedAt = 0;
+  let liveRpcOffset = 0;
   let liveFinishedAt = 0;
   let liveKind = "idle";
   let emittingLiveEvent:
@@ -496,6 +498,7 @@ export function installColdLoadProbes(
           () => {
             queued--;
             const request = pending.get(frame.id);
+            const rpcIndex = rpcs.length;
             if (request) {
               pending.delete(frame.id);
               rpcs.push({
@@ -514,7 +517,11 @@ export function installColdLoadProbes(
               liveKind = delivery.kind;
               liveEvents.set(delivery.kind, (liveEvents.get(delivery.kind) ?? 0) + 1);
             }
+            const dispatchStarted = performance.now();
             frameProbe.withDelivery(delivery, () => dispatch(event));
+            if (request) {
+              rpcs[rpcIndex]!.dispatchMs = performance.now() - dispatchStarted;
+            }
             lastActivity = performance.now();
           },
           Math.max(0, nextFrameAt - performance.now()),
@@ -534,6 +541,7 @@ export function installColdLoadProbes(
   Reflect.set(window, "__coldLoad", {
     startLive() {
       liveStartedAt = performance.now();
+      liveRpcOffset = rpcs.length;
       frameProbe.install();
       const sidebar = document.querySelector("openclaw-app-sidebar");
       sidebarRegistration.restore();
@@ -649,6 +657,7 @@ export function installColdLoadProbes(
     readLive() {
       return {
         elapsedMs: (liveFinishedAt || performance.now()) - liveStartedAt,
+        rpcs: rpcs.slice(liveRpcOffset),
         sentEvents: [...liveEvents.values()].reduce((sum, count) => sum + count, 0),
         events: Object.fromEntries(liveEvents),
         deliveryCadence: frameProbe.readDeliveryCadence(),
