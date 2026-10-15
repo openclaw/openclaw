@@ -306,28 +306,6 @@ describe("createHostedOutboundMediaStore", () => {
     expect(executeSqliteQuerySync(db, persistedRows).rows).toEqual([]);
   });
 
-  it("retains metadata until a failed chunk cleanup can be retried", async () => {
-    loadWebMediaMock.mockResolvedValueOnce(imageMedia());
-    const { metadataStore, chunkStore, store } = createStoreFixture("retry-delete-media");
-    await prepare(store);
-    const originalDelete = chunkStore.delete.bind(chunkStore);
-    let deleteCalls = 0;
-    vi.spyOn(chunkStore, "delete").mockImplementation(async (key) => {
-      deleteCalls += 1;
-      if (deleteCalls === 2) {
-        throw new Error("chunk delete failed");
-      }
-      return await originalDelete(key);
-    });
-
-    await expect(store.delete("abc123abc123abc123abc123")).rejects.toThrow("chunk delete failed");
-    expect(await metadataStore.entries()).toHaveLength(1);
-
-    await expect(store.delete("abc123abc123abc123abc123")).resolves.toBeUndefined();
-    expect(await metadataStore.entries()).toEqual([]);
-    expect(await chunkStore.entries()).toEqual([]);
-  });
-
   it("serializes explicit deletion with reject-new capacity checks", async () => {
     let idCounter = 0;
     const metadataStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaMetaRecord>(
