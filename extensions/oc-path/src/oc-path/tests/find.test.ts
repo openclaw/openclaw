@@ -391,7 +391,7 @@ describe("findOcPaths — Markdown", () => {
     const raw = Array.from({ length: blockCount }, (_, block) => {
       const items = Array.from(
         { length: itemsPerBlock },
-        (_, item) => `- key-${item}: ${block * itemsPerBlock + item}`,
+        (_item, item) => `- key-${item}: ${block * itemsPerBlock + item}`,
       );
       return `## Block ${block}\n\n${items.join("\n")}\n`;
     }).join("\n");
