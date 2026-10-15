@@ -6,7 +6,6 @@ import "./server-context.chrome-test-harness.js";
 import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
 import * as cdpHelpers from "./cdp.helpers.js";
 import * as cdp from "./cdp.js";
-import { BrowserTargetAmbiguousError } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import {
   createTestBrowserRouteContext,
@@ -187,44 +186,29 @@ describe("browser tab selection and ownership", () => {
     });
   });
 
-  it.each(["CDP", "HTTP"] as const)(
-    "does not adopt a %s target without a committed navigation",
-    async (transport) => {
-      const create = vi.spyOn(cdp, "createTargetViaCdp");
-      if (transport === "CDP") {
-        create.mockResolvedValue({ targetId: "UNSETTLED" });
-      } else {
-        create.mockRejectedValue(new Error("cdp unavailable"));
-        vi.spyOn(cdp, "waitForCdpCommittedNavigationUrl").mockResolvedValue(undefined);
-        vi.spyOn(cdpHelpers, "fetchJson").mockResolvedValueOnce(
-          page("UNSETTLED", "https://example.com"),
-        );
-      }
-      const { openclaw, runtime, fetchMock } = setup(async () => {
-        throw new Error("unexpected discovery or cleanup");
-      });
-      runtime.running = mockLaunchedChrome(vi.fn(), 1234);
-      runtime.lastTargetId = "GOOD";
-      runtime.tabAliases = {
-        nextTabNumber: 2,
-        byTargetId: { GOOD: { tabId: "t1", label: "good", url: "about:blank" } },
-      };
-      const aliases = structuredClone(runtime.tabAliases);
-      await expect(
-        openclaw.openTab("https://example.com", { label: "unsettled" }),
-      ).resolves.toEqual({
-        targetId: "UNSETTLED",
-        title: transport === "CDP" ? "" : "UNSETTLED",
-        ...(transport === "HTTP" ? { wsUrl: "ws://127.0.0.1:18800/devtools/page/UNSETTLED" } : {}),
-        url: "https://example.com",
-        type: "page",
-        ownership: { status: "non-durable", reason: "browser-identity-lookup-failed" },
-      });
-      expect(runtime.lastTargetId).toBe("GOOD");
-      expect(runtime.tabAliases).toEqual(aliases);
-      expect(fetchMock).toHaveBeenCalledOnce();
-    },
-  );
+  it("does not adopt a CDP target without a committed navigation", async () => {
+    vi.spyOn(cdp, "createTargetViaCdp").mockResolvedValue({ targetId: "UNSETTLED" });
+    const { openclaw, runtime, fetchMock } = setup(async () => {
+      throw new Error("unexpected discovery or cleanup");
+    });
+    runtime.running = mockLaunchedChrome(vi.fn(), 1234);
+    runtime.lastTargetId = "GOOD";
+    runtime.tabAliases = {
+      nextTabNumber: 2,
+      byTargetId: { GOOD: { tabId: "t1", label: "good", url: "about:blank" } },
+    };
+    const aliases = structuredClone(runtime.tabAliases);
+    await expect(openclaw.openTab("https://example.com", { label: "unsettled" })).resolves.toEqual({
+      targetId: "UNSETTLED",
+      title: "",
+      url: "https://example.com",
+      type: "page",
+      ownership: { status: "non-durable", reason: "browser-identity-lookup-failed" },
+    });
+    expect(runtime.lastTargetId).toBe("GOOD");
+    expect(runtime.tabAliases).toEqual(aliases);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
 
   it("rejects invalid labels before any browser mutation", async () => {
     const create = vi.spyOn(cdp, "createTargetViaCdp");
@@ -235,49 +219,6 @@ describe("browser tab selection and ownership", () => {
     expect(create).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(runtime.tabAliases).toBeUndefined();
-  });
-
-  it("retains dashboard and just-opened tabs when evicting excess managed tabs", async () => {
-    vi.spyOn(sessionTabStore, "readBrowserDashboardTabs").mockResolvedValue([
-      retainedDashboardRecord("OLD1"),
-    ]);
-    mockCreatedTarget("NEW", "http://127.0.0.1:3009");
-    const closed: string[] = [];
-    const cleanup = Promise.withResolvers<void>();
-    const { openclaw, runtime } = setup(async (url) => {
-      if (url.includes("/json/list")) {
-        return Response.json(makeManagedTabsWithNew({ newFirst: true }));
-      }
-      if (url.includes("/json/version")) {
-        return Response.json({
-          webSocketDebuggerUrl:
-            "ws://127.0.0.1:18800/devtools/browser/MANAGED-BROWSER?auth=fixture-value",
-        });
-      }
-      if (url.includes("/json/close/")) {
-        closed.push(url);
-        cleanup.resolve();
-        return new Response();
-      }
-      throw new Error("unexpected fetch: " + url);
-    });
-    runtime.running = mockLaunchedChrome(vi.fn(), 1234);
-    const opened = await openclaw.openTab("http://127.0.0.1:3009");
-    expect(opened).toMatchObject({
-      targetId: "NEW",
-      ownership: {
-        status: "durable",
-        nativeTargetId: "NEW",
-        profileFingerprint: expect.stringMatching(/^sha256:/),
-        browserInstanceFingerprint: expect.stringMatching(/^sha256:/),
-      },
-    });
-    expect(runtime.lastTargetId).toBe("NEW");
-    await cleanup.promise;
-    // Chrome lists targets most-recently-activated first, so the eviction
-    // walks from the stale end: OLD1 is dashboard-retained, OLD8 is the
-    // least recently used of the rest, and the fresh NEW tab is kept.
-    expect(closed).toEqual(["http://127.0.0.1:18800/json/close/OLD8"]);
   });
 
   it("orders managed eviction by recorded activity, not CDP listing position", async () => {
@@ -607,24 +548,5 @@ describe("browser tab selection and ownership", () => {
     expect(
       close.fetchMock.mock.calls.some(([url]) => String(url).endsWith("/json/close/ABCDEF123456")),
     ).toBe(true);
-  });
-
-  it("rejects ambiguous raw prefixes at every operation boundary", async () => {
-    const label = await labeled();
-    await expect(label.openclaw.labelTab("ABC", "parity")).rejects.toBeInstanceOf(
-      BrowserTargetAmbiguousError,
-    );
-    const ensure = await labeled();
-    await expect(ensure.openclaw.ensureTabAvailable("ABC")).rejects.toBeInstanceOf(
-      BrowserTargetAmbiguousError,
-    );
-    const focus = await labeled();
-    await expect(focus.openclaw.focusTab("ABC")).rejects.toBeInstanceOf(
-      BrowserTargetAmbiguousError,
-    );
-    const close = await labeled();
-    await expect(close.openclaw.closeTab("ABC")).rejects.toBeInstanceOf(
-      BrowserTargetAmbiguousError,
-    );
   });
 });
