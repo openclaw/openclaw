@@ -144,8 +144,8 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
     for (const change of ["optout", "model", "authority", "provider-config", "secrets"] as const) {
       const resolving = createDeferredCore();
       const resolved = createDeferredCore();
-      const localConfig = config(true);
-      setRuntimeConfigSnapshot(localConfig);
+      setRuntimeConfigSnapshot(config(true));
+      const localConfig = getRuntimeConfigSnapshot()!;
       const before = requests;
       const originalError = new Error("synthetic authority closed");
       const intercepted = vi

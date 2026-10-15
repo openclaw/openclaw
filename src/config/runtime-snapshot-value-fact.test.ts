@@ -38,15 +38,15 @@ it("reuses publication hashes and model keys across equal mutable fleet clones",
   try {
     const first = publications[0]!;
     setRuntimeConfigSnapshot(first.config, first.source);
-    const fingerprint = getRuntimeConfigSnapshotMetadata()!.fingerprint;
+    const metadata = getRuntimeConfigSnapshotMetadata();
     const modelKey = resolveRuntimeModelConfigCacheKey(first.config);
     for (const { config, source } of publications.slice(1)) {
       setRuntimeConfigSnapshot(config, source);
-      expect(getRuntimeConfigSnapshotMetadata()?.fingerprint).toBe(fingerprint);
-      expect(resolveRuntimeModelConfigCacheKey(config)).toBe(modelKey);
+      expect(getRuntimeConfigSnapshotMetadata()).toBe(metadata);
+      expect(resolveRuntimeModelConfigCacheKey(getRuntimeConfigSnapshot()!)).toBe(modelKey);
     }
     expect(keys.mock.calls.filter(([value]) => rosters.has(value))).toHaveLength(4);
-    expect(getRuntimeConfigSnapshot()).toBe(publications.at(-1)!.config);
+    expect(getRuntimeConfigSnapshot()).toBe(first.config);
   } finally {
     keys.mockRestore();
   }

@@ -100,7 +100,7 @@ export function transcriptMirrorForDeliveredPayload(
   };
 }
 
-export function captureDeliveredTranscriptMirror(params: {
+function captureDeliveredTranscriptMirror(params: {
   dispatcher: ReplyDispatcher;
   metadata?: TranscriptMirror;
   captureToken?: object;
