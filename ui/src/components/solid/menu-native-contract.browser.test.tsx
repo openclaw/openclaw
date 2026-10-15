@@ -314,7 +314,12 @@ it("keeps descendant-only native overlap leased through closing and releases aft
   await expect.poll(() => states).toEqual([false, true]);
   const branch = [surface(), child];
   // Hold the parent too: its exit moves the submenu anchor before hiding it.
-  branch.forEach((menu) => menu.style.setProperty("--oc-overlay-hide-duration", "60s"));
+  branch.forEach((menu) => {
+    const animation = menu.animate({ opacity: [1, 0], scale: [1, 0.9] }, { duration: 1000 });
+    animation.pause();
+    animation.currentTime = 0;
+    cleanups.push(() => animation.cancel());
+  });
   const hidden = new Promise<void>((resolve) => {
     child.addEventListener("overlay-after-hide", () => resolve(), { once: true });
   });
@@ -324,9 +329,77 @@ it("keeps descendant-only native overlap leased through closing and releases aft
       child.getAnimations().forEach((animation) => animation.finish());
     }
   });
+  const closeTrace: {
+    id: string;
+    operation: "animations" | "hide-before" | "hide-after";
+    phase: string | undefined;
+    nativeOpen: boolean;
+    animations?: number;
+  }[] = [];
+  const recordClose = (entry: (typeof closeTrace)[number]) => {
+    if (closeTrace.length < 32) {
+      closeTrace.push(entry);
+    }
+  };
+  for (const menu of branch) {
+    const getAnimations = menu.getAnimations.bind(menu);
+    const hidePopover = menu.hidePopover.bind(menu);
+    const animationSpy = vi.spyOn(menu, "getAnimations").mockImplementation(function (
+      this: HTMLElement,
+      ...args: Parameters<HTMLElement["getAnimations"]>
+    ) {
+      const animations = getAnimations(...args);
+      recordClose({
+        id: this.id,
+        operation: "animations",
+        phase: this.dataset.phase,
+        nativeOpen: this.matches(":popover-open"),
+        animations: animations.length,
+      });
+      return animations;
+    });
+    const hideSpy = vi.spyOn(menu, "hidePopover").mockImplementation(function (
+      this: HTMLElement,
+      ...args: Parameters<HTMLElement["hidePopover"]>
+    ) {
+      recordClose({
+        id: this.id,
+        operation: "hide-before",
+        phase: this.dataset.phase,
+        nativeOpen: this.matches(":popover-open"),
+      });
+      const result = hidePopover(...args);
+      recordClose({
+        id: this.id,
+        operation: "hide-after",
+        phase: this.dataset.phase,
+        nativeOpen: this.matches(":popover-open"),
+      });
+      return result;
+    });
+    cleanups.push(
+      () => animationSpy.mockRestore(),
+      () => hideSpy.mockRestore(),
+    );
+  }
   expect(view.handle.close()).toBe(true);
   const closing = branch.flatMap((menu) => {
     const animations = menu.getAnimations();
+    if (animations.length === 0) {
+      const style = getComputedStyle(menu);
+      console.error("Menu exit animation missing", {
+        closeTrace,
+        id: menu.id,
+        phase: menu.dataset.phase,
+        nativeOpen: menu.matches(":popover-open"),
+        opacity: style.opacity,
+        scale: style.scale,
+        display: style.display,
+        transitionDuration: style.transitionDuration,
+        transitionProperty: style.transitionProperty,
+        reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+      });
+    }
     expect(animations.length).toBeGreaterThan(0);
     return animations;
   });

@@ -387,16 +387,11 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     const { result } = await requestManagedImage({
       ...request,
       method: "HEAD",
-      headers: [
-        "Host",
-        "127.0.0.1",
-        "if-none-match",
-        `"not-the-current-tag", W/${etag}`,
-        "range",
-        "bytes=2-5",
-        "if-range",
-        '"stale"',
-      ],
+      headers: {
+        "if-none-match": `"not-the-current-tag", W/${etag}`,
+        range: "bytes=2-5",
+        "if-range": '"stale"',
+      },
     });
 
     expect(result.statusCode).toBe(304);
@@ -592,7 +587,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     }
   });
 
-  it("serves a sharp bounded 1600×800 thumbnail through local reads and the artifact ticket", async () => {
+  it("serves compressed bounded 1600×800 renditions through local reads and the artifact ticket", async () => {
     const source = createSolidPngBuffer(1600, 800, { r: 24, g: 64, b: 128 });
     const { attachmentId, sessionKey } = await createFixture(stateDir, { body: source });
     const canonicalPath = mediaPath({ sessionKey, attachmentId });
@@ -616,8 +611,9 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     };
     const localThumbnail = await readManagedOutgoingImageThumbnail(localRequest);
     expect(localThumbnail && readImageProbeFromHeader(localThumbnail)).toMatchObject({
-      width: 1200,
-      height: 600,
+      format: "webp",
+      width: 960,
+      height: 480,
     });
     await expect(
       readManagedOutgoingImageThumbnail({ ...localRequest, maxBytes: 1 }),
@@ -635,13 +631,26 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     });
 
     expect(result.statusCode).toBe(200);
-    expect(result.headers["content-type"]).toBe("image/png");
-    expect(result.headers["content-disposition"]).toContain("cat-thumbnail.png");
+    expect(result.headers["content-type"]).toBe("image/webp");
+    expect(result.headers["content-disposition"]).toContain("cat-thumbnail.webp");
     expect(readImageProbeFromHeader(result.body)).toMatchObject({
-      width: 1200,
-      height: 600,
+      format: "webp",
+      width: 960,
+      height: 480,
     });
     expect(result.body).toEqual(localThumbnail);
+    const small = await requestManagedImage({
+      stateDir,
+      pathName: `${thumbnailUrl}&width=480`,
+      denyAuth: true,
+      transcriptMessages,
+    });
+    expect(readImageProbeFromHeader(small.result.body)).toMatchObject({
+      format: "webp",
+      width: 480,
+      height: 240,
+    });
+    expect(small.result.body.byteLength).toBeLessThanOrEqual(96 * 1024);
     expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
   });
 

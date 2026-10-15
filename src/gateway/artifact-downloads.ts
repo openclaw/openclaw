@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { pipeline } from "node:stream/promises";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { ARTIFACT_DOWNLOAD_PATH } from "../../packages/gateway-protocol/src/artifact-download.js";
+import { normalizeChatImageRenditionWidth } from "../shared/chat-image-renditions.js";
 import {
   assertArtifactDownloadGrantCurrent,
   getArtifactDownloadGrant,
@@ -81,14 +82,24 @@ export async function handleArtifactDownloadHttpRequest(
           },
     });
     assertCurrent();
-    if (thumbnail && prepared?.body) {
+    if (thumbnail) {
+      // Lazy streams own their resources when opened. A preview must never open
+      // one as an implicit original-image fallback or buffer it without a bound.
+      if (!prepared?.body || prepared.stream) {
+        throw new Error("Artifact image preview bytes are unavailable");
+      }
       const source = prepared.body;
-      const cacheKey = createHash("sha256").update(source).digest("hex");
+      const width = normalizeChatImageRenditionWidth(url.searchParams.get("width"));
+      const cacheKey = `${createHash("sha256").update(source).digest("hex")}\0${width}`;
       // Preview failures are unavailable, never an implicit full-image download.
       const bytes = new Uint8Array(
-        await resolveManagedImageThumbnail(cacheKey, () => encodeImageThumbnail(source)),
+        await resolveManagedImageThumbnail(cacheKey, () => encodeImageThumbnail(source, width)),
       );
-      prepared.artifact = { ...prepared.artifact, mimeType: "image/png" };
+      prepared.artifact = {
+        ...prepared.artifact,
+        mimeType: "image/webp",
+        title: `${prepared.artifact.title}-preview.webp`,
+      };
       const response = resolveByteResponse({
         file: { size: bytes.byteLength },
         method: req.method,

@@ -11,7 +11,6 @@ import {
   type DiagnosticModelContentCapturePolicy,
 } from "../../../infra/diagnostic-llm-content.js";
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../../../infra/diagnostic-semantic-run-progress.js";
-import { createModelCallStreamProgressReporter } from "../../../logging/diagnostic-model-stream-progress.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../../usage.js";
 
 export type ModelCallEventBase = Omit<
@@ -328,7 +327,6 @@ export function createModelObserver(params: {
     contentCapture: params.contentCapture,
     suppressPluginHooks: params.suppressPluginHooks,
   };
-  const reportStreamProgress = createModelCallStreamProgressReporter({ config: params.config });
   return {
     state,
     promptStats,
@@ -355,12 +353,6 @@ export function createModelObserver(params: {
           reason: MODEL_CALL_SEMANTIC_PROGRESS_REASON,
         });
       }
-    },
-    maybeEmitStreamProgress(eventBase: ModelCallEventBase) {
-      reportStreamProgress({
-        ...eventBase,
-        callId: state.terminalEventEmitted ? undefined : eventBase.callId,
-      });
     },
     sizeTimingFields() {
       return {

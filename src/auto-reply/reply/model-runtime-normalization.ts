@@ -101,6 +101,7 @@ export async function prepareModelSelectionRuntime(params: {
   catalog: readonly ModelCatalogEntry[];
   rawRuntime?: string;
   hydrateThinkingCatalog?: boolean;
+  prepareNativeCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   /** Idle model-only host changes need no thinking policy refresh. */
   thinkingPolicyRequired?: boolean;
   profileOverride?: string;

@@ -2958,7 +2958,6 @@
 ["src/agents/simple-completion-runtime.generation.test.ts","./prepared-model-runtime.js","c2bf0141ababa36a59757dff0c5f2aad48b7db09b0787697584cffec57288290",1]
 ["src/agents/simple-completion-runtime.generation.test.ts","./sessions/model-registry-runtime.js","0c1c4f5c51d886b8c5da7456793370cb0a92086e31e3c8be73ec74f9ca3b13b9",1]
 ["src/agents/simple-completion-runtime.test.ts","../plugins/provider-runtime.runtime.js","47f78a2ddf23a16416d1abd7a26a83d3fe772fadfc34d09f432e95b20fd5671f",1]
-["src/agents/simple-completion-runtime.test.ts","./auth-profiles/usage.js","d6242662272cf8a4cba90be696027ac9533b484b2c967b70e4a1fbc5b31e6206",1]
 ["src/agents/simple-completion-runtime.test.ts","./embedded-agent-runner/model.js","8001490db7fa1aa1ebd9212c5ea430e3ae20c0d96e3a935068a3397d913b1914",1]
 ["src/agents/simple-completion-runtime.test.ts","./model-auth.js","3365bfea4871e26913b551a643210f550b54225998f7384704436340db550e34",1]
 ["src/agents/simple-completion-runtime.test.ts","./prepared-model-runtime.js","186b4f0e84223a0d3785dafc106dfd1c024a7982126c6c5cc27153564f88d554",1]
