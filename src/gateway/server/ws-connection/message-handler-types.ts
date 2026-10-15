@@ -102,7 +102,6 @@ export type GatewayWsMessageHandlerParams = {
 export type GatewayConnectAttachTiming =
   | "deviceAuthorizationMs"
   | "deviceLookupMs"
-  | "deviceMetadataMs"
   | "deviceTokensMs"
   | "nodePreparationMs"
   | "identityMs"
