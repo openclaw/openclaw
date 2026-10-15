@@ -67,7 +67,7 @@ const mocks = vi.hoisted(() => ({
   listRealtimeTranscriptionProviders: vi.fn(() => []),
   resolveConfiguredRealtimeVoiceProviderAsync: vi.fn(),
   isRealtimeVoiceProviderConfiguredAsync: vi.fn(
-    ({
+    async ({
       provider,
       cfg,
       providerConfig,

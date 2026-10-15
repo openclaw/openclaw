@@ -254,7 +254,7 @@ export function readSessionEntryCreationIdentity(creation: CreationRecord): Data
     : creation.source.databaseIdentity;
 }
 
-export function assertSessionEntryCreationCurrent(
+function assertSessionEntryCreationCurrent(
   creation: CreationRecord | undefined,
 ): asserts creation is CreationRecord {
   if (!creation?.active) {

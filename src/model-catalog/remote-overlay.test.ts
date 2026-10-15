@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ZodError } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createModelPickerRecommendationRank } from "../agents/model-catalog-order.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -54,6 +55,48 @@ describe("remote model catalog overlay", () => {
     expect(captureRemoteModelCatalogStartupSnapshot()).toBeNull();
     expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toBeUndefined();
     expect(mocks.read).not.toHaveBeenCalled();
+  });
+
+  it("keeps older hosted recommendations only for currently served rows", async () => {
+    mocks.builtAt.mockReturnValue(300);
+    mocks.read.mockReturnValue({
+      source_url: "https://catalog.openclaw.ai/models/v2/catalog.json",
+      bundle_json: JSON.stringify({
+        schemaVersion: 2,
+        generatedAt: 200,
+        minVersion: "2026.7.0",
+        sourceCommit: "recommendation-test",
+        providers: { anthropic: { recommendedModels: ["retired", "current"] } },
+        models: ["retired", "current"].map((id) => ({
+          id,
+          provider: "anthropic",
+          pricing: {
+            status: "known",
+            currency: "USD",
+            unit: "million_tokens",
+            input: 9,
+            output: 18,
+          },
+        })),
+        upstreamPricing: { "anthropic/current": { input: 9, output: 18, source: "native" } },
+      }),
+    });
+    await prepareRemoteModelCatalogStartupSnapshot();
+    const rank = createModelPickerRecommendationRank({});
+    const served = [
+      { provider: "anthropic", id: "current" },
+      { provider: "anthropic", id: "other" },
+    ];
+    expect(served.filter((entry) => rank(entry) !== undefined)).toEqual([served[0]]);
+    expect(rank(served[0]!)).toBe(1);
+    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toBeUndefined();
+    expect(getActiveRemoteModelCatalog({})?.pricing).toEqual({});
+    expect(getActiveRemoteModelCatalog({})?.upstreamPricing).toEqual({});
+    expect(
+      createModelPickerRecommendationRank({
+        models: { catalogRefresh: { enabled: false } },
+      })(served[0]!),
+    ).toBeUndefined();
   });
 
   it.each([false, true])(

@@ -50,7 +50,7 @@ const modelFieldsSchema = z.object({
   api: z.enum(MODEL_CATALOG_APIS).optional(),
   baseUrl: z.string().optional(),
   headers: stringMapSchema.optional(),
-  input: z.array(z.enum(["text", "image", "document"])).optional(),
+  input: z.array(z.enum(["text", "image", "video", "document"])).optional(),
   reasoning: z.boolean().optional(),
   contextWindow: z.number().finite().positive().optional(),
   contextWindows: z

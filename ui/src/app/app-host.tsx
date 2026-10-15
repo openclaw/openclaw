@@ -594,19 +594,11 @@ export class ShellOwner
     if (isSessionRouteId(routeId) && this.activeSessionKey) {
       primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
     }
-    const { phase, lastError } = context.gateway.snapshot;
-    // A warm shell renders before hello; initial loading is not a lost connection.
-    const gatewayDisconnected =
-      phase !== "connected" &&
-      (Boolean(lastError) ||
-        phase === "reconnecting" ||
-        phase === "offline" ||
-        phase === "reload-required");
+    const { phase } = context.gateway.snapshot;
     let title = formatDocumentTitle({
       context: primaryContext,
       brandName: context.theme.branding.brandName,
       attentionCount: phase === "connected" ? context.overlays.snapshot.approvalQueue.length : 0,
-      gatewayDisconnected,
     });
     const environment = context.config?.current.environment;
     if (environment) {
