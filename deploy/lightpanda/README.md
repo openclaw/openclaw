@@ -6,10 +6,15 @@ They do not add an engine binary, container layer, or npm dependency to OpenClaw
 
 ## License boundary
 
-OpenClaw's adapter is MIT-licensed. Lightpanda 1.0.0 is
-**AGPL-3.0-or-later**, as stated in its
+OpenClaw's adapter is MIT-licensed. Lightpanda 1.0.0 is **AGPL**, with an
+upstream declaration inconsistency at its selected source commit: its
+[licensing document](https://github.com/lightpanda-io/browser/blob/588f6223b9cae8a2406aeef035ed9363a3e404fd/LICENSING.md)
+says `AGPL-3.0-only`, while its
 [source header](https://github.com/lightpanda-io/browser/blob/588f6223b9cae8a2406aeef035ed9363a3e404fd/src/main.zig#L1)
-and [license](https://github.com/lightpanda-io/browser/blob/588f6223b9cae8a2406aeef035ed9363a3e404fd/LICENSE).
+allows version 3 or later. Preserve both declarations during redistribution
+review; neither makes the engine permissively licensed. The
+[license text](https://github.com/lightpanda-io/browser/blob/588f6223b9cae8a2406aeef035ed9363a3e404fd/LICENSE)
+is AGPL version 3.
 The engine is independently installed and communicates with OpenClaw over CDP;
 OpenClaw does not link, vendor, or relicense its implementation. This is not an
 MIT-only stack or a certification that every deployment is legally compliant.
@@ -71,6 +76,11 @@ CDP connections. Its host-fixture runs encountered DNS and navigation timeouts;
 those runs do not establish Docker route conformance. No existing browser,
 Gateway, profile, or user state was used. Windows, Linux amd64, and macOS x86-64
 execution remain unverified by this update.
+
+The retained adapter observations above do not qualify this version's Compose
+WebSocket-readiness probe, independent probe-session close, crash restart, or
+SIGTERM/stop-grace behavior. Those container-specific checks require execution
+against the exact pinned image; historical 0.4.1 results are not 1.0.0 proof.
 
 ## Existing JavaScript clients
 

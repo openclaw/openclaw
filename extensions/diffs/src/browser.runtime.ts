@@ -320,6 +320,14 @@ async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<str
     }
   }
 
+  // Full-only images omit the shell selected by an unspecified headless launch.
+  // Keep discovery owned by the shared browser promise, using Playwright's public
+  // full-browser path; absence preserves its default shell-only selection.
+  const playwrightPath = chromium.executablePath();
+  if (await isExecutable(playwrightPath)) {
+    return playwrightPath;
+  }
+
   return undefined;
 }
 
