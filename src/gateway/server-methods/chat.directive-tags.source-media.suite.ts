@@ -4,6 +4,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { buildSourceReplyPayloadState } from "../../agents/embedded-agent-runner/run/source-reply-payloads.js";
 import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { appendUsageLine } from "../../auto-reply/reply/agent-runner-usage-line.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -73,12 +74,13 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
     writeSavedPng,
   } = fixture;
   it.each([
-    { metadata: { assistantMessageIndex: 1 }, status: false },
-    { metadata: { assistantTranscriptOwned: true }, status: false },
-    { metadata: { assistantMessageIndex: 1 }, status: true },
+    { metadata: { assistantMessageIndex: 1 }, status: false, usage: false },
+    { metadata: { assistantTranscriptOwned: true }, status: false, usage: false },
+    { metadata: { assistantMessageIndex: 1 }, status: true, usage: false },
+    { metadata: { assistantMessageIndex: 1 }, status: false, usage: true },
   ])(
-    "settles transcript-owned queued text without another answer ($metadata, status=$status)",
-    async ({ metadata, status }) => {
+    "settles transcript-owned queued text without another answer ($metadata, status=$status, usage=$usage)",
+    async ({ metadata, status, usage }) => {
       await withTranscriptFixtureState("openclaw-chat-send-queued-answer-", async () => {
         const { scope } = fixture.session();
         const text = "The queued request is complete.";
@@ -86,6 +88,8 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
           message: { role: "assistant", content: [{ type: "text", text }] },
         });
         const before = loadTranscriptEventsSync(scope);
+        const footer = "Usage: 12 in / 3 out";
+        const replies = [setReplyPayloadMetadata({ text }, metadata)];
         const canvas: Omit<ChatCanvasBlock, "type"> = {
           preview: {
             kind: "canvas",
@@ -98,16 +102,16 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
         };
         const broadcast = await fixture.sendLate({
           runId: "queued-answer-run",
-          payloads: [
-            setReplyPayloadMetadata({ text }, metadata),
-            ...(status ? [{ text, isStatusNotice: true }] : []),
-          ],
+          payloads: usage
+            ? appendUsageLine(replies, footer)
+            : [...replies, ...(status ? [{ text, isStatusNotice: true }] : [])],
           canvas,
           bufferCurrent: true,
         });
         expect(broadcast).toMatchObject({ state: "final", runId: "queued-answer-run" });
         expect(getMessageContent(broadcast)).toEqual([
           ...(status ? [{ type: "text", text, openclawStatusNotice: true }] : []),
+          ...(usage ? [{ type: "text", text: footer }] : []),
           { type: "canvas", ...canvas },
         ]);
         expect(loadTranscriptEventsSync(scope)).toEqual(before);

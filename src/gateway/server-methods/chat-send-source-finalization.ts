@@ -242,7 +242,7 @@ async function finalizeChatSendAgentReplyPayloads(
     hasRuntimeOwnedReply = true;
     return replaceChatSendReplyPayload(
       input,
-      copyReplyPayloadMetadata(payload, { ...payload, text: undefined }),
+      copyReplyPayloadMetadata(payload, { ...payload, text: metadata?.responseUsageLine }),
     );
   });
   const agentRunReplyPayloads = inputs.map(readChatSendReplyPayload);
