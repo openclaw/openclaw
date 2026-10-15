@@ -327,8 +327,7 @@ export function summarizeTeamSessionSlots(
     const children = includeChildren ? row : row.subagentSummary;
     const visuallyActive = row.isRunVisuallyActive ?? row.hasActiveRun;
     active += Number(visuallyActive) + (children?.runningChildCount ?? 0);
-    queued +=
-      Number(visuallyActive && row.status === "queued") + (children?.queuedChildCount ?? 0);
+    queued += Number(visuallyActive && row.status === "queued") + (children?.queuedChildCount ?? 0);
     unread += Number(row.unread) + (children?.unreadChildCount ?? 0);
     failed ||=
       row.status === "failed" || row.status === "timeout" || (children?.failedChildCount ?? 0) > 0;
