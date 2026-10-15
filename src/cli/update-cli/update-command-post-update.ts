@@ -2,6 +2,7 @@ import { isUpdateDoctorInspectionReportMode } from "../../commands/doctor/shared
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildControlPlaneUpdateRestartHealthPendingResult } from "../../infra/update-control-plane-sentinel.js";
+import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -10,7 +11,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome, isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { verifyUpdateFailureRecovery } from "./update-command-failure-recovery.js";
-import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import type { FinishUpdateOptions, FinishUpdateParams } from "./update-command-finish-types.js";
 import { parkForegroundUpdateForActivation } from "./update-command-handoff.js";
 import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
 import { runPostActivationInspections } from "./update-command-post-activation-inspections.js";
@@ -60,14 +61,6 @@ import {
   deferUpdateCommandTerminalResult,
   recordUpdatePackageCompletion,
 } from "./update-command-terminal.js";
-
-type FinishUpdateOptions = {
-  candidateRuntime?: boolean;
-  /** Set by the candidate after it adopts restart and terminal reporting. */
-  adoptedFinalization?: true;
-  onGatewayStartAttempted?: () => void;
-  beforeFinalization?: () => Promise<void>;
-};
 
 export async function finishUpdate(
   params: FinishUpdateParams,
@@ -218,7 +211,7 @@ async function finishSettledUpdate(
       recoverService = false;
     }
     if (result.status === "error" && params.rollbackBlockedReason) {
-      result = { ...result, reason: params.rollbackBlockedReason };
+      result = completeUpdateCommandResult(params, result);
     } else if (
       result.status === "error" &&
       params.result.status === "ok" &&
@@ -241,6 +234,9 @@ async function finishSettledUpdate(
     recoverService ||=
       !gatewayStartAttempted &&
       (await admitInstalledGatewayRecovery(recoveryParams, result, assertCurrent));
+    if (recoverService) {
+      params.rollbackBlockedReason = undefined;
+    }
     if (isUpdateGatewayReadinessPending(result)) {
       return { result, recoverService: false };
     }
@@ -301,7 +297,7 @@ async function finishSettledUpdate(
       finalResult.status = "error";
       finalResult.reason =
         result.status === "error" ? result.reason : "windows-task-autostart-restore-failed";
-      finalResult.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+      finalResult.recovery = unsafeUpdateRecovery(finalResult.recovery);
       finalResult.steps = finalResult.steps.concat({
         name: "windows-task-autostart-recovery",
         command: "openclaw update",
@@ -592,7 +588,7 @@ async function finishSettledUpdate(
           ...resultWithPostUpdate,
           status: "error",
           reason: verificationFailure,
-          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+          recovery: unsafeUpdateRecovery(resultWithPostUpdate.recovery),
         };
         const recovered = await recoverFailedResult(failure, false);
         if (recovered.result.status !== "ok") {

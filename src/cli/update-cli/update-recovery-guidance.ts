@@ -56,9 +56,9 @@ export function resolveUpdateResultNextAction(params: {
       (step) => step.name === "doctor process settlement",
     );
     if (
-      result.reason === "state-migrated-no-rollback" &&
       result.recovery?.serviceRestartSafe === true &&
-      result.recovery.service === "healthy"
+      result.recovery.service === "healthy" &&
+      !result.recovery.packageRollbackVerified
     ) {
       const refusal = result.rollbackOutcome?.reason;
       return `${refusal ? `Rollback refused: ${refusal}. ` : ""}The candidate Gateway is healthy and running on the preserved migrated state. Keep the recovery snapshots; stop the Gateway first (\`${formatCliCommand("openclaw gateway stop", env)}\`), then run \`${formatCliCommand("openclaw update repair", env)}\` to finish maintenance.`;

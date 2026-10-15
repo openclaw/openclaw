@@ -88,6 +88,25 @@ afterEach(() => {
 });
 
 describe("update recovery reporting", () => {
+  it("keeps healthy previous-generation rollback guidance distinct from migrated candidate recovery", () => {
+    const action = resolveUpdateResultNextAction({
+      result: failure({
+        reason: "post-update-failed",
+        recovery: {
+          serviceRestartSafe: true,
+          packageRollbackVerified: true,
+          service: "healthy",
+          version: "1.0.0",
+        },
+      }),
+      verifiedServingVersion: "1.0.0",
+      env: {},
+    });
+    expect(action).toContain("Your Gateway is still serving 1.0.0; nothing to restore.");
+    expect(action).not.toContain("candidate");
+    expect(action).not.toContain("stop the Gateway");
+  });
+
   it.each([
     { reason: "service-definition-rollback-unverified", dataAtRisk: false },
     { reason: "runtime-verification-failed", dataAtRisk: false },

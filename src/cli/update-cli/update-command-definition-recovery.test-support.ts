@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi, type Mock } from "vitest";
+import { assert, expect, it, vi, type Mock } from "vitest";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
+import * as stateSchemas from "../../infra/update-candidate-state.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import * as processExec from "../../process/exec.js";
@@ -11,6 +12,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import { inspectActivatedUpdateState } from "./update-command-migrated.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 
@@ -300,4 +302,108 @@ export function registerUnverifiedDefinitionRecoveryTests({
       expect(mocks.restartCommand).not.toHaveBeenCalled();
     },
   );
+
+  it("never restarts or marks migration-risk results safe during final recovery", async () => {
+    for (const producer of ["migration", "inspection", "finalization"] as const) {
+      mocks.healthy = false;
+      const params = fixture();
+      const root = makeHome();
+      await fs.mkdir(path.join(root, "dist"));
+      await fs.writeFile(path.join(root, "dist/index.js"), "export {};\n");
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", version: mocks.version }),
+      );
+      params.root = root;
+      params.result = {
+        ...params.result,
+        root,
+        status: "error",
+        reason: "doctor-failed",
+        recovery: {
+          serviceRestartSafe: false,
+          reason:
+            producer === "finalization" ? "state-migration-started" : "runtime-verification-failed",
+        },
+      };
+      if (producer !== "finalization") {
+        const inspect = vi.spyOn(stateSchemas, "readUpdateStateSchemaVersions");
+        const database = path.join(
+          params.opts.run!.env!.OPENCLAW_STATE_DIR!,
+          "state/openclaw.sqlite",
+        );
+        inspect.mockResolvedValue([{ path: database, userVersion: 2 }]);
+        if (producer === "inspection") {
+          inspect.mockRejectedValue(new Error("Cannot inspect migrated state"));
+        }
+        params.rollbackBlockedReason = await inspectActivatedUpdateState({
+          result: params.result,
+          root,
+          schemaVersions: [{ path: database, userVersion: 1 }],
+          config: {},
+          env: params.opts.run!.env!,
+        });
+        inspect.mockRestore();
+      }
+      mocks.readService.mockImplementation(async () => ({
+        installed: true,
+        loadState: { status: "loaded" },
+        running: mocks.healthy,
+        runtime: { status: mocks.healthy ? "running" : "stopped" },
+        env: params.opts.run!.env!,
+        command: {
+          programArguments: [process.execPath, path.join(root, "dist/index.js"), "gateway"],
+        },
+      }));
+      vi.mocked(resolveGatewayService).mockReturnValue(
+        createMockGatewayService({
+          readRuntime: async () => ({ status: mocks.healthy ? "running" : "stopped" }),
+        }),
+      );
+      mocks.revalidate.mockResolvedValue({ kind: "owned", root, fingerprint: "fixture" });
+      params.preManagedServiceStop!.serviceUpdateVerdict = {
+        kind: "owned",
+        root,
+        fingerprint: "fixture",
+        refreshDefinition: false,
+      };
+      mocks.restartCommand.mockImplementation(async () => {
+        mocks.healthy = true;
+        return "accepted";
+      });
+      // Native activation would make this runnable package healthy; the risk must prevent it.
+      const run = params.opts.run!;
+      const failure = await withUpdateCommandExecutor(run.runId, async (executor) => {
+        run.executorFence = await executor.enter(root);
+        return await finishUpdate(params).catch((error: unknown) => error);
+      });
+      assert(failure instanceof UpdateCommandFailure);
+      const risk =
+        producer === "inspection" ? "rollback-state-unverified" : "state-migrated-no-rollback";
+      const actions = mocks.restartCommand.mock.calls.map(([, action]) => action);
+      expect(failure.result, JSON.stringify({ producer, actions })).toMatchObject({
+        reason: risk,
+        recovery: { serviceRestartSafe: false, dataAtRisk: risk },
+      });
+      if (producer !== "finalization") {
+        expect(params.result.recovery).toMatchObject({
+          serviceRestartSafe: false,
+          dataAtRisk: risk,
+        });
+      }
+      expect(actions, producer).toEqual([]);
+      expect(mocks.restart.mock.calls.length, producer).toBe(0);
+      const persisted = getUpdateRun(params.opts.run!.runId, { env: params.opts.run!.env });
+      expect(persisted?.verification.recovery).toMatchObject({
+        serviceRestartSafe: false,
+        dataAtRisk: risk,
+      });
+      expect(persisted?.steps).toContainEqual(
+        expect.objectContaining({
+          step: "finalize:data-at-risk",
+          failureFacts: [{ check: "update-recovery", code: risk }],
+        }),
+      );
+    }
+  });
 }

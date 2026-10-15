@@ -32,6 +32,7 @@ import {
 } from "../../infra/update-candidate-state.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
+import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
@@ -114,10 +115,7 @@ export async function rollbackFailedUpdate(params: {
     result: {
       ...result,
       status: "error" as const,
-      recovery: {
-        serviceRestartSafe: false as const,
-        reason: "runtime-verification-failed" as const,
-      },
+      recovery: unsafeUpdateRecovery(result.recovery),
     },
     rolledBack: false,
     pendingRecoveryReason,
@@ -169,15 +167,8 @@ export async function rollbackFailedUpdate(params: {
     ? (before.servicePort ?? (await resolveUpdatedGatewayRestartPort({ config, serviceEnv: env })))
     : undefined;
   const failed = (reason: string, dataAtRisk?: string) => {
-    if (
-      dataAtRisk &&
-      !(result.recovery?.serviceRestartSafe === false && result.recovery.dataAtRisk)
-    ) {
-      result.recovery = {
-        serviceRestartSafe: false,
-        reason: "state-migration-started",
-        dataAtRisk,
-      };
+    if (dataAtRisk) {
+      result.recovery = unsafeUpdateRecovery(result.recovery, dataAtRisk);
     }
     return {
       result: {
@@ -245,7 +236,8 @@ export async function rollbackFailedUpdate(params: {
   };
   let stoppedForRollback: PreManagedServiceStop | undefined;
   let failureReason = "rollback-state-unverified";
-  let dataAtRisk: "rollback-state-unverified" | undefined = "rollback-state-unverified";
+  let dataAtRisk: "rollback-state-unverified" | "state-migrated-no-rollback" | undefined =
+    "rollback-state-unverified";
   const assertConfigUnchanged = async () => {
     assertCurrent();
     let unchanged = configFiles.every((file) => file.doctorOwned !== false);
@@ -290,6 +282,7 @@ export async function rollbackFailedUpdate(params: {
     assertCurrent();
     if (!unchanged) {
       failureReason = "state-migrated-no-rollback";
+      dataAtRisk = "state-migrated-no-rollback";
       const detail = `Configuration ${configSnapshot.path} or its included files changed after activation; automatic rollback was refused to preserve those edits.`;
       result = {
         ...result,
@@ -471,6 +464,7 @@ export async function rollbackFailedUpdate(params: {
           return failed(restored.reason ?? "source-rollback-failed");
         }
         failureReason = "rollback-state-unverified";
+        dataAtRisk = "rollback-state-unverified";
         await assertConfigUnchanged();
         // Restore dependencies before the root that selects them.
         for (const file of changedConfigFiles.toReversed()) {
@@ -496,6 +490,7 @@ export async function rollbackFailedUpdate(params: {
         }
         await assertConfigUnchanged();
         assertRestorationCurrent();
+        dataAtRisk = undefined;
         return undefined;
       };
       // Unchanged config needs only the legacy read checks, including read-only

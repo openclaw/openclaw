@@ -257,9 +257,6 @@ export async function updateGitCheckout(params: {
       }
       // Doctor can migrate state before failing. Restoring code cannot undo that boundary.
       if (stateMigrationStarted) {
-        if (!recovery.serviceRestartSafe) {
-          recovery.dataAtRisk ??= "state-migrated-no-rollback";
-        }
         rollbackOutcome = {
           status: "not-attempted",
           reason: "State migration started; restoring code alone cannot restore operator state",
@@ -614,7 +611,11 @@ export async function updateGitCheckout(params: {
     // Source conversion migrates only after its prepared global exposure is swapped.
     if (!opts.prepareGitExposure) {
       stateMigrationStarted = true;
-      recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
+      recovery = {
+        serviceRestartSafe: false,
+        reason: "state-migration-started",
+        dataAtRisk: "state-migrated-no-rollback",
+      };
       const doctorSteps: UpdateStepResult[] = [];
       let doctorStep: UpdateStepResult | null;
       try {

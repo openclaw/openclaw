@@ -3,6 +3,7 @@ import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.j
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-control-plane-sentinel.js";
 import { collectUpdateDoctorFailureFacts } from "../../infra/update-doctor-result.js";
+import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -158,7 +159,10 @@ export function completeUpdateCommandResult(
     ...(result.status === "error" &&
     result.reason !== UPDATE_ACTIVATION_TIMEOUT_REASON &&
     params.rollbackBlockedReason
-      ? { reason: params.rollbackBlockedReason }
+      ? {
+          reason: params.rollbackBlockedReason,
+          recovery: unsafeUpdateRecovery(result.recovery, params.rollbackBlockedReason),
+        }
       : {}),
     durationMs: Math.max(0, Date.now() - params.startedAt),
   });

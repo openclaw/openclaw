@@ -241,7 +241,6 @@ export async function admitInstalledGatewayRecovery(
     settlement !== undefined;
   if (
     (!currentCore && result.reason !== "state-migrated-no-rollback") ||
-    (params.coreAlreadyCurrent && result.recovery?.serviceRestartSafe === false) ||
     (result.recovery?.serviceRestartSafe === false &&
       result.recovery.dataAtRisk &&
       result.recovery.dataAtRisk !== "state-migrated-no-rollback") ||
@@ -359,6 +358,10 @@ export async function admitInstalledGatewayRecovery(
     }
   }
   // Preserve later writes; the installed candidate's native startup still owns state admission.
+  // Forward admission settles the migration risk, but Doctor maintenance still failed.
+  if (result.reason === "state-migrated-no-rollback") {
+    result.reason = "post-update-failed";
+  }
   result.recovery = { serviceRestartSafe: true, version, ...(buildId ? { buildId } : {}) };
   if (params.opts.run) {
     recordUpdateRunDiagnostics(
