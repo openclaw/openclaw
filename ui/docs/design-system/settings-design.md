@@ -72,6 +72,11 @@ Mount settings views inside `ShellLayoutProvider` from
 and the connected route host. Settings layout boundaries publish their traits
 before evaluating descendant content, so measurements see the correct shell
 classes. Keep this owner shared with the Lit shell adapter during migration.
+When a page body loads asynchronously, publish its column trait at the page-shell
+boundary, outside the loading branch. The Models shell reserves the narrow
+settings column before provider data arrives, keeping its heading in place.
+The settings footer reserves one line for connection status and applies the
+build chip's `display: contents` layout before the custom element upgrades.
 
 ## Phone and native embed layouts
 

@@ -3050,6 +3050,7 @@ const reviewedOperations = new Map([
         operations: [
           "readLatestTranscriptEntry",
           "readTranscriptEntry",
+          "readTranscriptPage",
           "readStoredTranscriptNotes",
         ],
         evidence:

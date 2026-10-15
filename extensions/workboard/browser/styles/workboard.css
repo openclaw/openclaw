@@ -587,7 +587,7 @@
   gap: 14px;
   width: 100%;
   height: auto;
-  max-height: calc(100dvh - 40px);
+  max-height: var(--openclaw-modal-height-limit);
   min-height: 0;
   overflow: hidden;
   padding: 20px 22px;
@@ -1496,7 +1496,7 @@
   grid-column: 1 / -1;
 }
 
-.workboard-modal__actions {
+.workboard-modal__actions:not(openclaw-modal-actions) {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
@@ -4194,10 +4194,6 @@ workboard-inline-text {
 }
 
 .workboard-discard__actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
   margin-top: 12px;
 }
 

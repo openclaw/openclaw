@@ -232,25 +232,26 @@ export function kickSessionEntryMaintenanceAfterWrite(
             ...change,
             previousEntry: previous ? previous.previousEntry : change.previousEntry,
           });
-          if (!change.previousEntry || invalidated) {
-            const preserved =
-              change.entry.preserved ??
-              shouldPreserveMaintenanceEntry({
-                key: change.sessionKey,
-                entry: change.entry,
-                preserveRecentMs: null,
-              });
+          const preserved =
+            change.entry.preserved ??
+            shouldPreserveMaintenanceEntry({
+              key: change.sessionKey,
+              entry: change.entry,
+              preserveRecentMs: null,
+            });
+          const protectionReleased = change.previousEntry?.preserved && !preserved;
+          if (!change.previousEntry || invalidated || protectionReleased) {
             const fact = created.ageFact;
             const resume =
               !created.running &&
               (invalidated ||
-                (created.noCandidates
-                  ? !preserved
-                  : fact?.entryCount !== undefined &&
-                    shouldRunSessionEntryMaintenance({
-                      entryCount: fact.entryCount,
-                      maxEntries: fact.maintenance.maxEntries,
-                    })));
+                (fact && Date.now() >= Math.min(fact.next.at, fact.recheckAt)) ||
+                ((!created.noCandidates || !preserved) &&
+                  fact?.entryCount !== undefined &&
+                  shouldRunSessionEntryMaintenance({
+                    entryCount: fact.entryCount,
+                    maxEntries: fact.maintenance.maxEntries,
+                  })));
             if (!preserved) {
               created.noCandidates = false;
             }
@@ -263,6 +264,8 @@ export function kickSessionEntryMaintenanceAfterWrite(
               } else {
                 scheduleImmediateMaintenance(databasePath, created);
               }
+            } else if (!created.running && fact && created.retryDelayMs === undefined) {
+              scheduleMaintenanceAt(databasePath, created, Math.min(fact.next.at, fact.recheckAt));
             }
           }
         }),
@@ -580,10 +583,6 @@ async function runPendingMaintenance(
         return {
           activeSessionKeys,
           preservation: capturePreservation(),
-          preparedAgeFactCurrent:
-            owner.generation === generation &&
-            plannedChanges.isCurrent() &&
-            isDeepStrictEqual(maintenance, resolveOwnerMaintenance(owner)),
         };
       },
       plan: operation,

@@ -213,38 +213,33 @@ export class PaletteSessionSettings {
     const groups = machines
       .map((machine) => ({
         machine,
-        choices:
-          machine.disabledReason || machine.hosted
-            ? [
-                {
-                  id: "",
-                  label: t(
-                    machine.disabledReason
-                      ? "newSession.environmentUnavailable"
-                      : "newSession.hostedWorkspace",
-                  ),
-                },
-              ].filter(
-                (choice) =>
-                  !query ||
-                  (machine.label + " " + choice.label).toLocaleLowerCase().includes(query),
-              )
-            : [
-                {
-                  id: "",
-                  label: machine.remote
-                    ? t("newSession.newWorkspace")
-                    : pathDisplayName(place.workspacePath()) || t("newSession.folderPlaceholder"),
-                },
-                ...draft.browser.projects.map((project) => ({
-                  id: project.id,
-                  label: project.displayName,
-                })),
-              ].filter(
-                (choice) =>
-                  !query ||
-                  (machine.label + " " + choice.label).toLocaleLowerCase().includes(query),
-              ),
+        choices: (machine.disabledReason || machine.hosted
+          ? [
+              {
+                id: "",
+                label: t(
+                  machine.disabledReason
+                    ? "newSession.environmentUnavailable"
+                    : "newSession.hostedWorkspace",
+                ),
+              },
+            ]
+          : [
+              {
+                id: "",
+                label: machine.remote
+                  ? t("newSession.newWorkspace")
+                  : pathDisplayName(place.workspacePath()) || t("newSession.folderPlaceholder"),
+              },
+              ...draft.browser.projects.map((project) => ({
+                id: project.id,
+                label: project.displayName,
+              })),
+            ]
+        ).filter(
+          (choice) =>
+            !query || (machine.label + " " + choice.label).toLocaleLowerCase().includes(query),
+        ),
       }))
       .filter((group) => group.choices.length);
     return {

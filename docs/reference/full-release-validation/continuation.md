@@ -263,7 +263,21 @@ registry readback, binding and asset checks remain separate. Failed publishers
 can retain successful readback and partial package results. Docker and VCR
 remain parent jobs; VCR copy, smoke and alias values are API step conclusions.
 Detached Windows acknowledgement, its pre-upload marker and the current child
-conclusion are separate observations. The normal ClawHub dispatch record is not
+conclusion are separate observations. Linux requests likewise remain
+`awaiting-admission` until the exact downstream builder records admission. The
+reader binds the request attempt, builder identity, selected tag, and source SHA;
+main advancing can produce an explicit receiver rejection, not a silent pending
+request. Builder completion and admission are not publication qualification.
+The `Linux App Release` workflow accepts only completed release requests through
+`workflow_run`. Detached mirror-only dispatches use `Linux App Mirror`
+(`linux-app-mirror.yml`); they never select or build release-tag code.
+
+If Linux packaging checks fail after bundles finish building, the builder retains
+`linux-app-release-unqualified-<run-id>-<attempt>` for 14 days. Its `identity.json`
+records source, tooling, and failed checks; `SHA256SUMS` binds the retained bundle
+bytes. Verify those facts before rerunning the packaging checker on downloaded
+outputs. These diagnostics cannot enter signing or publication; there is no
+shortcut that converts a retained failed bundle into a qualified release. The normal ClawHub dispatch record is not
 a complete child inventory. Mac assets/feeds and website deployment are not
 collected by this reader. Use the native publication and website deployment
 owners for their current readbacks. The [website owner's download checks](https://github.com/openclaw/openclaw.ai#companion-downloads)

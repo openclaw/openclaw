@@ -94,9 +94,9 @@ suite.define(() => {
           await gateway.resolveDeferred("sessions.dispatch", {});
           await pollLocatorText(retained).toContain("Your prompt is kept here");
           await expect.poll(() => working.count()).toBe(0);
-          expect(await retained.locator(".agent-chat__composer-shell button:enabled").count()).toBe(
-            0,
-          );
+          expect(
+            await retained.locator(".agent-chat__composer-shell button:enabled:visible").count(),
+          ).toBe(0);
           expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
           await captureUiProof(suite, page, "interrupted-incognito-prompt.png");
         } else {

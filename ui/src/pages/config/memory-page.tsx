@@ -21,7 +21,6 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import {
   resolveConfiguredDreaming,
   resolveDreamingConfigPathSupport,
@@ -81,7 +80,7 @@ export type MemorySettingsPageProps = {
   buildEditor: () => JSX.Element;
 };
 
-function MemorySettingsContent(props: MemorySettingsPageProps) {
+export function MemorySettingsPage(props: MemorySettingsPageProps) {
   const application = useApplication();
   const gateway = projectGateway(application.gateway);
   const agentSelection = projectAgentSelection(application.settingsAgentSelection);
@@ -655,87 +654,76 @@ function MemorySettingsContent(props: MemorySettingsPageProps) {
   const agentError = () => (agentId() ? null : agents.read().agentsError);
 
   return (
-    <Memory
-      activeTab={activeTab()}
-      onTabChange={navigateTab}
-      engineOptions={buildMemoryEngineOptions(catalog(), engineSelection())}
-      engineSelection={engineSelection()}
-      engineState={currentEngineState()}
-      engineBusy={engineBusy() || props.mutationDisabled || catalogBlocksMutation()}
-      engineOutcome={engineOutcome()}
-      onEngineChange={(nextEngineId) => void changeEngine(nextEngineId, engineSelection())}
-      addons={buildMemoryAddonRows(catalog(), {
-        busy: addonBusy(),
-        errors: addonErrors(),
-        notices: addonNotices(),
-        refreshWarnings: addonRefreshWarnings(),
-      })}
-      canToggleAddons={
-        catalogCanMutate() &&
-        !props.mutationDisabled &&
-        readGatewayOperatorAccess(gateway.read().snapshot).canAdmin
-      }
-      onAddonChange={(pluginId, enabled) => void changeAddon(pluginId, enabled)}
-      pluginsHref={props.pluginsHref}
-      memoryImportHref={props.memoryImportHref}
-      canImportMemory={readGatewayOperatorAccess(gateway.read().snapshot).canAdmin}
-      overview={
-        <MemoryOverview
-          agentId={agentId()}
-          engineSelection={engineSelection()}
-          engineDisabled={currentEngineState() === "disabled"}
-          status={agentError() ? { kind: "error", message: agentError()! } : overviewStatus()}
-          probingEmbeddings={probingEmbeddings()}
-          onRefresh={() =>
-            agentId()
-              ? void loadOverviewStatus({ force: true })
-              : void application.agents.ensureList()
-          }
-          onProbeEmbeddings={() => void loadOverviewStatus({ force: true, probeEmbeddings: true })}
-          onNavigate={navigateTab}
-        />
-      }
-      memories={
-        <MemoryMemories
-          client={gateway.read().snapshot.client}
-          connected={gateway.read().snapshot.phase === "connected"}
-          methodAdvertised={
-            isGatewayMethodAdvertised(gateway.read().snapshot, "memory.search") === true
-          }
-          agentId={agentId()}
-        />
-      }
-      dreams={
-        <Show when={agentId()} keyed>
-          {(id) => <AgentMemoryPanel agentId={id} />}
-        </Show>
-      }
-      editor={activeTab() === "settings" ? props.buildEditor() : null}
-      dreamingSettings={
-        activeTab() === "settings" ? (
-          <MemoryDreamingControls
-            config={currentConfigObject(runtime.read().state)}
-            support={support()}
-            disabled={props.mutationDisabled}
-            onPatch={patchDreaming}
+    <openclaw-memory-settings>
+      <Memory
+        activeTab={activeTab()}
+        onTabChange={navigateTab}
+        engineOptions={buildMemoryEngineOptions(catalog(), engineSelection())}
+        engineSelection={engineSelection()}
+        engineState={currentEngineState()}
+        engineBusy={engineBusy() || props.mutationDisabled || catalogBlocksMutation()}
+        engineOutcome={engineOutcome()}
+        onEngineChange={(nextEngineId) => void changeEngine(nextEngineId, engineSelection())}
+        addons={buildMemoryAddonRows(catalog(), {
+          busy: addonBusy(),
+          errors: addonErrors(),
+          notices: addonNotices(),
+          refreshWarnings: addonRefreshWarnings(),
+        })}
+        canToggleAddons={
+          catalogCanMutate() &&
+          !props.mutationDisabled &&
+          readGatewayOperatorAccess(gateway.read().snapshot).canAdmin
+        }
+        onAddonChange={(pluginId, enabled) => void changeAddon(pluginId, enabled)}
+        pluginsHref={props.pluginsHref}
+        memoryImportHref={props.memoryImportHref}
+        canImportMemory={readGatewayOperatorAccess(gateway.read().snapshot).canAdmin}
+        overview={
+          <MemoryOverview
+            agentId={agentId()}
+            engineSelection={engineSelection()}
+            engineDisabled={currentEngineState() === "disabled"}
+            status={agentError() ? { kind: "error", message: agentError()! } : overviewStatus()}
+            probingEmbeddings={probingEmbeddings()}
+            onRefresh={() =>
+              agentId()
+                ? void loadOverviewStatus({ force: true })
+                : void application.agents.ensureList()
+            }
+            onProbeEmbeddings={() =>
+              void loadOverviewStatus({ force: true, probeEmbeddings: true })
+            }
+            onNavigate={navigateTab}
           />
-        ) : null
-      }
-    />
+        }
+        memories={
+          <MemoryMemories
+            client={gateway.read().snapshot.client}
+            connected={gateway.read().snapshot.phase === "connected"}
+            methodAdvertised={
+              isGatewayMethodAdvertised(gateway.read().snapshot, "memory.search") === true
+            }
+            agentId={agentId()}
+          />
+        }
+        dreams={
+          <Show when={agentId()} keyed>
+            {(id) => <AgentMemoryPanel agentId={id} />}
+          </Show>
+        }
+        editor={activeTab() === "settings" ? props.buildEditor() : null}
+        dreamingSettings={
+          activeTab() === "settings" ? (
+            <MemoryDreamingControls
+              config={currentConfigObject(runtime.read().state)}
+              support={support()}
+              disabled={props.mutationDisabled}
+              onPatch={patchDreaming}
+            />
+          ) : null
+        }
+      />
+    </openclaw-memory-settings>
   );
 }
-
-export const MemorySettingsPage = defineSolidBridge<MemorySettingsPageProps>(
-  "openclaw-memory-settings",
-  (props) => <MemorySettingsContent {...props} />,
-  {
-    properties: {
-      configObject: { default: {}, attribute: false },
-      mutationDisabled: { default: false, type: Boolean },
-      pluginsHref: { default: "" },
-      memoryImportHref: { default: "" },
-      routeData: { default: null, attribute: false },
-      buildEditor: { default: () => null, attribute: false },
-    },
-  },
-);

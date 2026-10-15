@@ -336,10 +336,10 @@ For typechecking, set `jsx: "preserve"` and `jsxImportSource: "@solidjs/web"`.
 The framework-neutral view contract stays the same:
 
 ```tsx
-/** @jsxImportSource @solidjs/web */
-import { createSignal } from "solid-js";
 import { render } from "@solidjs/web";
 import type { ControlUiView } from "openclaw/plugin-sdk/control-ui";
+/** @jsxImportSource @solidjs/web */
+import { createSignal } from "solid-js";
 
 const mount: ControlUiView = (container, context) => {
   const [label, setLabel] = createSignal(context.props.label ?? "Ready");

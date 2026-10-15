@@ -43,6 +43,7 @@ export type ExecApprovalCardProps = {
   error: string | null;
   variant: "inline" | "modal";
   queueCount?: number;
+  renderPendingQueue?: () => SolidJSX.Element;
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
 };
 
@@ -387,6 +388,82 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
   const agentId = createMemo(() =>
     props.variant === "modal" ? active().request.agentId?.trim() : null,
   );
+  const content = () => (
+    <>
+      <div class="exec-approval-header">
+        <div>
+          <div class="exec-approval-title">{approvalTitle(active())}</div>
+          {pluginId() || agentId() ? (
+            <div class="exec-approval-chips">
+              {renderChip("plugin", pluginId())} {renderChip("agent", agentId())}
+            </div>
+          ) : undefined}
+          <ApprovalCountdown
+            class="exec-approval-sub exec-approval-countdown"
+            role="timer"
+            expiresAtMs={active().expiresAtMs}
+          />
+        </div>
+        {(props.queueCount ?? 0) > 1 ? (
+          <div class="exec-approval-queue">
+            {t("execApproval.pending", { count: String(props.queueCount) })}
+          </div>
+        ) : undefined}
+      </div>
+      <Show when={props.variant === "inline" && active().sourceSessionKey}>
+        {(sessionKey) => (
+          <div class="exec-approval-warning" role="note">
+            {t("execApproval.requestedBySession", {
+              session: resolveSessionDisplayName(sessionKey(), props.sourceSession),
+            })}
+          </div>
+        )}
+      </Show>
+      {active().kind === "exec"
+        ? renderExecBody(active().request, props.variant)
+        : renderPluginBody(active(), props.variant)}
+      {active().kind === "exec" && !decisions().includes("allow-always") ? (
+        <div class="exec-approval-warning">{t("execApproval.allowAlwaysUnavailable")}</div>
+      ) : undefined}
+      {!props.canGrant ? (
+        <div
+          class={grantError() ? "exec-approval-error" : "exec-approval-warning"}
+          role={grantError() ? "alert" : "note"}
+        >
+          {reviewOnlyMessage()}
+        </div>
+      ) : undefined}
+      {props.error && !grantError() ? (
+        <div class="exec-approval-error" role="alert">
+          {props.error}
+        </div>
+      ) : undefined}
+      {props.renderPendingQueue?.()}
+    </>
+  );
+  const actions = () => (
+    <For each={decisions()}>
+      {(decision) => {
+        const label = createMemo(() => approvalDecisionLabel(decision, active()));
+        return (
+          <button
+            class={decisionClass(decision)}
+            type="button"
+            aria-label={label()}
+            disabled={props.busy || !props.canGrant}
+            title={
+              props.variant === "modal" && props.canGrant
+                ? `${label()} (${decisionShortcut(decision)})`
+                : label()
+            }
+            onClick={() => void props.onDecision(active().id, decision)}
+          >
+            <span>{label()}</span>
+          </button>
+        );
+      }}
+    </For>
+  );
   return (
     <>
       {" "}
@@ -398,77 +475,15 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
         ]}
         data-approval-id={active().id}
       >
-        <div class="exec-approval-header">
-          <div>
-            <div class="exec-approval-title">{approvalTitle(active())}</div>
-            {pluginId() || agentId() ? (
-              <div class="exec-approval-chips">
-                {renderChip("plugin", pluginId())} {renderChip("agent", agentId())}
-              </div>
-            ) : undefined}
-            <ApprovalCountdown
-              class="exec-approval-sub exec-approval-countdown"
-              role="timer"
-              expiresAtMs={active().expiresAtMs}
-            />
-          </div>
-          {(props.queueCount ?? 0) > 1 ? (
-            <div class="exec-approval-queue">
-              {t("execApproval.pending", { count: String(props.queueCount) })}
-            </div>
-          ) : undefined}
-        </div>
-        <Show when={props.variant === "inline" && active().sourceSessionKey}>
-          {(sessionKey) => (
-            <div class="exec-approval-warning" role="note">
-              {t("execApproval.requestedBySession", {
-                session: resolveSessionDisplayName(sessionKey(), props.sourceSession),
-              })}
-            </div>
-          )}
+        <Show when={props.variant === "modal"} fallback={content()}>
+          <div class="exec-approval-modal-content">{content()}</div>
         </Show>
-        {active().kind === "exec"
-          ? renderExecBody(active().request, props.variant)
-          : renderPluginBody(active(), props.variant)}
-        {active().kind === "exec" && !decisions().includes("allow-always") ? (
-          <div class="exec-approval-warning">{t("execApproval.allowAlwaysUnavailable")}</div>
-        ) : undefined}
-        {!props.canGrant ? (
-          <div
-            class={grantError() ? "exec-approval-error" : "exec-approval-warning"}
-            role={grantError() ? "alert" : "note"}
-          >
-            {reviewOnlyMessage()}
-          </div>
-        ) : undefined}
-        {props.error && !grantError() ? (
-          <div class="exec-approval-error" role="alert">
-            {props.error}
-          </div>
-        ) : undefined}
-        <div class="exec-approval-actions">
-          <For each={decisions()}>
-            {(decision) => {
-              const label = createMemo(() => approvalDecisionLabel(decision, active()));
-              return (
-                <button
-                  class={decisionClass(decision)}
-                  type="button"
-                  aria-label={label()}
-                  disabled={props.busy || !props.canGrant}
-                  title={
-                    props.variant === "modal" && props.canGrant
-                      ? `${label()} (${decisionShortcut(decision)})`
-                      : label()
-                  }
-                  onClick={() => void props.onDecision(active().id, decision)}
-                >
-                  <span>{label()}</span>
-                </button>
-              );
-            }}
-          </For>
-        </div>
+        <Show
+          when={props.variant === "modal"}
+          fallback={<div class="exec-approval-actions">{actions()}</div>}
+        >
+          <openclaw-modal-actions class="exec-approval-actions">{actions()}</openclaw-modal-actions>
+        </Show>
       </div>
     </>
   );

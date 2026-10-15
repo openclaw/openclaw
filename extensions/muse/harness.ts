@@ -1,9 +1,14 @@
 import { realpath } from "node:fs/promises";
 import type { Session, Turn } from "@muse-code/sdk";
 import {
+  createAgentHarnessAttemptLifecycle,
+  emitAgentHarnessAttemptEvent,
+} from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
+import {
   AgentHarnessPreflightError,
   agentHarnessAttemptTerminal,
   clearActiveEmbeddedRun,
+  embeddedAgentLog,
   execPolicy,
   setActiveEmbeddedRun,
   type AgentHarnessAttemptParamsV2,
@@ -34,7 +39,7 @@ import { createApprovalHandler } from "./src/approvals.js";
 import { prepareMuseSessionContext } from "./src/context.js";
 import { consumeTurn } from "./src/events.js";
 import { MusePool, openMuseSession } from "./src/runtime.js";
-import { readMuseCatalog, verifyMuseSetup } from "./src/verify-setup.js";
+import { MuseCatalogReader } from "./src/verify-setup.js";
 
 type MuseInputPart = Parameters<Session["sendUserTurn"]>[0]["input"][number];
 
@@ -52,6 +57,7 @@ function museRefusal(message: string): AgentHarnessPreflightError {
 
 export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnessV2 {
   const pool = new MusePool(options.binaryPath);
+  const catalogReader = new MuseCatalogReader();
   const queue = new KeyedAsyncQueue();
   const active = new Map<string, () => Promise<void>>();
   const inFlight = new Set<Promise<unknown>>();
@@ -186,6 +192,14 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       let text = "";
       let lastToolError: AgentHarnessAttemptResult["lastToolError"];
       let assistantTranscriptOwned = false;
+      const lifecycle = createAgentHarnessAttemptLifecycle({
+        attempt: params,
+        backend: "muse",
+        startedAtMs: params.startedAtMs ?? Date.now(),
+        state: { lifecycleStarted: false, lifecycleTerminalEmitted: false },
+        emitEvent: (event) =>
+          emitAgentHarnessAttemptEvent(params, event, { label: "Muse", log: embeddedAgentLog }),
+      });
       let finalKey: string | undefined;
       const bound = params.hostCapabilities.bindModelExecution?.({
         provider: "meta",
@@ -324,12 +338,15 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
             base64Data: image.data,
           })),
         ];
+        lifecycle.emitExecutionPhaseOnce("context", { phase: "context_assembled" });
         turn = await session.sendUserTurn({
           input,
           ...(params.thinkLevel
             ? { reasoningEffort: params.thinkLevel === "off" ? "minimal" : params.thinkLevel }
             : {}),
         });
+        lifecycle.emitLifecycleStart({ provider: "meta", model: params.modelId });
+        lifecycle.emitExecutionPhaseOnce("accepted", { phase: "turn_accepted" });
         // Publish the binding only once Muse accepted the turn carrying any fresh-session
         // context; an earlier failure must leave the next attempt to seed a new session.
         await options.sessionStore.register(params.sessionId, {
@@ -353,7 +370,10 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
             if (message.role === "assistant" && message.stopReason !== "toolUse") {
               finalKey = idempotencyKey;
             }
-            return { message: { ...message, idempotencyKey }, idempotencyLookup: "scan" as const };
+            return {
+              message: { ...message, idempotencyKey, __openclaw: { runId: params.runId } },
+              idempotencyLookup: "scan" as const,
+            };
           });
           params.hostCapabilities.assertActive();
           const written = await appendSessionTranscriptMessagesByIdentity({
@@ -364,7 +384,21 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           if (written.length !== entries.length) {
             throw new Error("Muse transcript persistence rejected a native message group.");
           }
-          await publishSessionTranscriptUpdateByIdentity(transcriptTarget);
+          const committed = written.at(-1);
+          if (committed) {
+            await publishSessionTranscriptUpdateByIdentity({
+              ...transcriptTarget,
+              update: {
+                message: committed.message,
+                messageId: committed.messageId,
+                ...(committed.anchor
+                  ? { messageSeq: committed.anchor.activeMessagePosition + 1 }
+                  : {}),
+                runId: params.runId,
+                ...(committed.message.role === "assistant" ? { assistantItemIds: [itemId] } : {}),
+              },
+            });
+          }
           messages.push(...group);
           assistantTranscriptOwned = finalKey !== undefined;
         });
@@ -388,6 +422,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         if (result.outcome.params.terminal === "cancelled" && !failure) {
           aborted = true;
         }
+        lifecycle.emitLifecycleTerminal({ phase: "end" });
       } catch (error) {
         if (signal?.aborted && !failure) {
           // The caller's abort, not a Muse failure, ended this attempt.
@@ -398,6 +433,10 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
         if (turn) {
           await stop().catch(() => undefined);
         }
+        lifecycle.emitLifecycleTerminal({
+          phase: failure ? "error" : "end",
+          ...(failure ? { error: failure } : {}),
+        });
       } finally {
         await abortPromise?.catch(() => undefined);
         clearTimeout(timer);
@@ -478,10 +517,10 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
     autoSelection: { providerIds: [] },
     authBootstrap: "harness",
     executionEnvironment: "host-only",
-    verifySetup: verifyMuseSetup,
+    verifySetup: (ctx) => catalogReader.verify(ctx),
     async loadModelCatalog(params) {
       catalogs.delete(params.agentDir);
-      const request = readMuseCatalog({
+      const request = catalogReader.read({
         config: params.config,
         signal: AbortSignal.any([catalogAbort.signal, AbortSignal.timeout(30_000)]),
         assertCurrent: () => {
@@ -565,6 +604,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       await Promise.allSettled([...active.values()].map((abort) => abort()));
       await Promise.allSettled(inFlight);
       await pool.dispose();
+      await catalogReader.dispose();
     },
   };
 }

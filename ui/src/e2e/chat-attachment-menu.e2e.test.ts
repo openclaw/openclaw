@@ -14,7 +14,7 @@ const suite = createControlUiE2eSuite({
 
 async function choose(page: Page, kind: string) {
   await page.getByRole("button", { name: "Add attachment", exact: true }).press("Enter");
-  const item = page.locator(`.agent-chat__attach-menu-option[value="${kind}"]`);
+  const item = page.locator(`.agent-chat__attach-menu-option[data-value="${kind}"]`);
   await item.waitFor({ state: "visible" });
   const pending = page.waitForEvent("filechooser");
   await item.press("Enter");
@@ -171,17 +171,19 @@ suite.define(() => {
           await page.setViewportSize({ width, height });
           await trigger.press("Enter");
           await page
-            .locator('.agent-chat__attach-menu-option[value="file"]')
+            .locator('.agent-chat__attach-menu-option[data-value="file"]')
             .waitFor({ state: "visible" });
           expect((await items.allTextContents()).map((text) => text.trim())).toEqual(
             fixture.single ? ["Attach…"] : ["Take photo", "Photo", "File"],
           );
           for (const value of ["open-skills", "open-connectors", "manage-plugins"]) {
-            expect(await page.locator(`wa-dropdown-item[value="${value}"]`).isVisible()).toBe(true);
+            expect(await page.locator(`.oc-menu-item[data-value="${value}"]`).isVisible()).toBe(
+              true,
+            );
           }
           await page.keyboard.press("Escape");
           await page
-            .locator('.agent-chat__attach-menu-option[value="file"]')
+            .locator('.agent-chat__attach-menu-option[data-value="file"]')
             .waitFor({ state: "hidden" });
         }
         for (const kind of fixture.single ? ["file"] : ["file", "photo"]) {

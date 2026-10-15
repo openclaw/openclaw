@@ -75,6 +75,13 @@ openclaw database port --to postgres --dry-run
 openclaw database port --to postgres
 ```
 
+Port, backup, restore, and fingerprint operations share one database-family
+provider registry. Each provider resolves its stores and supplies the generated
+schema descriptor and expected PostgreSQL catalog. **Workboard is currently the
+only registered family.** State, agent, Logbook, Team Reports, and Matrix-root
+support are not enabled by this registry yet. An unrecognized PostgreSQL anchor
+refuses the operation and names the supported families.
+
 The command inventories all existing registered workboard stores, including
 disabled workboard plugin stores. It does not create missing stores. Shared state,
 agent databases, and safety journals remain on SQLite; shared-state and agent
@@ -190,7 +197,15 @@ and a format-2 manifest. The export reads one `REPEATABLE READ READ ONLY` snapsh
 then applies the existing user-backup sanitizer before compaction and hashing.
 The manifest records the backup profile, engine, store UUID, schema versions,
 active fragments, allocation facts, artifact sizes, and hashes. It never records
-the connection DSN. Preserve the complete matched set: an anchor alone contains
+the connection DSN. Active optional fragments come from the source catalog,
+not from enabled-plugin configuration; a missing required fragment dependency
+refuses the copy. Restore re-admits that same fragment set. Canonical triggers
+are installed after loading rows, while declared derived projections are omitted
+from copying and rebuilt by their owner before verification. Unknown triggers
+and views refuse the operation. Owners can migrate an older SQLite source only
+in the operation's private copy; the original capture remains intact.
+
+Preserve the complete matched set: an anchor alone contains
 no PostgreSQL rows. Existing format-1 SQLite backups remain readable.
 
 PostgreSQL restore verifies the matched set, loads a fresh owned namespace, and
