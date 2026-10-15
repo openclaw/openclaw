@@ -8,6 +8,7 @@ import {
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
 import {
@@ -45,6 +46,9 @@ export function readSessionEntryList(
       readWithCanonicalSessionReaderContinuation(database, request.continuation, () => {
         source = captureSessionEntryReadSource(database, request.expectedIdentity);
         if (scope.pendingInputRecovery) {
+          if (!hasSessionPendingInputsSchema(database.db)) {
+            return [];
+          }
           const keys = executeSqliteQuerySync(
             database.db,
             getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)

@@ -1,7 +1,13 @@
+import { copyFileSync, renameSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   bindSessionPendingInputSources,
@@ -11,6 +17,30 @@ import {
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { appendTranscriptMessage } from "./session-accessor.sqlite-transcript-write.js";
 import { readPendingInputRecoveryEntriesInWorker } from "./session-entry-read-maintenance.js";
+
+it("skips an admitted store without optional pending-input storage", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const store = { agentId: "main", storePath: database.path, env };
+    writeSessionEntry(database, "agent:main:recovery-old-store", {
+      sessionId: "old-store-session",
+      updatedAt: 1,
+    });
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    copyFileSync(database.path, `${database.path}.previous`);
+    renameSync(`${database.path}.previous`, database.path);
+    const previous = new DatabaseSync(database.path);
+    try {
+      previous.exec("DROP TABLE session_pending_inputs");
+    } finally {
+      previous.close();
+    }
+
+    openOpenClawAgentDatabase({ agentId: "main", env });
+    expect(await readPendingInputRecoveryEntriesInWorker(store)).toEqual([]);
+  });
+});
 
 it("discovers only current recoverable inputs and observes writes after an empty recovery read", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
