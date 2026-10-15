@@ -15,12 +15,12 @@ when the run ID, workflow path, workflow ref, Tooling SHA, dispatch title, and
 event are unchanged. For each logical job, the newest observed attempt wins,
 including a newer failure; a job absent from a newer attempt carries forward
 from the last attempt that included it. Duplicate job names within one attempt,
-missing attempts, or provenance drift fail closed. During GitHub's rerun-attempt
+missing attempts, or provenance drift are rejected. During GitHub's rerun-attempt
 materialization window, `status` and `continue` re-read duplicate identities in
 the newest retry attempt for up to 60 seconds. The run identity and attempt stay
 pinned throughout; request timeouts, pagination, and transport backoff share
 the retry deadline. Persistent duplicates, duplicates in an earlier attempt, and
-changed identities still fail closed; ambiguous rows never become evidence.
+changed identities are still rejected; ambiguous rows never become evidence.
 
 Inspect or continue an existing parent:
 
@@ -123,7 +123,7 @@ workflow. Final verification must pass before recovery is reported successful.
 Each child or parent rerun mutation is sent exactly once. If GitHub returns an
 ambiguous transient error, the controller performs read-only reconciliation
 until the newer attempt becomes visible or the bounded reconciliation deadline
-expires. It never repeats the mutation, and provenance drift fails closed.
+expires. It never repeats the mutation, and provenance drift stops the operation.
 `frv status` leads with qualification, evidence acceptance, diagnostic drain,
 workload failures, and the next supported command. A passing GitHub badge or green
 child list is not an accepted seal: terminal successful parents are checked by the
@@ -252,7 +252,10 @@ FRV and publication workflow identities independently, then joins supported
 manifest recorded by that publisher. An original plan from attempt 1 can bind a
 final validation manifest from attempt 2. The two attempts are reported
 separately; neither is silently replaced with the latest attempt.
-Linked children retain their own observed tooling SHA/ref.
+Linked children retain their own observed tooling SHA/ref. The report preserves
+the publisher diagnostic's release version, tag, npm dist-tag and requested source
+SHA. Windows dispatch observations also retain the target tag and source tag;
+the source can differ from the overall release version.
 
 This view reports observations, **not release authorization or current registry
 visibility**. Writer selection, verification selection, job conclusions,
@@ -261,7 +264,12 @@ can retain successful readback and partial package results. Docker and VCR
 remain parent jobs; VCR copy, smoke and alias values are API step conclusions.
 Detached Windows acknowledgement, its pre-upload marker and the current child
 conclusion are separate observations. The normal ClawHub dispatch record is not
-a complete child inventory.
+a complete child inventory. Mac assets/feeds and website deployment are not
+collected by this reader. Use the native publication and website deployment
+owners for their current readbacks. The [website owner's download checks](https://github.com/openclaw/openclaw.ai#companion-downloads)
+can inspect production without deploying. For a stable release,
+`pnpm release:stable <version> --status` shows retained Mac run and appcast facts
+from the original orchestration state directory, not a new live verification.
 
 Prepared-release activation remains unknown without an authenticated link to
 its external owner. A successful inner publisher or skipped finalize job does
@@ -342,6 +350,6 @@ mapping remains authoritative even when `main` advances. The suffix records
 tag-creation provenance, not the current parent run id. Publication must re-read
 that exact tag and revalidate the exact parent run tuple immediately before each
 core or plugin npm publish or dist-tag mutation. A missing, moved, annotated, or
-wrong-SHA tag, parent mismatch, or disallowed parent state fails closed. Other
+wrong-SHA tag, parent mismatch, or disallowed parent state blocks publication. Other
 privileged writers require their dependent enforcement changes before the
 protected-tag publication route is globally complete.

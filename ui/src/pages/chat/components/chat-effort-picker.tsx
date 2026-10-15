@@ -457,7 +457,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                             if (
                               !props.fastMode.disabled &&
                               !option().disabled &&
-                              option().value !== props.fastMode.currentOverride
+                              option().value !== props.fastMode.persistedOverride
                             ) {
                               refreshAfterSelection(
                                 props.onFastModeSelect(option().value, props.sessionKey),

@@ -102,6 +102,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gateway_http_cancelled_total`                   | counter   | `source` (`client` or `shutdown`)                                                         |
 | `openclaw_gc_duration_seconds`                            | histogram | `kind`, `thread`                                                                          |
 | `openclaw_gateway_rpc_requests_total`                     | counter   | `method`                                                                                  |
+| `openclaw_models_list_requests_total`                     | counter   | `client_kind`, `source`, `view`, `scope`, `refresh`, `prepared_only`                      |
 | `openclaw_gateway_rpc_first_response_seconds`             | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_response_bytes`                     | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_handler_heap_delta_bytes`           | histogram | `method`                                                                                  |
@@ -239,6 +240,21 @@ RPC method labels contain exact core and registered plugin method names, `other`
 for unregistered requests, or `unknown` for unrecognized dedicated worker RPCs.
 Catalog membership is checked at request receipt, so plugin registry replacement
 affects subsequent requests without a separate label cache.
+
+`openclaw_models_list_requests_total` separately attributes catalog reads to the
+handshake's canonical client kind, such as `openclaw-control-ui`, `openclaw-macos`,
+or `gateway-client`. `source="wire"` identifies client request frames;
+`source="internal"` identifies server-dispatched requests with an adapted response,
+including the connection's initial model snapshot. `view` is `default`,
+`configured`, `provider-config`, `all`, or `other` for an invalid value. `scope`
+records parameter presence: `session`, then `auth-profile`, then `agent`, or
+`global` when none is supplied. `refresh` and `prepared_only` record whether the
+corresponding parameter is exactly `true`. Counts include later-rejected requests;
+scope does not describe the authorized result. No agent, session, profile,
+connection, user-agent, or display-name values are exported. Each observed label
+combination uses one sample in the existing shared cap. The method-only request
+counter and timing histograms retain their existing labels.
+
 Outcome totals aggregate by phase and outcome without a
 method dimension. Each method with all four timings, both byte histograms, and the exclusive-sample counter occupies eight aggregate
 samples in the shared 2,048-sample cap. An RPC duration histogram occupies one sample
@@ -720,6 +736,10 @@ attributes.
 ```promql
 # Gateway RPC requests per second by method
 sum by (method) (rate(openclaw_gateway_rpc_requests_total[5m]))
+
+# Model catalog calls per minute by caller and request shape over ten minutes
+60 * sum by (client_kind, source, view, scope, refresh, prepared_only)
+  (rate(openclaw_models_list_requests_total[10m]))
 
 # 95th percentile first-response latency by method
 histogram_quantile(

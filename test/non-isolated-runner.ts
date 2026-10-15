@@ -30,6 +30,7 @@ import {
   dropRepoOwnedCustomElements,
   trackCustomElementRegistry,
 } from "./jsdom-custom-elements.ts";
+import { type JsdomResourceTracking, trackJsdomResources } from "./jsdom-resources.ts";
 import { repositoryTestApiPublications } from "./repository-test-api-publications.ts";
 import {
   drainSqliteTestAgentOwner,
@@ -82,6 +83,7 @@ const RETAINED_MCP_MANAGERS = Symbol.for("openclaw.nonIsolatedRetainedMcpManager
 const SUBAGENT_REGISTRY_TEST_API = Symbol.for("openclaw.subagentRegistryTestApi");
 // Shared-worker scoped: the registry lives on the worker global, not in the module graph.
 const CUSTOM_ELEMENT_TRACKING = Symbol.for("openclaw.nonIsolatedCustomElementTracking");
+const DOM_RESOURCE_TRACKING = Symbol.for("openclaw.nonIsolatedDomResourceTracking");
 const nativeConsoleMethods = {
   log: console.log,
   info: console.info,
@@ -200,6 +202,7 @@ function restoreSharedTestHomeAfterEnvUnstub(testHomeRaw: string | undefined): v
 function customElementTrackingStore(): Record<PropertyKey, unknown> & {
   customElements?: CustomElementRegistry;
   [CUSTOM_ELEMENT_TRACKING]?: CustomElementTracking;
+  [DOM_RESOURCE_TRACKING]?: JsdomResourceTracking;
 } {
   return globalThis;
 }
@@ -213,6 +216,13 @@ function installCustomElementTracking(): void {
     return;
   }
   globalStore[CUSTOM_ELEMENT_TRACKING] = trackCustomElementRegistry(registry);
+}
+
+function installDomResourceTracking(): void {
+  const store = customElementTrackingStore();
+  if (typeof document !== "undefined" && store[DOM_RESOURCE_TRACKING]?.document !== document) {
+    store[DOM_RESOURCE_TRACKING] = trackJsdomResources();
+  }
 }
 
 function dropTrackedRepoOwnedCustomElements(): void {
@@ -486,6 +496,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     super.onCollectStart(file);
     if (!this.config.isolate) {
       installCustomElementTracking();
+      installDomResourceTracking();
     }
     restoreRealTimers();
     restoreNativeTimerGlobals();
@@ -674,6 +685,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
       for (const [phase, run] of [
         ["plugin runtimes", clearNamedPluginRuntimeStoresForTest],
         ["custom elements", dropTrackedRepoOwnedCustomElements],
+        ["DOM resources", () => customElementTrackingStore()[DOM_RESOURCE_TRACKING]?.retire()],
         ["document body", resetSharedDocumentBody],
         ["Gateway admission", resetGatewayWorkAdmission],
         ["module mocks", () => internals.moduleRunner?.mocker?.reset?.()],

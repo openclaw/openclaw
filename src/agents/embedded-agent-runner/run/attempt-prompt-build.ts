@@ -191,10 +191,16 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     }
   }
 
-  const assertHostActive = resolveAdmittedRunActiveAssertion(
+  const assertAdmittedActive = resolveAdmittedRunActiveAssertion(
     attempt.admittedRunContext,
     activeAbortSignal,
   );
+  const assertHostActive = attempt.authProfileBinding
+    ? () => {
+        assertAdmittedActive?.();
+        attempt.authProfileBinding?.assertCurrent();
+      }
+    : assertAdmittedActive;
   assertHostActive?.();
   const hasPendingActionInstructions = Boolean(
     // Authorized enrichment runs after policy; do not pre-empt its required actions.
