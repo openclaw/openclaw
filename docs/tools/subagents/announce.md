@@ -50,6 +50,12 @@ context messages. If transcript persistence rejects a completion because its
 keyed input belongs to a closed turn, delivery records a permanent failure with
 the error. It does not retry other models or keep scheduling the same completion.
 
+Direct child-result delivery records its transcript mirror after work already
+queued on the requester session. The send settles without waiting for that
+append, so a requester waiting on its child can resume. These tagged mirrors
+record history without closing an open keyed input; ordinary final replies still
+close the turn. Mirrors remain best-effort bookkeeping after a successful send.
+
 Blocked completion warnings identify the child run and retain the concrete delivery
 error across retries. A confirmed handoff remains delivered even if its receipt
 callback fails; cleanup must not replay an already consumed result. Failures before

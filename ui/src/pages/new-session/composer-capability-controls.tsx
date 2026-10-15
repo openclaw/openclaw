@@ -1,5 +1,4 @@
 import { createMemo, Show } from "solid-js";
-import { icons } from "../../components/icons.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -74,7 +73,7 @@ export function NewSessionPlusMenu(props: {
             {
               value: "new-session-draft",
               label: t("newSession.draft"),
-              icon: icons.pencil,
+              icon: "pencil",
               checked: options.visibility === "draft",
               disabled,
               title: t("newSession.draftDescription"),

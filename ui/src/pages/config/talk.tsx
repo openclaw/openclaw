@@ -10,8 +10,8 @@ import type {
   NativeDeviceSettingsSnapshot,
   NativeDeviceSettingsCapability,
 } from "../../app/native-device-settings.ts";
-import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import type { PickerParams, PickerOption } from "../../components/select-picker.ts";
+import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import "../../components/select-picker.ts";
 import {
   SettingsPage,
@@ -249,10 +249,12 @@ function ModelRow(props: TalkViewProps) {
                     disabled: props.configBusy,
                     searchable: true,
                     showOptionTooltips: false,
-                    renderLeading: (option) =>
-                      renderProviderBrandIcon(option.provider, {
-                        className: "model-picker__provider-icon",
-                      }),
+                    renderLeading: (option) => (
+                      <ProviderBrandIcon
+                        provider={option.provider}
+                        class="model-picker__provider-icon"
+                      />
+                    ),
                     onChange: (value) => props.onModelChange(value || null),
                   } satisfies PickerParams<TalkModelOption>
                 }

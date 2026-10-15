@@ -1,5 +1,4 @@
 import { createMemo, createSignal, merge, onCleanup, onSettled, Show } from "solid-js";
-import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { SessionCreatedActor } from "../lib/session-owner.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
@@ -79,7 +78,6 @@ function SessionMenuContent(
   const readState = () => state;
   const controllerHost = useSessionMenuControllers(
     host,
-    useOptionalApplication(),
     () => setRevision((value) => value + 1),
     () => {
       revision();

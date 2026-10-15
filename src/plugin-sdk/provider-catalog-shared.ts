@@ -218,40 +218,19 @@ export function clearLiveCatalogCacheForTests(): void {
   liveCatalogCache.clear();
 }
 
-function normalizeConfiguredCatalogModelInput(
-  input: unknown,
-): ConfiguredProviderCatalogEntry["input"] | undefined {
-  if (!Array.isArray(input)) {
-    return undefined;
-  }
-  const normalized = input.filter(
-    (item): item is "text" | "image" | "audio" | "video" | "document" =>
-      item === "text" ||
-      item === "image" ||
-      item === "audio" ||
-      item === "video" ||
-      item === "document",
-  );
-  return normalized.length > 0 ? normalized : undefined;
-}
-
 function resolveConfiguredProviderModels(
   config: OpenClawConfig | undefined,
   providerId: string,
 ): ModelDefinitionConfig[] {
   const providers = config?.models?.providers;
-  if (!providers || typeof providers !== "object") {
+  if (!providers) {
     return [];
   }
   const providerKey = findNormalizedProviderKey(providers, providerId);
   if (!providerKey) {
     return [];
   }
-  const providerConfig = providers[providerKey];
-  if (!providerConfig || typeof providerConfig !== "object") {
-    return [];
-  }
-  return Array.isArray(providerConfig.models) ? providerConfig.models : [];
+  return providers[providerKey]?.models ?? [];
 }
 
 /**
@@ -269,36 +248,26 @@ export function readConfiguredProviderCatalogEntries(params: {
   const models = resolveConfiguredProviderModels(params.config, params.providerId);
   const entries: ConfiguredProviderCatalogEntry[] = [];
   for (const model of models) {
-    if (!model || typeof model !== "object") {
-      continue;
-    }
-    const id = typeof model.id === "string" ? model.id.trim() : "";
+    const id = model.id.trim();
     if (!id) {
       continue;
     }
     const normalizedId = normalizeConfiguredProviderCatalogModelId(provider, id);
-    const name =
-      (typeof model.name === "string" ? model.name : normalizedId).trim() || normalizedId;
-    const contextWindow =
-      typeof model.contextWindow === "number" && model.contextWindow > 0
-        ? model.contextWindow
-        : undefined;
-    const reasoning = typeof model.reasoning === "boolean" ? model.reasoning : undefined;
-    const input = normalizeConfiguredCatalogModelInput(model.input);
+    const name = model.name.trim() || normalizedId;
     entries.push({
       provider,
       id: normalizedId,
       name,
-      ...(contextWindow ? { contextWindow } : {}),
-      ...(reasoning !== undefined ? { reasoning } : {}),
-      ...(input ? { input } : {}),
+      ...((model.contextWindow ?? 0) > 0 ? { contextWindow: model.contextWindow } : {}),
+      ...(model.reasoning !== undefined ? { reasoning: model.reasoning } : {}),
+      ...(model.input?.length ? { input: model.input } : {}),
     });
   }
   return entries;
 }
 
 function withStreamingUsageCompat(provider: ModelProviderConfig): ModelProviderConfig {
-  if (!Array.isArray(provider.models) || provider.models.length === 0) {
+  if (!provider.models?.length) {
     return provider;
   }
 

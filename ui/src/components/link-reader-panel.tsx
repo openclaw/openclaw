@@ -8,7 +8,7 @@ import {
   onSettled,
 } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, LitContent, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { solidContent } from "../lit/solid-content.tsx";
 import { DockResizer } from "./dock-layout-solid.tsx";
 import { LinkReaderContent } from "./link-reader-content.tsx";
@@ -165,7 +165,7 @@ function PanelView(
       label: item.label,
       url: item.url,
       title: item.title,
-      icon: <LitContent render={() => item.icon} />,
+      icon: item.icon,
       className: item.className,
       domId: item.id + "-label",
       closeLabel: t("linkReader.closeTab", { title: item.label }),

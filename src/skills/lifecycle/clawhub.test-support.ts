@@ -190,14 +190,6 @@ function expectInstalledSkill(
   }
 }
 
-function expectInvalidSlug(result: Awaited<ReturnType<typeof installSkillFromClawHub>>) {
-  expect(result.ok).toBe(false);
-  if (result.ok) {
-    throw new Error("expected invalid slug failure");
-  }
-  expect(result.error).toContain("Invalid skill slug");
-}
-
 function installTestSkill(
   workspaceDir: string,
   slug: string,
@@ -412,7 +404,6 @@ export {
   expectInstallPackageSourceDir,
   installPolicyInput,
   expectInstalledSkill,
-  expectInvalidSlug,
   installTestSkill,
   updateTestSkill,
   mockArchiveInstallResolution,

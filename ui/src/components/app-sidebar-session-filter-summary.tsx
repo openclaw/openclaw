@@ -4,7 +4,6 @@ import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { sessionParticipantIdentityKey } from "../lib/chat/sender-label.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
-import { solidContent } from "../lit/solid-content.tsx";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import "./sidebar-collapse-toggle.tsx";
 import { Icon } from "./solid/icon.tsx";
@@ -82,7 +81,7 @@ function SidebarOwnerPicker(props: { host: SessionListHost }) {
       showOptionTooltips: false,
       renderLeading: (option: { value: string }) => {
         const owner = owners().find((entry) => `owner:${entry.id}` === option.value);
-        return owner ? solidContent(() => renderSessionOwnerAvatar(owner), {}) : undefined;
+        return owner ? renderSessionOwnerAvatar(owner) : undefined;
       },
       options: options(),
       onChange: (value: string) =>

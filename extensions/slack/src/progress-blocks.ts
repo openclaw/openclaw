@@ -529,6 +529,11 @@ export function reconcileSlackNativeTaskChunks(params: {
   const nextTasks = new Map<string, SlackNativeTaskRow>();
   let planTitle = params.previous.planTitle;
   const emitted: AnyChunk[] = [];
+  // Empty authoritative snapshots retract the headline as well as their task rows.
+  if (!params.chunks?.length && planTitle && planTitle !== SLACK_PROGRESS_PLAN_FALLBACK_TITLE) {
+    planTitle = SLACK_PROGRESS_PLAN_FALLBACK_TITLE;
+    emitted.push({ type: "plan_update", title: planTitle });
+  }
   for (const chunk of params.chunks ?? []) {
     if (chunk.type === "plan_update") {
       if (chunk.title !== planTitle) {

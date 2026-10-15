@@ -2,7 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 // Voice Call tests cover events plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VoiceCallConfigSchema } from "../config.js";
+import { normalizeVoiceCallConfig } from "../config.js";
 import { CallManager } from "../manager.js";
 import {
   createEventManagerHarness,
@@ -405,7 +405,7 @@ describe("processEvent (functional)", () => {
       vi.setSystemTime(now);
       const hangupCalls: HangupCallInput[] = [];
       const ctx = createContext({
-        config: VoiceCallConfigSchema.parse({
+        config: normalizeVoiceCallConfig({
           enabled: true,
           provider: "plivo",
           fromNumber: "+15550000000",
@@ -474,7 +474,7 @@ describe("processEvent (functional)", () => {
     }) as VoiceCallProvider & { isConversationStreamConnectEnabled?: () => boolean };
     provider.isConversationStreamConnectEnabled = () => true;
     const ctx = createContext({
-      config: VoiceCallConfigSchema.parse({
+      config: normalizeVoiceCallConfig({
         enabled: true,
         provider: "twilio",
         fromNumber: "+15550000000",
@@ -765,7 +765,7 @@ describe("processEvent privacy assertions", () => {
     "redacts caller phone numbers in allowlist $label logs",
     async ({ phone, allowFrom, allowed }) => {
       const ctx = createContext({
-        config: VoiceCallConfigSchema.parse({
+        config: normalizeVoiceCallConfig({
           enabled: true,
           provider: "plivo",
           fromNumber: "+15550000000",
@@ -790,7 +790,7 @@ describe("processEvent privacy assertions", () => {
 
   it("redacts caller phone numbers in call record creation logs", async () => {
     const ctx = createContext({
-      config: VoiceCallConfigSchema.parse({
+      config: normalizeVoiceCallConfig({
         enabled: true,
         provider: "plivo",
         fromNumber: "+15550000000",
@@ -813,7 +813,7 @@ describe("processEvent privacy assertions", () => {
 
   it("redacts caller phone numbers when rejection cannot reach a provider", async () => {
     const ctx = createContext({
-      config: VoiceCallConfigSchema.parse({
+      config: normalizeVoiceCallConfig({
         enabled: true,
         provider: "plivo",
         fromNumber: "+15550000000",

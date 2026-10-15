@@ -632,7 +632,7 @@ export async function prepareSessionWorktreeCreation(params: {
   signal?: AbortSignal;
   commitGuard: () => void;
   onTitleError: (error: unknown) => void;
-  onTitlePersisted: () => void;
+  onTitleStateChanged: () => void;
 }): ReturnType<PrepareGatewaySessionLifecycle> {
   const { cfg, target: lifecycleTarget, signal, commitGuard, name, baseRef } = params;
   commitGuard();
@@ -740,7 +740,7 @@ export async function prepareSessionWorktreeCreation(params: {
           commitGuard,
           withSource,
           onError: params.onTitleError,
-          onPersisted: params.onTitlePersisted,
+          onTitleStateChanged: params.onTitleStateChanged,
         })
       : undefined;
   const prepared = await prepareSessionWorktree({

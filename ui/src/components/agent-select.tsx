@@ -7,7 +7,6 @@ import { t } from "../lib/reactive/i18n.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import type { AgentSelectOption } from "./agent-select-types.ts";
-import { avatarArtwork } from "./identity-avatar-view.ts";
 import { revealInScrollRegion } from "./scroll-state.ts";
 import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
@@ -70,26 +69,26 @@ defineSolidBridge<AgentSelectProps>(
       const resolved = () => avatars().get(avatarProps.option.value);
       return (
         <Show
-          when={!avatarProps.option.icon || Boolean(resolved()?.image)}
+          when={resolved()?.image ? undefined : avatarProps.option.icon}
           fallback={
-            <span
-              class="agent-select__avatar agent-select__avatar--icon"
-              aria-hidden="true"
-              ref={avatarArtwork(() => avatarProps.option.icon)}
+            <AgentIdentityAvatar
+              class="agent-select__avatar"
+              agent={{
+                id: avatarProps.option.agent?.id ?? avatarProps.option.value,
+                avatar: resolved()?.image ?? null,
+                textAvatar: avatarProps.option.agent
+                  ? resolveAgentTextAvatar(avatarProps.option.agent, resolved()?.identity ?? null)
+                  : null,
+              }}
+              onImageError={resolved()?.onError}
             />
           }
         >
-          <AgentIdentityAvatar
-            class="agent-select__avatar"
-            agent={{
-              id: avatarProps.option.agent?.id ?? avatarProps.option.value,
-              avatar: resolved()?.image ?? null,
-              textAvatar: avatarProps.option.agent
-                ? resolveAgentTextAvatar(avatarProps.option.agent, resolved()?.identity ?? null)
-                : null,
-            }}
-            onImageError={resolved()?.onError}
-          />
+          {(icon) => (
+            <span class="agent-select__avatar agent-select__avatar--icon" aria-hidden="true">
+              <Icon name={icon()} />
+            </span>
+          )}
         </Show>
       );
     }

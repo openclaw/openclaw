@@ -1,30 +1,27 @@
-import { html, nothing, render } from "lit";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LitContent, solidContent } from "../lit/solid-content.tsx";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
-import type { ModelPickerOption, ModelPickerParams } from "./model-picker-options.ts";
-import { renderPicker, type SelectPicker } from "./select-picker.ts";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
+import { Picker, type SelectPicker } from "./select-picker.ts";
 import { DecisionModelPicker } from "./solid/decision-model-picker.tsx";
-import { ModelPicker } from "./solid/model-picker.tsx";
+import {
+  ModelPicker,
+  type ModelPickerOption,
+  type ModelPickerParams,
+} from "./solid/model-picker.tsx";
 import { SettingsRow } from "./solid/settings-ui.tsx";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
 import "../styles/base.css";
 import "../styles/settings-controls.css";
 import "../styles/settings.css";
 
-const hosts: HTMLElement[] = [];
-
 afterEach(async () => {
-  for (const host of hosts.splice(0)) {
-    render(nothing, host);
-  }
+  cleanupSolid();
   document.body.replaceChildren();
   await Promise.resolve();
 });
 
 function mountHost(style = "") {
   const host = document.createElement("div");
-  hosts.push(host);
   host.style.cssText = style;
   document.body.append(host);
   return host;
@@ -41,7 +38,9 @@ function fixtureModels(labels: string[]): ModelPickerOption[] {
 async function mountModel(params: Omit<ModelPickerParams, "label" | "onChange">, style: string) {
   const host = mountHost(style);
   const onChange = vi.fn();
-  render(solidContent(ModelPicker, { label: "Model", onChange, ...params }), host);
+  mountSolid(() => <ModelPicker label="Model" onChange={onChange} {...params} />, {
+    container: host,
+  });
   const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
   await picker.updateComplete;
   return { picker, onChange };
@@ -65,13 +64,17 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
         label: `Model ${index}`,
       }));
       const onChange = vi.fn();
-      const shared = html`${renderPicker({
-        label: "Shared",
-        value: "fixture/model-0",
-        options,
-        searchable: true,
-        onChange,
-      })}`;
+      const Shared = () => (
+        <Picker
+          params={{
+            label: "Shared",
+            value: "fixture/model-0",
+            options,
+            searchable: true,
+            onChange,
+          }}
+        />
+      );
       mountSolid(
         () => (
           <>
@@ -100,8 +103,8 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
                 />
               }
             />
-            <SettingsRow title="Shared" control={<LitContent value={shared} />} />
-            <LitContent value={shared} />
+            <SettingsRow title="Shared" control={<Shared />} />
+            <Shared />
             <SettingsRow
               title="Value"
               control={
@@ -331,33 +334,35 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     };
     const utilityChange = vi.fn();
     const primaryChange = vi.fn();
-    render(
-      html`
-        ${solidContent(ModelPicker, {
-          id: "saved-utility",
-          label: "Utility Model",
-          value: unavailable.value,
-          options: [
-            { value: "__openclaw_automatic_utility__", label: "Auto" },
-            { value: "", label: "Disabled" },
-            ...available,
-            unavailable,
-          ],
-          onChange: utilityChange,
-        })}
-        ${solidContent(ModelPicker, {
-          id: "available-primary",
-          label: "Model",
-          value: "fixture/global-three",
-          options: [
-            { value: "", label: "Select a model", disabled: true },
-            ...available,
-            unavailable,
-          ],
-          onChange: primaryChange,
-        })}
-      `,
-      host,
+    mountSolid(
+      () => (
+        <>
+          <ModelPicker
+            id="saved-utility"
+            label="Utility Model"
+            value={unavailable.value}
+            options={[
+              { value: "__openclaw_automatic_utility__", label: "Auto" },
+              { value: "", label: "Disabled" },
+              ...available,
+              unavailable,
+            ]}
+            onChange={utilityChange}
+          />
+          <ModelPicker
+            id="available-primary"
+            label="Model"
+            value="fixture/global-three"
+            options={[
+              { value: "", label: "Select a model", disabled: true },
+              ...available,
+              unavailable,
+            ]}
+            onChange={primaryChange}
+          />
+        </>
+      ),
+      { container: host },
     );
     await Promise.all(
       [...host.querySelectorAll<SelectPicker>("openclaw-select-picker")].map(
@@ -431,21 +436,25 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       await page.viewport(width, 844);
       const host = mountHost("position:fixed;right:12px;top:32px;width:90px");
       const onChange = vi.fn();
-      const renderDecision = (value: string) =>
-        render(
-          html`${solidContent(DecisionModelPicker, {
-              id: "decisions",
-              models: [
+      const [value, setValue] = createSignal("alpha/one");
+      mountSolid(
+        () => (
+          <>
+            <DecisionModelPicker
+              id="decisions"
+              models={[
                 { provider: "alpha", id: "one", name: "Alpha decision model", pluginId: "alpha" },
                 { provider: "beta", id: "two", name: "Beta decision model", pluginId: "beta" },
-              ],
-              value,
-              disabled: false,
-              onChange,
-            })}<button id="after-picker">Next field</button>`,
-          host,
-        );
-      renderDecision("alpha/one");
+              ]}
+              value={value()}
+              disabled={false}
+              onChange={onChange}
+            />
+            <button id="after-picker">Next field</button>
+          </>
+        ),
+        { container: host },
+      );
       const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
       await picker.updateComplete;
       let trigger = page.getByRole("button", {
@@ -473,7 +482,8 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       )) {
         expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth);
       }
-      renderDecision("beta/two");
+      setValue("beta/two");
+      flush();
       await picker.updateComplete;
       trigger = page.getByRole("button", {
         name: "Decision Model: Beta decision model",

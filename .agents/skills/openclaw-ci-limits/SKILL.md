@@ -318,7 +318,11 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Preserve the existing hosted fallbacks and deadline.
   The existing `check-plan` prerequisite uses the 16-class for shared compiler
   snapshot memory on canonical automatic first attempts with an unset,
-  `blacksmith`, or `hybrid` backend, including fork PRs. Fork core type stripes
+  `blacksmith`, or `hybrid` backend, including fork PRs. Same-repository hybrid
+  PR first attempts instead use hosted planning with the existing serial
+  compiler discovery mode; reserve that mandatory row before optional offloads.
+  Never move the complete compiler snapshot onto the smaller hosted runner.
+  Fork core type stripes
   with an unset or `blacksmith` backend also use the 16-class on those attempts;
   hybrid health admission retains its existing placement rules. These routes
   add paid assignments, not jobs. Preserve logical GitHub stripe coverage,

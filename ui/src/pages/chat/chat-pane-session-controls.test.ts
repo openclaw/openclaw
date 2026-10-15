@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ChatAccountSelection,
@@ -19,12 +19,14 @@ import {
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { solidContent } from "../../lit/solid-content.tsx";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
@@ -85,7 +87,7 @@ describe("chat account selection", () => {
         onManage,
         onRequestUpdate: () => draw(),
       });
-      render(
+      renderPaneLegacyContent(
         section ? solidContent(ChatModelAccountSectionView, section.viewProps(0)) : undefined,
         container,
       );
@@ -266,7 +268,7 @@ describe("chat pane composer controls", () => {
       agentDefaultModel: "openai/gpt-5.6-luna",
     });
     const container = document.createElement("div");
-    render(controls.composerControls, container);
+    renderPaneLegacyContent(controls.composerControls, container);
 
     const trigger = container.querySelector<HTMLElement>("[data-chat-model-select]");
     expect(trigger?.textContent).toContain("GPT-5.6 Sol");
@@ -320,11 +322,12 @@ describe("chat pane composer controls", () => {
         agentDefaultPermissionMode: "guarded",
         onModelSetup,
       });
-      render(controls.composerControls, container);
+      renderPaneLegacyContent(controls.composerControls, container);
 
-      expect(Array.from(container.children).map((node) => node.className)).toEqual([
-        "chat-composer-model-control",
-      ]);
+      expect(container.children).toHaveLength(1);
+      expect(
+        Array.from(container.firstElementChild!.children).map((node) => node.className),
+      ).toEqual(["chat-composer-model-control"]);
       expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
       expect(container.querySelector('[data-chat-permission-select="true"]')).toBeNull();
       const catalogMessage = container.querySelector(".chat-controls__model-catalog-state");
@@ -334,7 +337,9 @@ describe("chat pane composer controls", () => {
       ).toBe(String(!connected));
       expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(cached ? 1 : 0);
       const permissionContainer = document.createElement("div");
-      render(solidContent(ChatPermissionPicker, controls.permissionPicker), permissionContainer);
+      mountSolid(() => createComponent(ChatPermissionPicker, controls.permissionPicker), {
+        container: permissionContainer,
+      });
       expect(
         permissionContainer.querySelector('[data-chat-permission-select="true"]'),
       ).not.toBeNull();
@@ -351,10 +356,6 @@ describe("chat pane composer controls", () => {
   it("patches a rootless session, clears to default, and locks full access", async () => {
     const container = document.createElement("div");
     document.body.append(container);
-    onTestFinished(() => {
-      render(undefined, container);
-      container.remove();
-    });
     const selectedSession: GatewaySessionRow = {
       key: "agent:main:permission-test",
       kind: "direct",
@@ -379,7 +380,16 @@ describe("chat pane composer controls", () => {
       agentDefaultPermissionMode: "guarded",
       canSelectFull: false,
     });
-    render(solidContent(ChatPermissionPicker, controls.permissionPicker), container);
+    const view = mountSolid(
+      () => createComponent(ChatPermissionPicker, controls.permissionPicker),
+      {
+        container,
+      },
+    );
+    onTestFinished(() => {
+      view.unmount();
+      container.remove();
+    });
     flush();
     const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
     trigger.click();
@@ -621,7 +631,7 @@ describe("chat pane model controls", () => {
         agentDefaultModel: "example/primary",
         contextWindowAccess: { allowed: true, requiredScope: "operator.write" },
       });
-      render(controls.composerControls, container);
+      renderPaneLegacyContent(controls.composerControls, container);
       const trigger = container.querySelector<HTMLElement>("[data-chat-model-select]");
       expect(trigger?.dataset.chatSelectValue).toBe("example/primary");
       expect(trigger?.getAttribute("aria-busy")).toBe("false");

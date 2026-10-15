@@ -93,13 +93,12 @@ function pluginRepository(
   return { href: url.href, name: url.hostname + url.pathname.replace(/\/$/u, ""), github };
 }
 
-export function renderPluginPublisher(
-  result: PluginDiscoveryDetailResult | undefined,
-  localName?: string,
-): JSX.Element | undefined {
-  const author = result?.detail.author;
-  const handle = author?.handle ?? result?.plugin.catalog.author;
-  const name = author?.displayName ?? localName;
+export function renderPublisherIdentity(options: {
+  name?: string;
+  handle?: string;
+  official?: boolean;
+}): JSX.Element | undefined {
+  const { name, handle, official } = options;
   if (!name && !handle) {
     return undefined;
   }
@@ -107,11 +106,23 @@ export function renderPluginPublisher(
     <div class="plugin-catalog-detail__publisher">
       <span class="plugin-catalog-detail__publisher-name">
         {name ? <strong>{name}</strong> : renderPluginAuthor(handle, { linked: true })}
-        {author?.official === true ? renderPluginOfficialBadge() : undefined}
+        {official ? renderPluginOfficialBadge() : undefined}
       </span>
       {name ? renderPluginAuthor(handle, { linked: true }) : undefined}
     </div>
   );
+}
+
+export function renderPluginPublisher(
+  result: PluginDiscoveryDetailResult | undefined,
+  localName?: string,
+): JSX.Element | undefined {
+  const author = result?.detail.author;
+  return renderPublisherIdentity({
+    name: author?.displayName ?? localName,
+    handle: author?.handle ?? result?.plugin.catalog.author,
+    official: author?.official === true,
+  });
 }
 
 export function renderPluginMetadata(

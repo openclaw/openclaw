@@ -53,7 +53,7 @@ export type MenuBinding = {
     label?: string,
   ): Record<string, unknown>;
   trigger(parentBinding?: MenuBinding, disabled?: boolean): Record<string, unknown>;
-  content(): Record<string, unknown>;
+  content(): Record<string, unknown> & { onKeyDown(event: KeyboardEvent): void };
   keydown(event: KeyboardEvent): void;
 };
 
@@ -66,6 +66,9 @@ export type MenuNavigationOptions = {
   items?: () => readonly { value: string; disabled?: boolean }[];
   value?: () => string | null;
 };
+
+export const MENU_FORM_CONTROL_SELECTOR =
+  ':is(input, textarea, select, [data-form-control], button, a[href]):not([role^="menuitem"]):not([aria-haspopup="menu"])';
 
 export function useMenuMachine(
   overlay: Overlay,
@@ -350,11 +353,20 @@ export function useMenuMachine(
     }
     const editing =
       event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
+    const fromButton =
+      options.surface !== "listbox" &&
+      event.target instanceof HTMLButtonElement &&
+      event.target.matches(MENU_FORM_CONTROL_SELECTOR) &&
+      !event.target.closest('[role^="menuitem"]');
     const type =
       event.key === "ArrowDown"
-        ? "ARROW_DOWN"
+        ? fromButton
+          ? "HOME"
+          : "ARROW_DOWN"
         : event.key === "ArrowUp"
-          ? "ARROW_UP"
+          ? fromButton
+            ? "END"
+            : "ARROW_UP"
           : event.key === "Home"
             ? "HOME"
             : event.key === "End"
@@ -548,7 +560,12 @@ export function useMenuMachine(
         },
         onKeyDown: (e: KeyboardEvent) => {
           const target = e.target;
-          if (!(target instanceof HTMLElement) || !ownsTarget(target)) {
+          if (
+            e.defaultPrevented ||
+            e.isComposing ||
+            !(target instanceof HTMLElement) ||
+            !ownsTarget(target)
+          ) {
             return;
           }
           if (options.surface === "listbox") {
@@ -564,8 +581,6 @@ export function useMenuMachine(
           }
           if (
             target.matches("input[data-search]") &&
-            !e.defaultPrevented &&
-            !e.isComposing &&
             (e.key === "ArrowDown" || e.key === "Enter")
           ) {
             const first = [
@@ -583,13 +598,13 @@ export function useMenuMachine(
           }
           if (
             target instanceof HTMLButtonElement &&
-            target.hasAttribute("data-form-control") &&
+            target.matches(MENU_FORM_CONTROL_SELECTOR) &&
             (e.key === "ArrowDown" || e.key === "ArrowUp")
           ) {
             keydown(e);
             return;
           }
-          if (e.key === "Tab" || target.matches("input,textarea,select,[data-form-control]")) {
+          if (e.key === "Tab" || target.matches(MENU_FORM_CONTROL_SELECTOR)) {
             return;
           }
           focusFromKeyboard = true;

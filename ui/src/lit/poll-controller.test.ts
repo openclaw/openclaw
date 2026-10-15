@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TestHost } from "./controller.test-support.ts";
+import { TestHost } from "../lib/controller.test-support.ts";
 import { PollController } from "./poll-controller.ts";
 
 afterEach(() => {
