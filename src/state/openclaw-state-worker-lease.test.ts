@@ -51,6 +51,8 @@ vi.mock("../shared/global-singleton.js", async (importOriginal) => {
 });
 
 vi.mock("./openclaw-state-db-cache.js", () => ({
+  // The synthetic cache is the only lifecycle this file publishes.
+  assertPublishedOpenClawStateDatabaseLifecycle: () => {},
   openClawStateDatabaseCache: {
     getKnownOpenClawStateDatabaseIdentity: () => physical.databaseAdmission?.identity,
   },
