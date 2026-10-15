@@ -501,7 +501,11 @@ describe("runDaemonInstall integration", () => {
       expect(await snapshotConfig()).toEqual(before);
       expect(serviceMock.install).not.toHaveBeenCalled();
       expect(runtimeLogs.join("\n")).toContain("SERVICE_DEFINITION_SEALED");
-      expect(await fs.readdir(plannedState)).toEqual(["control", "gateway.systemd.env", "tmp"]);
+      expect((await fs.readdir(plannedState)).toSorted()).toEqual([
+        "control",
+        "gateway.systemd.env",
+        "tmp",
+      ]);
       expect(await fs.readdir(path.join(plannedState, "control"))).toEqual(["services.sqlite"]);
       expect(await fs.readdir(effectiveState)).toEqual(["gateway.systemd.env"]);
     } finally {
