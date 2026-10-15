@@ -12,9 +12,11 @@ const storage = vi.hoisted(() => ({
   }),
 }));
 
+// mock-isolation: Any real SQLite open must fail this controlled-storage cleanup proof.
 vi.mock("../infra/node-sqlite.js", () => ({
   openNodeSqliteDatabase: storage.forbidden,
 }));
+// mock-isolation: Control storage failures while exercising the real lease and canonical-close owners.
 vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
   async acquireLease(
     _database: unknown,
@@ -58,6 +60,7 @@ vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
     },
   }),
 }));
+// mock-isolation: Keep cleanup failure deterministic and forbid native database access.
 vi.mock("./openclaw-state-lease-storage.js", () => ({
   STATE_LEASE_WRITE_BACKOFF: { initialMs: 25, maxMs: 250, factor: 1.5, jitter: 0.25 },
   prepareLeaseDatabase: storage.forbidden,
