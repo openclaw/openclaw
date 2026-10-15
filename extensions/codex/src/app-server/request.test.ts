@@ -668,7 +668,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     }
   });
 
-  it("abandons a pending acquisition without issuing a request after the deadline", async () => {
+  it("abandons a pending acquisition without issuing a request after the startup deadline", async () => {
     vi.useFakeTimers();
     const controlObservation = { phase: vi.fn(), failed: vi.fn() };
     const request = vi.fn(async () => ({ ok: true }));
@@ -685,17 +685,22 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       method: "thread/list",
       requestParams: { limit: 10 },
       timeoutMs: 50,
+      pluginConfig: { appServer: { requestTimeoutMs: 10 } },
       controlObservation,
     });
-    const rejection = expect(result).rejects.toThrow("codex app-server thread/list timed out");
+    const rejection = expect(result).rejects.toMatchObject({
+      name: "AgentHarnessPreflightError",
+      userMessage:
+        "Codex app-server startup exceeded its wait budget. Retry this request; if it persists, check the Gateway logs.",
+    });
     await acquisitionStarted.promise;
     const acquireOptions = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0] as
       | { abandonSignal?: AbortSignal; timeoutMs?: number }
       | undefined;
 
     expect(acquireOptions?.timeoutMs).toBeGreaterThan(0);
-    expect(acquireOptions?.timeoutMs).toBeLessThanOrEqual(50);
-    await vi.advanceTimersByTimeAsync(50);
+    expect(acquireOptions?.timeoutMs).toBeLessThanOrEqual(100);
+    await vi.advanceTimersByTimeAsync(150);
     await rejection;
     expect(acquireOptions?.abandonSignal?.aborted).toBe(true);
     expect(controlObservation.failed).toHaveBeenCalledExactlyOnceWith({
