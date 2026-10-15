@@ -1,7 +1,7 @@
 import { onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../api/types.ts";
-import { renderLegacyTemplate, solidContent } from "../lit/solid-content.tsx";
+import { LitContent, solidContent } from "../lit/solid-content.tsx";
 import { sidebarPanelDefinitions } from "../pages/chat/chat-pane-embedded-panels.ts";
 import { createChatPaneRails } from "../pages/chat/chat-pane-rails.ts";
 import { renderSidebarRegion } from "../pages/chat/chat-pane-sidebar-layout.ts";
@@ -21,21 +21,22 @@ import {
 import "../pages/chat/components/chat-sidebar-region.runtime.tsx";
 import { threadProps } from "../pages/chat/components/chat-transcript.test-support.ts";
 import type { SidebarLayout, SidebarSlotId } from "../pages/chat/sidebar-layout.ts";
-import { flush } from "./solid-settle.ts";
+import { mountSolid } from "./solid-render.tsx";
 
-const legacyContainers = new WeakSet<HTMLElement>();
+const legacyContainers = new WeakMap<
+  HTMLElement,
+  { update: (props: { value: unknown }) => void }
+>();
 
 // Pane adapters still return mixed legacy content; its retained range owns nested Solid roots.
 export function renderPaneLegacyContent(content: unknown, container: HTMLElement): void {
-  if (!legacyContainers.has(container)) {
-    legacyContainers.add(container);
-    onTestFinished(() => {
-      renderLegacyTemplate(undefined, container);
-      legacyContainers.delete(container);
-    });
+  const existing = legacyContainers.get(container);
+  if (existing) {
+    existing.update({ value: content });
+    return;
   }
-  renderLegacyTemplate(content, container);
-  flush();
+  legacyContainers.set(container, mountSolid(LitContent, { value: content }, container));
+  onTestFinished(() => legacyContainers.delete(container));
 }
 
 function ChatPanelPrimary() {

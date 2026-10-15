@@ -40,6 +40,7 @@ import {
   loadSessionWorkspace,
   openSessionWorkspacePreview,
 } from "./components/chat-session-workspace-state.ts";
+import { loadedSidebarContent } from "./components/chat-session-workspace.test-support.ts";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
@@ -562,7 +563,7 @@ describe("chat pane embedded panels", () => {
       expect(createSessionWorkspaceProps(state).list?.files[0]?.name).toBe("other.txt"),
     );
     file.resolve(preview);
-    await file.promise;
+    await loadedSidebarContent(state);
     await renderPanels();
     expect(
       mount.querySelector<HTMLImageElement>(
