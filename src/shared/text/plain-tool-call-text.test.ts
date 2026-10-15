@@ -9,6 +9,7 @@ const reference = (text: string) =>
   toolCallRepair.stripPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions });
 
 const samples = [
+  "[tool:read] {}\n\n[a\\]b\nmiddle\nrest]: /url\n\nAfter\n\n![example `x\n[tool:read] {}\nx`][a\\]b middle rest]",
   "[id]: /url\n\n[tool:read] {}\nIntro.\n\n![example `x\n[tool:read] {}\nx`][id]\n",
   "[a\\]b]: /url\n\n[tool:read] {}\nIntro.\n\n![example `x\n[tool:read] {}\nx`][a\\]b]\n",
   "![example `x\n[tool:read] {}\nx`][id]\n```text\nnext\n```\n[id]: /url",

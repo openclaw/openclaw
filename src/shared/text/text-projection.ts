@@ -62,11 +62,13 @@ function findTextCheckpoint(
     const line = text.slice(cursor, end + 1);
     const inFence = Boolean(state.fenceChar);
     advanceProtectionScanState(state, line);
-    // Reference definitions and setext headings can need earlier paragraph context.
+    // References, image descriptions, and setext headings can need earlier paragraph context.
     if (
       state.paragraphAmbiguous ||
       state.structuralUnknown ||
-      (!inFence && !state.fenceChar && /\[[^\]]*$|\]:|^ {0,3}=+[ \t]*\r?\n$/.test(line))
+      (!inFence &&
+        !state.fenceChar &&
+        (line.includes("\\]") || /!\[|\[[^\]]*$|\]:|^ {0,3}=+[ \t]*\r?\n$/.test(line)))
     ) {
       const ownership = findCodeOwnership(text);
       // Normalization can expand a label beyond CommonMark's 999-character source limit.

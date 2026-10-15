@@ -456,6 +456,11 @@ describe("assistantTraceTextFilter streamed projection", () => {
       "tool call: hidden\n\n[id]: /url\n\nIntro.\n\n![example `x\ntool call: literal\nx`][id]\n",
       "[id]: /url\n\nIntro.\n\n![example `x\nx`][id]",
     ],
+    [
+      "an unfinished image description with nested brackets",
+      "tool call: hidden\n\n[id]: /url\n\n![a [b]\nmore\n`x\ntool call: literal\nx`][id]",
+      "[id]: /url\n\n![a [b]\nmore\n`x\nx`][id]",
+    ],
   ])("projects %s in token-sized chunks", (_name, source, expected) => {
     for (const size of [1, 3, 7]) {
       const projection = createTextProjection(assistantVisibleTextFilters("delivery", true));
