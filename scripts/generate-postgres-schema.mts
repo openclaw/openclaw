@@ -44,7 +44,7 @@ const WORKBOARD_OUTPUT = "extensions/workboard/src/workboard-schema.postgres.sql
 const WORKBOARD_PORT_OUTPUT = "src/infra/database-engine/workboard-port.generated.json";
 const OUTPUT = "src/state/postgres-schema.generated";
 export const pendingPromotion: readonly { name: string; reason: string }[] = Object.freeze([]);
-export const sqliteOnlyAllowList = sqliteOnlyNulGuards.map((column) => ({
+const sqliteOnlyAllowList = sqliteOnlyNulGuards.map((column) => ({
   column,
   reason: "PostgreSQL text cannot hold NUL; the guard is enforced by the type.",
 }));
@@ -62,7 +62,7 @@ function tableStatements(data: Catalog): string[] {
 }
 
 /** Shared metadata recipe; family owners supply canonical SQLite and generated PostgreSQL DDL. */
-export function generateDatabasePortMetadata(
+function generateDatabasePortMetadata(
   db: import("node:sqlite").DatabaseSync,
   data: Catalog,
   source: { id: string; version: number; sqlite: string; postgres: string },
@@ -380,7 +380,7 @@ async function verifyPostgres(
   }
 }
 
-export async function checkPostgresCatalog(connection: string): Promise<void> {
+async function checkPostgresCatalog(connection: string): Promise<void> {
   const { Client } = await import("pg");
   const client = new Client({ connectionString: connection });
   const prefix = `conformance_${process.pid}`;
