@@ -183,6 +183,9 @@ it("keeps owned running work out of recovery and queue database polling", async 
       awaitGateBeforeSettlement(entered.promise, completion, "owned run did not start"),
       signal,
     );
+    // Manual admission loads once; queue activation reuses its committed postimages.
+    expect(loads).toHaveBeenCalledTimes(1);
+    loads.mockClear();
     await cron.start();
     const running = await cron.readJob(job.id);
     expect(running).toMatchObject({
