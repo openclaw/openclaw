@@ -126,6 +126,23 @@ export function applyMessageDefaults(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
+/** Persist the queue default only during initial creation or an explicit Doctor repair. */
+export function applyMessageQueueDefaults(cfg: OpenClawConfig): OpenClawConfig {
+  const messages = cfg.messages;
+  const queue = messages?.queue;
+  if (
+    (messages !== undefined && !isRecord(messages)) ||
+    (queue !== undefined && !isRecord(queue)) ||
+    queue?.allowCollaborativeSteering !== undefined
+  ) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    messages: { ...messages, queue: { ...queue, allowCollaborativeSteering: true } },
+  };
+}
+
 export function applySessionDefaults(
   cfg: OpenClawConfig,
   options: SessionDefaultsOptions = {},

@@ -80,7 +80,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   if (
     queueAdmission?.status === "accepted" &&
     queueAdmission.mode === "followup" &&
-    queueAdmission.reason === "requester-mismatch"
+    (queueAdmission.reason === "requester-mismatch" ||
+      queueAdmission.reason === "steering-unavailable")
   ) {
     queuedRequesterNotice = markReplyPayloadForSourceSuppressionDelivery({
       text: "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",

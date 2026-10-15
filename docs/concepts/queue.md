@@ -31,6 +31,7 @@ OpenClaw serializes inbound auto-reply runs (all channels) through a tiny in-pro
 When unset, all inbound channel surfaces use:
 
 - `mode: "steer"`
+- `allowCollaborativeSteering: true`
 - a built-in 500ms debounce for steer, followup, and collect batching
 - `cap: 20`
 - `drop: "summarize"`
@@ -55,15 +56,15 @@ an interrupted turn is still owed, its resend runs before an ordinary message th
 arrives on that session during startup; later messages queue behind it in arrival
 order. An `interrupt` message wins instead: it cancels a resend that has not
 started and runs, and it ends a running recovered turn like any active run.
-Steering a recovered turn follows the normal tool-permission check, so a steer it
-cannot accept waits and runs as its own turn. Stopping or interrupting a resend
+Steering a recovered turn follows the same requester and collaboration rules as
+other active turns. If its backend cannot accept steering, the input waits and
+runs as its own turn. Stopping or interrupting a resend
 before it starts ends that recovery without sending it again. See
 [Restart recovery](/gateway/restart-recovery#automatic-resume).
 
-Gateway input retains its authenticated operator and original scope ceiling while
-queued or delegated to a child. Collecting messages or steering an active run
-requires compatible operator sources and tool permissions; other input waits in
-FIFO order instead of borrowing the active or newest sender's permissions.
+Queued Gateway input retains its authenticated requester. Each new execution resolves current applicable policy. Collecting messages requires compatible operator sources and tool permissions.
+
+By default, admitted human input in the same conversation can steer an active turn under that turn's unchanged identity and prepared permissions. This lets Bob influence actions using permissions Alice has that Bob does not. Set `messages.queue.allowCollaborativeSteering: false` to require the same requester and compatible permissions; other input queues under its own identity. The option does not change queue modes or explicit cross-session `sessions_send(mode="steer")` authorization. See [Steering scope](/concepts/queue-steering#scope).
 
 An accepted turn can continue after its request returns or its client disconnects.
 That does not extend revoked device authority or permissions removed by a current
@@ -77,6 +78,7 @@ Configure globally or per channel via `messages.queue`:
   messages: {
     queue: {
       mode: "steer",
+      allowCollaborativeSteering: true,
       cap: 20,
       drop: "summarize",
       byChannel: { discord: "collect", x: "followup" },

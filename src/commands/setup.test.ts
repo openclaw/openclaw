@@ -86,6 +86,7 @@ describe("setupCommand", () => {
         gateway: {
           mode: "local",
         },
+        messages: { queue: { allowCollaborativeSteering: true } },
       });
       expect(effects.replaceConfigFile).toHaveBeenCalledWith(
         expect.objectContaining({

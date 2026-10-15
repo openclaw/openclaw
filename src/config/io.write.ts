@@ -33,6 +33,7 @@ import {
   resolveManagedUnsetPathsForWrite,
 } from "./config-path-mutation.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
+import { applyMessageQueueDefaults } from "./defaults.js";
 import {
   readConfigWriteMigrationFacts,
   preserveDeferredPluginMigrationConfig,
@@ -274,7 +275,7 @@ export async function writeConfigFileFromContext(
   const materialized = stampConfigWriteMetadata(
     snapshot.exists
       ? validatedCandidate
-      : initializeNativeSessionCatalogPreferences(validatedCandidate),
+      : applyMessageQueueDefaults(initializeNativeSessionCatalogPreferences(validatedCandidate)),
     options.lastTouchedVersionOverride,
     snapshot.exists ? previousSource : null,
     deps.env,

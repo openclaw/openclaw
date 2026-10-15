@@ -71,6 +71,11 @@ export function captureReplyMessageInjectionTarget(
     [replyMessageInjectionTargetOwner]: {
       backendIdentity: backend,
       admissionIdentity: attachment,
+      get toolAuthorityFingerprint() {
+        return "handle" in attachment
+          ? backend.toolAuthorityFingerprint
+          : (backend.toolAuthorityFingerprint ?? operation.toolAuthorityFingerprint);
+      },
       acceptParticipant: (overlay) => participants?.accept(overlay),
       projectToolAuthorityFingerprint: (overlay) => {
         try {
@@ -428,6 +433,7 @@ export function canInjectReplyMessageTarget(
       allowPendingUserInputAnswer,
       inboundAudio,
       canAdmit: _canAdmit,
+      allowCollaborativeSteering: _allowCollaborativeSteering,
       ...backendOptions
     } = options ?? {};
     toolAuthorityPreparation?.compatAssertCurrent();
@@ -499,20 +505,49 @@ async function beginPreparedReplyMessageInjectionTarget(
   // Deferred preparation may install both caller policy and a transcript recorder.
   const {
     canAdmit,
-    toolAuthorityOverlay,
+    toolAuthorityOverlay: incomingOverlay,
+    allowCollaborativeSteering,
     requesterToolAuthority,
     toolAuthorityPreparation,
     personalToolParticipant,
     assertCurrent,
-    allowPendingUserInputAnswer,
+    allowPendingUserInputAnswer: requestedPendingUserInputAnswer,
     inboundAudio,
     ...backendOptions
   } = options ?? {};
-  const projectedToolAuthorityFingerprint = requesterToolAuthority
+  let selectedOverlay = incomingOverlay;
+  let allowPendingUserInputAnswer = requestedPendingUserInputAnswer;
+  let projectedToolAuthorityFingerprint = requesterToolAuthority
     ? await owner.projectRequesterToolAuthorityFingerprintAsync(requesterToolAuthority)
-    : toolAuthorityOverlay
-      ? await owner.projectToolAuthorityFingerprintAsync(toolAuthorityOverlay)
+    : selectedOverlay
+      ? await owner.projectToolAuthorityFingerprintAsync(selectedOverlay)
       : backendOptions.toolAuthorityFingerprint;
+  if (
+    !requesterToolAuthority &&
+    allowCollaborativeSteering &&
+    backendOptions.isInboundUserMessage &&
+    incomingOverlay &&
+    (!projectedToolAuthorityFingerprint ||
+      projectedToolAuthorityFingerprint !== owner.toolAuthorityFingerprint)
+  ) {
+    const collaborativeOverlay = { ...incomingOverlay, allowCollaborativeSteering: true as const };
+    const incumbentFingerprint =
+      await owner.projectToolAuthorityFingerprintAsync(collaborativeOverlay);
+    if (incumbentFingerprint && incumbentFingerprint !== projectedToolAuthorityFingerprint) {
+      selectedOverlay = collaborativeOverlay;
+      projectedToolAuthorityFingerprint = incumbentFingerprint;
+      // Collaboration permits ordinary input, not answering or canceling another
+      // requester's pending question. Compatible input keeps its strict preparation.
+      allowPendingUserInputAnswer = false;
+    }
+  }
+  const toolAuthorityOverlay = selectedOverlay;
+  const currentToolAuthorityOverlay = () => {
+    const overlay = options?.toolAuthorityOverlay;
+    return overlay && toolAuthorityOverlay?.allowCollaborativeSteering
+      ? { ...overlay, allowCollaborativeSteering: true as const }
+      : overlay;
+  };
   const sourceBound =
     assertCurrent !== undefined ||
     (toolAuthorityPreparation !== undefined && toolAuthorityPreparation.authorityKind !== "run");
@@ -551,7 +586,7 @@ async function beginPreparedReplyMessageInjectionTarget(
                       compatAssertCurrent: () => {
                         toolAuthorityPreparation?.compatAssertCurrent();
                         const requester = options?.requesterToolAuthority;
-                        const overlay = options?.toolAuthorityOverlay;
+                        const overlay = currentToolAuthorityOverlay();
                         assertPolicy(
                           requester
                             ? owner.projectRequesterToolAuthorityFingerprint(requester)
@@ -561,7 +596,7 @@ async function beginPreparedReplyMessageInjectionTarget(
                       prepareCurrent: async () => {
                         await toolAuthorityPreparation?.prepareCurrent();
                         const requester = options?.requesterToolAuthority;
-                        const overlay = options?.toolAuthorityOverlay;
+                        const overlay = currentToolAuthorityOverlay();
                         assertPolicy(
                           requester
                             ? await owner.projectRequesterToolAuthorityFingerprintAsync(requester)
@@ -582,6 +617,7 @@ async function beginPreparedReplyMessageInjectionTarget(
       ...(resolved.errorMessage ? { errorMessage: resolved.errorMessage } : {}),
     };
     const cancelPendingImage =
+      allowPendingUserInputAnswer !== false &&
       options?.isInboundUserMessage === true &&
       hasPromptImageInput(options) &&
       (resolved.reason === "tool_authority_mismatch" ||

@@ -62,7 +62,10 @@ import {
   withReplyToolAuthorityCohort,
   type CapturedReplyToolAuthoritySession,
 } from "./reply-tool-authority-cohort.js";
-import { applyReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
+import {
+  applyReplyToolAuthorityOverlay,
+  isSameReplyToolAuthorityConversation,
+} from "./reply-tool-authority-inbound.js";
 import {
   captureMemoryReplyToolAuthoritySession,
   prepareMemoryReplyToolAuthorityCaller,
@@ -381,6 +384,20 @@ export function prepareReplyToolAuthority(
     operatorAuthority: snapshot.operatorAuthority,
   });
   const projectInput = (caller?: ReplyToolAuthorityOverlay | ReplyToolAuthorityRequester) => {
+    if (
+      caller &&
+      !("requesterOrigin" in caller) &&
+      caller.allowCollaborativeSteering &&
+      requesterPrincipalKey &&
+      resolveRequesterPrincipalKey({ ...caller, messageChannel: caller.originatingChannel }) &&
+      (!caller.inputProvenance || caller.inputProvenance.kind === "external_user") &&
+      isSameReplyToolAuthorityConversation(snapshot, caller)
+    ) {
+      assertCurrentOperatorAuthority(caller.operatorAuthority);
+      // Only the policy projection uses the incumbent. The input and its author
+      // remain unchanged, including if injection later falls back to a new turn.
+      return snapshot;
+    }
     const incoming = !caller
       ? snapshot
       : "requesterOrigin" in caller
@@ -553,6 +570,9 @@ export function prepareReplyToolAuthority(
     route: ReplyToolAuthorityRoute,
   ) => {
     const prepared = await prepare(projectInput(caller), route);
+    if (!("requesterOrigin" in caller)) {
+      assertCurrentOperatorAuthority(caller.operatorAuthority);
+    }
     projectionRead = prepared;
     return prepared.read();
   };
@@ -608,9 +628,16 @@ export function prepareReplyToolAuthority(
     result.projectAsync,
     async (caller, expected, route, assertActive) => {
       const projected = projectInput(caller);
+      const policyInputs = projected === snapshot ? [snapshot] : [snapshot, projected];
+      const assertCallerCurrent = () => {
+        if (caller && !("requesterOrigin" in caller)) {
+          assertCurrentOperatorAuthority(caller.operatorAuthority);
+        }
+      };
       if (readMemoryEntry) {
-        const policy = await prepareSessionCapabilityRead(() =>
-          [snapshot, projected].every(
+        const policy = await prepareSessionCapabilityRead(() => {
+          assertCallerCurrent();
+          return policyInputs.every(
             (input) =>
               resolvePreparedReplyToolAuthorityFingerprint(
                 input,
@@ -619,8 +646,8 @@ export function prepareReplyToolAuthority(
                 undefined,
                 memoryCapabilities,
               ) === expected,
-          ),
-        );
+          );
+        });
         releases.add(policy.release);
         const prepared = prepareMemoryReplyToolAuthorityCaller(readMemoryEntry, assertActive, () =>
           policy.read(),
@@ -643,6 +670,7 @@ export function prepareReplyToolAuthority(
       }
       const assertSources = () => {
         assertActive();
+        assertCallerCurrent();
         plan?.assertCurrent();
       };
       const assertEntry = (entry: SessionEntry | undefined) => {
@@ -656,7 +684,7 @@ export function prepareReplyToolAuthority(
             "Tool authority classification session changed (caller session identity)",
           );
         }
-        for (const input of [snapshot, projected]) {
+        for (const input of policyInputs) {
           if (
             resolvePreparedReplyToolAuthorityFingerprint(input, route, entry, narrow) !== expected
           ) {

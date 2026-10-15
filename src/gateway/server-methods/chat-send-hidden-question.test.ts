@@ -21,10 +21,13 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createChatSendMessageInjectionStarter } from "./chat-send-message-injection.js";
 
 it.each(
-  [false, true].flatMap((restricted) => [false, true].map((image) => ({ restricted, image }))),
+  (["compatible", "restricted", "different profile"] as const).flatMap((caller) =>
+    [false, true].map((image) => ({ caller, image })),
+  ),
 )(
-  "projects Gateway caller authority before hidden question settlement (restricted=$restricted, image=$image)",
-  async ({ restricted, image }) => {
+  "projects Gateway caller authority before hidden question settlement (caller=$caller, image=$image)",
+  async ({ caller, image }) => {
+    const compatible = caller === "compatible";
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const sessionKey = "agent:main:gateway-hidden-question";
       const sessionId = "gateway-hidden-question-session";
@@ -64,6 +67,13 @@ it.each(
         modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
         assertCurrent: () => operation.abortSignal.throwIfAborted(),
       });
+      const incomingAuthority =
+        caller === "different profile"
+          ? createAdmittedRunOperatorAuthority({
+              ...owner.operatorAuthority,
+              profileId: "question-participant",
+            })
+          : owner.operatorAuthority;
       await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(owner));
       const fingerprint = await operation.bindToolAuthorityRouteAsync({
         provider: owner.run.provider,
@@ -119,7 +129,7 @@ it.each(
           sourceRef: { input, adapter },
           target,
           abortSignal: operation.abortSignal,
-          operatorAuthority: owner.operatorAuthority,
+          operatorAuthority: incomingAuthority,
           assertCurrent: () => operation.abortSignal.throwIfAborted(),
           request: {
             p: { sessionKey, message: text, idempotencyKey: "gateway-question-answer" },
@@ -134,10 +144,11 @@ it.each(
             storePath,
             clientRunId: "answer-run",
           },
-          admittedSessionSettings: { permissionMode: restricted ? "guarded" : "full" },
+          admittedSessionSettings: { permissionMode: caller === "restricted" ? "guarded" : "full" },
           turn: {
             ctx: {
               Provider: "webchat",
+              SessionKey: sessionKey,
               Body: text,
               GatewayClientScopes: ["operator.admin"],
               GatewayClientCaps: ["tool-events"],
@@ -159,12 +170,12 @@ it.each(
         const attempt = await start();
         expect(attempt).toBeDefined();
         await expect(attempt!.outcome).resolves.toMatchObject(
-          !restricted && !image
+          compatible && !image
             ? { status: "accepted" }
             : { status: "rejected", reason: "input_visibility_mismatch" },
         );
-        expect(claim).toHaveBeenCalledTimes(!restricted && !image ? 1 : 0);
-        expect(cancel).toHaveBeenCalledTimes(!restricted && image ? 1 : 0);
+        expect(claim).toHaveBeenCalledTimes(compatible && !image ? 1 : 0);
+        expect(cancel).toHaveBeenCalledTimes(compatible && image ? 1 : 0);
         expect(queueMessage).not.toHaveBeenCalled();
         retireSessionControllerInput(input);
       } finally {

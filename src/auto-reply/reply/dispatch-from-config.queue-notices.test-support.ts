@@ -57,10 +57,11 @@ export function registerQueuedFollowupNoticeCases(noVisibleReplyFallbackText: st
   });
 
   it.each([
-    "still queued",
-    "evicted before finalization",
-    "evicted during progress flush",
-  ] as const)("reports a truthful cross-requester queue notice when %s", async (phase) => {
+    { phase: "still queued", reason: "requester-mismatch" },
+    { phase: "still queued", reason: "steering-unavailable" },
+    { phase: "evicted before finalization", reason: "requester-mismatch" },
+    { phase: "evicted during progress flush", reason: "steering-unavailable" },
+  ] as const)("reports a truthful $reason queue notice when $phase", async ({ phase, reason }) => {
     setNoAbort();
     const sessionKey = `test:queue-notice:${phase}`;
     const queued = createDeferred();
@@ -90,7 +91,7 @@ export function registerQueuedFollowupNoticeCases(noVisibleReplyFallbackText: st
       expect(enqueueFollowupRun(sessionKey, run, settings, "message-id", undefined, false)).toBe(
         true,
       );
-      runState.admission = { status: "accepted", mode: "followup", reason: "requester-mismatch" };
+      runState.admission = { status: "accepted", mode: "followup", reason };
       if (phase === "evicted during progress flush") {
         await opts?.onItemEvent?.({
           itemId: "queue-progress",

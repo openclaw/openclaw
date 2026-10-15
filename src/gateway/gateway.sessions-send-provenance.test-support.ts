@@ -634,6 +634,7 @@ export function runHuman(
           SenderId: sender,
           SenderName: sender,
           ChatType: "group",
+          ChatId: scenario.sourceRecipient,
           Provider: "telegram",
           Surface: "telegram",
           OriginatingChannel: "telegram",

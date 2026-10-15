@@ -92,6 +92,7 @@ export type ReplyMessageInjectionResolution =
 /** An adapter over one existing execution owner; it never acquires another run slot. */
 type ReplyMessageInjectionOwner = {
   readonly backendIdentity: object;
+  readonly toolAuthorityFingerprint?: string;
   /** One concrete attachment lifetime; reusing a backend handle cannot revive its receipts. */
   readonly admissionIdentity: object;
   acceptParticipant?(participant: ReplyTurnParticipantInput): void;
@@ -678,7 +679,7 @@ type ReplyOperationAdmissionSnapshot =
   | {
       status: "accepted";
       mode: "steer" | "followup";
-      reason?: "requester-mismatch";
+      reason?: "requester-mismatch" | "steering-unavailable";
     }
   | {
       status: "skipped";

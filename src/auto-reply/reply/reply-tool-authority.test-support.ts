@@ -29,6 +29,7 @@ export function toolAuthorityOverlay(
   run: ReturnType<typeof createQueueTestRun>,
 ): ReplyToolAuthorityOverlay {
   return {
+    sessionKey: run.run.sessionKey,
     operatorAuthority: run.operatorAuthority,
     permissionMode: run.run.permissionMode,
     toolOverrides: run.run.toolOverrides,

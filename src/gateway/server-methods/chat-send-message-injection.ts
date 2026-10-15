@@ -200,6 +200,9 @@ export function createChatSendMessageInjectionStarter(params: {
           inboundAudio: hasInboundAudio(ctx),
           steeringMode: "all",
           isInboundUserMessage: true,
+          allowCollaborativeSteering:
+            cfg.messages?.queue?.allowCollaborativeSteering !== false &&
+            (!ctx.InputProvenance || ctx.InputProvenance.kind === "external_user"),
           ...(isProgressCardRefreshInputProvenance(ctx.InputProvenance)
             ? { allowPendingUserInputAnswer: false as const, debounceMs: 0 }
             : {}),

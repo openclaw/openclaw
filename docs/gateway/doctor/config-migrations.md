@@ -37,6 +37,28 @@ The migration also leaves lists absent when the effective account, channel, or
 global-default `groupPolicy` disables groups. Explicit policy overrides still
 apply. Update-time Doctor repair follows the same rules.
 
+## Collaborative steering default
+
+Doctor writes `messages.queue.allowCollaborativeSteering: true` when the setting is
+absent, creating missing parent objects. New configuration files contain the same
+explicit default. Existing `true` and `false` values, including values supplied
+through config includes, stay unchanged.
+
+The repair uses Doctor's existing backed-up, include-aware config writer and
+update rollback. A supported, singly owned nested include receives the repair in
+that file. Ambiguous, shared, external, or root-level include layouts retain the
+writer's existing refusal behavior; Doctor reports the affected boundary so the
+operator can edit its owning file explicitly. Repeated repair is idempotent.
+
+Managed package updates and source updates invoke candidate Doctor and use this
+repair. Older update drivers that request a read-only Doctor phase cannot persist
+it in that phase. Direct package-manager upgrades, manual package replacement, and
+container-image replacement can bypass Doctor entirely. These installations use
+the runtime default immediately; run `openclaw doctor --fix` to persist it.
+Ordinary configuration reads and Gateway startup do not write this setting.
+
+See [Queue steering](/concepts/queue-steering) for the default-on authority tradeoff.
+
 ## Cloud setup secret migration
 
 The Crabbox plugin retires `cloudWorkers.profiles.<id>.settings.setupEnv`.

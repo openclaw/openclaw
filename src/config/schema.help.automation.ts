@@ -288,6 +288,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Queue strategy for inbound messages that arrive while a session run is active. Use this to tune steering, deferred followups, batching, or interruption.",
   "messages.queue.mode":
     'Queue mode for active runs. Use "steer" to inject prompts into the active run, "followup" to run later, "collect" to batch compatible messages later, or "interrupt" to abort the active run before starting the newest prompt.',
+  "messages.queue.allowCollaborativeSteering":
+    "Allow admitted human input in the same conversation to steer under the active turn's unchanged identity and prepared permissions, even when its author has fewer permissions (default: true). Set false to require the same requester and compatible permissions; other input queues under its own identity. Queue modes and explicit cross-session steering authorization still apply.",
   "messages.queue.byChannel":
     "Per-channel queue mode overrides keyed by channel ID, including plugin channels (for example discord, telegram, x). Use this when one channel's traffic pattern needs different behavior than global defaults.",
   "messages.queue.debounceMsByChannel":

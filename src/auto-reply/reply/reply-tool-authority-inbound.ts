@@ -6,9 +6,13 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import { normalizeAccountId } from "../../routing/account-id.js";
 import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { getRequesterProfile } from "../requester-profile.js";
+import { internalSessionConversationId } from "../../utils/message-channel-constants.js";
+import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 import type { RuntimeMsgContext } from "../templating.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
@@ -26,6 +30,7 @@ export function resolveInboundReplyToolAuthorityOverlay(params: {
 }): ReplyToolAuthorityOverlay {
   const { ctx } = params;
   return {
+    sessionKey: normalizeOptionalString(ctx.SessionKey),
     operatorAuthority: params.operatorAuthority,
     permissionMode: params.sessionEntry?.permissionMode,
     toolOverrides: params.sessionEntry?.toolOverrides,
@@ -133,4 +138,31 @@ export function applyReplyToolAuthorityOverlay(
       toolBindings: overlay.toolBindings,
     },
   };
+}
+
+/** Session sharing alone does not establish that two inputs belong to the same conversation. */
+export function isSameReplyToolAuthorityConversation(
+  snapshot: ReplyToolAuthorityInput,
+  caller: ReplyToolAuthorityOverlay,
+): boolean {
+  const execution = snapshot.run;
+  const channel = normalizeMessageChannel(execution.messageProvider ?? snapshot.originatingChannel);
+  const incomingChannel = normalizeMessageChannel(
+    caller.messageProvider ?? caller.originatingChannel,
+  );
+  const conversationId =
+    normalizeOptionalString(execution.conversationId) ??
+    (channel && internalSessionConversationId(channel, execution.sessionKey));
+  const incomingConversationId =
+    normalizeOptionalString(caller.conversationId) ??
+    (incomingChannel && internalSessionConversationId(incomingChannel, caller.sessionKey));
+  return Boolean(
+    channel &&
+    channel === incomingChannel &&
+    conversationId &&
+    conversationId === incomingConversationId &&
+    normalizeAccountId(execution.agentAccountId) === normalizeAccountId(caller.agentAccountId) &&
+    stringifyRouteThreadId(execution.messageThreadId) ===
+      stringifyRouteThreadId(caller.messageThreadId),
+  );
 }

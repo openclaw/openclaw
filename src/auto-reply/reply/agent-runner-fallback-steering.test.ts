@@ -11,6 +11,7 @@ import * as metadata from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import * as registryState from "../../sessions/session-controller.state.js";
+import { createCommandTurnContext } from "../command-turn-context.js";
 import { bindReplyFallbackSteeringRoute } from "./agent-runner-fallback-authority.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import * as followupRunner from "./followup-runner.js";
@@ -173,7 +174,11 @@ describe("ordinary steering into automatic model fallback", () => {
         } else {
           await expect(incoming).resolves.toBeUndefined();
           expect(replacementInjected).not.toHaveBeenCalled();
-          expect(resultState.admission).toEqual({ status: "accepted", mode: "followup" });
+          expect(resultState.admission).toEqual({
+            status: "accepted",
+            mode: "followup",
+            reason: "steering-unavailable",
+          });
           if (aborted || replaceBackend) {
             expect(consumeFollowup).not.toHaveBeenCalled();
             operation.complete();
@@ -201,6 +206,11 @@ describe("ordinary steering into automatic model fallback", () => {
     "queued-followup",
     "cross-profile",
     "cross-profile-pending",
+    "collaborative-automatic",
+    "collaborative-pinned-selection",
+    "collaborative-locked-selection",
+    "explicit-steer-same-requester",
+    "explicit-steer-cross-profile",
     "policy-fallback",
     "explicit-redirect",
     "new-selection",
@@ -210,13 +220,26 @@ describe("ordinary steering into automatic model fallback", () => {
     "hook-route",
     "transport-alias",
   ] as const)("preserves admitted selection and authority: %s", async (scenario) => {
-    const crossProfile = scenario === "cross-profile" || scenario === "cross-profile-pending";
+    const collaborative =
+      scenario === "collaborative-automatic" ||
+      scenario === "collaborative-pinned-selection" ||
+      scenario === "collaborative-locked-selection";
+    const explicitSteer =
+      scenario === "explicit-steer-same-requester" || scenario === "explicit-steer-cross-profile";
+    const crossProfile =
+      collaborative ||
+      scenario === "cross-profile" ||
+      scenario === "cross-profile-pending" ||
+      scenario === "explicit-steer-cross-profile";
     const key = `agent:main:fallback-steering-${scenario}`;
     const run = createQueueTestRun({ prompt: "use the new requirements", messageId: scenario });
     run.run.agentId = "main";
     run.run.sessionKey = key;
     run.run.sessionId = `fallback-${scenario}`;
     run.run.config = {
+      ...(explicitSteer || collaborative
+        ? {}
+        : { messages: { queue: { allowCollaborativeSteering: false } } }),
       agents: {
         defaults: {
           model: {
@@ -260,7 +283,10 @@ describe("ordinary steering into automatic model fallback", () => {
         modelPolicy,
         assertCurrent() {},
       });
-    if (crossProfile) {
+    if (explicitSteer || collaborative) {
+      run.run.conversationId = "shared-steering-chat";
+    }
+    if (crossProfile || explicitSteer) {
       run.operatorAuthority = operator("alice");
       Object.assign(run.run, {
         senderId: "alice-sender",
@@ -360,10 +386,14 @@ describe("ordinary steering into automatic model fallback", () => {
       if (scenario === "new-selection") {
         run.run.provider = "test-provider";
         run.run.model = "test-model";
-      } else if (scenario === "pinned-selection") {
+      } else if (scenario === "pinned-selection" || scenario === "collaborative-pinned-selection") {
         run.run.hasSessionModelOverride = true;
         run.run.modelOverrideSource = "user";
-      } else if (scenario === "locked-selection" || scenario === "cross-profile-pending") {
+      } else if (
+        scenario === "locked-selection" ||
+        scenario === "collaborative-locked-selection" ||
+        scenario === "cross-profile-pending"
+      ) {
         run.run.modelSelectionLocked = true;
       } else if (scenario === "changed-tools") {
         run.toolsAllow = ["read"];
@@ -372,7 +402,9 @@ describe("ordinary steering into automatic model fallback", () => {
       const shouldSteer =
         scenario === "automatic" ||
         scenario === "queued-followup" ||
-        scenario === "policy-fallback";
+        scenario === "collaborative-automatic" ||
+        scenario === "policy-fallback" ||
+        scenario === "explicit-steer-same-requester";
       if (scenario === "queued-followup") {
         const older = createQueueTestRun({ prompt: "run on the next turn", messageId: "older" });
         older.run.agentId = run.run.agentId;
@@ -407,7 +439,27 @@ describe("ordinary steering into automatic model fallback", () => {
         shouldFollowup: false,
         isActive: true,
         typing: createMockTypingController(),
-        sessionCtx: {},
+        sessionCtx:
+          explicitSteer || collaborative
+            ? {
+                Provider: "telegram",
+                ChatId: "shared-steering-chat",
+                SenderId: run.run.senderId,
+                SenderName: run.run.senderName,
+                GatewayClientCaps: run.run.clientCaps,
+                GatewayUiCommandTarget: run.run.gatewayUiCommandTarget,
+                // The command handler rewrites the prompt but retains the explicit turn facts.
+                ...(explicitSteer
+                  ? {
+                      CommandTurn: createCommandTurnContext("text", {
+                        authorized: true,
+                        commandName: "steer",
+                        body: `/steer ${run.prompt}`,
+                      }),
+                    }
+                  : {}),
+              }
+            : {},
         sessionKey: key,
         defaultModel: "gpt-test",
         resolvedVerboseLevel: "off",
@@ -421,7 +473,9 @@ describe("ordinary steering into automatic model fallback", () => {
       expect(resultState.admission).toEqual({
         status: "accepted",
         mode: shouldSteer ? "steer" : "followup",
-        ...(crossProfile ? { reason: "requester-mismatch" } : {}),
+        ...(shouldSteer
+          ? {}
+          : { reason: crossProfile ? "requester-mismatch" : "steering-unavailable" }),
       });
       expect(delivered).toEqual(shouldSteer ? [run.prompt] : []);
       if (crossProfile) {
@@ -440,7 +494,16 @@ describe("ordinary steering into automatic model fallback", () => {
               new Set(["alice-tab"]),
             );
             const other = await dispatch("bob");
-            expect(other.broadcastToConnIds).not.toHaveBeenCalled();
+            if (shouldSteer) {
+              // Accepted collaboration retains the incumbent default and existing participant lookup.
+              expect(other.broadcastToConnIds).toHaveBeenCalledWith(
+                "ui.command",
+                expect.any(Object),
+                new Set(["bob-tab"]),
+              );
+            } else {
+              expect(other.broadcastToConnIds).not.toHaveBeenCalled();
+            }
           },
         );
       }

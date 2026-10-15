@@ -94,6 +94,7 @@ export function registerSteeringReceiptCases({
       isActive: true,
       shouldSteer: true,
       resolvedQueueMode: "steer",
+      runOverrides: { config: { messages: { queue: { allowCollaborativeSteering: false } } } },
       bindActiveAuthority: false,
       opts: {
         onBlockReply,
@@ -341,7 +342,11 @@ export function registerSteeringReceiptCases({
 
       expect(state.backendQueueMessageMock).toHaveBeenCalledOnce();
       expect(onDeferred).toHaveBeenCalledOnce();
-      expect(secondState.admission).toEqual({ status: "accepted", mode: "followup" });
+      expect(secondState.admission).toEqual({
+        status: "accepted",
+        mode: "followup",
+        reason: "steering-unavailable",
+      });
       expect(getExistingFollowupQueue(sessionKey)?.items).toEqual([
         expect.objectContaining({
           messageId: "second-parked-input",
@@ -416,7 +421,9 @@ export function registerSteeringReceiptCases({
         runId: undefined,
       });
       expect(runState.admission).toEqual(
-        enqueued ? { status: "accepted", mode: "followup" } : undefined,
+        enqueued
+          ? { status: "accepted", mode: "followup", reason: "steering-unavailable" }
+          : undefined,
       );
       expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
       active.complete();
@@ -464,7 +471,11 @@ export function registerSteeringReceiptCases({
 
     expect(state.backendQueueMessageMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
+    expect(runState.admission).toEqual({
+      status: "accepted",
+      mode: "followup",
+      reason: "steering-unavailable",
+    });
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
     active.complete();
   });
@@ -555,7 +566,11 @@ export function registerSteeringReceiptCases({
 
     expect(state.backendQueueMessageMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
+    expect(runState.admission).toEqual({
+      status: "accepted",
+      mode: "followup",
+      reason: "steering-unavailable",
+    });
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
     active.complete();
   });
@@ -599,7 +614,11 @@ export function registerSteeringReceiptCases({
 
     expect(state.backendQueueMessageMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
+    expect(runState.admission).toEqual({
+      status: "accepted",
+      mode: "followup",
+      reason: "steering-unavailable",
+    });
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
     active.complete();
   });

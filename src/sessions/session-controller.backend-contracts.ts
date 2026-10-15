@@ -72,6 +72,8 @@ export type ReplyMessageInjectionOptions = ReplyBackendQueueMessageOptions & {
   inboundAudio?: boolean;
   /** Consumed by reply ownership and never forwarded to the active backend. */
   toolAuthorityOverlay?: ReplyToolAuthorityOverlay;
+  /** Normal human ingress may retain the incumbent's policy within the same conversation. */
+  allowCollaborativeSteering?: boolean;
   /** Accepted sender facts when the ingress owner already prepared route-specific authority. */
   personalToolParticipant?: ReplyTurnParticipantInput;
   /** Composed into V2's final admission assertion after asynchronous preparation. */
@@ -85,6 +87,9 @@ export type ReplyToolAuthorityRoute = Readonly<{
 
 /** Per-message authority facts projected against an active run's frozen owner state. */
 export type ReplyToolAuthorityOverlay = Readonly<{
+  /** Internal admission decision; never used for explicit cross-session requests. */
+  allowCollaborativeSteering?: true;
+  sessionKey?: string;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   permissionMode?: SessionEntry["permissionMode"];
   toolOverrides?: SessionEntry["toolOverrides"];

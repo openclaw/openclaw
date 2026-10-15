@@ -8,7 +8,7 @@ read_when:
 title: "Steering queue"
 ---
 
-When a normal prompt from the same authenticated requester arrives while a session run is active and the queue mode is `steer` (the default, no config needed), OpenClaw tries to send that prompt into the active runtime, including during tool execution. OpenClaw and the native Codex app-server harness implement the delivery details differently.
+When a normal prompt arrives in the same conversation while a session run is active and the queue mode is `steer` (the default, no config needed), OpenClaw tries to send that prompt into the active runtime, including during tool execution. OpenClaw and the native Codex app-server harness implement the delivery details differently.
 
 This page covers queue-mode steering for normal inbound messages in `steer` mode. In `followup` or `collect` mode, normal messages skip this path and wait until the active run finishes. For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 
@@ -78,20 +78,24 @@ Messages with separate durable ingress admission, including Discord and Telegram
 
 If several messages arrive while the agent is executing a tool call:
 
-- Messages from another person wait for a new turn under that person's identity and permissions. OpenClaw immediately acknowledges the queued message and explains that it has not changed the active work.
-- For compatible messages from the active requester, OpenClaw preserves the runtime's configured steering drain mode and FIFO order. One-at-a-time consumers keep later messages for later boundaries; `all` consumers inject the queued FIFO batch together. Codex receives messages collected during its quiet window as one batched `turn/steer`.
+- With collaborative steering enabled (the default), messages from another admitted participant can join the active turn under its original requester and prepared permissions. With `messages.queue.allowCollaborativeSteering: false`, another person's message waits for a new turn under that person's identity and current permissions.
+- For accepted steering, OpenClaw preserves the runtime's configured steering drain mode and FIFO order. One-at-a-time consumers keep later messages for later boundaries; `all` consumers inject the queued FIFO batch together. Codex receives messages collected during its quiet window as one batched `turn/steer`.
 - With `/queue collect`, OpenClaw does not steer. It waits until the active run ends, then creates followup turns after the debounce window, combining only compatible queued messages.
 - With `/queue interrupt`, OpenClaw aborts the active run and starts the newest message instead of steering.
 
 ## Scope
 
-Steering targets the current active session run and preserves its requester and prepared policy. A message from a different or unidentified requester waits for a separately admitted followup in the same conversation. The conversation and history stay shared; queueing does not isolate future turns from that history.
+`messages.queue.allowCollaborativeSteering` defaults to `true`. When Bob's admitted human input joins Alice's active turn in the same conversation, the execution keeps Alice's identity and prepared permissions. Bob can influence actions using permissions Alice has that Bob does not. Bob remains identified as the message author; steering does not switch the execution to Bob, combine their permissions, or attribute subsequent actions to individual messages.
 
-The runtime acknowledges the actual queue decision:
+Set the option to `false` to require the same authenticated requester and compatible permissions. Other input becomes a separately admitted followup under its own requester and current policy. Unidentified input cannot borrow the active execution's authority. Conversation access, backend compatibility, cancellation, and current-owner checks always apply.
+
+This option permits steering only when the queue mode attempts it. `followup`, `collect`, and `interrupt` keep their existing behavior. If steering is unavailable, Bob's input remains Bob's when it starts a new execution. Conversation history stays shared; queueing does not isolate future turns from that history.
+
+When attempted steering becomes a followup, the runtime acknowledges the actual queue decision:
 
 > Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.
 
-A queued request to stop work has not stopped the active turn. Authorized stop commands use the separate cancellation path and report its actual outcome.
+A queued or steered natural-language request to stop work does not confirm that the active turn stopped. Authorized stop commands use the separate cancellation path and report its actual outcome. Approval responses and explicit control commands retain their existing authorization; collaboration does not let another requester answer or cancel a pending question.
 
 Visible user turns started through the `agent` RPC can also receive compatible
 steering. Direct background turns with optional replies leave new human messages
@@ -100,21 +104,21 @@ This includes subagent completion and command announcements: when steering is
 rejected, the message runs automatically after the announcement and its cleanup
 finish. The input remains queued and can still be canceled while it waits.
 
-The same signed-in person can steer after reconnecting when permissions and model access remain compatible. Browser connections and display names do not define a new requester. The turn keeps its original authority, tool bindings, and approval destination. Changes to role scopes, session access, sandbox requirements, allowed agents, model access, access grants, tool policy, workspace, or bound tools can require a followup.
+The same signed-in person can steer after reconnecting when permissions and model access remain compatible. Browser connections and display names do not define a new requester. The turn keeps its original authority, tool bindings, and approval destination. With collaborative steering disabled, changes to role scopes, session access, sandbox requirements, allowed agents, model access, access grants, tool policy, workspace, or bound tools can require a followup.
 
 Configured permissions are resolved when each new execution is admitted and remain stable for that execution. Human messages waiting for admission use current policy. Already admitted native work retains its prepared policy while waiting to run. A new delegation resolves current destination policy for the original requester; it may intentionally use a more capable agent. Cancellation and current-owner checks still apply, and accepted asynchronous work survives normal source-turn completion.
 
-Explicit `sessions_send(mode="steer")` keeps its requested operation: incompatible steering is refused with guidance to use `mode="followup"`, rather than silently queueing a different operation.
+This setting does not broaden cross-session authorization. Explicit `sessions_send(mode="steer")` keeps its requested operation: incompatible steering is refused with guidance to use `mode="followup"`, rather than silently queueing a different operation.
 
 Automatic credential rotation and model fallback also retain the active turn.
 New input can steer that turn while the selected model remains unchanged, fallback
-is still allowed, and the current permissions match. Selecting or locking a model,
-pinning a different account, or changing tool permissions can require a followup
+is still allowed, and the applicable steering policy permits it. Selecting or locking a model,
+pinning a different account, or disabling collaboration when permissions differ can require a followup
 turn. Answers to a pending question still go to the question's original owner.
 
 [Personal `USER.md` context](/concepts/user-model#personal-user-files-on-a-shared-gateway)
 follows the session's assigned human owner, otherwise its authenticated human
-creator. Another participant's message starts a separate turn, and queued or collected messages keep the same session selection. Reassignment
+creator. Collaboratively steered input retains the active turn's personal instructions; queued or collected messages keep the same session selection. Reassignment
 takes effect on the next new turn; it does not replace the running turn's personal
 instructions. Personal context selection does not grant tool permissions or
 change the approval destination.

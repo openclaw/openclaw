@@ -25,10 +25,53 @@ describe("reply requester authority", () => {
     accountId?: string;
     senderName?: string;
     unknownOwner?: boolean;
+    collaborative?: true;
+    conversationId?: string | null;
+    threadId?: string;
     accepted: boolean;
   }>([
     { name: "same channel requester", senderId: "alice", accepted: true },
     { name: "another channel requester with equal permissions", senderId: "bob", accepted: false },
+    {
+      name: "collaborator with fewer permissions",
+      senderId: "bob",
+      collaborative: true,
+      accepted: true,
+    },
+    {
+      name: "collaborator in another conversation",
+      senderId: "bob",
+      collaborative: true,
+      conversationId: "other-room",
+      accepted: false,
+    },
+    {
+      name: "collaborator without conversation facts",
+      senderId: "bob",
+      collaborative: true,
+      conversationId: null,
+      accepted: false,
+    },
+    {
+      name: "collaborator in another thread",
+      senderId: "bob",
+      collaborative: true,
+      threadId: "other-thread",
+      accepted: false,
+    },
+    {
+      name: "collaborator on another account",
+      senderId: "bob",
+      collaborative: true,
+      accountId: "other",
+      accepted: false,
+    },
+    {
+      name: "unidentified collaborator",
+      senderId: undefined,
+      collaborative: true,
+      accepted: false,
+    },
     {
       name: "same sender on another account",
       senderId: "alice",
@@ -45,8 +88,18 @@ describe("reply requester authority", () => {
     },
   ])(
     "preserves requester identity for $name",
-    async ({ senderId, accountId, senderName, unknownOwner, accepted }) => {
+    async ({
+      senderId,
+      accountId,
+      senderName,
+      unknownOwner,
+      collaborative,
+      conversationId,
+      threadId,
+      accepted,
+    }) => {
       const run = createQueueTestRun({ prompt: "Alice's work" });
+      run.run.conversationId = "shared-room";
       if (unknownOwner) {
         delete run.run.senderId;
       }
@@ -60,11 +113,20 @@ describe("reply requester authority", () => {
       operation.setPhase("running");
       const incoming = {
         ...run,
-        run: { ...run.run, senderId, senderName, agentAccountId: accountId },
+        ...(collaborative ? { toolsAllow: ["read"] } : {}),
+        run: {
+          ...run.run,
+          senderId,
+          senderName,
+          agentAccountId: accountId,
+          conversationId: conversationId === null ? undefined : (conversationId ?? "shared-room"),
+          messageThreadId: threadId,
+        },
       };
       const outcome = await queueCurrentReplyRunMessage("requester-identity", "change the work", {
         isInboundUserMessage: true,
         toolAuthorityOverlay: toolAuthorityOverlay(incoming),
+        allowCollaborativeSteering: collaborative,
       });
       expect(outcome).toMatchObject(
         accepted
