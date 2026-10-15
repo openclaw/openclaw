@@ -2135,20 +2135,18 @@ describe("cron method validation", () => {
 
   // Creation records no host inference account for a CLI-backed model, so an
   // edit must accept the same model ref instead of demanding a stored account.
-  it("accepts a CLI-backed model with a selected profile on cron.update", async () => {
-    const cliModel = "claude-sonnet-4-6";
-    const embeddedModel = "claude-opus-4-6";
-    const cliRef = `anthropic/${cliModel}`;
-    const embeddedRef = `anthropic/${embeddedModel}`;
-    setRuntimeConfig({
+  const cliBackedModelRef = "anthropic/claude-sonnet-4-6";
+  const embeddedModelRef = "anthropic/claude-opus-4-6";
+  function cliBackedModelConfig(): OpenClawConfig {
+    return {
       agents: {
         ownership: "explicit",
         entries: { main: {} },
         defaults: {
-          model: { primary: cliRef, fallbacks: [] },
+          model: { primary: cliBackedModelRef, fallbacks: [] },
           models: {
-            [cliRef]: { agentRuntime: { id: "claude-cli" } },
-            [embeddedRef]: { agentRuntime: { id: "openclaw" } },
+            [cliBackedModelRef]: { agentRuntime: { id: "claude-cli" } },
+            [embeddedModelRef]: { agentRuntime: { id: "openclaw" } },
           },
         },
       },
@@ -2158,7 +2156,7 @@ describe("cron method validation", () => {
             api: "anthropic-messages",
             baseUrl: "https://api.anthropic.com",
             apiKey: "synthetic-unused-model-key",
-            models: [cliModel, embeddedModel].map((id) => ({
+            models: ["claude-sonnet-4-6", "claude-opus-4-6"].map((id) => ({
               id,
               name: `Synthetic ${id}`,
               reasoning: false,
@@ -2170,13 +2168,17 @@ describe("cron method validation", () => {
           },
         },
       },
-    } as OpenClawConfig);
-    const patchFor = (model: string) => ({
-      payload: { kind: "agentTurn", message: "updated", model },
-    });
+    } as OpenClawConfig;
+  }
+  const cliModelPatch = (model: string) => ({
+    payload: { kind: "agentTurn", message: "updated", model },
+  });
+
+  it("accepts a CLI-backed model with a selected profile on cron.update", async () => {
+    setRuntimeConfig(cliBackedModelConfig());
 
     const accepted = await invokeCronUpdate(
-      { id: "cron-1", patch: patchFor(`${cliRef}@selected-profile`) },
+      { id: "cron-1", patch: cliModelPatch(`${cliBackedModelRef}@selected-profile`) },
       createCronJob(),
     );
     expect(accepted.context.cron.update).toHaveBeenCalled();
@@ -2184,11 +2186,36 @@ describe("cron method validation", () => {
 
     // Control: an embedded-runtime reference still needs its stored account.
     const refused = await invokeCronUpdate(
-      { id: "cron-1", patch: patchFor(`${embeddedRef}@missing-profile`) },
+      { id: "cron-1", patch: cliModelPatch(`${embeddedModelRef}@missing-profile`) },
       createCronJob(),
     );
     expect(refused.context.cron.update).not.toHaveBeenCalled();
     expectResponseError(refused.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "is unavailable",
+    });
+  });
+
+  // A bound job keeps its rejection: the store would otherwise clone its recorded
+  // account onto the CLI route while the same patch replaces the model.
+  it("keeps the stored account rejection when a bound job moves to a CLI-backed model", async () => {
+    setRuntimeConfig(cliBackedModelConfig());
+
+    const bound = await invokeCronUpdate(
+      { id: "cron-1", patch: cliModelPatch(`${cliBackedModelRef}@selected-profile`) },
+      Object.assign(createCronJob(), {
+        inferenceBinding: {
+          version: 1 as const,
+          provider: "anthropic",
+          profileId: "anthropic:stored-account",
+          authorizationId: "9f2b1c0d4e5a67890123456789abcdef0123456789abcdef0123456789abcdef",
+          authRequirement: "api-key" as const,
+          source: "user" as const,
+        },
+      }),
+    );
+    expect(bound.context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(bound.respond, {
       code: "INVALID_REQUEST",
       messageIncludes: "is unavailable",
     });

@@ -337,7 +337,8 @@ export async function captureCronUpdatedInferenceBinding(
     ? resolveSimpleCompletionSelectionForAgent({ cfg, agentId, modelRef: model })
     : null;
   // CLI backends own their login: creation records no binding for them, so an
-  // update must not demand a stored account that cannot bind that route.
+  // unbound job must not demand a stored account. A job that already records one
+  // keeps its rejection until an authorized transition replaces that account.
   const cliExecution = selection
     ? resolveCliRuntimeExecutionProvider({
         cfg,
@@ -346,7 +347,7 @@ export async function captureCronUpdatedInferenceBinding(
         modelId: selection.modelId,
       })
     : undefined;
-  if (!model || cliExecution || !selection?.profileId) {
+  if (!model || (cliExecution && !nextJob.inferenceBinding) || !selection?.profileId) {
     if (patch.agentId !== undefined && nextJob.inferenceBinding) {
       // A move may keep the account only when the new agent sees the same credential owner.
       const authority = await acquireCronInferenceAuthorization({
