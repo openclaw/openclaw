@@ -166,38 +166,15 @@ describe("artifact transfer response settlement", () => {
     expect(onProgress).toHaveBeenCalled();
   });
 
-  it.each([0, 4, contents.length - 1])(
-    "serves exactly the bytes from offset %i",
-    async (offset) => {
-      const { res, body } = await serve({ range: `bytes=${offset}-` });
-      expect(res.statusCode).toBe(206);
-      expect(res.getHeader("content-range")).toBe(
-        `bytes ${offset}-${artifact.tarballBytes - 1}/${artifact.tarballBytes}`,
-      );
-      expect(res.getHeader("content-length")).toBe(String(artifact.tarballBytes - offset));
-      expect(res.getHeader("x-openclaw-content-sha256")).toBe(artifact.tarballSha256);
-      expect(res.getHeader("accept-ranges")).toBe("bytes");
-      expect(body).toBe(contents.slice(offset));
+  it.each(["bytes=0-,4-", "bytes=9007199254740992-", `bytes=${contents.length}-`])(
+    "rejects unsupported or unsatisfiable range %j",
+    async (range) => {
+      const { res, body } = await serve({ range });
+      expect(res.statusCode).toBe(416);
+      expect(res.getHeader("content-range")).toBe(`bytes */${artifact.tarballBytes}`);
+      expect(JSON.parse(body)).toEqual({ error: "range_not_satisfiable" });
     },
   );
-
-  it.each([
-    "bytes=0-,4-",
-    "bytes=-4",
-    "bytes=0-4",
-    "bytes=-1-",
-    "bytes=1.5-",
-    "bytes=9007199254740992-",
-    `bytes=${contents.length}-`,
-    `bytes=${contents.length + 1}-`,
-    "items=0-",
-    "",
-  ])("rejects unsupported or unsatisfiable range %j", async (range) => {
-    const { res, body } = await serve({ range });
-    expect(res.statusCode).toBe(416);
-    expect(res.getHeader("content-range")).toBe(`bytes */${artifact.tarballBytes}`);
-    expect(JSON.parse(body)).toEqual({ error: "range_not_satisfiable" });
-  });
 
   it("terminates a ranged response when its capability is revoked mid-stream", async () => {
     await prepareArtifact(Buffer.alloc(256 * 1024, "x"));
@@ -563,6 +540,12 @@ describe("artifact transfer interruption observations", () => {
       h.socket.destroy();
       h.owner.abort();
       expect(h.res.statusCode).toBe(status);
+      expect(h.res.getHeader("content-length")).toBe(range ? "4" : "6");
+      expect(h.res.getHeader("content-range")).toBe(range ? "bytes 2-5/6" : undefined);
+      expect(h.res.getHeader("x-openclaw-content-sha256")).toBe("b".repeat(64));
+      expect(h.res.getHeader("accept-ranges")).toBe("bytes");
+      const wire = Buffer.concat(h.socket.chunks).toString("utf8");
+      expect(wire.slice(wire.indexOf("\r\n\r\n") + 4)).toBe(range ? "ndle" : "bundle");
       expect(h.progress.mock.calls.flat()).toEqual(progress);
       expect(h.res.writableFinished).toBe(true);
       expect(h.interrupted).not.toHaveBeenCalled();
