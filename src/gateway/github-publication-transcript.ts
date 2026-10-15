@@ -7,7 +7,10 @@ import {
   readCapturedSessionActorEntry,
 } from "../config/sessions/session-actor-storage-binding.js";
 import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
-import type { GitHubPublicationCoordinator } from "./github-publication.js";
+import type {
+  GitHubPublicationCoordinator,
+  GitHubPublicationTranscriptReport,
+} from "./github-publication.js";
 
 const GITHUB_PUBLICATION_RESPONSE_PREFIX = "github-publication:";
 
@@ -32,15 +35,6 @@ function formatGitHubPublicationResult(result: SessionGitHubPublicationResult): 
   }
   return result satisfies never;
 }
-
-export type GitHubPublicationTranscriptReport = {
-  sessionId: string;
-  sessionKey: string;
-  agentId: string;
-  result: SessionGitHubPublicationResult;
-  /** Run whose tool call requested this publication, when it is known to this process. */
-  runId?: string;
-};
 
 export async function reportGitHubPublicationTranscript(
   loadSessionRuntime: () => Promise<{

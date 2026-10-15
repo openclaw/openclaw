@@ -50,7 +50,6 @@ import {
   readGitHubPublicationRequestAsync,
   runGitHubPublicationMaintenanceAsync,
 } from "./github-publication-store-async.js";
-import type { GitHubPublicationTranscriptReport } from "./github-publication-transcript.js";
 import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
 import {
   prepareGitHubPublicationClaimWorkspace,
@@ -62,6 +61,15 @@ import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./worker-environments/placement-store.js";
+
+export type GitHubPublicationTranscriptReport = {
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+  result: SessionGitHubPublicationResult;
+  /** Run whose tool call requested this publication, when it is known to this process. */
+  runId?: string;
+};
 
 const activePublicationExecutions = new Map<string, Promise<SessionGitHubPublicationResult>>();
 
@@ -599,12 +607,7 @@ export function createGitHubPublicationCoordinator(params: {
       await repository.deferOrphanedRequestsAsync();
     },
     /** @deprecated Use listUnreportedResultsAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
-    listUnreportedResults(): Array<{
-      sessionId: string;
-      sessionKey: string;
-      agentId: string;
-      result: SessionGitHubPublicationResult;
-    }> {
+    listUnreportedResults(): GitHubPublicationTranscriptReport[] {
       return refuseLegacyPublication("listUnreportedResults", "listUnreportedResultsAsync");
     },
     async listUnreportedResultsAsync() {
