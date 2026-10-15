@@ -178,7 +178,7 @@ jobs:
           PYTHON
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -415,7 +415,7 @@ jobs:
 
       - name: Setup trusted Node for prepared publication
         if: inputs.prepared_artifact != ''
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -565,7 +565,7 @@ jobs:
 
       - name: Upload resolved npm publication plan
         if: inputs.defer_registry_verification && inputs.release_publish_run_id != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plugin-npm-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/npm-publication-plan.json
@@ -592,7 +592,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -696,6 +696,8 @@ jobs:
       - name: Prepare immutable npm preflight artifact
         id: preflight_artifact
         env:
+          # Resolve trusted tooling workspace packages from its tsconfig, not the candidate's.
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
           ARTIFACT_NAME: plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}
           EXTENSION_ID: ${{ matrix.plugin.extensionId }}
           INSTALL_NPM_SPEC: ${{ matrix.plugin.installNpmSpec }}
@@ -903,6 +905,7 @@ jobs:
       - name: Qualify packed plugin runtime
         env:
           ARTIFACT_DIR: ${{ steps.preflight_artifact.outputs.dir }}
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
         run: |
           set -euo pipefail
           node --import tsx --input-type=module <<'NODE'
@@ -928,6 +931,7 @@ jobs:
       - name: Scan exact plugin npm artifact
         env:
           ARTIFACT_DIR: ${{ steps.preflight_artifact.outputs.dir }}
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
         run: |
@@ -940,7 +944,7 @@ jobs:
 
       - name: Upload immutable npm preflight artifact
         id: upload_preflight_artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.preflight_artifact.outputs.name }}
           path: ${{ steps.preflight_artifact.outputs.dir }}
@@ -989,7 +993,7 @@ jobs:
             src/plugins
 
       - name: Download immutable npm preflight artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}
           path: ${{ runner.temp }}/plugin-npm-preflight-readback
@@ -1035,7 +1039,7 @@ jobs:
           PYTHON
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -1415,7 +1419,7 @@ jobs:
           echo "artifact_path=$output_dir" >> "$GITHUB_OUTPUT"
 
       - name: Upload immutable plugin npm preflight evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.preflight_evidence.outputs.artifact_name }}
           path: ${{ steps.preflight_evidence.outputs.artifact_path }}/*
@@ -1455,7 +1459,7 @@ jobs:
           fetch-depth: 1
 
       - name: Setup trusted Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -1489,7 +1493,7 @@ jobs:
 
       - name: Upload qualified npm preparation manifest
         id: upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.seal.outputs.artifact_name }}
           path: ${{ runner.temp }}/plugin-npm-prepared/plugin-npm-prepared.json
@@ -1527,7 +1531,7 @@ jobs:
           fetch-depth: 1
 
       - name: Setup trusted Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -1603,7 +1607,7 @@ jobs:
             scripts
 
       - name: Setup trusted Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -1869,7 +1873,7 @@ jobs:
 
       - name: Upload consumed npm qualification
         if: inputs.defer_registry_verification && inputs.release_publish_run_id != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plugin-npm-qualification-${{ matrix.plugin.extensionId }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/${{ matrix.plugin.extensionId }}-npm-qualification.json
@@ -1973,7 +1977,7 @@ jobs:
 
       - name: Download stable npm bootstrap approval
         if: ${{ steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap' && steps.publication_evidence.outputs.publish_tag == 'latest' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: npm-stable-bootstrap-approval-${{ inputs.release_publish_run_id }}-${{ inputs.release_publish_run_attempt }}
           path: ${{ runner.temp }}/npm-stable-bootstrap-approval
@@ -2129,7 +2133,7 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.all_matrix) }}
     steps:
       - name: Setup trusted Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 

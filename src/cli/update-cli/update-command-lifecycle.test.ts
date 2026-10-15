@@ -117,8 +117,8 @@ vi.mock("../../plugins/plugin-lifecycle-lease.js", () => ({
   },
 }));
 
-vi.mock("../../state/openclaw-state-ownership.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../state/openclaw-state-ownership.js")>()),
+vi.mock("../../state/openclaw-state-ownership-preflight.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-state-ownership-preflight.js")>()),
   assertOpenClawStateWriteAllowedAtPath: vi.fn(async () => undefined),
 }));
 

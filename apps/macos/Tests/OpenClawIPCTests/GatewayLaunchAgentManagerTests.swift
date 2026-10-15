@@ -223,50 +223,64 @@ struct GatewayLaunchAgentManagerTests {
             homeDirectory: home)?.contains("default") == true)
     }
 
-    @Test func `reads Gateway service ownership command directly from launchd`() throws {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-gateway-\(UUID().uuidString).plist")
-        defer { try? FileManager.default.removeItem(at: url) }
-        let arguments = [
-            "/Users/Test/.openclaw/tools/node/bin/node",
-            "/Users/Test/.openclaw/lib/node_modules/openclaw/dist/index.js",
-            "gateway",
-        ]
-        let data = try PropertyListSerialization.data(
-            fromPropertyList: ["ProgramArguments": arguments],
-            format: .xml,
-            options: 0)
-        try data.write(to: url, options: .atomic)
+    @Test func `reads Gateway service ownership command directly from launchd`() async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        try await TestIsolation.withIsolatedState(launchAgentHomeDirectory: home) {
+            let url = GatewayLaunchAgentManager.plistURL(homeDirectory: home, profile: .current)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            let arguments = [
+                "/Users/Test/.openclaw/tools/node/bin/node",
+                "/Users/Test/.openclaw/lib/node_modules/openclaw/dist/index.js",
+                "gateway",
+            ]
+            let data = try PropertyListSerialization.data(
+                fromPropertyList: ["ProgramArguments": arguments],
+                format: .xml,
+                options: 0)
+            try data.write(to: url, options: .atomic)
 
-        #expect(GatewayLaunchAgentManager._testLaunchdProgramArguments(plistURL: url) == arguments)
-        try Data("not a plist".utf8).write(to: url, options: .atomic)
-        #expect(GatewayLaunchAgentManager._testLaunchdProgramArguments(plistURL: url) == nil)
-        try FileManager.default.removeItem(at: url)
-        #expect(GatewayLaunchAgentManager._testLaunchdProgramArguments(plistURL: url) == [])
+            #expect(GatewayLaunchAgentManager.launchdProgramArguments() == arguments)
+            try Data("not a plist".utf8).write(to: url, options: .atomic)
+            #expect(GatewayLaunchAgentManager.launchdProgramArguments() == nil)
+            try FileManager.default.removeItem(at: url)
+            #expect(GatewayLaunchAgentManager.launchdProgramArguments() == [])
+        }
     }
 
-    @Test func `daemon status exposes only a loaded running gateway pid`() {
-        #expect(GatewayLaunchAgentManager._testRunningGatewayPID(from: """
-        {
-          "service": {
-            "loaded": true,
-            "runtime": { "status": "running", "pid": 4242 }
-          }
-        }
-        """) == 4242)
+    @Test func `daemon status exposes only a loaded running gateway pid`() async {
+        await TestIsolation.withIsolatedState {
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            defer {
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+            }
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload("""
+            {
+              "service": {
+                "loaded": true,
+                "runtime": { "status": "running", "pid": 4242 }
+              }
+            }
+            """)
+            #expect(await GatewayLaunchAgentManager.runningGatewayPID() == 4242)
 
-        let rejected = [
-            #"{"service":{"loaded":false,"runtime":{"status":"running","pid":4242}}}"#,
-            #"{"service":{"loaded":true,"runtime":{"status":"stopped","pid":4242}}}"#,
-            #"{"service":{"loaded":true,"runtime":{"status":"running","pid":0}}}"#,
-            #"{"service":{"loaded":true,"runtime":{"status":"running","pid":2147483648}}}"#,
-            #"{"service":{"loaded":true,"runtime":{"status":"running","pid":"4242"}}}"#,
-            #"{"service":{"loaded":true,"runtime":{"status":"running"}}}"#,
-            #"{"service":null}"#,
-            "not-json",
-        ]
-        for json in rejected {
-            #expect(GatewayLaunchAgentManager._testRunningGatewayPID(from: json) == nil)
+            let rejected = [
+                #"{"service":{"loaded":false,"runtime":{"status":"running","pid":4242}}}"#,
+                #"{"service":{"loaded":true,"runtime":{"status":"stopped","pid":4242}}}"#,
+                #"{"service":{"loaded":true,"runtime":{"status":"running","pid":0}}}"#,
+                #"{"service":{"loaded":true,"runtime":{"status":"running","pid":2147483648}}}"#,
+                #"{"service":{"loaded":true,"runtime":{"status":"running","pid":"4242"}}}"#,
+                #"{"service":{"loaded":true,"runtime":{"status":"running"}}}"#,
+                #"{"service":null}"#,
+                "not-json",
+            ]
+            for json in rejected {
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(json)
+                #expect(await GatewayLaunchAgentManager.runningGatewayPID() == nil)
+            }
         }
     }
 

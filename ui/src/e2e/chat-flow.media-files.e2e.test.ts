@@ -404,6 +404,7 @@ suite.define(() => {
   it.each([
     {
       name: "canonical inbound",
+      boundedPreview: true,
       previewFails: false,
       source: "media://inbound/telegram-photo.png",
       workspaceDir: undefined,
@@ -411,6 +412,7 @@ suite.define(() => {
     },
     {
       name: "sandbox-staged inbound",
+      boundedPreview: false,
       previewFails: false,
       source: "/workspace/media/inbound/fabricated-sandbox.png",
       workspaceDir: "/workspace",
@@ -418,6 +420,7 @@ suite.define(() => {
     },
     {
       name: "unavailable inbound preview",
+      boundedPreview: true,
       source: "media://inbound/animated.png",
       workspaceDir: undefined,
       screenshotName: "inbound-preview-unavailable",
@@ -425,7 +428,7 @@ suite.define(() => {
     },
   ] as const)(
     "renders a $name image through the ticketed media route",
-    async ({ source, workspaceDir, screenshotName, previewFails }) => {
+    async ({ source, workspaceDir, screenshotName, previewFails, boundedPreview }) => {
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
         ? suite.artifactDir
         : undefined;
@@ -481,6 +484,7 @@ suite.define(() => {
                 {
                   path: source,
                   contentType: "image/png",
+                  ...(previewFails ? { fileName: "Attached image.png" } : {}),
                   ...(workspaceDir ? { workspaceDir } : {}),
                 },
               ],
@@ -494,8 +498,11 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(2);
         if (previewFails) {
-          const openOriginal = page.getByRole("button", { name: "Open original", exact: true });
-          await openOriginal.waitFor();
+          const retry = page.getByRole("button", { name: "Retry", exact: true });
+          await retry.waitFor();
+          expect(
+            await page.getByRole("button", { name: "Open original", exact: true }).count(),
+          ).toBe(0);
           expect(
             requestedMediaUrls
               .filter((url) => url.searchParams.get("meta") !== "1")
@@ -507,14 +514,31 @@ suite.define(() => {
               animations: "disabled",
             });
           }
-          await openOriginal.click();
-          const original = page.locator("openclaw-image-lightbox img").first();
-          await original.waitFor({ state: "visible" });
+          await retry.click();
+          await expect
+            .poll(
+              () =>
+                requestedMediaUrls.filter((url) => url.searchParams.get("variant") === "thumbnail")
+                  .length,
+            )
+            .toBe(2);
+          await retry.waitFor();
           expect(
-            new URL((await original.getAttribute("src"))!, suite.server.baseUrl).searchParams.has(
-              "variant",
+            requestedMediaUrls.filter(
+              (url) => !url.searchParams.has("variant") && !url.searchParams.has("meta"),
             ),
-          ).toBe(false);
+          ).toHaveLength(0);
+          await page.getByRole("button", { name: "Image actions", exact: true }).click();
+          await page.getByRole("menuitem", { name: "Copy image", exact: true }).waitFor();
+          const download = page.waitForEvent("download");
+          await page.getByRole("menuitem", { name: "Download image", exact: true }).click();
+          expect((await download).suggestedFilename()).toBe("Attached image.png");
+          expect(
+            requestedMediaUrls.filter(
+              (url) => !url.searchParams.has("variant") && !url.searchParams.has("meta"),
+            ),
+          ).toHaveLength(1);
+          expect(await page.locator("openclaw-image-lightbox").count()).toBe(0);
           return;
         }
         const image = page.locator("img.chat-message-image");
@@ -530,16 +554,30 @@ suite.define(() => {
           (url) => url.searchParams.get("meta") !== "1",
         );
         expect(previewRequest?.searchParams.get("variant")).toBe(
-          source.startsWith("media://inbound/") ? "thumbnail" : null,
+          boundedPreview ? "thumbnail" : null,
         );
+        const inlineSource = await image.getAttribute("src");
         await page.getByRole("button", { name: /Open image/ }).click();
-        const original = page.locator("openclaw-image-lightbox img").first();
-        await original.waitFor({ state: "visible" });
-        expect(
-          new URL((await original.getAttribute("src"))!, suite.server.baseUrl).searchParams.has(
-            "variant",
-          ),
-        ).toBe(false);
+        const display = page.locator("openclaw-image-lightbox img").first();
+        await display.waitFor({ state: "visible" });
+        if (boundedPreview) {
+          await expect.poll(() => display.getAttribute("src")).toContain("width=1920");
+          expect(
+            requestedMediaUrls.every(
+              (url) =>
+                url.searchParams.get("meta") === "1" ||
+                url.searchParams.get("variant") === "thumbnail",
+            ),
+          ).toBe(true);
+        } else {
+          // Legacy local sources retain original bytes, without a second upgrade read.
+          expect(await display.getAttribute("src")).toBe(
+            new URL(inlineSource!, suite.server.baseUrl).href,
+          );
+          expect(requestedMediaUrls).toHaveLength(2);
+          expect(requestedMediaUrls.every((url) => !url.searchParams.has("variant"))).toBe(true);
+          expect(requestedMediaUrls.every((url) => !url.searchParams.has("width"))).toBe(true);
+        }
         if (artifactDir) {
           await page.screenshot({
             fullPage: true,
