@@ -283,6 +283,29 @@ describe("installSessionToolResultGuard", () => {
     expect(messages(sm)).toHaveLength(1);
   });
 
+  it("re-points the instruction when a restricted attempt reuses a guarded manager", () => {
+    const instruction =
+      "Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+    const sm = SessionManager.inMemory();
+    guardSessionManager(sm, {});
+    guardSessionManager(sm, { suppressEchoedAssistantPersistence: instruction });
+    sm.appendMessage(assistant(instruction));
+    sm.appendMessage(assistant("The disk has 12 GB free."));
+    expect(messages(sm)).toMatchObject([
+      { role: "assistant", content: [{ type: "text", text: "The disk has 12 GB free." }] },
+    ]);
+  });
+
+  it("clears the instruction when the guarded manager returns to an ordinary attempt", () => {
+    const instruction =
+      "Continue from the current transcript and produce the final user-visible answer now. Do not repeat completed tool calls or restart from scratch.";
+    const sm = SessionManager.inMemory();
+    guardSessionManager(sm, { suppressEchoedAssistantPersistence: instruction });
+    guardSessionManager(sm, {});
+    sm.appendMessage(assistant(instruction));
+    expect(messages(sm)).toHaveLength(1);
+  });
+
   it("suppresses transcript-only assistants while retaining tool calls", () => {
     const { sm } = setup({ suppressTranscriptOnlyAssistantPersistence: true });
     sm.appendMessage(asAppendMessage({ role: "assistant", content: "private room-event note" }));

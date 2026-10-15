@@ -47,6 +47,7 @@ type GuardedSessionManager = SessionManager &
       | "flushPendingToolResultsAsync"
       | "clearPendingToolResults"
       | "setNextUserMessagePersistence"
+      | "setEchoedAssistantInstruction"
     >
   > & {
     /** Refresh the exact owning run when a caller reuses this guarded manager. */
@@ -161,6 +162,7 @@ export function guardSessionManager(
         replayKey: preparedUserReplayKey,
       },
     );
+    guardedSessionManager.setEchoedAssistantInstruction?.(opts?.suppressEchoedAssistantPersistence);
     return guardedSessionManager;
   }
 
@@ -379,6 +381,7 @@ export function guardSessionManager(
   guardedSessionManager.flushPendingToolResultsAsync = guard.flushPendingToolResultsAsync;
   guardedSessionManager.clearPendingToolResults = guard.clearPendingToolResults;
   guardedSessionManager.setNextUserMessagePersistence = guard.setNextUserMessagePersistence;
+  guardedSessionManager.setEchoedAssistantInstruction = guard.setEchoedAssistantInstruction;
   guardedSessionManager.setTranscriptRunContext = (
     runId,
     prepare,

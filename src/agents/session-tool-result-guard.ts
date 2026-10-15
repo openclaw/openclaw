@@ -177,6 +177,7 @@ export function installSessionToolResultGuard(
   setNextUserMessagePersistence: (mode: NextUserMessagePersistence) => void;
   getPendingIds: () => string[];
   setTranscriptRunId: (runId: string | undefined, errors?: AssistantErrorTranscript) => void;
+  setEchoedAssistantInstruction: (instruction: string | undefined) => void;
 } {
   const originalAppend = getRawSessionAppendMessage(sessionManager);
   const originalAppendWithTranscriptAnchor =
@@ -210,6 +211,9 @@ export function installSessionToolResultGuard(
   const transcriptSeqByEntryId = new Map<string, number>();
   let transcriptRunId = opts?.runId;
   let assistantErrorTranscript = opts?.assistantErrorTranscript;
+  // Attempt-scoped: a caller that reuses this guarded manager must be able to
+  // re-point (and clear) the instruction the current attempt injected.
+  let echoedAssistantInstruction = opts?.suppressEchoedAssistantPersistence;
   let nextUserMessagePersistence: NextUserMessagePersistence =
     opts?.suppressNextUserMessagePersistence ? "suppress" : "normal";
 
@@ -540,11 +544,11 @@ export function installSessionToolResultGuard(
     if (
       finalMessage.role === "assistant" &&
       toolCalls.length === 0 &&
-      opts?.suppressEchoedAssistantPersistence !== undefined &&
-      opts.suppressEchoedAssistantPersistence.trim().length > 0 &&
+      echoedAssistantInstruction !== undefined &&
+      echoedAssistantInstruction.trim().length > 0 &&
       isRecoveryInstructionEcho(
         extractAssistantVisibleText(finalMessage).trim(),
-        opts.suppressEchoedAssistantPersistence,
+        echoedAssistantInstruction,
       )
     ) {
       // The finalizer still rejects this reply and re-asks; persisting it first
@@ -631,6 +635,9 @@ export function installSessionToolResultGuard(
     setTranscriptRunId: (runId, errors) => {
       transcriptRunId = runId;
       assistantErrorTranscript = errors;
+    },
+    setEchoedAssistantInstruction: (instruction) => {
+      echoedAssistantInstruction = instruction;
     },
   };
 }
