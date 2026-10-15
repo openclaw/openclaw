@@ -192,7 +192,11 @@ export function createAgentSchemaInspectionWorker() {
           } else {
             if (kind === "state") {
               const stateInspection = message.stateInspection;
-              if (!stateInspection) {
+              if (stateInspection === null) {
+                response.resolve(null);
+                return;
+              }
+              if (stateInspection === undefined) {
                 failure = new Error("Invalid state schema inspection response");
                 kill();
                 return;
@@ -312,10 +316,10 @@ export function createAgentSchemaInspectionWorker() {
       input: StateSchemaInspectionInput,
       callerSignal: AbortSignal | undefined,
       snapshotPath?: string,
-    ): Promise<StateSchemaInspection> => {
+    ): Promise<StateSchemaInspection | null> => {
       const result = await operations.inspect({ kind: "state", input }, callerSignal, snapshotPath);
-      if (!result || !("schemas" in result)) {
-        throw new Error("Missing state schema inspection result");
+      if (result && !("schemas" in result)) {
+        throw new Error("Unexpected agent schema inspection result");
       }
       return result;
     },

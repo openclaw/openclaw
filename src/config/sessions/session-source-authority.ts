@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
+import type { SessionAdmissionTransition } from "./session-admission-transition.types.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
@@ -10,7 +11,7 @@ export type SessionSourceConversationPredicate = {
   sessionKey: string | null;
 };
 
-/** Prepared source facts are compared again on the existing writer's connection. */
+/** Same-store facts are compared on the writer; published foreign sources may admit once. */
 export type SessionSourcePredicate = {
   source: CapturedSessionEntryReadSource;
   sessionKey: string;
@@ -25,6 +26,26 @@ export type SessionSourcePredicateFacts = {
   entry: SessionEntry | undefined;
   members?: readonly string[];
 };
+
+const publishedSourceAdmissions = new WeakMap<SessionSourcePredicate, () => void>();
+
+/** Bind the existing owner's live publication without copying authority into another cache. */
+export function bindPublishedSessionSourceAdmission(
+  predicate: SessionSourcePredicate,
+  admit: () => void,
+): void {
+  publishedSourceAdmissions.set(predicate, admit);
+}
+
+/** Each durable operation admits anew; later disclosure and execution keep their live checks. */
+export function admitPublishedSessionSource(predicate: SessionSourcePredicate): boolean {
+  const admit = publishedSourceAdmissions.get(predicate);
+  if (!admit) {
+    return false;
+  }
+  admit();
+  return true;
+}
 
 /** Current source facts supplied by the mutation's own transaction. */
 export type SessionSourceTransactionGrant = {
@@ -74,6 +95,11 @@ export type PreparedSessionSourceAuthority = {
 export type SessionSourceAssertion = (() => void) & {
   nativeSource?: boolean;
   opaqueCommitGuard?: boolean;
+  /** Host commit notification only; never a substitute for the normal source checks. */
+  onSessionCompactionCommitted?: (
+    transition: SessionAdmissionTransition,
+    entry: SessionEntry,
+  ) => void;
   /** Keep the source owner alive through accepted work that outlasts its request. */
   retain?: () => () => void;
   /** Checks the scope owner without invoking storage-dependent source predicates. */
@@ -247,6 +273,8 @@ export function createDynamicSessionSourceAssertion(
       return scoped ? scoped.assertCurrent() : select()?.();
     },
     {
+      onSessionCompactionCommitted: (transition: SessionAdmissionTransition, entry: SessionEntry) =>
+        select()?.onSessionCompactionCommitted?.(transition, entry),
       prepareSessionSource: () => prepareSelected(prepareSessionSourceAuthority),
       prepareSessionSourceScope: () => prepareSelected(prepareSessionSourceScope),
     },
@@ -346,6 +374,14 @@ export function composeSessionSourceAssertion(
       return scoped ? scoped.assertCurrent() : check(() => sources.forEach((source) => source?.()));
     },
     {
+      onSessionCompactionCommitted: (
+        transition: SessionAdmissionTransition,
+        entry: SessionEntry,
+      ) => {
+        for (const source of new Set(sources)) {
+          source?.onSessionCompactionCommitted?.(transition, entry);
+        }
+      },
       prepareSessionSource: () => prepare(),
       prepareSessionSourceScope: () => prepare(true),
     },

@@ -242,6 +242,24 @@ describe("Baseten sparse live model transport", () => {
     );
   });
 
+  it("disables the current Pro thinking envelope when thinking is off", async () => {
+    const { provider, model } = await resolveSparseLiveModel("deepseek-ai/DeepSeek-V4-Pro-0813");
+    const body = await captureRegisteredRequest({
+      provider,
+      model,
+      reasoning: "off",
+      maxTokens: 64,
+      forceTool: false,
+      context: { messages: [{ role: "user", content: "Reply with exactly ok.", timestamp: 0 }] },
+    });
+    // Baseten rejects effort "none" next to an enabled envelope with a 400.
+    expect(body).toMatchObject({
+      model: "deepseek-ai/DeepSeek-V4-Pro-0813",
+      reasoning_effort: "none",
+      thinking: { type: "disabled" },
+    });
+  });
+
   it("sends the current Pro replay through its registered transport", async () => {
     const { provider, model } = await resolveSparseLiveModel("deepseek-ai/DeepSeek-V4-Pro-0813");
     const toolCallId = "call_baseten_live_replay_1";

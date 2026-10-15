@@ -37,6 +37,7 @@ type AssistantAttachmentAvailability =
       checkedAt: number;
       recoverable: boolean;
       retryAttempted?: true;
+      requiresExplicitRetry?: true;
       unconfirmed?: true;
       canAllow?: boolean;
     };
@@ -282,6 +283,7 @@ export function reportAssistantImageFailure(
     resource,
     createUnavailableAssistantAttachment(t("chat.imageLightbox.loadFailed"), true, {
       unconfirmed: true,
+      requiresExplicitRetry: true,
     }),
   );
   notifyChatMediaResourceSubscribers(resource);
@@ -302,7 +304,12 @@ function resetAssistantAttachmentAvailability(
 function createUnavailableAssistantAttachment(
   reason: string,
   retryAttempted: boolean,
-  options: { recoverable?: boolean; unconfirmed?: true; canAllow?: boolean } = {},
+  options: {
+    recoverable?: boolean;
+    unconfirmed?: true;
+    canAllow?: boolean;
+    requiresExplicitRetry?: true;
+  } = {},
 ): Extract<AssistantAttachmentAvailability, { status: "unavailable" }> {
   return {
     status: "unavailable",
@@ -311,6 +318,7 @@ function createUnavailableAssistantAttachment(
     recoverable: options.recoverable !== false,
     ...(options.unconfirmed ? { unconfirmed: true } : {}),
     ...(retryAttempted ? { retryAttempted: true } : {}),
+    ...(options.requiresExplicitRetry ? { requiresExplicitRetry: true } : {}),
     ...(options.canAllow ? { canAllow: true } : {}),
   };
 }
@@ -322,6 +330,7 @@ function assistantAttachmentCacheScope(source: string, options: ImageRenderOptio
     options.authToken?.trim() ?? "",
     options.sessionKey,
     options.agentId,
+    options.messageId,
     source,
   ]);
 }
@@ -386,7 +395,11 @@ function observeAssistantAttachment(source: string, options: ImageRenderOptions)
   );
   if (resource.subscribers.size > 0 && !resource.releaseAuthRecovery) {
     resource.releaseAuthRecovery = subscribeBrowserAuthRestored(() => {
-      if (isChatMediaResourceCurrent(resource) && resource.value?.status === "unavailable") {
+      if (
+        isChatMediaResourceCurrent(resource) &&
+        resource.value?.status === "unavailable" &&
+        !resource.value.requiresExplicitRetry
+      ) {
         resetAssistantAttachmentAvailability(resource);
         notifyChatMediaResourceSubscribers(resource);
       }

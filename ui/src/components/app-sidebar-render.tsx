@@ -21,7 +21,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import { pluginTabKey } from "../pages/plugin/route.ts";
-import { renderSidebarNavLink } from "./app-sidebar-nav-menus.tsx";
+import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { iconData, type IconName } from "./icon-data.ts";
@@ -37,7 +37,6 @@ import { renderSessionLeadingState, SessionRowBadges } from "./solid/session-pre
 import "./theme-brand-icon.ts";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
-  teamOnlineExpanded: boolean;
   readonly nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
   readonly people: import("./sidebar-people-controller.ts").SidebarPeopleController;
   renderPinnedSidebarSession(session: () => SidebarRecentSession): JSX.Element;
@@ -197,22 +196,18 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
           aria-haspopup="menu"
           aria-expanded={menuOpen() ? "true" : "false"}
           aria-label={`${name()} · ${t("agentChip.workspaceMenuLabel")}`}
-          onPointerMove={(event: PointerEvent) => {
-            if (event.currentTarget instanceof HTMLElement) {
-              host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
-            }
+          onPointerMove={(event) => {
+            host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
           }}
           onPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
           onPointerDown={(event: PointerEvent) => event.stopPropagation()}
-          onClick={(event: MouseEvent) => {
+          onClick={(event) => {
             event.stopPropagation();
-            if (event.currentTarget instanceof HTMLElement) {
-              host.sidebarMenus.toggleAgentMenu(event.currentTarget);
-            }
+            host.sidebarMenus.toggleAgentMenu(event.currentTarget);
           }}
-          onContextMenu={(event: MouseEvent) => {
+          onContextMenu={(event) => {
             event.preventDefault();
-            if (!menuOpen() && event.currentTarget instanceof HTMLElement) {
+            if (!menuOpen()) {
               host.sidebarMenus.toggleAgentMenu(event.currentTarget);
             }
           }}
@@ -222,9 +217,7 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
               class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
               aria-hidden="true"
             >
-              {branding().brandIcon === "claw" ? (
-                <Icon name="lobster" />
-              ) : branding().brandIcon === "mark" ? (
+              {branding().brandIcon === "mark" ? (
                 <Icon name="mark" />
               ) : (
                 <openclaw-theme-brand-icon prop:branding={branding()} aria-hidden="true" />
@@ -322,17 +315,17 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
               {(session) => (
                 <>
                   {
-                    renderSessionLeadingState(
-                      session(),
-                      undefined,
-                      "owned",
-                      undefined,
-                      undefined,
-                      false,
-                      <span class="nav-item__icon" aria-hidden="true">
-                        <Icon name="home" />
-                      </span>,
-                    ).leadingIndicator
+                    renderSessionLeadingState({
+                      get session() {
+                        return session();
+                      },
+                      attribution: "owned",
+                      icon: (
+                        <span class="nav-item__icon" aria-hidden="true">
+                          <Icon name="home" />
+                        </span>
+                      ),
+                    }).leadingIndicator
                   }
                   {
                     <SessionRowBadges
@@ -473,30 +466,21 @@ export function renderAppSidebarPluginTab(
     return isRouteId(route) ? route : null;
   });
   const location = createMemo(() => pluginTabLocation(tab(), host.basePath));
-  const link = renderSidebarNavLink({
-    get href() {
-      return `${location().pathname}${location().search}`;
-    },
-    get icon() {
-      const icon = tab().icon;
-      return (
-        <Icon
-          name={
-            icon && Object.hasOwn(iconData, icon)
-              ? (icon as IconName) // SAFETY: The preceding own-key guard admits only keys of iconData.
-              : "plug"
-          }
-        />
-      );
-    },
-    get label() {
-      return tab().label;
-    },
-    get active() {
-      return host.activeRouteId === "plugin" && host.activePluginTabId === key();
-    },
-    onNavigate: () => host.onNavigate?.("plugin", location()),
+  const iconName = createMemo(() => {
+    const icon = tab().icon;
+    return icon && Object.hasOwn(iconData, icon)
+      ? (icon as IconName) // SAFETY: The preceding own-key guard admits only keys of iconData.
+      : "plug";
   });
+  const link = (
+    <SidebarNavLink
+      href={`${location().pathname}${location().search}`}
+      icon={<Icon name={iconName()} />}
+      label={tab().label}
+      active={host.activeRouteId === "plugin" && host.activePluginTabId === key()}
+      onNavigate={() => host.onNavigate?.("plugin", location())}
+    />
+  );
   return (
     <Show when={routeId()} fallback={link}>
       {(route) => host.sidebarMenus.renderRoute(route())}

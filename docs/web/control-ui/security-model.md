@@ -151,7 +151,8 @@ ticket; replacing the file or restarting the Gateway requires a new allowance.
 When gateway auth is configured, assistant local-media previews use a two-step route:
 
 - `GET /__openclaw__/assistant-media?meta=1&source=<path>&sessionKey=<key>&agentId=<id>` requires the normal Control UI operator auth and access to the selected session; the browser sends the gateway token as a bearer header when checking availability.
-- Successful metadata responses include a short-lived `mediaTicket` scoped to the file and session. Explicit outside-image allowances use an authenticated administrator `POST` to the same route with `meta=1&allow=1`.
+- Saved message attachments also carry `messageId`. Readers with `operator.sessions.read` can open an attachment only when its current, visible message belongs to a conversation they can read, including retained queued or stopped inputs. The Gateway verifies the source against that message’s saved attachment references or supported assistant media directives; a session key or filename alone never grants file access. These reads retain the same filesystem restrictions. Standalone file reads still require `operator.read`.
+- Successful metadata responses include a short-lived `mediaTicket` scoped to the file, session, and message when applicable. Explicit outside-image allowances use an authenticated administrator `POST` to the same route with `meta=1&allow=1`.
 - Browser-rendered image, audio, video, and document URLs use `mediaTicket=<ticket>` instead of the active gateway token or password. The ticket expires quickly and cannot authorize a different source.
 
 Tickets remain bound to the issuing reader's current access. Losing session

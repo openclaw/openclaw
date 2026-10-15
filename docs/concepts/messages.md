@@ -189,6 +189,11 @@ appears in session history and live updates; it does not mirror to an inherited
 external channel. External reactions still require the normal channel routing and
 external message ID.
 
+Runs without a current prompt, such as heartbeats and internal events, cannot add
+prompt reactions. A prompt-targeted attempt fails locally rather than asking you
+to configure an external channel. To react externally, pass an explicit
+`channel`, `target`, and `messageId`.
+
 Queued turns bind the reaction to their own committed prompt when execution
 begins. Steering updates the current prompt only after the new input is committed
 and consumed by the running agent; pending or rejected input does not retarget a

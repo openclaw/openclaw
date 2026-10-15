@@ -45,7 +45,8 @@ function exitedDriver(): UpdateRunDriver {
 }
 
 beforeEach(() => {
-  vi.useFakeTimers();
+  // Ledger receipts still need real worker scheduling and monotonic clocks.
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   vi.setSystemTime(new Date("2026-09-07T12:00:00Z"));
 });
 

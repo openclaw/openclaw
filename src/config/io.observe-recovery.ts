@@ -3,6 +3,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { root } from "../infra/fs-safe.js";
+import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
 import {
   enqueueConfigAuditRecord,
   captureConfigAuditAppender,
@@ -43,7 +44,7 @@ import { chmodConfigBestEffort, chmodConfigBestEffortSync } from "./io.write-saf
 import { formatConfigIssueSummary } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
-import { resolveIsConfigReadOnly } from "./paths.js";
+import { resolveIsConfigReadOnly, resolveStateDir } from "./paths.js";
 import {
   collectPollutedSecretPlaceholders,
   isPluginLocalInvalidConfigSnapshot,
@@ -79,7 +80,12 @@ function createRecoveryCommitEffect(params: {
   const options = {
     filePath: params.configPath,
     content: params.raw,
-    dirMode: 0o700,
+    dirMode:
+      readExistingStateRootMode(
+        path.dirname(params.configPath),
+        resolveStateDir(params.deps.env, params.deps.homedir),
+        params.deps.fs,
+      ) ?? 0o700,
     mode: 0o600,
     tempPrefix: path.basename(params.configPath),
     fileSystem: params.deps.fs,

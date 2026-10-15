@@ -52,7 +52,7 @@ backdrop-filter: blur(14px); /* components.css markdown preview dialog backdrop 
 
 > **Do not** add `background: var(--bg)` or any fully-opaque fill to a surface that appears above other content.
 
-Use the `@supports` fallback pattern below instead. Browsers that lack `backdrop-filter` fall back gracefully to the semi-opaque base without breaking layout.
+Use the `@supports` fallback pattern below instead. Browsers that lack `backdrop-filter` use the semi-opaque base without breaking layout.
 
 ### `@supports` Fallback Pattern
 

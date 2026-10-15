@@ -911,6 +911,8 @@ it("prepares an oversized mirrored tool frame without losing the incoming reques
     512,
   );
   expect(prepared).toMatchObject([
+    { role: "user", content: "sqlite prompt" },
+    { role: "assistant", content: "sqlite answer" },
     { role: "user", content: "Send the synthetic update." },
     { role: "assistant", content: [{ type: "toolCall", id: "sent", name: "message" }] },
     {

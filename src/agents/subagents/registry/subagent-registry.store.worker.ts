@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { readAcpSessionControlInWorker } from "../../../acp/runtime/session-meta-source.worker.js";
 import { requestSessionEntryCurrentAdmission } from "../../../config/sessions/session-entry-current-admission.worker.js";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../../../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../../../infra/sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "../../../infra/sqlite-lifecycle-errors.js";
 import { deferSqlitePostCommitPublication } from "../../../infra/sqlite-post-commit.js";
@@ -48,7 +48,7 @@ import type {
 const log = createSubsystemLogger("state/worker");
 
 export function readSubagentRunsInWorker(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: Extract<OpenClawStateReadCommand, { type: "subagents.runs" }>,
 ): Extract<OpenClawStateReadResult, { type: "subagents.runs" }> {
   if (command.scope.kind === "maintenance") {
@@ -100,9 +100,13 @@ export async function streamSubagentRegistryInWorker(
   let count = 0;
   try {
     // sqlite-allow-raw -- Keep the complete streamed read on one read-only snapshot.
-    db.exec("BEGIN");
+    db.exec(
+      isPostgresSqlConnection(db) ? "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY" : "BEGIN",
+    );
     assertStateReadSchema(db, input.databasePath);
-    admitSqliteSchema(db);
+    if (!isPostgresSqlConnection(db)) {
+      admitSqliteSchema(db);
+    }
     onAdmitted();
     const query = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "subagent_runs">>(db)
       .selectFrom("subagent_runs")
@@ -129,7 +133,7 @@ export async function streamSubagentRegistryInWorker(
       (await channel.request(batch)).consumed();
     }
   } catch (error) {
-    if (isSqliteCorruptionError(error)) {
+    if (!isPostgresSqlConnection(db) && isSqliteCorruptionError(error)) {
       invalidateOpenClawStateRuntimeIntegrity(db);
     }
     errors.push(error);

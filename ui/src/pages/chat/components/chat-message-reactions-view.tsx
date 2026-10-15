@@ -1,6 +1,6 @@
 import { createEffect, createSignal, For, Show, onCleanup } from "solid-js";
 import { isReactionEmoji } from "../../../../../packages/gateway-protocol/src/index.js";
-import { sessionEmojiPickerShortcut } from "../../../components/session-icon-picker.ts";
+import { EmojiSearchPanel } from "../../../components/emoji-search-panel.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -9,6 +9,28 @@ import type { MessageReactionPlacement } from "./chat-message-reaction-model.ts"
 import "./chat-message-reactions.css";
 
 const QUICK_REACTIONS = ["👍", "❤️", "🎉", "👀", "🚀", "😂"] as const;
+// Shown before the search has a query; quick reactions lead so the grid extends the palette.
+const SEARCH_DEFAULTS = [
+  ...QUICK_REACTIONS,
+  "👎",
+  "🙏",
+  "🔥",
+  "✅",
+  "❌",
+  "💯",
+  "🤔",
+  "😮",
+  "😢",
+  "👏",
+  "🙌",
+  "💡",
+  "🐛",
+  "🦞",
+  "⚠️",
+  "🤝",
+  "✨",
+  "🎯",
+] as const;
 let nextPickerId = 0;
 
 type MessageReactionPickerProps = {
@@ -22,8 +44,7 @@ export const MessageReactionPicker = defineSolidBridge<MessageReactionPickerProp
   "openclaw-message-reaction-picker",
   (props, host) => {
     const [custom, setCustom] = createSignal(false);
-    const [value, setValue] = createSignal("");
-    const [invalid, setInvalid] = createSignal(false);
+    const [query, setQuery] = createSignal("");
     // Popovers now share the document's ID namespace instead of individual shadow roots.
     const triggerId = `reaction-trigger-${++nextPickerId}`;
     let popover: PopoverHandle | undefined;
@@ -62,18 +83,17 @@ export const MessageReactionPicker = defineSolidBridge<MessageReactionPickerProp
       props.onSelect?.(emoji, props.activeEmoji.has(emoji));
       close();
     };
-    const applyCustom = (text: string) => {
+    const search = (text: string) => {
+      setQuery(text);
+      // A pasted or OS-picker emoji applies at once, including ones the shortcode catalog lacks.
       const candidate = text.trim();
       if (isReactionEmoji(candidate)) {
         select(candidate);
-      } else {
-        setInvalid(candidate.length > 0);
       }
     };
     const reset = () => {
       setCustom(false);
-      setValue("");
-      setInvalid(false);
+      setQuery("");
     };
     const showPalette = () => {
       focusAfterCommit = "palette";
@@ -101,7 +121,6 @@ export const MessageReactionPicker = defineSolidBridge<MessageReactionPickerProp
         buttons[target]?.focus();
       }
     };
-    const shortcut = sessionEmojiPickerShortcut()?.join("");
     return (
       <>
         <openclaw-tooltip prop:content={t("chat.reactions.add")}>
@@ -186,59 +205,32 @@ export const MessageReactionPicker = defineSolidBridge<MessageReactionPickerProp
             }
           >
             <div class="custom">
-              <div class="custom-row">
-                <button
-                  class="back"
-                  type="button"
-                  aria-label={t("chat.reactions.back")}
-                  onClick={showPalette}
-                >
-                  <Icon name="arrowLeft" />
-                </button>
-                <input
-                  aria-label={t("chat.reactions.emoji")}
-                  aria-invalid={invalid() ? "true" : "false"}
-                  autocomplete="off"
-                  placeholder={t("chat.reactions.placeholder")}
-                  value={value()}
-                  onInput={(event) => {
-                    const text = event.currentTarget.value;
-                    setValue(text);
-                    setInvalid(false);
-                    // The OS picker commits one emoji; IME candidates wait for compositionend.
-                    if (!event.isComposing && isReactionEmoji(text.trim())) {
-                      applyCustom(text);
-                    }
-                  }}
-                  onCompositionEnd={(event) => {
-                    const text = event.currentTarget.value;
-                    setValue(text);
-                    if (isReactionEmoji(text.trim())) {
-                      applyCustom(text);
-                    }
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.isComposing) {
-                      return;
-                    }
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      applyCustom(event.currentTarget.value);
-                    } else if (event.key === "Backspace" && !event.currentTarget.value) {
-                      event.preventDefault();
-                      showPalette();
-                    }
-                  }}
-                />
-              </div>
-              <p class="hint" aria-live="polite">
-                {invalid()
-                  ? t("chat.reactions.invalid")
-                  : shortcut
-                    ? t("chat.reactions.shortcut", { shortcut })
-                    : t("chat.reactions.hint")}
-              </p>
+              <EmojiSearchPanel
+                query={query()}
+                onQueryChange={search}
+                onSelect={select}
+                isSelected={(emoji) => props.activeEmoji.has(emoji)}
+                defaults={SEARCH_DEFAULTS}
+                searchLabel={t("chat.reactions.search")}
+                gridLabel={t("chat.reactions.emoji")}
+                emptyLabel={t("chat.reactions.noMatches")}
+                onInputKeyDown={(event) => {
+                  if (event.key === "Backspace" && !event.currentTarget.value) {
+                    event.preventDefault();
+                    showPalette();
+                  }
+                }}
+                leading={
+                  <button
+                    class="back"
+                    type="button"
+                    aria-label={t("chat.reactions.back")}
+                    onClick={showPalette}
+                  >
+                    <Icon name="arrowLeft" />
+                  </button>
+                }
+              />
             </div>
           </Show>
         </Popover>

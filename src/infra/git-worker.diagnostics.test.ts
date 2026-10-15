@@ -80,7 +80,18 @@ it.each([
       runGitWorkerOperation(
         {
           type: "pull-request.branch-facts",
-          input: { root: cwd, branch: "fixture", mergedHeads: [], refreshIndex: true },
+          input: {
+            root: cwd,
+            branch: "fixture",
+            mergedHeads: [],
+            refreshIndex: true,
+            comparison: {
+              statsBase: null,
+              creatable: true,
+              equalPushedTips: false,
+              complete: true,
+            },
+          },
         },
         { git: { text: run, buffered: run } },
       ),

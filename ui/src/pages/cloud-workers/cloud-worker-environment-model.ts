@@ -94,47 +94,50 @@ export function showPreparationRow(environment: EnvironmentSummary): boolean {
       environment.worker.destroyRequestedAtMs !== undefined),
   );
 }
+export function isUnassignedPreparation(environment: EnvironmentSummary): boolean {
+  const worker = environment.worker;
+  return Boolean(
+    environment.preparation &&
+    worker &&
+    worker.state !== "destroyed" &&
+    !worker.attachedSessionIds.length &&
+    (["requested", "provisioning", "bootstrapping", "ready", "failed", "orphaned"].includes(
+      worker.state,
+    ) ||
+      worker.destroyRequestedAtMs !== undefined ||
+      worker.error),
+  );
+}
 export function cloudEnvironments(
   images: SnapshotImage[],
   inventory: EnvironmentsListResult | null,
   defaults: CloudWorkerRepository[],
 ): CloudEnvironment[] {
   const groups = new Map<string, CloudEnvironment>();
-  function group(key: string, label: string) {
+  function group(key: string) {
     let entry = groups.get(key);
     if (!entry) {
-      entry = { key, label, images: [], workers: [] };
+      entry = { key, label: key, images: [], workers: [] };
       groups.set(key, entry);
     }
     return entry;
   }
   for (const mapping of defaults) {
-    group(mapping.repository, mapping.repository).defaultProfile = mapping.profileId;
+    group(mapping.repository).defaultProfile = mapping.profileId;
   }
   for (const image of images) {
     if (!image.projectKey && !image.projectLabel && !image.projectRoot) {
       continue;
     }
     const key = image.projectLabel ?? image.projectRoot ?? image.projectKey ?? image.profileKey;
-    group(key, key).images.push(image);
+    group(key).images.push(image);
   }
   for (const environment of inventory?.environments ?? []) {
     const label = environment.preparation?.details?.project?.label;
-    const worker = environment.worker;
-    if (
-      !label ||
-      !worker ||
-      worker.state === "destroyed" ||
-      (!["requested", "provisioning", "bootstrapping", "ready", "failed", "orphaned"].includes(
-        worker.state,
-      ) &&
-        worker.destroyRequestedAtMs === undefined &&
-        !worker.error) ||
-      worker.attachedSessionIds.length
-    ) {
+    if (!label || !isUnassignedPreparation(environment)) {
       continue;
     }
-    group(label, label).workers.push(environment);
+    group(label).workers.push(environment);
   }
   return [...groups.values()].toSorted((a, b) => a.label.localeCompare(b.label));
 }
@@ -146,18 +149,13 @@ export function environmentState(
   environment: CloudEnvironment,
 ): "ready" | "building" | "coldOnly" | "attention" {
   if (
-    environment.images.some(
-      (image) =>
-        image.recipePreparation?.failure ||
-        image.capture?.phase === "uncertain" ||
-        (image.retirement?.checkpointId === image.checkpointId && Boolean(image.retirement)),
-    ) ||
+    environment.images.some((image) => snapshotState(image) === "attention") ||
     environment.workers.some(preparationNeedsAttention)
   ) {
     return "attention";
   }
   if (
-    environment.images.some((image) => image.capture && image.capture.phase !== "uncertain") ||
+    environment.images.some((image) => snapshotState(image) === "building") ||
     environment.workers.some((worker) =>
       ["requested", "provisioning", "bootstrapping"].includes(worker.worker?.state ?? ""),
     )
@@ -171,4 +169,15 @@ export function environmentState(
     return "ready";
   }
   return "coldOnly";
+}
+
+export function snapshotState(image: SnapshotImage): ReturnType<typeof environmentState> {
+  if (
+    image.recipePreparation?.failure ||
+    image.capture?.phase === "uncertain" ||
+    (image.retirement && image.retirement.checkpointId === image.checkpointId)
+  ) {
+    return "attention";
+  }
+  return image.capture ? "building" : image.state === "available" ? "ready" : "coldOnly";
 }

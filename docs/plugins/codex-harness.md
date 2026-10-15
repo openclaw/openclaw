@@ -439,7 +439,10 @@ Stopping an active Codex run interrupts its turn. After a parent yields to nativ
 children, Stop waits for its admitted descendants to reach real terminal events
 and finish completion settlement. A child that completes successfully during
 Stop keeps its result. Stop does not cancel a sibling run or a replacement
-session generation.
+session generation. After Stop settles, you can send another message in the same
+chat without reconnecting.
+Stop also retires an already-interrupted child without interrupting its finished
+turn again, so that child cannot keep its parent session blocked.
 If its previous native process is already closing, Stop cancels the waiting run
 without waiting for physical exit. A replacement writer still waits for that exit.
 Session-wide Stop preserves the caller's request ownership, protected-run, and
@@ -579,7 +582,7 @@ same child result after the parent replies.
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
 - Managed Codex app-server `0.160.0` or newer. The plugin ships
-  `@openai/codex` `0.160.0` and uses a newer stable `codex` from `PATH` only
+  `@openai/codex` `0.160.1` and uses a newer stable `codex` from `PATH` only
   after it passes a version check and an app-server handshake; see
   [Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
   Explicit custom, remote, and macOS desktop-owned

@@ -4,7 +4,7 @@ import type {
   SessionParticipantRecord,
 } from "../config/sessions/session-membership-facts.types.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
-import { sqlPublicationAnchor } from "../infra/sql-connection.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import {
   hasSqlitePostCommitScope,
   publishSqliteCommittedState,
@@ -151,7 +151,7 @@ export function readSessionRowChangeRevision(): number {
 
 /** Worker receipts borrow the producer's transaction postimages, including savepoint rollback. */
 export function captureSessionRowChanges<T>(
-  database: DatabaseSync,
+  database: EngineConnection,
   run: (changes: readonly SessionRowChange[]) => T,
 ) {
   const anchor = sqlPublicationAnchor(database);
@@ -200,12 +200,12 @@ export const sessionChanges = {
     }
   },
   /** SQLite observers run only after all committed owner state has settled. */
-  emit(change: SessionRowChange, database?: DatabaseSync): void {
+  emit(change: SessionRowChange, database?: EngineConnection): void {
     sessionChanges.emitBatch([change], database);
   },
   emitBatch(
     changes: readonly SessionRowChange[],
-    database?: DatabaseSync,
+    database?: EngineConnection,
     beforePublicNotifications?: () => void,
   ): void {
     const anchor = database && sqlPublicationAnchor(database);

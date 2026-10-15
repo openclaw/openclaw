@@ -34,7 +34,7 @@ export async function ensureBoardViewElement(): Promise<boolean> {
   return true;
 }
 
-export function BoardSessionSurface(props: BoardSessionSurfaceProps & { elementReady?: boolean }) {
+function BoardSessionSurface(props: BoardSessionSurfaceProps & { elementReady?: boolean }) {
   const [revision, setRevision] = createSignal(0);
   createEffect(
     () => props.active,

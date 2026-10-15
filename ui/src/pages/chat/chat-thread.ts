@@ -320,6 +320,7 @@ function sameChatItemsStructuralInput(
     previous.showToolCalls === next.showToolCalls &&
     previous.persistCommentary === next.persistCommentary &&
     previous.runWorking === next.runWorking &&
+    previous.runFinalizing === next.runFinalizing &&
     previous.runActive === next.runActive &&
     previous.subagentWait?.startedAt === next.subagentWait?.startedAt &&
     previous.subagentWait?.runId === next.subagentWait?.runId &&

@@ -575,9 +575,9 @@ suite.define(() => {
       await expect
         .poll(() => page.locator("#new-session-project-trigger").textContent())
         .toContain("client-work");
-      expect(await page.locator(".new-session-page__message").inputValue()).toBe(
-        "wait for fresh defaults",
-      );
+      await expect
+        .poll(() => page.locator(".new-session-page__message").inputValue())
+        .toBe("wait for fresh defaults");
       expect(await page.locator(".new-session-page__catalog-unavailable").count()).toBe(0);
       await expect.poll(() => start.isEnabled()).toBe(true);
     } finally {

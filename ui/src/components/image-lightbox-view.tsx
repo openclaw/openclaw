@@ -24,10 +24,25 @@ export function LightboxAction(props: {
   );
 }
 
-export function LightboxHeader(props: {
+export function LightboxChrome(props: {
   title: string;
   originalUrl: string;
   resolvingOriginal: boolean;
+  isVideo: boolean;
+  onClose: (event?: Event) => void;
+  children: JSX.Element;
+}) {
+  return (
+    <section class="lightbox">
+      <LightboxHeader title={props.title} isVideo={props.isVideo} onClose={props.onClose} />
+      {props.children}
+      <LightboxFooter originalUrl={props.originalUrl} resolvingOriginal={props.resolvingOriginal} />
+    </section>
+  );
+}
+
+function LightboxHeader(props: {
+  title: string;
   isVideo: boolean;
   onClose: (event?: Event) => void;
 }) {
@@ -35,22 +50,6 @@ export function LightboxHeader(props: {
     <header class="header">
       <strong class="title">{props.title}</strong>
       <div class="actions">
-        <Show when={props.originalUrl || props.resolvingOriginal}>
-          <a
-            class="action open-original"
-            href={props.originalUrl || undefined}
-            aria-disabled={props.originalUrl ? "false" : "true"}
-            tabindex={props.originalUrl ? 0 : -1}
-            target="_blank"
-            rel="noreferrer"
-            aria-label={t("chat.imageLightbox.openOriginal")}
-          >
-            <span class="open-original-label">{t("chat.imageLightbox.openOriginal")}</span>
-            <span class="open-original-icon" aria-hidden="true">
-              <Icon name="externalLink" />
-            </span>
-          </a>
-        </Show>
         <button
           class="action close"
           type="button"
@@ -64,6 +63,29 @@ export function LightboxHeader(props: {
         </button>
       </div>
     </header>
+  );
+}
+
+function LightboxFooter(props: { originalUrl: string; resolvingOriginal: boolean }) {
+  return (
+    <Show when={props.originalUrl || props.resolvingOriginal}>
+      <openclaw-modal-actions class="lightbox-footer">
+        <a
+          class="action open-original"
+          href={props.originalUrl || undefined}
+          aria-disabled={props.originalUrl ? "false" : "true"}
+          tabindex={props.originalUrl ? 0 : -1}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={t("chat.imageLightbox.openOriginal")}
+        >
+          <span class="open-original-label">{t("chat.imageLightbox.openOriginal")}</span>
+          <span class="open-original-icon" aria-hidden="true">
+            <Icon name="externalLink" />
+          </span>
+        </a>
+      </openclaw-modal-actions>
+    </Show>
   );
 }
 

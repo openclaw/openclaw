@@ -13,9 +13,10 @@ import {
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
 import { resetComposerFixture } from "./chat-composer.test-support.ts";
+import { renderChat } from "./chat-view-render.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
-import { renderChat } from "./chat-view.tsx";
+import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -123,6 +124,9 @@ it.each([
     });
     provider.append(host);
     document.body.append(provider);
+    await host.updateComplete;
+    await provider.querySelector<LitElement>("openclaw-plugin-view")?.updateComplete;
+    await questionPanelIn(provider);
     await vi.waitFor(() => {
       expect(provider.querySelectorAll("openclaw-chat-question-panel")).toHaveLength(1);
       expect(provider.querySelectorAll('textarea[aria-label="Custom draft"]')).toHaveLength(

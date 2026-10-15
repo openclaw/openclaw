@@ -54,6 +54,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowTextToSpeech
 
 @RunWith(RobolectricTestRunner::class)
@@ -1966,7 +1967,8 @@ class WearChatEventFlowTest {
         flow.abortFails = mode == "failed"
         flow.abortGate = CompletableDeferred()
         flow.clickAppAction("Abort run")
-        assertTrue("The explicit action still stops current playback immediately", speech.isStopped)
+        flow.idle()
+        assertTrue("The explicit action stops current playback before the RPC outcome", speech.isStopped)
         assertEquals(ownRun, flow.state.pendingReply?.runId)
         if (mode == "confirmed-foreign") flow.emit("delta", eventRunId = "foreign-run", text = "Foreign live")
         flow.abortGate?.complete(Unit)
@@ -2767,7 +2769,17 @@ class WearChatEventFlowTest {
       idle()
     }
 
-    fun idle() = shadowOf(Looper.getMainLooper()).idle()
+    fun idle() {
+      // UI actions enqueue speech; speech callbacks publish state back to Compose.
+      // Drain both directions before asserting the resulting UI or playback state.
+      repeat(2) {
+        shadowOf(Looper.getMainLooper()).idle()
+        ShadowLooper
+          .getAllLoopers()
+          .filter { it != Looper.getMainLooper() && it.thread.isAlive }
+          .forEach { shadowOf(it).idle() }
+      }
+    }
 
     fun observeReplyCompletion() {
       val sessionKey = checkNotNull(state.selectedSession).key
@@ -3110,9 +3122,12 @@ class WearChatEventFlowTest {
     }
 
     fun close() {
+      idle()
       replyObserver?.pause()?.stop()?.destroy()
       owner.viewModelStore.clear()
-      idle()
+      // Disposal shuts down the speech Looper before its thread necessarily exits.
+      // Drain remaining UI cleanup without sending control tasks to that Looper.
+      shadowOf(Looper.getMainLooper()).idle()
       clientField.set(app, previousClient)
       repositoryField.set(app, previousRepository)
       originalScale?.let { Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, it) }

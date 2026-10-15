@@ -3,6 +3,7 @@ import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-sta
 import { readSqliteDatabaseWriteRevision } from "../../infra/sqlite-database-admission.js";
 import { runWithSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { maintainCronRunHistoryInWorker } from "./runtime-maintenance.worker.js";
 
@@ -27,7 +28,7 @@ it.each(["empty", "retained", "expired"] as const)(
         expect(revision).toBeTypeOf("number");
         const exec = vi.spyOn(database.db, "exec");
         const reads = trackSqliteStatementExecutions(
-          database.db,
+          requireNativeSqliteDatabase(database.db),
           ["history", "receipts"],
           (sql) => {
             if (!/^select\b/i.test(sql)) {

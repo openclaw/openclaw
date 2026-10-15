@@ -1,4 +1,3 @@
-import { html } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { showConfirmDialog } from "../components/confirm-dialog.ts";
 import "../styles.css";
@@ -26,6 +25,7 @@ async function showArchiveToast(options: Partial<ToastOptions> = {}) {
     durationMs: 60_000,
     ...options,
   });
+  await vi.dynamicImportSettled();
   await waitForSolid(() => expect(host.querySelector(".app-toast")).not.toBeNull());
   return host;
 }
@@ -59,6 +59,7 @@ describe.skipIf(!hasBrowserLayout)("toast browser layout", () => {
         onAction: action,
         durationMs: 60_000,
       });
+      await vi.dynamicImportSettled();
       await waitForSolid(() => expect(host.querySelector(".app-toast")).not.toBeNull());
       expect(host.parentElement).toBe(modal.getOverlayContainer());
       const undo = host.querySelector<HTMLButtonElement>(".app-toast__action")!;
@@ -190,10 +191,17 @@ describe.skipIf(!hasBrowserLayout)("toast browser layout", () => {
         anchor.style.cssText =
           `position: fixed; top: 100px; left: 0; width: ` + width + "px; height: 100px";
         document.body.append(anchor);
+        const recovery = document.createDocumentFragment();
+        const recoveryLink = document.createElement("a");
+        recoveryLink.href = "#settings";
+        recoveryLink.textContent = "Gateway settings";
+        recovery.append(
+          "Your changes could not be saved because the connection was interrupted. Keep this tab open, check ",
+          recoveryLink,
+          ", and try again when the connection is restored.",
+        );
         const host = await showArchiveToast({
-          message: html`Your changes could not be saved because the connection was interrupted. Keep
-            this tab open, check <a href="#settings">Gateway settings</a>, and try again when the
-            connection is restored.`,
+          message: recovery,
           actionLabel: "Discard unsaved changes and reload",
           ...(placement === "anchored" ? { anchor } : { placement }),
         });
@@ -224,10 +232,30 @@ describe.skipIf(!hasBrowserLayout)("toast browser layout", () => {
         expect(
           messageBounds.right <= actionBounds.left || messageBounds.bottom <= actionBounds.top,
         ).toBe(true);
-        const link = message.querySelector("a")!;
+        const link = recoveryLink;
+        expect(message.querySelector("a")).toBe(link);
         link.focus();
         expect(document.activeElement).toBe(link);
+        host.toast = { ...host.toast! };
+        await waitForSolid(() => expect(host.querySelector(".app-toast__message a")).toBe(link));
+        expect(document.activeElement).toBe(link);
         expect(action.getBoundingClientRect().height).toBeGreaterThanOrEqual(width < 768 ? 44 : 32);
+        const replacement = document.createDocumentFragment();
+        const replacementLink = document.createElement("a");
+        replacementLink.href = "#sidebar";
+        replacementLink.textContent = "Sidebar settings";
+        replacement.append("Another section hidden. ", replacementLink);
+        showToast({ ...host.toast!, message: replacement });
+        await waitForSolid(() => expect(replacementLink.isConnected).toBe(true));
+        expect(link.isConnected).toBe(false);
+        expect(message.textContent).toBe("Another section hidden. Sidebar settings");
+        expect(message.querySelector("a")).toBe(replacementLink);
+        replacementLink.focus();
+        host.toast = { ...host.toast! };
+        await waitForSolid(() =>
+          expect(host.querySelector(".app-toast__message a")).toBe(replacementLink),
+        );
+        expect(document.activeElement).toBe(replacementLink);
         host.remove();
         anchor.remove();
       }

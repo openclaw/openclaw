@@ -33,6 +33,16 @@ export type SqliteWorkerAdmissionRequest = {
   deadlineMs?: number;
 };
 
+// Each side measures admission deadlines on its own thread's monotonic clock
+// captured at import: fake timers replace `process.hrtime` with a clock that
+// starts at zero, and Bun's real `process.hrtime` origin differs per thread.
+const processMonotonicClock = process.hrtime;
+
+/** Monotonic nanoseconds for deadlines measured within the calling thread. */
+export function readSqliteWorkerMonotonicNs(): bigint {
+  return processMonotonicClock.bigint();
+}
+
 export type SqliteWorkerOperations = Record<string, { input: unknown; output: unknown }>;
 export type SqliteWorkerCommand<Operations extends SqliteWorkerOperations> = {
   [Key in keyof Operations]: { type: Key; input: Operations[Key]["input"] };
@@ -88,6 +98,7 @@ export type SqliteWorkerRequest = {
   actor: number;
   stateContext?: SqliteWorkerStateContext;
   operationAdmission?: MessagePort;
+  operationAttachment?: { value: unknown };
   requestCustody?: SqliteWorkerRequestCustodyDescriptor;
   executionAuthority?: SqliteWorkerExecutionAuthority;
   stateDatabasePath?: string;
@@ -101,21 +112,22 @@ export type SqliteWorkerRequest = {
       databasePath: string;
       existingIdentity?: string;
       openAdmission?: "input" | "identity";
-      input: Uint8Array;
-      preparation?: Uint8Array;
+      input: Uint8Array<ArrayBuffer>;
+      preparation?: Uint8Array<ArrayBuffer>;
     }
-  | { type: "execute"; input: Uint8Array }
+  | { type: "execute"; input: Uint8Array<ArrayBuffer> }
   | { type: "execute-start"; transfer: SqliteWorkerTransferHandle }
-  | { type: "execute-frame"; input: Uint8Array }
+  | { type: "execute-frame"; input: Uint8Array<ArrayBuffer> }
   | { type: "result-next"; transferId: number }
   | { type: "close" }
 );
 
 export type SqliteWorkerReply = {
   id: number;
+  /** Explicit outer BEGINs in this frame, including rollback; excludes savepoints/autocommit. */
+  transactionCount?: number;
   timing?: DiagnosticWorkerRequestFields["timing"];
   cleanupFailure?: OpenClawStateWorkerErrorPayload;
-  databaseAdmissions?: SqliteDatabaseAdmissions;
 } & (
   | {
       ok: true;

@@ -5,11 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
-import {
-  downgradeOpenAIFunctionCallReasoningPairs,
-  dropStaleOpenAIReasoning,
-  isMessagingToolDuplicate,
-} from "./embedded-agent-helpers.js";
+import { dropStaleOpenAIReasoning, isMessagingToolDuplicate } from "./embedded-agent-helpers.js";
 import { stripThoughtSignatures } from "./embedded-agent-helpers/bootstrap.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
@@ -346,60 +342,6 @@ describe("dropStaleOpenAIReasoning", () => {
   });
 });
 
-describe("downgradeOpenAIFunctionCallReasoningPairs", () => {
-  const callIdWithReasoning = "call_123|fc_123";
-  const callIdWithoutReasoning = "call_123";
-  const readArgs = {} as Record<string, never>;
-
-  const makeToolCall = (id: string) => ({
-    type: "toolCall",
-    id,
-    name: "read",
-    arguments: readArgs,
-  });
-  const makeToolResult = (toolCallId: string, text: string) => ({
-    role: "toolResult",
-    toolCallId,
-    toolName: "read",
-    content: [{ type: "text", text }],
-  });
-  const makeReasoningAssistantTurn = (id: string) => ({
-    role: "assistant",
-    content: [
-      {
-        type: "thinking",
-        thinking: "internal",
-        thinkingSignature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
-      },
-      makeToolCall(id),
-    ],
-  });
-  const makePlainAssistantTurn = (id: string) => ({
-    role: "assistant",
-    content: [makeToolCall(id)],
-  });
-
-  it("only rewrites tool results paired to the downgraded assistant turn", () => {
-    const input = [
-      makePlainAssistantTurn(callIdWithReasoning),
-      makeToolResult(callIdWithReasoning, "turn1"),
-      makeReasoningAssistantTurn(callIdWithReasoning),
-      makeToolResult(callIdWithReasoning, "turn2"),
-    ];
-
-    expect(
-      downgradeOpenAIFunctionCallReasoningPairs(
-        input as Parameters<typeof downgradeOpenAIFunctionCallReasoningPairs>[0],
-      ),
-    ).toEqual([
-      makePlainAssistantTurn(callIdWithoutReasoning),
-      makeToolResult(callIdWithoutReasoning, "turn1"),
-      makeReasoningAssistantTurn(callIdWithReasoning),
-      makeToolResult(callIdWithReasoning, "turn2"),
-    ]);
-  });
-});
-
 describe("isMessagingToolDuplicate", () => {
   it.each([
     ["hello world", [], false],
@@ -415,6 +357,29 @@ describe("isMessagingToolDuplicate", () => {
       "Checking the deploy logs now. The deploy failed because the migration step timed out after 300 seconds while the database was mid-vacuum, which held the lock the migration needed. I re-ran the deploy after the vacuum finished and it completed cleanly. All services are healthy and the new version is serving traffic.",
       ["Checking the deploy logs now."],
       false,
+    ],
+    ["Deployment finished. Actually it failed.", ["Deployment finished."], false],
+    ["Deployment finished. 2 hosts restarted.", ["Deployment finished."], false],
+    ["Deployment finished!!!", ["Deployment finished"], true],
+    ["Deployment finished. Tests passed.", ["Deployment finished.", "Tests passed."], true],
+    [
+      "Deployment finished. Tests passed. Actually it failed.",
+      ["Deployment finished.", "Tests passed."],
+      false,
+    ],
+    [
+      "Deployment finished. All good!",
+      ["Deployment finished.", "Deployment finished. All good!"],
+      true,
+    ],
+    [
+      "Deployment to staging finished without any errors. Tests passed. Coverage unchanged.",
+      [
+        "Deployment to staging finished without any errors.",
+        "Tests passed.",
+        "Tests passed. Coverage unchanged.",
+      ],
+      true,
     ],
   ] satisfies [string, string[], boolean][])(
     "checks sent-text overlap: %s",

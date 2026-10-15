@@ -199,6 +199,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
   }
 
   const allowlistResolved = await resolveDiscordAllowlistConfig({
+    accountId: account.accountId,
     token,
     guildEntries,
     allowFrom,

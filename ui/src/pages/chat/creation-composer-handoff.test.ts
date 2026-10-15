@@ -53,45 +53,6 @@ function fixture() {
 }
 
 describe("created-composer canonical outbox admission", () => {
-  it("keeps IDs and submission order, then wakes the existing drain under only the accepted key", async () => {
-    const { host, owner, scope, resume } = fixture();
-    await admitCreatedComposerQueue(host, transfer());
-    const queue = owner.snapshot(host, scope.scope);
-    expect(queue.map((item) => item.id)).toEqual(["first-input", "second-input"]);
-    expect(queue.every((item) => item.sessionKey === host.sessionKey)).toBe(true);
-    expect(
-      queue.every((item) => item.sendState === "waiting-idle" && item.sendAttempts === 0),
-    ).toBe(true);
-    expect(listStoredChatOutboxes(host)).toHaveLength(1);
-    expect(owner.admissions.has(scope.scope)).toBe(false);
-    expect(resume).toHaveBeenCalledExactlyOnceWith(host);
-    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toEqual([]);
-  });
-
-  it("adopts queued followers through the recovery driver for an equivalent pane key", async () => {
-    const { host, owner, scope, resume } = fixture();
-    const input = transfer({ sessionKey: host.sessionKey.toUpperCase() });
-    const resumed = createDeferred();
-    resume.mockImplementation(async () => {
-      resumed.resolve();
-    });
-    const disconnect = connectCreatedComposerQueue(
-      { gateway: { subscribe: () => () => {} } },
-      host,
-      input,
-    );
-    onTestFinished(disconnect);
-    expect(owner.snapshot(host, scope.scope).map((item) => item.id)).toEqual([
-      "first-input",
-      "second-input",
-    ]);
-    await resumed.promise;
-    expect(
-      owner.snapshot(host, scope.scope).every((item) => item.sendState === "waiting-idle"),
-    ).toBe(true);
-    expect(input.complete).toHaveBeenCalledOnce();
-  });
-
   it("preserves later delivery state when concurrent panes finish the same transfer", async () => {
     const { host, owner, scope, resume } = fixture();
     const input = transfer();

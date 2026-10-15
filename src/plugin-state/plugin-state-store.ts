@@ -162,9 +162,9 @@ function createKeyedStoreForPluginId<T>(
         moduleSource,
       );
     },
-    /** @deprecated Use observe and compareAndApply; removal follows a stable deprecation period. */
+    /** @deprecated Use observe and compareAndApply; final compatibility day: 2026-12-31. */
     update: async (...args) => getLegacyStore().update(...args),
-    /** @deprecated Use observe and compareAndApply; removal follows a stable deprecation period. */
+    /** @deprecated Use observe and compareAndApply; final compatibility day: 2026-12-31. */
     deleteIf: async (...args) => getLegacyStore().deleteIf(...args),
   };
   return bindPluginStateNativeBindingStore(
@@ -486,7 +486,7 @@ export function createPluginStateRuntimeStores(
 /**
  * Named adapter for the plugin-state-sync-keyed-store compatibility contract.
  * @deprecated Use createPluginStateKeyedStoreV2 or api.runtime.state.openKeyedStoreV2
- * and await its operations. This adapter will be removed after a stable deprecation period.
+ * and await its operations. This adapter will be removed in the first January 2027 stable release, after the final compatibility day 2026-12-31.
  */
 export function createPluginStateSyncKeyedStore<T>(
   pluginId: string,

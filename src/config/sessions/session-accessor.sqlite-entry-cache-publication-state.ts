@@ -5,10 +5,8 @@ import {
   type SessionRowFacts,
 } from "../../sessions/session-row-changes.js";
 import { resolveGlobalSet, resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
-  assertSessionEntryCreationCurrent,
   readSessionEntryCreationIdentity,
   projectSessionSharingEntry,
   type CreatedSessionEntryReceipt,
@@ -146,41 +144,24 @@ function prepareSessionEntryReplacementChanges(
     return undefined;
   }
   const current = (key: string) => !owner.superseded.has(key);
+  const snapshot = <T>(entries: ReadonlyMap<string, T>, participants = false) =>
+    new Map(
+      [...entries].filter(
+        ([key]) =>
+          current(key) && (!participants || !replacement.unavailableParticipantKeys?.includes(key)),
+      ),
+    );
   return {
     source: replacement.source,
-    entries: new Map(
-      [...replacement.current]
-        .filter(([key]) => current(key) && !replacement.unavailableParticipantKeys?.includes(key))
-        .map(([key, entry]) => [key, freezeJsonSnapshot(entry)]),
-    ),
-    fullEntries:
-      replacement.fullEntries &&
-      new Map(
-        [...replacement.fullEntries]
-          .filter(([key]) => current(key) && !replacement.unavailableParticipantKeys?.includes(key))
-          .map(([key, entry]) => [key, freezeJsonSnapshot(entry)]),
-      ),
-    actorPostimages:
-      replacement.actorPostimages &&
-      new Map(
-        [...replacement.actorPostimages]
-          .filter(([key]) => current(key))
-          .map(([key, state]) => [key, freezeJsonSnapshot(state)]),
-      ),
+    entries: snapshot(replacement.current, true),
+    fullEntries: replacement.fullEntries && snapshot(replacement.fullEntries, true),
+    actorPostimages: replacement.actorPostimages && snapshot(replacement.actorPostimages),
     sharing: new Map(
       [...replacement.current]
         .filter(([key]) => current(key))
         .map(([key, entry]) => [key, projectSessionSharingEntry(entry)]),
     ),
-    projection:
-      replacement.projection &&
-      new Map(
-        [...replacement.projection]
-          .filter(
-            ([key]) => readCurrentSessionEntryProjection(owner, replacement, key) !== undefined,
-          )
-          .map(([key, facts]) => [key, freezeJsonSnapshot(facts)]),
-      ),
+    projection: replacement.projection && snapshot(replacement.projection),
   };
 }
 
@@ -487,11 +468,7 @@ function readSessionEntryCreationReceipt(
   if (!creation) {
     return undefined;
   }
-  try {
-    assertSessionEntryCreationCurrent(creation);
-  } catch {
-    return undefined;
-  }
+  // Receipt provenance lasts for the operation; effect owners still validate live authority.
   return receipt?.committed &&
     receipt.creation === creation &&
     receipt.databaseIdentity === readSessionEntryCreationIdentity(creation) &&

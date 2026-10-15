@@ -2,6 +2,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
+import { createDiagnosticLogRecordCapture } from "../../logging/test-helpers/diagnostic-log-capture.js";
+import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 
@@ -44,21 +46,59 @@ beforeEach(() => {
 });
 
 describe("generateConversationLabel", () => {
-  it.each<{ primary: string; explicit: boolean; sessionRuntime?: string }>([
-    { primary: "claude-opus", explicit: false },
-    { primary: "claude-sonnet", explicit: false },
-    { primary: "claude-opus", explicit: true },
-    { primary: "claude-opus", explicit: false, sessionRuntime: "openclaw" },
+  it("warns once per model per minute without exposing provider errors or title source", async () => {
+    const warningLog = createWarnLogCapture("conversation-label");
+    const logs = createDiagnosticLogRecordCapture();
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    runIsolatedCompletion.mockRejectedValue(new Error("secret-bearing provider failure"));
+    const params = {
+      cfg: {},
+      modelRef: "warning-provider/always-thinking@private-profile",
+      prompt: "Generate a title",
+      userMessage: "Private title source",
+    };
+    const generate = () =>
+      expect(generateConversationLabel(params)).rejects.toThrow(
+        "conversation label generation failed",
+      );
+    try {
+      await generate();
+      now += 30_000;
+      await generate();
+      now += 30_001;
+      await generate();
+      await logs.flush();
+      const warnings = logs.records.filter((record) =>
+        record.message.includes("Conversation label generation failed"),
+      );
+      expect(warnings).toHaveLength(2);
+      for (const warning of warnings) {
+        expect(warning.message).toContain("warning-provider/always-thinking");
+        expect(warning.message).toContain("utilityModel");
+        expect(JSON.stringify(warning)).not.toMatch(
+          /secret-bearing|private-profile|Private title source/,
+        );
+      }
+    } finally {
+      clock.mockRestore();
+      logs.cleanup();
+      warningLog.cleanup();
+    }
+  });
+
+  it.each<{ primary: string; sessionRuntime?: string }>([
+    { primary: "claude-sonnet" },
+    { primary: "claude-opus", sessionRuntime: "openclaw" },
   ])(
-    "keeps the utility label on its selected runtime ($primary, explicit=$explicit, session=$sessionRuntime)",
-    async ({ primary, explicit, sessionRuntime }) => {
+    "keeps the utility label on its selected runtime ($primary, session=$sessionRuntime)",
+    async ({ primary, sessionRuntime }) => {
       const utilityModel = "anthropic/claude-haiku";
       const cfg = {
         agents: {
           defaults: {
             model: `anthropic/${primary}`,
             models: { [`anthropic/${primary}`]: { agentRuntime: { id: "claude-cli" } } },
-            ...(explicit ? { utilityModel } : {}),
           },
         },
       };
@@ -87,13 +127,8 @@ describe("generateConversationLabel", () => {
       expect(runIsolatedCompletion).toHaveBeenCalledOnce();
       expect(runIsolatedCompletion.mock.calls[0]?.[0]).toMatchObject({
         model: "claude-haiku",
-        ...(explicit ? {} : { agentHarnessRuntimeOverride: sessionRuntime ?? "claude-cli" }),
+        agentHarnessRuntimeOverride: sessionRuntime ?? "claude-cli",
       });
-      if (explicit) {
-        expect(runIsolatedCompletion.mock.calls[0]?.[0]).not.toHaveProperty(
-          "agentHarnessRuntimeOverride",
-        );
-      }
     },
   );
 
@@ -117,7 +152,7 @@ describe("generateConversationLabel", () => {
     );
   });
 
-  it.each(["active", "retired", "aborted"] as const)(
+  it.each(["retired", "aborted"] as const)(
     "allows utility fallback only while its caller is active (%s)",
     async (state) => {
       const abort = new AbortController();
@@ -144,15 +179,8 @@ describe("generateConversationLabel", () => {
           }
         },
       });
-      if (state !== "active") {
-        await expect(label).rejects.toBe(expired);
-        expect(runIsolatedCompletion).toHaveBeenCalledOnce();
-        return;
-      }
-      await expect(label).resolves.toBe("Primary title");
-
-      expect(runIsolatedCompletion).toHaveBeenCalledTimes(2);
-      expect(runIsolatedCompletion.mock.calls[1]?.[0]?.model).toBe("gpt-main");
+      await expect(label).rejects.toBe(expired);
+      expect(runIsolatedCompletion).toHaveBeenCalledOnce();
     },
   );
 

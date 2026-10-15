@@ -15,6 +15,6 @@ export const { applyConfig: applyCerebrasConfig } = createProviderConnectionPres
     api: "openai-completions",
     baseUrl: CEREBRAS_BASE_URL,
     catalogModels: buildCerebrasCatalogModels,
-    aliases: [{ modelRef: CEREBRAS_DEFAULT_MODEL_REF, alias: "Cerebras Gemma 4 31B" }],
+    aliases: [{ modelRef: CEREBRAS_DEFAULT_MODEL_REF, alias: "Cerebras GPT OSS 120B" }],
   }),
 });

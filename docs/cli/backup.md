@@ -756,6 +756,12 @@ OpenClaw does not enforce a built-in maximum backup size or per-file size limit.
 - Time to rescan the archive with `--verify` or `openclaw backup verify`
 - Destination filesystem behavior: OpenClaw requires no-overwrite hard-link publication so a final archive path never exposes an in-progress copy; unsupported filesystems fail with an actionable error
 
+Interrupting archive creation with Ctrl-C or SIGTERM stops traversal and compression,
+closes the archive writer, and cleans up its owned partial archive and scratch before
+the command exits. Existing archives and backup source files remain unchanged.
+An archive already published to the requested local destination is retained;
+admitted verification and best-effort outcome recording finish before signal exit.
+
 If final-directory durability confirmation fails after publication, the command reports failure but preserves the complete final entry rather than risk deleting a concurrent replacement.
 
 Large workspaces are usually the main driver of archive size. Use `--no-include-workspace` for a smaller/faster backup, or `--only-config` for the smallest archive.

@@ -475,6 +475,143 @@ describe("google transport stream", () => {
     vi.resetModules();
   });
 
+  it.each([
+    {
+      name: "2.5 Pro low",
+      id: "gemini-2.5-pro",
+      reasoning: "low",
+      maxTokens: 64,
+      cap: 8192,
+      expected: {
+        maxOutputTokens: 2112,
+        thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 },
+      },
+    },
+    {
+      name: "2.5 Pro off",
+      id: "gemini-2.5-pro",
+      reasoning: "off",
+      maxTokens: 64,
+      cap: 8192,
+      expected: { maxOutputTokens: 192, thinkingConfig: { thinkingBudget: 128 } },
+    },
+    {
+      name: "2.5 Flash off",
+      id: "gemini-2.5-flash",
+      reasoning: "off",
+      maxTokens: 64,
+      cap: 8192,
+      expected: { maxOutputTokens: 64, thinkingConfig: { thinkingBudget: 0 } },
+    },
+    {
+      name: "omitted cap",
+      id: "gemini-2.5-pro",
+      reasoning: "low",
+      maxTokens: undefined,
+      cap: 8192,
+      expected: { thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 } },
+    },
+    {
+      name: "omitted cap with Pro off",
+      id: "gemini-2.5-pro",
+      reasoning: "off",
+      maxTokens: undefined,
+      cap: 8192,
+      expected: {},
+    },
+    {
+      name: "model ceiling",
+      id: "gemini-2.5-pro",
+      reasoning: "low",
+      maxTokens: 8000,
+      cap: 8192,
+      expected: {
+        maxOutputTokens: 8192,
+        thinkingConfig: { includeThoughts: true, thinkingBudget: 2048 },
+      },
+    },
+    {
+      name: "thinking budget ceiling",
+      id: "gemini-2.5-pro",
+      reasoning: "high",
+      maxTokens: 64,
+      cap: 8192,
+      expected: {
+        maxOutputTokens: 8192,
+        thinkingConfig: { includeThoughts: true, thinkingBudget: 7168 },
+      },
+    },
+    {
+      name: "Gemini 3 level",
+      id: "gemini-3.1-pro-preview",
+      reasoning: "low",
+      maxTokens: 64,
+      cap: 8192,
+      expected: {
+        maxOutputTokens: 64,
+        thinkingConfig: { includeThoughts: true, thinkingLevel: "LOW" },
+      },
+    },
+    {
+      name: "Gemini 3 automatic thinking",
+      id: "gemini-3.1-pro-preview",
+      reasoning: "adaptive",
+      maxTokens: 64,
+      cap: 8192,
+      expected: {
+        maxOutputTokens: 64,
+        thinkingConfig: { includeThoughts: true },
+      },
+    },
+    {
+      name: "dynamic budget",
+      id: "gemini-2.5-flash",
+      reasoning: "adaptive",
+      maxTokens: 64,
+      cap: 8192,
+      expected: {
+        maxOutputTokens: 64,
+        thinkingConfig: { includeThoughts: true, thinkingBudget: -1 },
+      },
+    },
+  ] as const)(
+    "applies thinking and caller output budgets in serialized requests: $name",
+    async ({ id, reasoning, maxTokens, cap, expected }) => {
+      for (const api of ["google-generative-ai", "google-vertex"] as const) {
+        mockGoogleTextResponse();
+        const streamFn =
+          api === "google-vertex"
+            ? createGoogleVertexTransportStreamFn()
+            : createGoogleGenerativeAiTransportStreamFn();
+        const model = {
+          ...buildGeminiModel({ id, maxTokens: cap }),
+          api,
+          provider: api === "google-vertex" ? "google-vertex" : "google",
+        };
+        const stream = await streamFn(
+          model,
+          { messages: [{ role: "user", content: "Reply with ok.", timestamp: 0 }] },
+          {
+            apiKey: "test-key",
+            reasoning,
+            maxTokens,
+            project: "test-project",
+            location: "us-central1",
+          } as Parameters<typeof streamFn>[2],
+        );
+        const result = await stream.result();
+        expect(result.stopReason).toBe("stop");
+        const call = requireMockCall(
+          guardedFetchMock,
+          guardedFetchMock.mock.calls.length - 1,
+          "Google request",
+        );
+        const payload = parseRequestJsonBody(requireRequestInit(call, "Google request"));
+        expect(payload.generationConfig ?? {}).toEqual(expected);
+      }
+    },
+  );
+
   it("reports every parsed Google SSE chunk as request activity", async () => {
     const chunks = [
       { usageMetadata: { totalTokenCount: 1 } },
@@ -2527,8 +2664,9 @@ describe("google transport stream", () => {
     ["gemini-pro-latest", "Gemini Pro Latest"],
     ["gemini-flash-latest", "Gemini Flash Latest"],
     ["gemini-flash-lite-latest", "Gemini Flash Lite Latest"],
+    ["gemini-4-argon", "Gemini 4 Argon"],
   ])(
-    "adds skip-validator fallback to first-turn unsigned Gemini 3 tool calls for %s",
+    "adds skip-validator fallback to first-turn unsigned Gemini tool calls for %s",
     (modelId, modelName) => {
       const model = buildGeminiModel({ id: modelId, name: modelName });
       const params = buildGoogleGenerativeAiParams(model, {
@@ -2586,94 +2724,6 @@ describe("google transport stream", () => {
     });
     expect(JSON.stringify(params.contents)).not.toContain("Zm9yZWlnbl9zaWc=");
     expect(JSON.stringify(params.contents)).not.toContain("skip_thought_signature_validator");
-  });
-
-  it.each([
-    {
-      name: "custom model has no negative fallback budget",
-      model: {
-        id: "custom-gemini-model",
-        provider: "custom-google",
-        baseUrl: "https://proxy.example.com/gemini/v1beta",
-      },
-      options: { reasoning: "medium" },
-      expected: { includeThoughts: true },
-    },
-    {
-      name: "non-reasoning model omits thinking",
-      model: { id: "gemma-4-26b-a4b-it", reasoning: false },
-      options: { reasoning: "medium" },
-      expected: undefined,
-    },
-    {
-      name: "Gemini 2.5 Pro omits disabled thinking",
-      model: {},
-      options: { maxTokens: 128 },
-      expected: undefined,
-    },
-    {
-      name: "Gemini 2.5 Pro strips zero budget but keeps thoughts",
-      model: {},
-      options: { thinking: { enabled: true, budgetTokens: 0 } },
-      expected: { includeThoughts: true },
-    },
-    ...[
-      { id: "gemini-pro-latest", thinkingLevel: "LOW" },
-      { id: "gemini-flash-lite-latest", thinkingLevel: "MINIMAL" },
-      { id: "gemini-3.6-flash", thinkingLevel: "MINIMAL" },
-      { id: "gemini-3.7-flash", thinkingLevel: "LOW" },
-    ].map(({ id, thinkingLevel }) => ({
-      name: `${id} disabled thinking floor`,
-      model: { id },
-      options: { maxTokens: 128 },
-      expected: { thinkingLevel },
-    })),
-    {
-      name: "explicit Gemini 3 budget becomes a level",
-      model: { id: "gemini-3-flash-preview" },
-      options: { thinking: { enabled: true, budgetTokens: 8192 } },
-      expected: { includeThoughts: true, thinkingLevel: "MEDIUM" },
-    },
-    {
-      name: "adaptive Gemini 3 uses dynamic defaults",
-      model: { id: "gemini-3-flash-preview" },
-      options: { reasoning: "adaptive" },
-      expected: { includeThoughts: true },
-    },
-    {
-      name: "adaptive Gemini 2.5 uses a dynamic budget",
-      model: { id: "gemini-2.5-flash" },
-      options: { reasoning: "adaptive" },
-      expected: { includeThoughts: true, thinkingBudget: -1 },
-    },
-    {
-      name: "Gemini 3 Pro normalizes the explicit minimum level",
-      model: { id: "gemini-3.1-pro-preview" },
-      options: { thinking: { enabled: true, level: "MINIMAL" } },
-      expected: { includeThoughts: true, thinkingLevel: "LOW" },
-    },
-    ...[
-      { id: "gemini-2.5-flash-lite", reasoning: "minimal", thinkingBudget: 512 },
-      { id: "gemini-2.5-flash-lite", reasoning: "low", thinkingBudget: 2048 },
-      { id: "gemini-2.5-flash", reasoning: "minimal", thinkingBudget: 128 },
-      { id: "gemini-2.5-pro", reasoning: "minimal", thinkingBudget: 128 },
-      { id: "gemini-2.5-pro", reasoning: "medium", thinkingBudget: 8192 },
-    ].map(({ id, reasoning, thinkingBudget }) => ({
-      name: `${id} ${reasoning} budget`,
-      model: { id },
-      options: { reasoning },
-      expected: { includeThoughts: true, thinkingBudget },
-    })),
-  ])("builds thinking config: $name", ({ model, options, expected }) => {
-    const config = buildGeminiUserParams(model, options).generationConfig ?? {};
-    if (expected === undefined) {
-      expect(config).not.toHaveProperty("thinkingConfig");
-    } else {
-      expect(config.thinkingConfig).toStrictEqual(expected);
-    }
-    if ("maxTokens" in options) {
-      expect(config).toHaveProperty("maxOutputTokens", options.maxTokens);
-    }
   });
 
   it("omits stopSequences when the stop list is empty", () => {

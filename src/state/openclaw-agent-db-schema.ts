@@ -52,6 +52,7 @@ import {
   AGENT_MEDIA_SCHEMA_VERSION,
   AGENT_STORAGE_SCHEMA_VERSION,
   AGENT_JSON_PREDICATE_SCHEMA_VERSION,
+  AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION,
   CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION,
   CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -83,6 +84,7 @@ import {
   readExistingAgentSchemaMeta,
   repairAndAssertOpenClawAgentV14SchemaForMigration,
 } from "./openclaw-agent-db-schema-helpers.js";
+import { hasAgentDatabaseApplicationSchema } from "./openclaw-agent-db-schema-read.js";
 import {
   backfillSessionConversations,
   assertSupportedAgentMigrationSchemas,
@@ -109,6 +111,7 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
 import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-predicate-schema.js";
+import { migrateOutboxEnqueueSequenceInTransaction } from "./openclaw-agent-outbox-sequence-migration.js";
 import { migrateSessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { migrateSessionEntrySnapshotsInTransaction } from "./openclaw-agent-session-snapshots-migration.js";
@@ -165,12 +168,11 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     return false;
   }
   setSqliteBusyTimeout(database, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
-  const userVersion = readSqliteUserVersion(database);
-  const hasApplicationSchema = database
-    .prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1")
-    .get();
+  const userVersion =
+    getAdmittedSqliteSchemaFacts(database)?.userVersion ?? readSqliteUserVersion(database);
+  const hasApplicationSchema = userVersion === 0 && hasAgentDatabaseApplicationSchema(database);
   const migrationPending =
-    (userVersion === 0 && hasApplicationSchema !== undefined) ||
+    (userVersion === 0 && hasApplicationSchema) ||
     (userVersion > 0 && userVersion < OPENCLAW_AGENT_SCHEMA_VERSION);
   if (migrationPending) {
     agentDbLog.info("agent database schema migration pending; verifying integrity first", {
@@ -273,10 +275,9 @@ export function refreshOpenClawAgentDatabaseSchema(
     if (convergence) {
       ensureAgentSchema(db, agentId, pathname);
     }
-    // Publish facts from the same schema snapshot that passes the final contract checks.
+    // Integrity admission or same-version repair already checked the runtime schema.
     return runSqliteSchemaReadSnapshotSync(db, () => {
       admitSqliteSchema(db);
-      assertOpenClawAgentCurrentRuntimeSchema(db, { agentId, pathname });
       assertCanonicalSessionValidationSchema(db);
       assertCurrent();
       if (!validation) {
@@ -342,11 +343,26 @@ function ensureAgentSchema(
 ): void {
   const warnings: string[] = [];
   const schemaSql = getOpenClawAgentMigrationSchema(targetVersion);
-  const originalVersion = readSqliteUserVersion(db);
+  const metadata = readExistingAgentSchemaMeta(db);
+  assertExistingAgentSchemaOwner(metadata, agentId, pathname);
+  const originalVersion = assertSupportedAgentSchemaVersion(db, pathname);
+  const isEmptyDatabase = originalVersion === 0 && !hasAgentDatabaseApplicationSchema(db);
   const schemaMigration =
-    originalVersion < targetVersion &&
-    (originalVersion > 0 || readExistingAgentSchemaMeta(db) !== null);
+    originalVersion < targetVersion && (originalVersion > 0 || metadata !== null);
   const identityMigration = targetVersion >= 18 && schemaMigration;
+  if (identityMigration && metadata?.schemaVersion !== originalVersion) {
+    throw new Error(
+      `Agent schema markers disagree for ${pathname}; repair ownership metadata before migration.`,
+    );
+  }
+  if (originalVersion > targetVersion) {
+    throw new Error(
+      `OpenClaw agent database ${pathname} uses schema version ${originalVersion}; expected at most ${targetVersion} for this migration.`,
+    );
+  }
+  if (!isEmptyDatabase && originalVersion < targetVersion) {
+    assertSupportedAgentMigrationSchemas(db, pathname, originalVersion);
+  }
   const assertMigration = () => {
     if (!schemaMigration) {
       return;
@@ -369,30 +385,8 @@ function ensureAgentSchema(
   let created = false;
   try {
     const mutate = () => {
-      // Repeat preflight ownership/version gates inside the write transaction;
-      // concurrent openers must not overwrite another agent after the scan.
-      // Role/ownership gates before version: user_version is only meaningful
-      // within one schema role, and the global state DB now carries version 3.
-      assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
-      assertSupportedAgentSchemaVersion(db, pathname);
-      const previousVersion = readSqliteUserVersion(db);
-      if (identityMigration && readExistingAgentSchemaMeta(db)?.schemaVersion !== previousVersion) {
-        throw new Error(
-          `Agent schema markers disagree for ${pathname}; repair ownership metadata before migration.`,
-        );
-      }
-      if (previousVersion > targetVersion) {
-        throw new Error(
-          `OpenClaw agent database ${pathname} uses schema version ${previousVersion}; expected at most ${targetVersion} for this migration.`,
-        );
-      }
-      if (previousVersion < targetVersion) {
-        assertSupportedAgentMigrationSchemas(db, pathname, previousVersion);
-      }
-      const isEmptyDatabase =
-        previousVersion === 0 &&
-        readExistingAgentSchemaMeta(db) === null &&
-        !db.prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get();
+      // Gateway or offline maintenance owns this store throughout schema preparation.
+      const previousVersion = originalVersion;
       if (isEmptyDatabase && targetVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
         // Canonical creation has no legacy rows or definitions to converge or repair.
         db.exec(schemaSql);
@@ -436,6 +430,26 @@ function ensureAgentSchema(
         ) {
           migrateAgentJsonPredicatesInTransaction(db);
         }
+        if (
+          previousVersion < AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION &&
+          targetVersion >= AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION
+        ) {
+          const elapsedMs = migrateOutboxEnqueueSequenceInTransaction(db);
+          if (elapsedMs !== null) {
+            agentDbLog.info("agent outbox enqueue sequence rebuilt", {
+              agentId,
+              pathname,
+              elapsedMs,
+            });
+          }
+        }
+        // Historical rebuilds also converge indexes. Later version steps own
+        // only their declared tables; additive index repair stays at admission.
+        if (previousVersion < CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION) {
+          repairCanonicalSqliteIndexes(db, pathname, schemaSql, {
+            verifyPhysicalIntegrity: false,
+          });
+        }
         finishAgentSchemaMigration(
           db,
           agentId,
@@ -447,14 +461,17 @@ function ensureAgentSchema(
         );
       };
       if (
-        previousVersion === CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION &&
-        targetVersion >= AGENT_JSON_PREDICATE_SCHEMA_VERSION
+        previousVersion >= CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION &&
+        previousVersion < targetVersion
       ) {
         assertAgentSchemaVersion(
           db,
           { agentId, pathname, version: previousVersion },
           getOpenClawAgentMigrationSchema(previousVersion),
         );
+        // Schema-25 writers predate later startup columns; read-only session
+        // readers refuse a migrated database that still lacks them.
+        ensureSessionAdditiveColumns(db);
         finishStorageMigration();
         return;
       }
@@ -519,8 +536,7 @@ function ensureAgentSchema(
           migrateMemoryChunkMetadataSchema(db);
           db.exec(schemaSql);
         }
-        // Repeat index repair before the transactional schema assertion so a
-        // concurrent opener cannot turn repairable drift into a hard refusal.
+        // Repair canonical indexes after the same-version additive schema changes.
         repairCanonicalSqliteIndexes(db, pathname, schemaSql, {
           verifyPhysicalIntegrity: false,
         });

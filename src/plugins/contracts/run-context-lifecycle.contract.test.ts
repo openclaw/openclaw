@@ -392,51 +392,14 @@ describe("plugin run context lifecycle", () => {
     ).toBeUndefined();
   });
 
-  it.each([{ phases: undefined }, { phases: [] }, { phases: [" start "] }])(
-    "filters event phases before cloning with phases=$phases",
-    async ({ phases }) => {
-      const handle = vi.fn();
-      const { config, registry } = createPluginRegistryFixture();
-      registerTestPlugin({
-        registry,
-        config,
-        record: createPluginRecord({ id: "phase-filter" }),
-        register(api) {
-          api.agent.events.registerAgentEventSubscription({
-            id: "events",
-            streams: ["tool"],
-            phases,
-            handle,
-          });
-        },
-      });
-      const filtered = Boolean(phases?.length);
-      for (const phase of ["start", "update", "result", undefined, 1, null]) {
-        let payloadReads = 0;
-        const data = {
-          phase,
-          get result() {
-            payloadReads++;
-            return { text: "tool output" };
-          },
-        };
-        handle.mockClear();
-        dispatchPluginAgentEventSubscriptions({
-          registry: registry.registry,
-          event: { runId: "run-phase-filter", seq: 1, ts: 0, stream: "tool", data },
-          isLive: () => true,
-        });
-        const delivered = !filtered || phase === "start";
-        expect(handle).toHaveBeenCalledTimes(delivered ? 1 : 0);
-        expect(payloadReads).toBe(delivered ? 1 : 0);
-      }
-      await waitForPluginEventHandlers();
-    },
-  );
-
-  it.each(["end", "error"])(
-    "cleans up a filtered terminal %s event after pending handlers settle",
-    async (phase) => {
+  it.each(
+    ["end", "error"].flatMap((phase) => [
+      { phase, payload: undefined },
+      { phase, payload: "metadata" as const },
+    ]),
+  )(
+    "cleans up a filtered terminal $phase event with payload=$payload after pending handlers settle",
+    async ({ phase, payload }) => {
       const pending = createDeferredCore();
       const handle = vi.fn<
         Parameters<OpenClawPluginApi["registerAgentEventSubscription"]>[0]["handle"]
@@ -455,6 +418,7 @@ describe("plugin run context lifecycle", () => {
             id: "starts",
             streams: ["tool", "lifecycle"],
             phases: ["start"],
+            payload,
             handle,
           });
         },

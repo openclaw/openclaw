@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -20,6 +19,7 @@ import { startOpenClawStateLeaseHeartbeat } from "../state/openclaw-state-lease-
 import {
   acquireOpenClawStateLeaseInTransaction,
   releaseOpenClawStateLeaseInTransaction,
+  updateOpenClawStateLeasePayloadInTransaction,
 } from "../state/openclaw-state-lease-store.js";
 import { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
 import { captureOpenClawStateReadSource } from "../state/openclaw-state-read-worker.js";
@@ -39,6 +39,7 @@ import type {
 } from "./gateway-owner-lease.types.js";
 import { captureGatewayStateOwner, type StateDatabaseSchemaLease } from "./gateway-state-owner.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { retainSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
@@ -52,6 +53,7 @@ const log = createSubsystemLogger("gateway");
 export type GatewayOwnerLease = {
   owner: string;
   ready: Promise<void>;
+  markListening: () => void;
   release: () => Promise<void>;
 };
 
@@ -209,7 +211,7 @@ export function readGatewayOwnerLease(
     openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
   } = {},
 ): GatewayOwnerLeaseIdentity | undefined {
-  const operation = ({ db }: { db: DatabaseSync }) =>
+  const operation = ({ db }: { db: EngineConnection }) =>
     readGatewayOwnerLeaseFromDatabase(db, params.port);
   return params.current || params.openStateSchemaReadAdmission
     ? withExistingOpenClawStateDatabaseCurrentReadOnly(
@@ -241,13 +243,17 @@ export function acquireGatewayOwnerLease(params: {
       getFileLockProcessStartTime(process.pid, env) ??
       getFileLockProcessStartTime(process.pid, env),
   };
-  const payloadJson = JSON.stringify({
+  const payload = {
     owner: processOwner,
     port: params.port,
     mode: params.mode,
     supervisor: params.supervisor,
-  });
-  const mutateLease = <T>(operation: "acquire" | "release", mutate: (db: DatabaseSync) => T) =>
+  };
+  const payloadJson = JSON.stringify(payload);
+  const mutateLease = <T>(
+    operation: "acquire" | "release" | "listening",
+    mutate: (db: EngineConnection) => T,
+  ) =>
     withOpenClawStateStartupMigrationCheckpointDatabase(
       (db) =>
         runSqliteImmediateTransactionSync(
@@ -315,6 +321,25 @@ export function acquireGatewayOwnerLease(params: {
   return {
     owner: identity.owner,
     ready,
+    markListening() {
+      custody?.assertCurrent();
+      mutateLease("listening", (db) => {
+        custody?.assertCurrent();
+        const current = readGatewayOwnerLeaseFromDatabase(db);
+        if (!current || current.owner !== identity.owner) {
+          throw new Error("Gateway owner changed before listening publication");
+        }
+        updateOpenClawStateLeasePayloadInTransaction(
+          db,
+          identity,
+          JSON.stringify({
+            ...payload,
+            owner: { ...processOwner, startedAt: current.startedAt },
+            listeningAt: Date.now(),
+          }),
+        );
+      });
+    },
     async release() {
       if (released) {
         return;

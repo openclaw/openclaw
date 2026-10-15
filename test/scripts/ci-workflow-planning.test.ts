@@ -98,6 +98,21 @@ function successfulNativeSetup() {
 
 describe("PostgreSQL conformance selection", () => {
   it.each([
+    [["extensions/workboard/README.md", "src/utils/absolute-deadline.test.ts"], false],
+    [["extensions/workboard/README.md", "extensions/workboard/src/store.ts"], true],
+    [["extensions/workboard/test/fixtures/README.md", "src/utils/absolute-deadline.test.ts"], true],
+  ] as const)("selects mixed diff %j: %s", (changedPaths, selected) => {
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      changedPaths: [...changedPaths],
+      targetFiles: ["scripts/test-database-conformance.mjs"],
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs.run_postgres_conformance).toBe(String(selected));
+  });
+
+  it.each([
     ["src/infra/database-engine/open.ts", true],
     ["src/infra/postgres-sync/locks.test.ts", true],
     ["src/infra/sql-connection.ts", true],
@@ -120,6 +135,21 @@ describe("PostgreSQL conformance selection", () => {
     });
     expect(result.status, result.output).toBe(0);
     expect(result.outputs.run_postgres_conformance).toBe(String(selected));
+  });
+
+  it.each([
+    { changedPaths: null, label: "no path inventory" },
+    { changedPaths: ["extensions/workboard/README.md"], label: "a matching documentation path" },
+  ])("skips docs-only pull requests with $label", ({ changedPaths }) => {
+    const result = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      changedPaths,
+      targetFiles: ["scripts/test-database-conformance.mjs"],
+      scopeEnv: { OPENCLAW_CI_DOCS_ONLY: "true" },
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.outputs.run_postgres_conformance).toBe("false");
   });
 
   it.each([
@@ -952,6 +982,21 @@ function runControlUiI18nSourceFixture(options: {
     rmSync(root, { force: true, recursive: true });
   }
 }
+describe("channel detail presentation CI selection", () => {
+  it.each(["discord", "googlechat", "imessage", "signal", "slack", "telegram"])(
+    "selects UI proof when only %s display facts change",
+    (pluginId) => {
+      expect(
+        detectChangedScope([`extensions/${pluginId}/control-ui.channel-detail.json`]).runUiTests,
+      ).toBe(true);
+    },
+  );
+
+  it("does not classify unrelated plugin JSON as a UI input", () => {
+    expect(detectChangedScope(["extensions/telegram/unrelated.json"]).runUiTests).toBe(false);
+  });
+});
+
 describe("changed-path transport", () => {
   it("plans current PR tests from the complete manifest above the output size limit", () => {
     const changedPaths = [
@@ -2510,6 +2555,7 @@ describe("ci workflow guards", () => {
         includeReleaseOnlyPluginShards: false,
         compact: !release,
         compactNodeJobCap: release ? 70 : 77,
+        mainValidation: !release,
       });
       expect(plan.compactMode).toBe(release ? undefined : "pull-request");
       expect(
@@ -2828,7 +2874,10 @@ describe("ci workflow guards", () => {
           ...manifest.outputs,
           cache_write_allowed: "true",
         },
-        fileHashes: { "scripts/test-macos-health-render.sh": "present" },
+        fileHashes: {
+          "scripts/test-macos-health-render.sh": "present",
+          "scripts/test-macos-app-host.sh": "present",
+        },
       };
       const phases: string[] = Array.isArray(job.strategy.matrix.phase)
         ? job.strategy.matrix.phase
@@ -2857,6 +2906,7 @@ describe("ci workflow guards", () => {
               steps: {
                 ...successfulNativeSetup(),
                 "swift-test": {
+                  outcome: "success",
                   outputs: { "debug-tests-built": phase === "tests" ? "true" : "" },
                 },
                 "swiftpm-cache": { outputs: { "cache-hit": "false" } },
@@ -2884,6 +2934,28 @@ describe("ci workflow guards", () => {
         );
       }
       expect(selectedPhases("Swift test")).toEqual(["tests"]);
+      expect(selectedPhases("Setup bundled recovery runtime build")).toEqual(
+        full && !historical ? ["tests"] : [],
+      );
+      expect(selectedPhases("Setup bundled recovery runtime build", { cancelled: true })).toEqual(
+        [],
+      );
+      expect(
+        selectedPhases("Setup bundled recovery runtime build", {
+          steps: { "swift-test": { outcome: "failure", outputs: { "debug-tests-built": "true" } } },
+        }),
+      ).toEqual([]);
+      expect(
+        selectedPhases("Setup bundled recovery runtime build", {
+          fileHashes: { "scripts/test-macos-health-render.sh": "present" },
+        }),
+      ).toEqual([]);
+      for (const phase of phases) {
+        expect(
+          evaluateWorkflowExpression(job["timeout-minutes"], { ...context, matrix: { phase } }),
+        ).toBe(full && !historical && phase === "tests" ? 75 : 30);
+      }
+
       expect(selectedPhases("Swabble tests")).toEqual(historical ? [] : ["packages"]);
       expect(selectedPhases("Swift build (release)")).toEqual(full ? ["release"] : []);
       for (const name of [
@@ -3128,8 +3200,8 @@ describe("ci workflow guards", () => {
         expect(manifest.outputs.hybrid_hosted_offload).toBe(String(baseRows <= 40));
         expect(Number(manifest.outputs.hybrid_hosted_base_rows)).toBe(baseRows);
         expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(hosted.length);
-        expect(hosted.length).toBe(baseRows <= 40 ? baseRows + 5 : baseRows);
-        for (const name of ["security-fast", "checks-ui", "checks-ui-e2e"]) {
+        expect(hosted.length).toBe(baseRows <= 40 ? baseRows + 2 : baseRows);
+        for (const name of ["security-fast", "checks-ui-e2e"]) {
           expect(hosted.includes(name), name).toBe(baseRows <= 40);
         }
         for (const name of [
@@ -3143,7 +3215,7 @@ describe("ci workflow guards", () => {
         ]) {
           expect(hosted, name).not.toContain(name);
         }
-        expect(hosted.filter((name) => name === "checks-ui")).toHaveLength(baseRows <= 40 ? 3 : 0);
+        expect(hosted.filter((name) => name === "checks-ui")).toHaveLength(0);
         expect(hosted.filter((name) => name === "checks-ui-e2e")).toHaveLength(
           baseRows <= 40 ? 1 : 0,
         );
@@ -3394,13 +3466,13 @@ describe("ci workflow guards", () => {
       const baseline = manifestWithHostedNodeRows(0);
       const originalBase = Number(baseline.outputs.hybrid_hosted_base_rows);
       for (const healthy of ["true", "false", ""]) {
-        for (const baseRows of [30, 31, 32, 33, 40, 41, 45, 46]) {
+        for (const baseRows of [30, 31, 32, 33, 34, 35, 36, 40, 41, 45, 46]) {
           const manifest = manifestWithHostedNodeRows(baseRows - originalBase, {
             scopeEnv: { OPENCLAW_CI_HOSTED_HEALTHY: healthy },
           });
           expect(manifest.status, manifest.output).toBe(0);
-          const admitted = healthy === "true" && baseRows <= 32;
-          const mainAdmitted = admitted && baseRows <= 30;
+          const admitted = healthy === "true" && baseRows <= 35;
+          const mainAdmitted = admitted && baseRows <= 33;
           expect(manifest.outputs.hybrid_hosted_checks).toBe(String(admitted));
           expect(manifest.outputs.hybrid_hosted_main_checks).toBe(String(mainAdmitted));
           const hosted = emittedHostedRows(manifest.outputs);
@@ -3423,7 +3495,7 @@ describe("ci workflow guards", () => {
                 withoutChecks.filter((row) => row === name).length,
             ).toBe(admitted ? (name === "check-shard" ? 1 + (mainAdmitted ? 2 : 0) : 1) : 0);
           }
-          // The old UI/security decision remains independent of the new check admission.
+          // The security/browser decision remains independent of the new check admission.
           expect(manifest.outputs.hybrid_hosted_offload).toBe(String(baseRows <= 40));
           for (const name of [
             "checks-node-core-test-nondist-shard",
@@ -5299,6 +5371,34 @@ describe("ci workflow guards", () => {
     }
   });
 
+  it.each([
+    { event: "pull_request", docsOnly: "true", root: "true", expected: "false" },
+    { event: "pull_request", docsOnly: "true", root: "", expected: "true" },
+    { event: "pull_request", docsOnly: "false", root: "true", expected: "true" },
+    { event: "schedule", docsOnly: "true", root: "true", expected: "true" },
+    { event: "workflow_dispatch", docsOnly: "true", root: "true", expected: "true" },
+  ] as const)(
+    "keeps docs content conservative for $event/$docsOnly/$root",
+    ({ event, docsOnly, root, expected }) => {
+      const result = runCiManifestFixture({
+        bundledPlanner: true,
+        changedPaths: docsOnly === "false" ? ["VISION.md", "src/focused.ts"] : ["VISION.md"],
+        eventName: event,
+        scopeEnv: {
+          OPENCLAW_CI_DOCS_ONLY: docsOnly,
+          OPENCLAW_CI_DOCS_CHANGED: "true",
+          OPENCLAW_CI_DOCS_ROOT_PROSE_ONLY: root,
+        },
+      });
+      expect(result.status, result.output).toBe(0);
+      expect(result.outputs).toMatchObject({
+        run_docs_content: expected,
+        run_check_docs: "true",
+        run_format_check: "true",
+      });
+    },
+  );
+
   it("resolves admitted main qualification profiles without changing ordinary main routing", () => {
     for (const [configuredProfile, backend] of (
       ["", "github", "blacksmith", "hybrid"] as const
@@ -5551,6 +5651,7 @@ describe("ci workflow guards", () => {
       docs_changed: "true",
       run_check_docs: "true",
       run_node: "false",
+      run_docs_content: "true",
     });
   });
 
@@ -11751,6 +11852,7 @@ describe("ci workflow guards", () => {
     const prSuccessor = "test/scripts/pr-baseline-successor.test.ts";
     const prSigning = "test/scripts/pr-baseline-signing.test.ts";
     const prContinuation = "test/scripts/pr-correction-continuation.test.ts";
+    const prPublication = "test/scripts/pr-baseline-publication.test.ts";
     const unrelated = "src/agents/run-wait.test.ts";
     const selections = [
       { targets: [contract] },
@@ -11774,6 +11876,9 @@ describe("ci workflow guards", () => {
       { targets: [prContinuation] },
       { includePatterns: [prContinuation] },
       { groups: [{ shard_name: "core-tooling-11", includePatterns: [prContinuation] }] },
+      { targets: [prPublication] },
+      { includePatterns: [prPublication] },
+      { groups: [{ shard_name: "core-tooling-11", includePatterns: [prPublication] }] },
       { includePatterns: [unrelated] },
       { shardName: "agentic-agents-core-runtime" },
       { shardName: "agentic-agents-support" },
@@ -11803,6 +11908,9 @@ describe("ci workflow guards", () => {
       expectDefined(result.outputs.checks_node_core_nondist_matrix, "non-dist Node matrix"),
     ) as { include: { requires_ripgrep?: boolean }[] };
     expect(matrix.include.map((row) => Boolean(row.requires_ripgrep))).toEqual([
+      true,
+      true,
+      true,
       true,
       true,
       true,
@@ -11926,6 +12034,7 @@ describe("ci workflow guards", () => {
       "ios-screenshot-shard",
       "ios-screenshot-evidence",
       "android",
+      "android-release-e2e",
       "android-screenshots",
       "android-access-native",
       "docker-seed-e2e",

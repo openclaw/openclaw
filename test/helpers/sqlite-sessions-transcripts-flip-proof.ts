@@ -13,16 +13,14 @@ import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatCliCommand } from "../../src/cli/command-format.js";
-import {
-  readSessionArchiveContentSync,
-  stripSessionArchiveCompressionSuffix,
-} from "../../src/config/sessions/archive-compression.js";
+import { readSessionArchiveContentSync } from "../../src/config/sessions/archive-compression.js";
 import { formatSqliteSessionFileMarker } from "../../src/config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
   type TranscriptEvent,
 } from "../../src/config/sessions/session-accessor.js";
 import { importSqliteSessionRows } from "../../src/config/sessions/session-accessor.sqlite-import.test-support.js";
+import { stripSessionArchiveCompressionSuffix } from "../../src/config/sessions/transcript-file-names.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 import { isGatewayProtocolResponseError } from "../../src/gateway/client.js";
 import {

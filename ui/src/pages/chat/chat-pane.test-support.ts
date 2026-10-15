@@ -48,6 +48,7 @@ import {
   SESSION_MUTATION_TEST_METHODS,
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
+import { createChatErrorState } from "./chat-error-state.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
@@ -523,12 +524,11 @@ export function createTestChatPane(params: {
     value: true,
   });
   const requestUpdate = vi.fn();
-  const state = {
+  const state = Object.assign(createChatErrorState(), {
     agentsList: null,
     assistantAgentId: null,
     chatAttachments: [],
     chatComposerFallbackByScope: {},
-    chatError: null,
     chatHistoryPagination: { hasMore: false },
     chatLoading: false,
     chatMessages: [],
@@ -544,7 +544,6 @@ export function createTestChatPane(params: {
     connected: true,
     connectionEpoch: 4,
     hello: sessionMutationGatewayHello(),
-    lastError: null,
     modelAuthStatusRequestVersion: 0,
     requestUpdate,
     sessionKey: "agent:main:current",
@@ -560,7 +559,7 @@ export function createTestChatPane(params: {
     handleChatScroll: vi.fn(),
     resetToolStream: vi.fn(),
     renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
-  } as unknown as ChatPageHost;
+  }) as unknown as ChatPageHost;
   attachChatRealtimeActions(state);
   state.updateSidebarLayout = (layout) => {
     state.sidebarLayout = layout;

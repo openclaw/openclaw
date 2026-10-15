@@ -217,7 +217,12 @@ export async function selectUsageSessions(params: {
   function withUsageGrouping(
     base: Omit<UsageSessionSelection, "instances">,
   ): UsageSessionSelection {
-    const currentInstance = { sessionId: base.sessionId, sessionFile: base.sessionFile };
+    const currentInstance = {
+      sessionId: base.sessionId,
+      sessionFile: base.sessionFile,
+      transcriptFile: discoveredByIdentity.get(usageSessionIdentity(base.agentId, base.sessionId))
+        ?.transcriptFile,
+    };
     if (groupingMode !== "family") {
       return { ...base, instances: [currentInstance] };
     }

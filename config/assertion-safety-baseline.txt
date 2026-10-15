@@ -234,7 +234,7 @@ extensions/discord/src/internal/commands.ts	1
 extensions/discord/src/internal/components.message.ts	8
 extensions/discord/src/internal/components.modal.ts	1
 extensions/discord/src/internal/entity-cache.ts	3
-extensions/discord/src/internal/gateway-dispatch.ts	7
+extensions/discord/src/internal/gateway-dispatch.ts	5
 extensions/discord/src/internal/gateway-payload.ts	1
 extensions/discord/src/internal/gateway.ts	2
 extensions/discord/src/internal/interaction-dispatch.ts	6
@@ -367,14 +367,13 @@ extensions/google/music-generation-provider.ts	1
 extensions/google/oauth-token-shared.ts	1
 extensions/google/provider-registration.ts	2
 extensions/google/realtime-voice-provider.ts	4
-extensions/google/transport-stream.ts	13
+extensions/google/transport-stream.ts	12
 extensions/google/vertex-adc.ts	4
 extensions/google/video-generation-provider.ts	13
 extensions/googlechat/src/approval-card-actions.ts	1
 extensions/googlechat/src/approval-handler.runtime.ts	1
 extensions/googlechat/src/google-auth.runtime.ts	4
 extensions/googlechat/src/monitor-event.ts	2
-extensions/groq/index.ts	2
 extensions/huggingface/index.ts	1
 extensions/huggingface/models.ts	2
 extensions/imessage/src/actions-contract.ts	1
@@ -511,7 +510,6 @@ extensions/mattermost/src/setup-core.ts	2
 extensions/memory-core/index.ts	3
 extensions/memory-core/src/cli-index-search.runtime.ts	1
 extensions/memory-core/src/cli-rem.runtime.ts	1
-extensions/memory-core/src/cli-runtime-common.ts	2
 extensions/memory-core/src/cli-status.runtime.ts	2
 extensions/memory-core/src/dreaming.ts	1
 extensions/memory-core/src/memory/hybrid.ts	1
@@ -555,7 +553,6 @@ extensions/microsoft-foundry/provider.ts	1
 extensions/migrate-hermes/apply.ts	1
 extensions/migrate-hermes/auth-config.ts	2
 extensions/migrate-hermes/auth.ts	1
-extensions/migrate-hermes/model.ts	1
 extensions/minimax/model-definitions.ts	2
 extensions/minimax/music-generation-provider.ts	2
 extensions/minimax/oauth.ts	1
@@ -565,7 +562,6 @@ extensions/minimax/video-generation-provider.ts	3
 extensions/moonshot/index.ts	2
 extensions/moonshot/native-video.ts	2
 extensions/moonshot/provider-policy-api.ts	1
-extensions/moonshot/src/kimi-web-search-provider.runtime.ts	2
 extensions/msteams/doctor-contract-api.ts	1
 extensions/msteams/src/attachments/graph.ts	1
 extensions/msteams/src/attachments/shared.ts	1
@@ -610,9 +606,9 @@ extensions/nostr/src/nostr-profile-http.ts	1
 extensions/nostr/src/nostr-profile-import.ts	1
 extensions/nvidia/provider-catalog.ts	1
 extensions/oc-path/src/oc-path/find.ts	9
-extensions/oc-path/src/oc-path/universal.ts	4
+extensions/oc-path/src/oc-path/universal.ts	2
 extensions/oc-path/src/oc-path/yaml/edit.ts	2
-extensions/oc-path/src/oc-path/yaml/resolve.ts	4
+extensions/oc-path/src/oc-path/yaml/resolve.ts	2
 extensions/ollama/index.ts	5
 extensions/ollama/provider-discovery.ts	1
 extensions/ollama/src/config-compat.ts	1
@@ -762,7 +758,7 @@ extensions/reef/protocol/canonical.ts	1
 extensions/reef/protocol/envelope.ts	1
 extensions/reef/protocol/guard-adapters.ts	1
 extensions/reef/protocol/guard.ts	1
-extensions/reef/src/channel.ts	4
+extensions/reef/src/channel.ts	3
 extensions/reef/src/cli.ts	6
 extensions/reef/src/doctor-durable-state.ts	2
 extensions/reef/src/legacy-key-guard.ts	1
@@ -793,7 +789,6 @@ extensions/slack/src/client-options.ts	2
 extensions/slack/src/doctor.ts	1
 extensions/slack/src/group-policy.ts	1
 extensions/slack/src/http/plugin-routes.ts	1
-extensions/slack/src/http/registry.ts	2
 extensions/slack/src/modal-metadata.ts	1
 extensions/slack/src/monitor/context.ts	2
 extensions/slack/src/monitor/event-scope.ts	1
@@ -918,7 +913,7 @@ extensions/twitch/src/outbound.ts	2
 extensions/twitch/src/resolver.ts	1
 extensions/twitch/src/setup-surface.ts	1
 extensions/twitch/src/token.ts	3
-extensions/twitch/src/twitch-ingress.ts	4
+extensions/twitch/src/twitch-ingress.ts	3
 extensions/venice/models.ts	1
 extensions/vllm/stream.ts	1
 extensions/voice-call/index.ts	2
@@ -1022,7 +1017,7 @@ packages/ai/src/providers/anthropic.ts	2
 packages/ai/src/providers/azure-openai-responses.ts	1
 packages/ai/src/providers/clean-for-gemini.ts	4
 packages/ai/src/providers/google-shared.ts	2
-packages/ai/src/providers/mistral.ts	2
+packages/ai/src/providers/mistral.ts	1
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
 packages/ai/src/providers/openai-chatgpt-responses.ts	17
 packages/ai/src/providers/openai-completions-tool-calls.ts	1
@@ -1059,7 +1054,7 @@ packages/ai/src/transports/openai-responses-replay-internal.ts	10
 packages/ai/src/transports/openai-responses-replay-messages-internal.ts	7
 packages/ai/src/transports/openai-responses-stream-observer-internal.ts	1
 packages/ai/src/transports/openai-responses-stream-slots-internal.ts	2
-packages/ai/src/transports/openai-responses-stream-terminal-internal.ts	2
+packages/ai/src/transports/openai-responses-stream-terminal-internal.ts	1
 packages/ai/src/transports/openai-responses-websocket.ts	3
 packages/ai/src/transports/openai-transport-params.ts	2
 packages/ai/src/transports/openai-transport-shared.ts	2
@@ -1219,7 +1214,7 @@ src/agents/custom-api-registry.ts	1
 src/agents/delegation-capability.ts	1
 src/agents/embedded-agent-helpers/bootstrap.ts	2
 src/agents/embedded-agent-helpers/images.ts	6
-src/agents/embedded-agent-helpers/openai.ts	17
+src/agents/embedded-agent-helpers/openai.ts	11
 src/agents/embedded-agent-helpers/turns.ts	8
 src/agents/embedded-agent-live-edit-diff.ts	3
 src/agents/embedded-agent-messaging-extraction.ts	1
@@ -1314,7 +1309,7 @@ src/agents/harness/hook-helpers.ts	1
 src/agents/harness/lifecycle-hook-helpers.ts	1
 src/agents/harness/native-hook-relay-client.ts	2
 src/agents/harness/native-hook-relay-codec.ts	2
-src/agents/harness/selection.ts	4
+src/agents/harness/selection.ts	3
 src/agents/harness/support.ts	1
 src/agents/identity.ts	5
 src/agents/internal-runtime-context.ts	1
@@ -1498,7 +1493,6 @@ src/auto-reply/reply/agent-runner-utils.ts	1
 src/auto-reply/reply/block-streaming.ts	3
 src/auto-reply/reply/commands-acp/diagnostics.ts	2
 src/auto-reply/reply/commands-allowlist.ts	6
-src/auto-reply/reply/commands-config.ts	1
 src/auto-reply/reply/commands-context-report.ts	1
 src/auto-reply/reply/commands-context.ts	1
 src/auto-reply/reply/commands-login.ts	1
@@ -1658,7 +1652,7 @@ src/cli/nodes-cli/register.status.ts	3
 src/cli/nodes-cli/rpc.ts	2
 src/cli/output-file.runtime.ts	1
 src/cli/pairing-cli.ts	1
-src/cli/plugins-authoring-command.ts	4
+src/cli/plugins-authoring-command.ts	2
 src/cli/plugins-update-command.ts	5
 src/cli/ports.ts	6
 src/cli/program/action-reparse.ts	1
@@ -1817,7 +1811,7 @@ src/config/redact-snapshot.ts	4
 src/config/runtime-overrides.ts	1
 src/config/runtime-source-projection.ts	4
 src/config/schema.ts	1
-src/config/sessions/legacy-main-session-migration.ts	4
+src/config/sessions/legacy-main-session-migration.ts	3
 src/config/sessions/session-accessor.entry-mutation.ts	2
 src/config/sessions/session-accessor.entry.ts	1
 src/config/sessions/session-accessor.sqlite-archive-store.ts	1
@@ -2043,7 +2037,6 @@ src/gateway/worker-environments/state.ts	1
 src/gateway/worker-environments/worker-session-tool-executor.ts	1
 src/gateway/worker-environments/worker-turn-admission.ts	3
 src/gateway/worker-environments/workspace-accepted-publication.ts	1
-src/gateway/worker-environments/workspace-manifest.ts	14
 src/gateway/worker-environments/workspace-result-staging.ts	2
 src/gateway/worker-workspace-conflict-transcript.ts	4
 src/gateway/ws-log.ts	3
@@ -2074,7 +2067,6 @@ src/infra/channel-summary.ts	1
 src/infra/channels-status-issues.ts	2
 src/infra/clawhub-client.ts	2
 src/infra/clawhub-install-trust.ts	2
-src/infra/control-ui-assets.ts	1
 src/infra/delivery-queue-sqlite-bound.ts	2
 src/infra/delivery-recovery.shared.ts	4
 src/infra/diagnostic-events.ts	2
@@ -2184,11 +2176,10 @@ src/infra/state-migrations.state-dir.ts	1
 src/infra/state-migrations.tui-last-session.ts	2
 src/infra/state-migrations.workspace-setup-store.ts	1
 src/infra/state-migrations.workspace-setup.ts	1
-src/infra/system-presence.ts	1
 src/infra/tailscale.ts	4
 src/infra/tmp-openclaw-dir.ts	1
 src/infra/update-check-package-target.ts	2
-src/infra/update-global.ts	3
+src/infra/update-global.ts	2
 src/infra/update-package-manager.ts	1
 src/infra/warning-filter.ts	4
 src/infra/windows-gateway-firewall-diagnostics.ts	2
@@ -2330,7 +2321,7 @@ src/plugins/capability-provider-runtime.ts	8
 src/plugins/captured-registration.ts	1
 src/plugins/channel-presence-policy.ts	2
 src/plugins/channel-validation.ts	1
-src/plugins/clawhub.ts	4
+src/plugins/clawhub.ts	3
 src/plugins/cli-gateway-nodes-runtime.ts	2
 src/plugins/command-registration.ts	3
 src/plugins/config-normalization-shared.ts	1
@@ -2621,7 +2612,6 @@ ui/src/components/browser/browser-annotation.ts	1
 ui/src/components/browser/browser-client.ts	1
 ui/src/components/config-form-copy-on-write.ts	1
 ui/src/components/config-form.analyze.ts	1
-ui/src/components/connect-command.ts	2
 ui/src/components/desktop/desktop-client.ts	2
 ui/src/components/desktop/desktop-mobile-keyboard.ts	1
 ui/src/components/dock-panel-layout.ts	3
@@ -2630,8 +2620,6 @@ ui/src/components/markdown-assistant-transcript.ts	1
 ui/src/components/markdown-code-blocks.ts	1
 ui/src/components/markdown-parser.ts	1
 ui/src/components/mcp-app-theme.ts	1
-ui/src/components/mcp-server-form.ts	1
-ui/src/components/model-picker.ts	1
 ui/src/components/sensitive-input.ts	2
 ui/src/components/session-data-controller.ts	1
 ui/src/components/session-organizer-controller.ts	5

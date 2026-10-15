@@ -11,6 +11,8 @@ import { createEmbeddedRunHandle } from "../../../agents/embedded-agent-runner/r
 import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../agents/realtime-bootstrap-context.test-support.js";
 import { resolveCommandAuthorization } from "../../../auto-reply/command-auth.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { captureRuntimeConfigWithSource } from "../../../config/runtime-config-capture-state.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../../../config/runtime-source-projection.js";
 import { normalizeResolvedSecretInputString } from "../../../config/types.secrets.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
@@ -49,7 +51,7 @@ const mocks = vi.hoisted(() => ({
   getCanonicalUserPreferences: vi.fn<
     () => Promise<{ profileId: string; entries: Record<string, unknown> } | undefined>
   >(async () => undefined),
-  readConfigFileSnapshot: vi.fn(),
+  projectConfigOntoRuntimeSourceSnapshot: vi.fn<(config: OpenClawConfig) => OpenClawConfig>(),
   canonicalizeSpeechProviderId: vi.fn((providerId: string | undefined) => providerId),
   getSpeechProvider: vi.fn(),
   listSpeechProviders: vi.fn(() => []),
@@ -65,7 +67,7 @@ const mocks = vi.hoisted(() => ({
   listRealtimeTranscriptionProviders: vi.fn(() => []),
   resolveConfiguredRealtimeVoiceProviderAsync: vi.fn(),
   isRealtimeVoiceProviderConfiguredAsync: vi.fn(
-    ({
+    async ({
       provider,
       cfg,
       providerConfig,
@@ -155,8 +157,9 @@ const mocks = vi.hoisted(() => ({
   agentRuntime: {},
 }));
 
-vi.mock("../../../config/config.js", () => ({
-  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+vi.mock("../../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../config/config.js")>()),
+  projectConfigOntoRuntimeSourceSnapshot: mocks.projectConfigOntoRuntimeSourceSnapshot,
 }));
 
 vi.mock("../../../state/user-preferences.js", async (importOriginal) => ({
@@ -338,12 +341,7 @@ vi.mock("../transcription-relay.js", async (importOriginal) => {
 });
 
 function setSourceConfig(config: OpenClawConfig) {
-  mocks.readConfigFileSnapshot.mockResolvedValue({
-    path: "/tmp/openclaw.json",
-    hash: "test-hash",
-    valid: true,
-    config,
-  });
+  mocks.projectConfigOntoRuntimeSourceSnapshot.mockReturnValue(config);
 }
 
 const callTalkHandler = createTalkHandlerCaller(talkHandlers);
@@ -1194,7 +1192,7 @@ describe("talk.speak handler", () => {
         return;
       }
       expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
-      expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mocks.projectConfigOntoRuntimeSourceSnapshot).not.toHaveBeenCalled();
       expectRecordFields(mockCallArg(mocks.synthesizeSpeech), {
         text: "Hello from talk mode.",
         disableFallback: true,
@@ -1215,6 +1213,46 @@ describe("talk.config handler", () => {
     vi.clearAllMocks();
   });
 
+  it("projects the matching applied source and canonical runtime fields", async () => {
+    const source: OpenClawConfig = {
+      ...createTalkConfig({ source: "env", provider: "default", id: "SYNTHETIC_TALK_KEY" }),
+      session: { mainKey: "ignored-legacy-key" },
+      ui: { seamColor: "${SYNTHETIC_ACCENT}" },
+    };
+    const runtime = captureRuntimeConfigWithSource(
+      {
+        ...createTalkConfig("synthetic-applied-key"),
+        session: { mainKey: "main" },
+        ui: { seamColor: "#123456" },
+      },
+      source,
+    );
+    mocks.projectConfigOntoRuntimeSourceSnapshot.mockImplementationOnce(
+      projectConfigOntoRuntimeSourceSnapshot,
+    );
+    mocks.getSpeechProvider.mockReturnValue({ id: "acme" });
+    const respond = vi.fn();
+    await callTalkHandler("talk.config", { params: {}, respond, config: runtime });
+    expect(expectRespondOk(respond)).toMatchObject({
+      config: {
+        session: { mainKey: "main" },
+        ui: { seamColor: "#123456" },
+        talk: {
+          providers: {
+            acme: {
+              apiKey: {
+                source: "__OPENCLAW_REDACTED__",
+                provider: "__OPENCLAW_REDACTED__",
+                id: "__OPENCLAW_REDACTED__",
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(JSON.stringify(respond.mock.calls)).not.toContain("synthetic-applied-key");
+  });
+
   it.each([
     ["talk:speech", false, true],
     ["talk:speech", true, false],
@@ -1229,7 +1267,7 @@ describe("talk.config handler", () => {
           : { source: "env", provider: "default", id: "MISSING" },
       );
       mocks.getSpeechProvider.mockReturnValue({ id: "acme" });
-      mocks.readConfigFileSnapshot.mockResolvedValue({ config: runtimeConfig });
+      setSourceConfig(runtimeConfig);
       const respond = vi.fn();
 
       await callTalkHandler("talk.config", {
@@ -1245,14 +1283,15 @@ describe("talk.config handler", () => {
 
   it.each(talkConfigAccentCases)("$name", async ({ profileId, profileAccent, expectedAccent }) => {
     markTalkOwnerCold("tts");
-    const runtimeConfig = createTalkConfig("healthy-talk-key");
+    const runtimeConfig = {
+      ...createTalkConfig("healthy-talk-key"),
+      ui: { seamColor: "#123456", prefs: { accent: "#52c99a" } },
+    };
     mocks.getSpeechProvider.mockReturnValue({ id: "acme" });
     mocks.getCanonicalUserPreferences.mockResolvedValue(
       profileId ? { profileId, entries: { "ui.accent": profileAccent } } : undefined,
     );
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      config: { ...runtimeConfig, ui: { seamColor: "#123456", prefs: { accent: "#52c99a" } } },
-    });
+    setSourceConfig(runtimeConfig);
     const respond = vi.fn();
 
     await callTalkHandler("talk.config", {
@@ -1276,13 +1315,8 @@ describe("talk.config handler", () => {
     }
   });
 
-  it("projects the runtime realtime transport when source config is invalid", async () => {
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      hash: "test-hash",
-      valid: false,
-      config: {},
-    });
+  it("projects the runtime realtime transport when source config omits it", async () => {
+    setSourceConfig({});
 
     const respond = vi.fn();
     await callTalkHandler("talk.config", {

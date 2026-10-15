@@ -161,6 +161,16 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
 }
 
 export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({
+    cfg,
+    providerConfig,
+  }) =>
+    Boolean(
+      resolveGoogleTtsApiKey({
+        cfg,
+        providerConfig: readGoogleTtsProviderConfig(providerConfig),
+      }),
+    );
   return {
     id: "google",
     label: "Google",
@@ -202,13 +212,9 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
         : { model: normalizeGoogleTtsModel(params.modelId) }),
     }),
     listVoices: async () => GOOGLE_PREBUILT_VOICES.map((voice) => ({ id: voice, name: voice })),
-    isConfigured: ({ cfg, providerConfig }) =>
-      Boolean(
-        resolveGoogleTtsApiKey({
-          cfg,
-          providerConfig: readGoogleTtsProviderConfig(providerConfig),
-        }),
-      ),
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     prepareSynthesis: (ctx) => {
       const config = readGoogleTtsProviderConfig(ctx.providerConfig);
       const overrides = readGoogleTtsOverrides(ctx.providerOverrides);

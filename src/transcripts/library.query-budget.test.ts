@@ -10,10 +10,12 @@ import {
   executeSqliteQuerySync,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createTranscriptCaptureAppends } from "./capture-appends.js";
 import { activeSessions } from "./capture-startup.js";
 import { exportTranscriptLibrary, getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
@@ -52,7 +54,7 @@ function fixture() {
   return createTranscriptLibraryStoreFixture(tempDirs.make("transcript-library-query-budget-"));
 }
 
-function seedExportBookkeeping(db: DatabaseSync) {
+function seedExportBookkeeping(db: EngineConnection) {
   executeSqliteQuerySync(
     db,
     meetingTranscriptDb(db)
@@ -66,8 +68,9 @@ function seedExportBookkeeping(db: DatabaseSync) {
 
 function observeArchiveReads(
   store: ReturnType<typeof createTranscriptLibraryStoreFixture>["store"],
-  database: DatabaseSync,
+  connection: EngineConnection,
 ) {
+  const database = requireNativeSqliteDatabase(connection);
   // SQL allocation assertions use the same kernels locally; the worker fixture
   // separately proves the real facade's transport and absence of parent SQL.
   vi.spyOn(store, "listReadEntries").mockImplementation(

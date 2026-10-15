@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
+  loadChatRequestIdentityKeyAsync,
   loadDeviceIdentityIfPresentAsync,
   loadOrCreateDeviceIdentityAsync,
   loadOrCreateProcessDeviceIdentityAsync,
@@ -58,6 +59,7 @@ describe("device identity shared worker", () => {
       const fileMode = (await fs.stat(options.path)).mode;
 
       expect(await loadDeviceIdentityIfPresentAsync(options)).toBeNull();
+      expect(await loadChatRequestIdentityKeyAsync(options)).toBeNull();
 
       expect(await fs.readFile(options.path)).toHaveLength(0);
       expect((await fs.stat(options.path)).mode).toBe(fileMode);

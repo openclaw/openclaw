@@ -375,6 +375,11 @@
         "default": {},
         "type": "object",
         "properties": {
+          "enabled": {
+            "default": true,
+            "type": "boolean",
+            "description": "Run automatic collection and catch-up. Manual generation and stored reports remain available when disabled."
+          },
           "closedDayUtc": {
             "default": "00:05",
             "type": "string",

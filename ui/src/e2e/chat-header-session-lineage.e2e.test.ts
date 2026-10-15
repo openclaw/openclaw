@@ -134,7 +134,7 @@ suite.define(() => {
       expect(await gateway.getRequests("config.patch")).toEqual([]);
       await actions.click();
       await openSessionMenuSubmenu(page, "Move to group");
-      await menu.locator('wa-dropdown-item[value="move-to-group:Projects"]').click();
+      await menu.getByRole("menuitemradio", { name: "Projects", exact: true }).click();
       expect(
         (await waitForPatch(gateway, (params) => params.category === "Projects")).params,
       ).toMatchObject({

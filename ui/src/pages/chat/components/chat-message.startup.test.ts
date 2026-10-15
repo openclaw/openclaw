@@ -4,7 +4,7 @@ import { render } from "lit";
 import { expect, it } from "vitest";
 import { chatStartupStatusLabel } from "../chat-run-startup.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
-import { renderStreamGroup } from "./chat-message-stream.ts";
+import { renderStreamGroup } from "./chat-message-stream.test-support.ts";
 
 it("renders the startup status with elapsed time instead of a working phrase", () => {
   const container = document.createElement("div");
@@ -91,5 +91,5 @@ it.each([
       null,
       startStatus,
     ),
-  ).toBe("Waiting for a response…");
+  ).toBe("Waiting for a response");
 });

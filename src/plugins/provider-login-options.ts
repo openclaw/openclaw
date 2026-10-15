@@ -15,6 +15,8 @@ export type ProviderLoginOption = {
   docsUrl?: string;
   kind: "oauth" | "device-code" | "secret";
   featured: boolean;
+  /** This sign-in activates a provider runtime rather than only saving credentials. */
+  requiresSetup?: true;
 };
 export type ProviderChannelLoginChoice = {
   choiceId: string;
@@ -42,7 +44,11 @@ function isEligible(choice: ProviderAuthChoiceMetadata): boolean {
 }
 
 function loginKind(choice: ProviderAuthChoiceMetadata): ProviderLoginOption["kind"] | undefined {
-  if (!isEligible(choice) || choice.credentialOnly !== true || choice.appGuidedDiscovery) {
+  if (
+    !isEligible(choice) ||
+    choice.appGuidedDiscovery ||
+    (choice.credentialOnly !== true && !choice.appGuidedAuth)
+  ) {
     return undefined;
   }
   return choice.appGuidedAuth ?? (choice.appGuidedSecret ? "secret" : undefined);
@@ -93,6 +99,7 @@ export function listProviderLoginOptions(
           docsUrl: choice.docsUrl,
           kind,
           featured: choice.onboardingFeatured === true,
+          ...(choice.credentialOnly !== true ? { requiresSetup: true as const } : {}),
         },
       ];
     });
@@ -115,7 +122,7 @@ function normalizeInput(value: string | undefined): string {
 }
 
 function projectChannelChoice(choice: ProviderAuthChoiceMetadata): ProviderChannelLoginChoice {
-  const kind = loginKind(choice);
+  const kind = choice.credentialOnly === true ? loginKind(choice) : undefined;
   return {
     choiceId: choice.choiceId,
     pluginId: choice.pluginId,

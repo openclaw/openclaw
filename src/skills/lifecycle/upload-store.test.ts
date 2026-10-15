@@ -13,6 +13,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { commitSkillUploadInDatabase } from "./upload-store-commit.js";
 import { SkillUploadRequestError } from "./upload-store-error.js";
 import { beginSkillUploadInDatabase } from "./upload-store.kernel.js";
@@ -187,7 +188,7 @@ describe("skill upload store", () => {
       tempRootDir: activeLimitRoot,
     });
     capacityReads = trackSqliteStatementExecutions(
-      stateDatabase(path.join(activeLimitRoot, "openclaw.sqlite")),
+      requireNativeSqliteDatabase(stateDatabase(path.join(activeLimitRoot, "openclaw.sqlite"))),
       ["capacity"],
       (sql) => (/from "skill_uploads" where "expires_at" >/u.test(sql) ? "capacity" : null),
     );

@@ -44,10 +44,7 @@ export interface SqlConnection {
 
 const postgresConnectionBrand = Symbol.for("openclaw.postgres-sync-connection");
 
-export interface PostgresSqlConnection extends Pick<
-  SqlConnection,
-  "isTransaction" | "exec" | "close"
-> {
+export interface PostgresSqlConnection extends SqlConnection {
   readonly anchor: DatabaseSync;
   readonly advisoryLockKey: bigint;
   query: (
@@ -64,6 +61,8 @@ export interface PostgresSqlConnection extends Pick<
     ...modes: [readOnly?: boolean, reserved?: boolean]
   ): T;
 }
+
+export type EngineConnection = DatabaseSync | PostgresSqlConnection;
 
 export function isPostgresSqlConnection(db: object): db is PostgresSqlConnection {
   return postgresConnectionBrand in db && db[postgresConnectionBrand] === true;

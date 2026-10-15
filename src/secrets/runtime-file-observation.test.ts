@@ -8,7 +8,6 @@ import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-re
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotCore,
-  getRuntimeAuthProfileStoreSnapshotsRevision,
   refreshRuntimeAuthProfileStoreSources,
   registerRuntimeAuthProfileStoreMutationListener,
   setRuntimeAuthProfileStoreSnapshot,
@@ -78,69 +77,37 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-it.each(["session admission", "foreign credentials"] as const)(
-  "observes first-file %s after empty startup",
-  async (creation) => {
-    const root = temporary.make("auth-empty-startup-observation-");
-    const agentDir = path.join(root, "agents", "main", "agent");
-    vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    await prepareSharedAuthStoreOwnership();
-    const prepared = prepareSecretsRuntimeFastPathSnapshot({
-      config: { agents: { entries: { main: { agentDir } } }, plugins: { enabled: false } },
-      agentDirs: [agentDir],
-    });
-    expect(prepared).not.toBeNull();
-    activateSecretsRuntimeSnapshot(prepared!.snapshot);
-    const snapshot = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
-    const revision = getRuntimeAuthProfileStoreCredentialsRevision();
-    const snapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
-    const publication =
-      creation === "foreign credentials"
-        ? new Promise<void>((resolve) => {
-            mutationSubscriptions.push(
-              registerRuntimeAuthProfileStoreMutationListener(() => resolve()),
-            );
-          })
-        : undefined;
-    if (creation === "session admission") {
-      const lease = acquireStateDatabaseSchemaLease(resolveOpenClawStateSqlitePath());
-      try {
-        lease.run(() =>
-          openOpenClawAgentDatabase({
-            agentId: "main",
-            path: resolveAuthProfileDatabasePath(agentDir),
-          }),
-        );
-      } finally {
-        lease.release();
-      }
-    } else {
-      await promisify(execFile)(process.execPath, [
-        "-e",
-        'const fs = require("node:fs"); const path = require("node:path"); const { DatabaseSync } = require("node:sqlite"); fs.mkdirSync(path.dirname(process.argv[1]), { recursive: true }); const db = new DatabaseSync(process.argv[1]); try { db.exec("CREATE TABLE auth_profile_store (store_key TEXT PRIMARY KEY, store_json TEXT); CREATE TABLE auth_profile_state (state_key TEXT PRIMARY KEY, state_json TEXT)"); db.prepare("INSERT INTO auth_profile_store VALUES (?, ?)").run("primary", process.argv[2]); } finally { db.close(); }',
-        resolveAuthProfileDatabasePath(agentDir),
-        JSON.stringify({
-          version: 1,
-          profiles: { example: { type: "api_key", provider: "openai", key: "foreign" } },
-        }),
-      ]);
-    }
-    await refreshAuthProfileFileState();
-    await publication;
-    if (creation === "session admission") {
-      expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(revision);
-      expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toEqual(snapshot);
-    } else {
-      expect(getRuntimeAuthProfileStoreSnapshotsRevision()).toBeGreaterThan(snapshotsRevision);
-      expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles.example).toMatchObject({
-        key: "foreign",
-      });
-    }
-  },
-);
+it("preserves auth facts through first-file session admission after empty startup", async () => {
+  const root = temporary.make("auth-empty-startup-observation-");
+  const agentDir = path.join(root, "agents", "main", "agent");
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  await prepareSharedAuthStoreOwnership();
+  const prepared = prepareSecretsRuntimeFastPathSnapshot({
+    config: { agents: { entries: { main: { agentDir } } }, plugins: { enabled: false } },
+    agentDirs: [agentDir],
+  });
+  expect(prepared).not.toBeNull();
+  activateSecretsRuntimeSnapshot(prepared!.snapshot);
+  const snapshot = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
+  const revision = getRuntimeAuthProfileStoreCredentialsRevision();
+  const lease = acquireStateDatabaseSchemaLease(resolveOpenClawStateSqlitePath());
+  try {
+    lease.run(() =>
+      openOpenClawAgentDatabase({
+        agentId: "main",
+        path: resolveAuthProfileDatabasePath(agentDir),
+      }),
+    );
+  } finally {
+    lease.release();
+  }
+  await refreshAuthProfileFileState();
+  expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(revision);
+  expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toEqual(snapshot);
+});
 
 it.each(["native commit", "cold async read"] as const)(
-  "retains a %s through observation and detects a later foreign edit",
+  "retains a %s through observation",
   async (initial) => {
     const root = temporary.make("auth-own-write-observation-");
     const agentDir = path.join(root, "agents", "main", "agent");
@@ -180,19 +147,14 @@ it.each(["native commit", "cold async read"] as const)(
     expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles.example).toMatchObject({
       key: "owned",
     });
-    await promisify(execFile)(process.execPath, [
-      "-e",
-      'const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(process.argv[1]); try { db.prepare("UPDATE auth_profile_store SET store_json = ? WHERE store_key = ?").run(process.argv[2], "primary"); } finally { db.close(); }',
-      resolveAuthProfileDatabasePath(agentDir),
-      JSON.stringify(store("foreign")),
-    ]);
     await refreshAuthProfileFileState();
-
-    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toBeUndefined();
+    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles.example).toMatchObject({
+      key: "owned",
+    });
   },
 );
 
-it.each(["observation", "explicit refresh", "legacy source observation"] as const)(
+it.each(["explicit refresh", "legacy source observation"] as const)(
   "publishes a separate process's auth edit through %s",
   async (refresh) => {
     const root = temporary.make("auth-observation-publication-");

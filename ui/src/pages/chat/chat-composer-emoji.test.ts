@@ -1,4 +1,3 @@
-import { nothing, render } from "lit";
 import MarkdownIt from "markdown-it";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { TextareaTokenAnchor } from "../../components/textarea-token-anchor.ts";
@@ -12,8 +11,9 @@ import {
   createComposerContainer,
   createComposerProps,
   resetComposerFixture,
+  disposeComposer,
+  renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
 const controllers: NewSessionComposerTextareaController[] = [];
@@ -32,7 +32,7 @@ afterEach(async () => {
 beforeEach(() => {
   onTestFinished(installChatComposerPickerDismissal(document));
   // jsdom has no layout/ResizeObserver; real-browser tests cover placement and cleanup.
-  vi.spyOn(TextareaTokenAnchor.prototype, "update").mockImplementation(() => {});
+  vi.spyOn(TextareaTokenAnchor.prototype, "updateNative").mockImplementation(() => {});
   // jsdom has no editing engine. Exercise the browser command's input contract;
   // native undo itself is covered by the real-browser composer suite.
   Object.defineProperty(document, "execCommand", {
@@ -63,7 +63,7 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
     if (native) {
       native.unmount();
     } else {
-      render(nothing, container);
+      disposeComposer(container);
     }
     container.remove();
   });
@@ -91,7 +91,7 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
       return;
     }
     if (kind === "chat") {
-      render(renderChatComposer({ ...props, draft }), container);
+      renderComposerInto(container, { ...props, draft });
     } else {
       nativeOptions = {
         agentId: "main",
@@ -154,9 +154,9 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
   return { container, textarea, input, key, colon, send, backgroundSend, draft: () => draft };
 }
 
-describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
+describe("chat emoji acceptance", () => {
   it("does not send on held Enter after accepting an emoji, but sends on a fresh press", () => {
-    const f = fixture(kind);
+    const f = fixture("chat");
     f.input(":smi");
     f.key("Enter");
     expect(f.draft()).toBe("😄");
@@ -170,7 +170,7 @@ describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
   });
 
   it("supports mouse and Tab acceptance and persistent Escape dismissal", () => {
-    const f = fixture(kind);
+    const f = fixture("chat");
     f.input(":smi");
     f.key("Escape");
     f.textarea.dispatchEvent(new Event("select"));
@@ -184,7 +184,9 @@ describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
     expect(f.draft()).toBe("👍");
     expect(f.send).not.toHaveBeenCalled();
   });
+});
 
+describe.each(["chat", "new"] as const)("%s emoji composer", (kind) => {
   it("ignores a queued selection event after focus leaves the composer", () => {
     const f = fixture(kind);
     f.input(":smi");

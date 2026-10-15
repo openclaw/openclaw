@@ -2,7 +2,6 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { Show } from "solid-js";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-content.tsx";
 import { Icon } from "./icon.tsx";
 import { LoadingState } from "./loading-state.tsx";
 
@@ -81,17 +80,6 @@ export function LazyViewError(props: {
   );
 }
 
-export function LegacyPanelErrorState(
-  props: Omit<Parameters<typeof PanelErrorState>[0], "actions"> & { actions?: unknown },
-) {
-  return (
-    <PanelErrorState
-      {...props}
-      actions={props.actions ? <LitContent value={props.actions} /> : undefined}
-    />
-  );
-}
-
 export function PanelErrorState(props: {
   actions?: SolidJSX.Element;
   class?: string;
@@ -116,12 +104,16 @@ export function PanelErrorState(props: {
       </div>
       <div class="lazy-view-error__title">{props.title}</div>
       <div class="lazy-view-error__subtitle">{props.subtitle}</div>
-      {props.actions ? <div class="lazy-view-error__actions">{props.actions}</div> : undefined}
       {props.detail ? (
         <details class="lazy-view-error__details">
           <summary>{t("chat.details")}</summary>
           <code class="lazy-view-error__detail">{props.detail}</code>
         </details>
+      ) : undefined}
+      {props.actions ? (
+        <openclaw-modal-actions class="lazy-view-error__actions">
+          {props.actions}
+        </openclaw-modal-actions>
       ) : undefined}
     </div>
   );

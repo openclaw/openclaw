@@ -133,6 +133,7 @@ export type SetupInferenceStatus = "ok" | SetupInferenceFailureStatus;
 export type ActivateSetupInferenceResult =
   | (Extract<VerifySetupInferenceResult, { ok: true }> & {
       lines: string[];
+      modelName?: string;
       gatewayRestartRequired?: true;
     })
   | (Extract<VerifySetupInferenceResult, { ok: false }> & {
@@ -187,6 +188,8 @@ export type ActivateSetupInferenceParams = {
   kind: SetupInferenceKind | "api-key" | "provider-auth";
   /** Gateway first-run policy; never inherited by the manual picker. */
   automaticSetup?: true;
+  /** Enable and verify access without changing the agent's selected model. */
+  selectModel?: boolean;
   /** Acknowledge utility-only activation; older clients must not promote it as primary-ready. */
   modelTarget?: "utility";
   /** Configured agent that owns the route being tested and persisted. */
@@ -214,6 +217,8 @@ export type ActivateSetupInferenceParams = {
   signal?: AbortSignal;
   /** Session cancellation gate; interactive credentials must never persist after cancel. */
   isCancelled?: () => boolean;
+  /** Revalidate the caller's live authority before provider I/O or persistent effects. */
+  assertCurrent?: () => void;
   /** Lock the caller's cancellation boundary before the first durable setup effect. */
   beforePersistentEffect?: () => void | Promise<void>;
   /** Preparation effects are complete; the selected route is ready for its live test. */
@@ -232,11 +237,12 @@ export class SetupInferenceCancelledError extends Error {
 }
 
 export function throwIfSetupInferenceCancelled(
-  params: Pick<ActivateSetupInferenceParams, "signal" | "isCancelled">,
+  params: Pick<ActivateSetupInferenceParams, "signal" | "isCancelled" | "assertCurrent">,
 ): void {
   if (params.signal?.aborted || params.isCancelled?.()) {
     throw new SetupInferenceCancelledError();
   }
+  params.assertCurrent?.();
 }
 
 export async function waitForProviderAuth<T>(

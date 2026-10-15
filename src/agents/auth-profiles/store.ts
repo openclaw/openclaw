@@ -190,7 +190,7 @@ export function applyScopedAuthReadThrough(store: AuthProfileStore): AuthProfile
   );
 }
 
-function isEnvOnlyAuthProfileRuntime(): boolean {
+export function isEnvOnlyAuthProfileRuntime(): boolean {
   return authProfileRuntimeMode.getStore()?.kind === "env-only";
 }
 
@@ -270,7 +270,7 @@ export function isSharedMainAuthProfileAgentDir(agentDir?: string): boolean {
   return resolveAgentAuthPath(effectiveAgentDir) === mainPath;
 }
 
-/** @deprecated Use findPersistedAuthProfileCredentialAsync. Retained until an announced stable removal window. */
+/** @deprecated Use findPersistedAuthProfileCredentialAsync. Supported through 2026-12-31. */
 export function findPersistedAuthProfileCredential(params: {
   agentDir?: string;
   profileId: string;
@@ -310,7 +310,7 @@ export function findPersistedAuthProfileCredential(params: {
 
 /**
  * Resolve which agent dir owns a persisted profile, accounting for inherited OAuth.
- * @deprecated Use resolvePersistedAuthProfileOwnerAgentDirAsync. Retained until an announced stable removal window.
+ * @deprecated Use resolvePersistedAuthProfileOwnerAgentDirAsync. Supported through 2026-12-31.
  */
 export function resolvePersistedAuthProfileOwnerAgentDir(params: {
   agentDir?: string;
@@ -733,7 +733,7 @@ export function restoreAuthProfileStorePersistenceSnapshot(
       );
       deferSqlitePostCommitPublication(database.db, () => {
         noteAuthProfileFileWrite(owner.databasePath);
-        recordRuntimeAuthProfilePersistedStore(owner.databasePath, persisted, owner.env);
+        recordRuntimeAuthProfilePersistedStore(owner.databasePath, persisted);
       });
       const publication: RuntimeSnapshotPublication = {
         ...(agentDir ? { agentDir } : {}),
@@ -907,7 +907,6 @@ export function createAuthProfileStoreRuntime(
     recordRuntimeAuthProfilePersistedStore(
       agentDir ? resolveAgentAuthPath(agentDir) : resolveSharedAuthPath(),
       store,
-      getScopedAuthProfileEnv(),
     );
     observeCanonicalAuthProfileCredentials(
       agentDir ? resolveAgentAuthPath(agentDir) : resolveSharedAuthPath(),
@@ -986,7 +985,7 @@ export function createAuthProfileStoreRuntime(
     }
     const store = readStore();
     if (!preparedRows && !effectiveOptions?.database) {
-      recordRuntimeAuthProfilePersistedStore(databasePath, store, env);
+      recordRuntimeAuthProfilePersistedStore(databasePath, store);
     }
     if (store) {
       observeCanonicalAuthProfileCredentials(
@@ -1405,8 +1404,7 @@ export function createAuthProfileStoreRuntime(
 
   /**
    * @deprecated Await loadAuthProfileStoreForRuntimeAsync from openclaw/plugin-sdk/agent-runtime
-   * with readOnly: true and allowKeychainPrompt: false. Retained until removal in a later stable
-   * release after deprecation ships.
+   * with readOnly: true and allowKeychainPrompt: false. Supported through 2026-12-31.
    */
   function loadAuthProfileStoreForSecretsRuntime(
     agentDir?: string,
@@ -1445,7 +1443,7 @@ export function createAuthProfileStoreRuntime(
     });
   }
 
-  /** @deprecated Use ensureAuthProfileStoreForLocalUpdateAsync. Retained until an announced stable removal window. */
+  /** @deprecated Use ensureAuthProfileStoreForLocalUpdateAsync. Supported through 2026-12-31. */
   function ensureAuthProfileStoreForLocalUpdate(agentDir?: string): AuthProfileStore {
     warnPluginSdkDeprecation({
       family: "auth-profiles",
@@ -1586,7 +1584,7 @@ export function createAuthProfileStoreRuntime(
       );
       const publishSource = () => {
         noteAuthProfileFileWrite(savedAuthPath);
-        recordRuntimeAuthProfilePersistedStore(savedAuthPath, persisted, owner.env);
+        recordRuntimeAuthProfilePersistedStore(savedAuthPath, persisted);
       };
       if (!deferSqlitePostCommitPublication(database.db, publishSource)) {
         publishSource();
@@ -1687,7 +1685,7 @@ export function createAuthProfileStoreRuntime(
 
   /**
    * @deprecated Use updateAuthProfileStoreWithLock from openclaw/plugin-sdk/provider-auth.
-   * Retained until removal in a later stable release after deprecation ships.
+   * Supported through 2026-12-31.
    */
   function saveAuthProfileStore(
     store: AuthProfileStore,

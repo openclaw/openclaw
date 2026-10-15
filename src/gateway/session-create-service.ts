@@ -10,7 +10,7 @@ import {
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
+import { isEmbeddedAgentRunActive } from "../agents/embedded-agent-runner/active-run-projections.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import {
   resolveDefaultModelForAgent,
@@ -68,10 +68,7 @@ import {
   prepareSessionCreateFilesystemRoot,
   prepareSessionForkFilesystemRoot,
 } from "./server-methods/session-create-root.js";
-import {
-  prepareSessionPatchRuntimeSelection,
-  refreshSessionPatchQueuedSelection,
-} from "./server-methods/sessions-patch-model-selection.js";
+import { refreshSessionPatchQueuedSelection } from "./server-methods/sessions-patch-model-selection.js";
 import { completeGatewaySessionCreation } from "./session-create-completion.js";
 import {
   existingSessionSelectionWouldChange,
@@ -87,6 +84,7 @@ import {
 import { buildDashboardSessionKey, resolveSessionCreateTargetKey } from "./session-create-key.js";
 import { buildSessionCreateLifecycleTargets } from "./session-create-lifecycle-targets.js";
 import {
+  prepareSessionCreateRuntimeSelection,
   resolveSessionCreationCommitGuard,
   prepareSessionCreateDefaultAccount,
   prepareSessionCreateModelSelection,
@@ -131,7 +129,6 @@ import {
   resolveGatewaySessionStoreTargetInWorker,
 } from "./session-utils-store-worker.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
-import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
 
 export function createGatewaySession(
@@ -573,6 +570,7 @@ async function createGatewaySessionInScope(
       !params.spawnedCwd &&
       !params.sessionRoot &&
       !params.execNode &&
+      !params.deviceFolder &&
       !params.prepareLifecycle &&
       !params.pendingWorktree &&
       !params.pendingProjectGitUrl
@@ -684,6 +682,16 @@ async function createGatewaySessionInScope(
         }
         if (params.initialEntry && existingEntry !== undefined) {
           return invalidSessionRequest("trusted initial session state requires a new session");
+        }
+        if (
+          params.deviceFolder &&
+          existingEntry !== undefined &&
+          (existingEntry.deviceFolder?.deviceId !== params.deviceFolder.deviceId ||
+            existingEntry.deviceFolder.path !== params.deviceFolder.path)
+        ) {
+          return invalidSessionRequest(
+            "device folder requires a new session or its original folder",
+          );
         }
         if (params.catalogTarget && existingEntry !== undefined) {
           return invalidSessionRequest("catalog session target requires a new session");
@@ -850,8 +858,12 @@ async function createGatewaySessionInScope(
                 pluginOwnerId: catalogPluginOwnerId,
               }
             : {}),
+          ...(params.deviceFolder ? { deviceFolder: { ...params.deviceFolder } } : {}),
           ...(execNode ? { execHost: "node", execNode, ...(execCwd ? { execCwd } : {}) } : {}),
-          ...(createdNewEntry && params.armSessionDiffBaselineCapture && !execNode
+          ...(createdNewEntry &&
+          params.armSessionDiffBaselineCapture &&
+          !execNode &&
+          !params.deviceFolder
             ? {
                 sessionDiffBaselineCapture: createSessionDiffBaselineCaptureClaim(),
               }
@@ -939,28 +951,16 @@ async function createGatewaySessionInScope(
             }
           }
         }
-        const runtimeSelection = await prepareSessionPatchRuntimeSelection({
-          cfg: params.cfg,
+        const runtimeSelection = await prepareSessionCreateRuntimeSelection({
+          request: params,
           agentId: target.agentId,
-          patch: {
-            key: target.canonicalKey,
-            agentRuntime: params.agentRuntime,
-            model: params.model,
-          },
+          sessionKey: target.canonicalKey,
+          storePath: target.storePath,
+          existingEntry,
           entry,
-          catalog: preparedModelCatalog?.entries,
-          // Thinking policy was already validated by the patch owner; create discards hydration.
-          hydrateThinkingCatalog: false,
+          catalog: preparedModelCatalog,
           validateModelSelection:
             validateAccountModel ?? patched.validateModelSelection ?? modelSelection.validate,
-          ...(params.agentRuntime !== undefined || params.model !== undefined
-            ? {
-                placement: {
-                  context: resolveSessionWorkerPlacementContext(),
-                  sessionKey: target.canonicalKey,
-                },
-              }
-            : {}),
         });
         if (!runtimeSelection.ok) {
           return runtimeSelection;

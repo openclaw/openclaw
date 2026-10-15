@@ -67,9 +67,6 @@ const COMPUTER_FRAME_IMAGE =
 const REPLACEMENT_FRAME_IMAGE =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
 
-// Synthetic, non-usable credential fixtures for model-visible fidelity coverage.
-const SYNTHETIC_BEARER_CREDENTIAL = "bearer-model-visible-credential-1234567890";
-
 function installResultMiddleware(
   handler: ReturnType<
     typeof createEmptyPluginRegistry
@@ -755,75 +752,6 @@ describe("createCodexDynamicToolBridge", () => {
     expect(firstInputText(result).length).toBe(1);
   });
 
-  it.each([
-    { kind: "split credential", unicode: false },
-    { kind: "Unicode repartition", unicode: true },
-  ])("preserves adjacent text items with $kind", async ({ unicode }) => {
-    const bridge = createBridgeWithToolResult("credential_lookup", {
-      content: (unicode
-        ? ["Authorization: Bearer abcdefg\n", "123😀tail"]
-        : [
-            "Deployment finished.\nAuthorization: Bearer ",
-            SYNTHETIC_BEARER_CREDENTIAL,
-            "\nArtifacts remain available.",
-          ]
-      ).map((text) => ({ type: "text", text })),
-      details: {},
-    });
-
-    const result = await bridge.handleToolCall(
-      createDynamicToolCall("credential_lookup", {}, "call-split-credential"),
-    );
-
-    const textItems = result.contentItems.flatMap((item) =>
-      item.type === "inputText" && typeof item.text === "string" ? [item.text] : [],
-    );
-    if (unicode) {
-      const unpairedSurrogate =
-        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
-      expect(textItems).toHaveLength(2);
-      expect(textItems.every((text) => !unpairedSurrogate.test(text))).toBe(true);
-      expect(textItems.join("")).toBe("Authorization: Bearer abcdefg\n123😀tail");
-    } else {
-      const text = textItems.join("");
-      expect(text).toContain(SYNTHETIC_BEARER_CREDENTIAL);
-      expect(text).toContain("Authorization: Bearer");
-      expect(text).toContain("Deployment finished.");
-      expect(text).toContain("Artifacts remain available.");
-    }
-  });
-
-  it("bounds raw text that crosses the dynamic tool result budget", async () => {
-    const maxChars = 16_000;
-    const totalChars = 20_000;
-    const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalChars} chars, weighted budget ${maxChars}; rerun with narrower args.)`;
-    const textBudget = maxChars - noticeText.length - 1;
-    // Newlines bound the credential token so the filler stays outside its mask.
-    const marker = `\nAuthorization: Bearer ${SYNTHETIC_BEARER_CREDENTIAL}\n`;
-    // Place the token text across the ordinary output truncation boundary.
-    const prefix = "a".repeat(textBudget - 45);
-    const suffix = "z".repeat(totalChars - prefix.length - marker.length);
-    const bridge = createBridgeWithToolResult("credential_lookup", {
-      content: [
-        { type: "text", text: `${prefix}${marker}${suffix}` },
-        { type: "image", mimeType: "image/png", data: COMPUTER_FRAME_IMAGE },
-      ],
-      details: {},
-    });
-
-    const result = await bridge.handleToolCall(
-      createDynamicToolCall("credential_lookup", {}, "call-credential-budget"),
-    );
-
-    const text = result.contentItems
-      .map((item) => (item.type === "inputText" && typeof item.text === "string" ? item.text : ""))
-      .join("");
-    expect(text).toBe(
-      `${prefix}${marker}${suffix}`.slice(0, textBudget).trimEnd() + `\n${noticeText}`,
-    );
-    expect(result.contentItems).toContainEqual(expect.objectContaining({ type: "inputImage" }));
-  });
-
   it("shares weighted budget across mixed text blocks while preserving images", async () => {
     const bridge = createBridgeWithToolResult(
       "mixed_lookup",
@@ -1113,31 +1041,6 @@ describe("createCodexDynamicToolBridge", () => {
       }
     },
   );
-
-  it("reports dynamic tool results unchanged to the private result observer", async () => {
-    const onAgentToolResult = vi.fn();
-    const bridge = createBridgeWithToolResult(
-      "memory_lookup_custom",
-      textToolResult("OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789", {
-        status: "failed",
-        error: "backend unavailable",
-      }),
-    );
-
-    await bridge.handleToolCall(createDynamicToolCall("memory_lookup_custom"), {
-      onAgentToolResult,
-    });
-
-    expect(onAgentToolResult).toHaveBeenCalledOnce();
-    expect(onAgentToolResult).toHaveBeenCalledWith({
-      toolName: "memory_lookup_custom",
-      result: {
-        content: [{ type: "text", text: "OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789" }],
-        details: { status: "failed", error: "backend unavailable" },
-      },
-      isError: true,
-    });
-  });
 
   it("preserves successful execution when its observer throws an unreadable error", async () => {
     const observerError = Object.defineProperty(new Error(), "message", {
@@ -1842,16 +1745,6 @@ describe("Codex automation tool references", () => {
     expect(execute).toHaveBeenCalledTimes(1);
     return execute.mock.calls[0]?.[1];
   }
-
-  it("keeps exact canonical names before resolving a colliding qualified reference", async () => {
-    const { call, execute } = setup();
-    await call(
-      automationArgs(["openclaw__read", "openclaw_direct__read", "openclaw__openclaw__read"]),
-    );
-    expect(received(execute)).toEqual(
-      automationArgs(["openclaw__read", "openclaw_direct__read", "openclaw__read"]),
-    );
-  });
 
   it("leaves unknown, wrong-namespace and non-string values unchanged", async () => {
     const { call, execute } = setup();

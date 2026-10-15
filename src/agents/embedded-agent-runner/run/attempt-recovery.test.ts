@@ -257,7 +257,7 @@ describe("recoverEmbeddedRunAttempt", () => {
       });
 
       expect(await recover()).toEqual({ action: "proceed" });
-      expect(failoverRetryController.transientRetryCount).toBe(1);
+      expect(failoverRetryController.transientRetryCount).toBe(0);
       expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
       expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
       expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();

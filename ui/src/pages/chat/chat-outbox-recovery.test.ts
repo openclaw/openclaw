@@ -5,7 +5,6 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { t } from "../../i18n/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import type { ChatOutboxRecoveryElement } from "./chat-outbox-recovery.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -36,13 +35,10 @@ it("shows a failed recovery module only for the owner still awaiting it", async 
   host.client = createTestGatewayClient(async () => ({}));
   host.settings = { ...host.settings, gatewayUrl: "ws://recovery.test" };
   const createRecovery = () =>
-    Object.assign(
-      document.createElement("openclaw-chat-outbox-recovery") as ChatOutboxRecoveryElement,
-      {
-        host,
-        identity: "connected-owner",
-      },
-    );
+    Object.assign(document.createElement("openclaw-chat-outbox-recovery"), {
+      host,
+      identity: "connected-owner",
+    });
   const current = createRecovery();
   const superseded = createRecovery();
   document.body.append(current, superseded);

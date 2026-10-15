@@ -12,7 +12,7 @@ import {
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { getCliLiveSessionGeneration } from "../agents/cli-runner/cli-live-session-registry.js";
 import { loadCliSessionHistoryMessages } from "../agents/cli-runner/session-history.js";
-import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import { isLiveTestEnabled, useLiveTestRuntimeConfig } from "../agents/live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
 import { parseModelRef } from "../agents/model-selection.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
@@ -549,6 +549,7 @@ describeLive("gateway live (cli backend)", () => {
       const tempConfigPath = path.join(tempDir, "openclaw.json");
       await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
       setTestEnvValue("OPENCLAW_CONFIG_PATH", tempConfigPath);
+      using _ = useLiveTestRuntimeConfig(nextCfg);
       const cacheProbeBackend = CLI_CACHE_PROBE
         ? prepareClaudeCacheProbeBackend({ config: nextCfg, liveBackend, providerId })
         : undefined;
@@ -987,11 +988,14 @@ describeLive("gateway live (cli backend)", () => {
         try {
           logCliBackendLiveStep("cleanup:start");
           announceBarrier.release();
-          clearRuntimeConfigSnapshot();
           try {
             await client?.stopAndWait();
           } finally {
-            await server?.close();
+            try {
+              await server?.close();
+            } finally {
+              clearRuntimeConfigSnapshot();
+            }
           }
         } finally {
           cliBackendsTesting.resetDepsForTest();

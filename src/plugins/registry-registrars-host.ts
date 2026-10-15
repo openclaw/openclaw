@@ -335,6 +335,17 @@ export function createHostRegistrars(state: PluginRegistryState) {
       );
       return;
     }
+    if (
+      subscription.payload !== undefined &&
+      subscription.payload !== "full" &&
+      subscription.payload !== "metadata"
+    ) {
+      reportRegistrationError(
+        record,
+        `agent event subscription payload must be full or metadata: ${id}`,
+      );
+      return;
+    }
     const existing = registry.agentEventSubscriptions.find(
       (entry) => entry.pluginId === record.id && entry.subscription.id === id,
     );

@@ -100,6 +100,7 @@ export async function prewarmSessionHistoryWorker(
         (owner) =>
           owner.prewarm({
             env: captureSessionTranscriptStorageEnvironment(options.env ?? process.env),
+            history: lane === historyLane,
           }),
         lane,
       ).then(

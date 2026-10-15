@@ -504,6 +504,7 @@ suite.define(() => {
     const catalogRequests = new Set<string>();
     const catalogParams: unknown[] = [];
     let rejectCatalogReplies = false;
+    let rejectedCatalogReplies = 0;
     const publish = async (page: Page, id: string) => {
       const applicationHandle = await getControlUiContextHandle(page);
       try {
@@ -572,6 +573,7 @@ suite.define(() => {
                 });
               }
               if (catalogReply && rejectCatalogReplies) {
+                rejectedCatalogReplies += 1;
                 socket.send(
                   JSON.stringify({
                     type: "res",
@@ -615,11 +617,16 @@ suite.define(() => {
           // Refresh the same catalog owner; a config write retires its display facts.
           providerModel = "read-failure-fixture:latest";
           const refreshParams = { agentId: "main", view: "configured", refresh: true };
-          commands.push({
-            method: "models.list",
-            params: refreshParams,
-            result: await readback.request("models.list", refreshParams),
+          const refreshed = requireRecord(await readback.request("models.list", refreshParams));
+          commands.push({ method: "models.list", params: refreshParams, result: refreshed });
+          expect(refreshed.providerOutcomes).toContainEqual({
+            provider: "ollama",
+            status: "ready",
           });
+          expect(refreshed.models).toContainEqual(
+            expect.objectContaining({ provider: "ollama", id: "read-failure-fixture:latest" }),
+          );
+          await expect.poll(() => rejectedCatalogReplies).toBeGreaterThan(0);
           const status = page
             .locator(".cmd-palette [role=status]")
             .filter({ hasText: "Model search unavailable" });

@@ -697,9 +697,6 @@ describe("voice consult registration authority", () => {
           requester: composeSessionSourceAssertion(
             [authorized.authorization!.assertCurrent],
             (assertSource) => {
-              if (kind === "foreign") {
-                expect(inWorkerGrant).toBe(false);
-              }
               assertSource();
               workerAuthorityObserved ||= inWorkerGrant;
               nativeAuthorityObserved ||=
@@ -711,8 +708,8 @@ describe("voice consult registration authority", () => {
           ),
         });
         expect(schemaSql).toEqual([]);
-        expect(workerAuthorityObserved).toBe(kind === "incognito");
-        expect(nativeAuthorityObserved).toBe(kind === "foreign");
+        expect(workerAuthorityObserved).toBe(true);
+        expect(nativeAuthorityObserved).toBe(false);
         expect(
           clientVoiceSessionTesting.readRecord(target.agentId, "cold-native-voice"),
         ).toMatchObject({

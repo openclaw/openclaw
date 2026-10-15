@@ -2,9 +2,9 @@ import type {
   SuggestedWorkerProfile,
   WorkerProfileSuggestionDiscovery,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { findCrabboxBinary } from "./crabbox-binary.js";
+import { runCrabboxProcess } from "./crabbox-process.js";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import { createCrabboxMachineCatalogResolver } from "./crabbox-worker-machine-options.js";
 import { loadCrabboxConfigShow } from "./crabbox-worker-preflight.js";
@@ -16,7 +16,7 @@ export function createCrabboxProfileSuggestionDiscovery(dependencies: {
   runCommand?: CrabboxCommandRunner;
   warn: (message: string) => void;
 }): WorkerProfileSuggestionDiscovery {
-  const runCommand = dependencies.runCommand ?? runCommandWithTimeout;
+  const runCommand = dependencies.runCommand ?? runCrabboxProcess;
   let cached: Promise<SuggestedWorkerProfile | undefined> | undefined;
 
   const discover = async (): Promise<SuggestedWorkerProfile | undefined> => {
@@ -72,7 +72,7 @@ export function createCrabboxProfileSuggestionDiscovery(dependencies: {
           provider,
           target: "linux",
           class: machineClass,
-          ttl: "8h",
+          ttl: "4h",
           idleTimeout: "45m",
           warmImage: true,
         },

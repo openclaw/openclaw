@@ -7,6 +7,7 @@ export const databaseWorkerExtensionTestRoots = [
 
 export const databaseWorkerExtensionTestFiles = [
   "extensions/alibaba/video-generation-provider.test.ts",
+  "extensions/mcp-events/src/service.test.ts",
   "extensions/codex/src/conversation-binding.test.ts",
   "extensions/codex/src/conversation-control.test.ts",
   "extensions/codex/src/app-server/native-execution-policy.incognito.test.ts",
@@ -300,7 +301,9 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/crabbox/src/doctor.test.ts",
   "extensions/crabbox/index.test.ts",
   "extensions/crabbox/src/crabbox-gateway-methods.test.ts",
+  "extensions/crabbox/src/crabbox-worker-capture-nonblocking.test.ts",
   "extensions/crabbox/src/crabbox-worker-enrollment-overlap.test.ts",
+  "extensions/crabbox/src/crabbox-worker-heartbeat.test.ts",
   "extensions/crabbox/src/crabbox-worker-node-enrollment.test.ts",
   "extensions/crabbox/src/crabbox-worker-prepared-image.test.ts",
   "extensions/crabbox/src/crabbox-worker-project.test.ts",
@@ -426,6 +429,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/reef/src/flow.test.ts",
   "extensions/reef/src/friends.test.ts",
   "extensions/reef/src/inbox-cursor.test.ts",
+  "extensions/reef/src/outbound.test.ts",
   "extensions/reef/src/setup.test.ts",
   "extensions/reef/src/state.test.ts",
   "extensions/reef/src/replay-state.test.ts",

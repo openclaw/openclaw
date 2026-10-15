@@ -75,6 +75,7 @@ schemaVersion: 1
 agent:
   id: incident-triage
   name: Incident triage
+categories: [operations, research]
 workspace:
   bootstrapFiles: {}
 packages: []
@@ -87,6 +88,10 @@ cronJobs: []
 You review incoming incidents, identify severity and ownership, and leave a
 concise handoff with evidence.
 ```
+
+`categories` is optional. Declare one to three distinct lowercase slugs for
+catalog discovery; the receiving registry decides which category names it
+accepts. Categories do not change the agent's runtime behavior.
 
 OpenClaw automatically discovers the optional `profiles/openclaw.yml` file.
 No manifest pointer is required. Other harnesses may discover their own

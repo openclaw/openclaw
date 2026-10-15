@@ -10,6 +10,7 @@ import {
   isPostgresSqlConnection,
   sqlPublicationAnchor,
   type PostgresSqlConnection,
+  type EngineConnection,
 } from "./sql-connection.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import { createSqliteDatabaseAdmissionReader } from "./sqlite-database-admission-read.js";
@@ -119,7 +120,6 @@ const scopedWrites = createSqliteDatabaseWriteReceipts({
   readRevision: readSqliteDatabaseWriteRevision,
   writer: (database) => state.dataWriters.get(database),
   suspended: (database) => state.suspended.has(database),
-  exchange,
   publish(record) {
     state.registry.publish(record);
     exchange(record);
@@ -131,6 +131,7 @@ export const {
   withoutSqliteDatabaseWriteScope,
   readSqliteDatabaseScopedWriteToken,
   readSqliteDatabaseScopedWriteTokenForPath,
+  readSqliteDatabaseScopedWriteTokensForPath,
   readSqliteDatabasePendingScopedWriteToken,
   readSqliteDatabaseWriteTokenForPath,
   readSqliteDatabasePendingWriteToken,
@@ -481,7 +482,8 @@ export function finishSqliteDatabaseWrite(database: DatabaseSync): void {
 }
 
 /** Ordinary reads consume the last committed writer revision without a writer census. */
-export function readSqliteDatabaseWriteRevision(database: DatabaseSync): number | undefined {
+export function readSqliteDatabaseWriteRevision(connection: EngineConnection): number | undefined {
+  const database = sqlPublicationAnchor(connection);
   if (!database.isOpen || state.suspended.has(database)) {
     return undefined;
   }
@@ -496,7 +498,10 @@ export function readSqliteDatabaseWriteRevision(database: DatabaseSync): number 
 }
 
 /** TEMP-trigger owners already see their own writes and only need sibling settlement. */
-export function readSqliteDatabaseSiblingWriteRevision(database: DatabaseSync): number | undefined {
+export function readSqliteDatabaseSiblingWriteRevision(
+  connection: EngineConnection,
+): number | undefined {
+  const database = sqlPublicationAnchor(connection);
   const revision = readSqliteDatabaseWriteRevision(database);
   return revision === undefined
     ? undefined
@@ -700,7 +705,8 @@ export function retireSqliteDatabaseAdmissionForPath(
   }
 }
 
-export function getSqliteDatabaseSchemaRevision(database: DatabaseSync): number | undefined {
+export function getSqliteDatabaseSchemaRevision(connection: EngineConnection): number | undefined {
+  const database = sqlPublicationAnchor(connection);
   const record = admission(database);
   if (record) {
     return readSqliteDatabaseGeneration(record, "schemaRevision");

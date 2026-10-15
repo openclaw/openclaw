@@ -15,6 +15,7 @@ import { writeQaLabSuiteResultFixture } from "./lab-server-suite.test-support.js
 import { resolveUiAssetVersion } from "./lab-server-ui.js";
 import { startQaLabServer, type QaLabServerStartParams } from "./lab-server.js";
 import * as runConfig from "./run-config.js";
+import * as selfCheck from "./self-check.js";
 import * as suiteSummary from "./suite-summary.js";
 
 const qaChannelMock = vi.hoisted(() => ({
@@ -600,6 +601,122 @@ describe("qa-lab server", () => {
         scenarioIds: ["channel-canary"],
       }),
     );
+  });
+
+  it("serializes self-check admission and drains accepted work before stopping the bus", async ({
+    signal,
+  }) => {
+    const entered = Promise.withResolvers<void>();
+    const result: Awaited<ReturnType<typeof selfCheck.runQaSelfCheckAgainstState>> = {
+      outputPath: "self-check.md",
+      report: "Self-check executor completed.",
+      checks: [{ name: "Fixture execution", status: "pass" }],
+      scenarioResult: { name: "Fixture execution", status: "pass", steps: [] },
+    };
+    const finish =
+      Promise.withResolvers<Awaited<ReturnType<typeof selfCheck.runQaSelfCheckAgainstState>>>();
+    using _ = vi.spyOn(selfCheck, "runQaSelfCheckAgainstState").mockImplementation(() => {
+      entered.resolve();
+      return finish.promise;
+    });
+    const lab = await startQaLabServerForTest();
+    let stopping: Promise<void> | undefined;
+    const stop = () => (stopping ??= lab.stop());
+    cleanups.push(stop);
+    const request = postLabJson(lab.baseUrl, "/api/scenario/self-check", {});
+    void request.catch(() => undefined);
+    let stopped = false;
+    try {
+      await withinTest(entered.promise, signal);
+      for (const route of [
+        "/api/reset",
+        "/v1/reset",
+        "/api/scenario/self-check",
+        "/api/scenario/suite",
+      ]) {
+        const response = await withinTest(
+          postLabJson(lab.baseUrl, route, { scenarioIds: ["dm-chat-baseline"] }),
+          signal,
+        );
+        await response.json();
+        expect(response.status).toBe(409);
+      }
+      await expect(withinTest(lab.runSelfCheck(), signal)).rejects.toThrow(
+        "QA run already in progress",
+      );
+      const stoppedRun = stop().then(() => {
+        stopped = true;
+      });
+      void stoppedRun.catch(() => undefined);
+      const outbound = await postLabJson(lab.baseUrl, "/v1/outbound/message", {
+        to: "dm:qa-operator",
+        text: "accepted self-check still delivering",
+      });
+      expect(outbound.status).toBe(200);
+      expect(await outbound.json()).toMatchObject({
+        message: { direction: "outbound", text: "accepted self-check still delivering" },
+      });
+      expect(stopped).toBe(false);
+      await expect(withinTest(lab.runSelfCheck(), signal)).rejects.toThrow("QA Lab is stopping");
+      for (const route of [
+        "/api/reset",
+        "/v1/reset",
+        "/api/scenario/self-check",
+        "/api/scenario/suite",
+      ]) {
+        const response = await postLabJson(lab.baseUrl, route, {});
+        expect(response.status).toBe(503);
+        await response.json();
+      }
+      finish.resolve(result);
+      const response = await withinTest(request, signal);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ report: "Self-check executor completed." });
+      await withinTest(stoppedRun, signal);
+      expect(stopped).toBe(true);
+    } finally {
+      finish.resolve(result);
+      const response = await withinTest(request, signal);
+      if (!response.bodyUsed) {
+        await response.arrayBuffer();
+      }
+      await withinTest(stop(), signal);
+    }
+  });
+
+  it("closes the lab after an accepted self-check rejects during shutdown", async ({ signal }) => {
+    const entered = Promise.withResolvers<void>();
+    const finish =
+      Promise.withResolvers<Awaited<ReturnType<typeof selfCheck.runQaSelfCheckAgainstState>>>();
+    using _ = vi.spyOn(selfCheck, "runQaSelfCheckAgainstState").mockImplementation(() => {
+      entered.resolve();
+      return finish.promise;
+    });
+    const lab = await startQaLabServerForTest();
+    let stopping: Promise<void> | undefined;
+    const stop = () => (stopping ??= lab.stop());
+    cleanups.push(stop);
+    const request = postLabJson(lab.baseUrl, "/api/scenario/self-check", {});
+    void request.catch(() => undefined);
+    const failure = new Error("self-check executor failed");
+    try {
+      await withinTest(entered.promise, signal);
+      const stopped = stop();
+      void stopped.catch(() => undefined);
+      finish.reject(failure);
+      const response = await withinTest(request, signal);
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({ error: "self-check executor failed" });
+      await expect(withinTest(stopped, signal)).resolves.toBeUndefined();
+      await expect(fetch(`${lab.baseUrl}/healthz`)).rejects.toThrow();
+    } finally {
+      finish.reject(failure);
+      const response = await withinTest(request, signal);
+      if (!response.bodyUsed) {
+        await response.arrayBuffer();
+      }
+      await withinTest(stop(), signal);
+    }
   });
 
   it("serializes suite admission and drains accepted work before stopping the bus", async ({

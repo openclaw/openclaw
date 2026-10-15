@@ -132,6 +132,7 @@ describe("getMessageFeishu", () => {
         parts: [{ platformMessageId: messageId, kind: "text", index: 0, raw }],
         sentAt: result.receipt.sentAt,
         raw: [raw],
+        sourceResults: [{ channel: "feishu", messageId }],
       },
     });
   }

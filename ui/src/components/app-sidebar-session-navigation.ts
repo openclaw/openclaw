@@ -6,6 +6,7 @@ import { isSessionRouteId } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import {
   collectKnownSessionGroups,
   type SidebarSessionsGrouping,
@@ -87,7 +88,6 @@ import {
 import { SessionAttentionController } from "./session-attention-controller.ts";
 import { SessionDataController } from "./session-data-controller.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
 import { SidebarEmptyGroupsController } from "./sidebar-empty-groups-controller.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
@@ -331,7 +331,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   ): SidebarRecentSession[] {
     const result = personalSidebarOwnerProjection(this, projected, ownerFacet);
     const agentId = this.sidebarAgentsMode === "roster" ? "*" : this.expandedAgentId();
-    this.sessionOwnerFilter.observeOwnerFacet(agentId, ownerFacet && result.ownershipVisibility);
+    this.sessionOwnerFilter.observeOwnerFacet(agentId, ownerFacet);
     this.ownerOptions = result.ownerOptions;
     this.sessionOwnershipVisibility = result.ownershipVisibility;
     this.activeSessionOwnerId = result.activeOwnerId;

@@ -36,7 +36,10 @@ export function createUsageExportRequest(
           signal,
         },
       );
-      if (isUsageCacheIncomplete(result.cacheStatus, undefined)) {
+      if (
+        isUsageCacheIncomplete(result.cacheStatus, undefined) &&
+        result.overview?.selectedUsageComplete !== true
+      ) {
         throw new Error(t("usage.export.incomplete"));
       }
       const selectedKeys = new Set(selectedQuery.selectedSessions);

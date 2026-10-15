@@ -1,19 +1,29 @@
+import fs from "node:fs";
 import { constants, DatabaseSync } from "node:sqlite";
 import { zstdCompressSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { deriveContextEngineTurnOutboxState } from "../agents/harness/context-engine-turn-outbox-state.js";
 import { deriveSessionPredicateColumns } from "../config/sessions/session-predicate-columns.js";
 import { deriveTranscriptPredicateFields } from "../config/sessions/transcript-predicate-fields.js";
+import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { hasPendingAgentStartupColumns } from "./openclaw-agent-db-additive-columns.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
+import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-agent-db.test-support.js";
 import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-predicate-schema.js";
+import {
+  OPENCLAW_AGENT_SCHEMA_V21_SQL,
+  restoreEmptyV21StorageForHistoricalFixture,
+} from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_V25_SQL } from "./openclaw-agent-schema-v25.test-support.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   assertOpenClawMigrationWitnessPreserved,
   captureOpenClawMigrationWitness,
 } from "./openclaw-migration-witness.js";
+import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
 
 function seedSchema(database: DatabaseSync) {
   database.exec(OPENCLAW_AGENT_SCHEMA_V25_SQL);
@@ -160,7 +170,7 @@ describe("agent JSON predicate migration", () => {
     }
   });
 
-  it.each(["commit", "rollback", "without-outbox"] as const)(
+  it.each(["commit", "rollback", "without-outbox", "missing-additive-indexes"] as const)(
     "publishes both version markers only with the complete migration (%s)",
     async (outcome) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -170,8 +180,16 @@ describe("agent JSON predicate migration", () => {
         if (outcome === "without-outbox") {
           database.exec("DROP TABLE context_engine_turn_outbox");
         }
+        if (outcome === "missing-additive-indexes") {
+          database.exec(`
+            DROP INDEX idx_agent_transcript_context_pending;
+            DROP INDEX idx_agent_session_nodes_label;
+            DROP INDEX idx_agent_session_nodes_entry_not_valid;
+          `);
+        }
         database.exec(`INSERT INTO transcript_events (session_id, seq, event_json, created_at)
           VALUES ('history', 1, '{"type":"message","message":{"role":"user"}}', 1)`);
+        database.exec("ANALYZE");
         const original = captureOpenClawMigrationWitness(database, {
           role: "agent",
           agentId: "main",
@@ -195,7 +213,18 @@ describe("agent JSON predicate migration", () => {
           if (outcome === "rollback") {
             expect(migrate).toThrow(/authoriz/u);
           } else {
-            migrate();
+            await assertSqliteMigrationScopePreserved(
+              database,
+              [
+                "schema_meta",
+                "session_nodes",
+                // Old schema-25 stores also need the current readers' startup columns.
+                "session_windows",
+                "transcript_events",
+                "context_engine_turn_outbox",
+              ],
+              migrate,
+            );
           }
         });
         database.setAuthorizer(null);
@@ -215,6 +244,10 @@ describe("agent JSON predicate migration", () => {
           .all()
           .map((row) => row.name);
         expect(columns.includes("navigation_type")).toBe(outcome !== "rollback");
+        // Read-only session readers refuse migrated stores without startup columns.
+        expect(hasPendingAgentStartupColumns(captureSqliteSchemaFacts(database).tableSql)).toBe(
+          outcome === "rollback",
+        );
         if (outcome === "without-outbox") {
           expect(
             database
@@ -222,7 +255,180 @@ describe("agent JSON predicate migration", () => {
               .get(),
           ).toBeUndefined();
         }
+        if (outcome === "missing-additive-indexes") {
+          expect(
+            database
+              .prepare(`SELECT name FROM sqlite_schema WHERE name IN (
+              'idx_agent_transcript_context_pending', 'idx_agent_session_nodes_label',
+              'idx_agent_session_nodes_entry_not_valid'
+            )`)
+              .all(),
+          ).toEqual([]);
+        }
       });
     },
   );
+});
+
+describe("agent outbox sequence migration", () => {
+  it.each(["frozen", "restored"] as const)(
+    "preserves a v17 outbox through schema admission from %s storage",
+    async (source) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const pathname = state.path("outbox-v17.sqlite");
+        using database = new DatabaseSync(pathname);
+        database.exec(
+          source === "frozen" ? OPENCLAW_AGENT_SCHEMA_V21_SQL : OPENCLAW_AGENT_SCHEMA_SQL,
+        );
+        if (source === "restored") {
+          restoreEmptyV21StorageForHistoricalFixture(database);
+        }
+        removeCanonicalValidationFromHistoricalAgentFixture(database);
+        database.exec(`DROP TABLE session_participants;
+          PRAGMA user_version = 17;
+          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
+          VALUES ('primary', 'agent', 17, 'main', 1, 1);`);
+        const rows = [
+          { enqueue_sequence: -7, advancement_key: "z-first", payload_json: '{"state":"ready"}' },
+          { enqueue_sequence: 40, advancement_key: "a-last", payload_json: '{"state":"blocked"}' },
+        ];
+        const insert = database.prepare(`INSERT INTO context_engine_turn_outbox
+          (rowid, advancement_key, engine_id, session_id, payload_json, attempt_count, created_at)
+          VALUES (?, ?, 'test', 'session', ?, 3, 1)`);
+        for (const row of rows) {
+          insert.run(row.enqueue_sequence, row.advancement_key, row.payload_json);
+        }
+        const indexes = database
+          .prepare(
+            "SELECT name, sql FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'context_engine_turn_outbox' AND sql IS NOT NULL ORDER BY name",
+          )
+          .all();
+        await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
+          ensureOpenClawAgentDatabaseSchema(database, {
+            agentId: "main",
+            env: state.env,
+            path: pathname,
+            register: false,
+          });
+        });
+        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
+        expect(
+          database.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version,
+        ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+        expect(database.prepare("PRAGMA table_info(context_engine_turn_outbox)").all()).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ name: "enqueue_sequence", type: "INTEGER", pk: 1 }),
+            expect.objectContaining({ name: "advancement_key", type: "TEXT", notnull: 1, pk: 0 }),
+          ]),
+        );
+        expect(
+          database
+            .prepare(
+              "SELECT enqueue_sequence, advancement_key, payload_json FROM context_engine_turn_outbox ORDER BY enqueue_sequence",
+            )
+            .all(),
+        ).toEqual(rows);
+        expect(
+          database
+            .prepare(
+              "SELECT name, sql FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'context_engine_turn_outbox' AND sql IS NOT NULL ORDER BY name",
+            )
+            .all(),
+        ).toEqual(indexes);
+        expect(() => restoreEmptyV21StorageForHistoricalFixture(database)).toThrow(
+          "Historical fixture must not discard context_engine_turn_outbox data",
+        );
+        expect(() => insert.run(100, "z-first", "{}")).toThrow(/UNIQUE/);
+        expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
+        expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      });
+    },
+  );
+
+  it("preserves the previous rowids, payloads and FIFO across migration, vacuum and reopen", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const pathname = state.path("outbox-v26.sqlite");
+      const database = new DatabaseSync(pathname);
+      try {
+        database.exec(
+          fs.readFileSync(
+            new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
+            "utf8",
+          ),
+        );
+        database.exec(`PRAGMA user_version = 26;
+          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
+          VALUES ('primary', 'agent', 26, 'main', 1, 1);`);
+        const insert = database.prepare(`INSERT INTO context_engine_turn_outbox
+          (rowid, advancement_key, engine_id, session_id, payload_json, payload_state, attempt_count, last_attempt_at, last_error, created_at)
+          VALUES (?, ?, 'test', 'session', ?, ?, 3, 7, 'retry', ?)`);
+        insert.run(7, "z-first", '{"state":"ready"}', "ready", 90);
+        insert.run(40, "m-blocked", '{"state":"blocked"}', "blocked", 1);
+        insert.run(91, "a-last", '{"state":"accepted"}', "accepted", 20);
+        const originalRows = database
+          .prepare(
+            "SELECT rowid AS enqueue_sequence, * FROM context_engine_turn_outbox ORDER BY rowid",
+          )
+          .all();
+        const original = captureOpenClawMigrationWitness(database, {
+          role: "agent",
+          agentId: "main",
+        });
+        await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
+          ensureOpenClawAgentDatabaseSchema(database, {
+            agentId: "main",
+            env: state.env,
+            path: pathname,
+            register: false,
+          });
+        });
+        expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
+          OPENCLAW_AGENT_SCHEMA_VERSION,
+        );
+        expect(
+          database.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version,
+        ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+        expect(
+          assertOpenClawMigrationWitnessPreserved(
+            original,
+            captureOpenClawMigrationWitness(database, { role: "agent", agentId: "main" }),
+          ),
+        ).toEqual({ warnings: [] });
+        database.exec("VACUUM");
+        expect(
+          database
+            .prepare("SELECT * FROM context_engine_turn_outbox ORDER BY enqueue_sequence")
+            .all(),
+        ).toEqual(originalRows);
+      } finally {
+        database.close();
+      }
+      using reopened = new DatabaseSync(pathname);
+      ensureOpenClawAgentDatabaseSchema(reopened, {
+        agentId: "main",
+        env: state.env,
+        path: pathname,
+        register: false,
+      });
+      reopened
+        .prepare(`INSERT INTO context_engine_turn_outbox
+        (advancement_key, engine_id, session_id, payload_json, created_at)
+        VALUES ('new', 'test', 'session', '{}', 0)`)
+        .run();
+      expect(
+        reopened
+          .prepare(
+            "SELECT enqueue_sequence, advancement_key FROM context_engine_turn_outbox ORDER BY enqueue_sequence",
+          )
+          .all(),
+      ).toEqual([
+        { enqueue_sequence: 7, advancement_key: "z-first" },
+        { enqueue_sequence: 40, advancement_key: "m-blocked" },
+        { enqueue_sequence: 91, advancement_key: "a-last" },
+        { enqueue_sequence: 92, advancement_key: "new" },
+      ]);
+    });
+  });
 });
