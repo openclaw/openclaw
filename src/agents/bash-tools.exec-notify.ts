@@ -150,6 +150,8 @@ export async function recoverExecExitNotifications(cfg: OpenClawConfig, signal: 
     for await (const { sessionKey, entry } of iteratePendingExecNotificationEntriesInWorker(
       scope,
     )) {
+      // Shared stores have one physical owner; routing and policy follow the row's agent.
+      const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? scope.agentId;
       for (const [id, fact] of Object.entries(entry.pendingExecNotifications ?? {})) {
         if (fact.incarnation === getAgentEventLifecycleGeneration()) {
           continue;
@@ -160,7 +162,7 @@ export async function recoverExecExitNotifications(cfg: OpenClawConfig, signal: 
         }
         const clear = () =>
           patchSessionEntryCore(
-            { ...scope, sessionKey },
+            { ...scope, agentId, sessionKey },
             (current) => {
               if (current.pendingExecNotifications?.[id]?.incarnation !== fact.incarnation) {
                 return null;
@@ -179,7 +181,7 @@ export async function recoverExecExitNotifications(cfg: OpenClawConfig, signal: 
           entry.archivedAt ||
           entry.sessionId !== fact.sessionId ||
           entry.lifecycleRevision !== fact.lifecycleRevision ||
-          !notificationsEnabled(cfg, scope.agentId) ||
+          !notificationsEnabled(cfg, agentId) ||
           hasRestartRecoverySourceClaim(entry, `exec:${id}`) ||
           hasRestartRecoveryTerminalRun(entry, `exec:${id}`)
         ) {
@@ -188,7 +190,7 @@ export async function recoverExecExitNotifications(cfg: OpenClawConfig, signal: 
         }
         recovering.add(key);
         try {
-          const target = await captureSessionEventTarget(scope.agentId, sessionKey, {
+          const target = await captureSessionEventTarget(agentId, sessionKey, {
             producerPolicy: {
               settings: fact.policy.settings,
               toolsAllow: intersectSessionEventToolsAllow(...(fact.policy.toolsAllow ?? [])),
@@ -213,7 +215,7 @@ export async function recoverExecExitNotifications(cfg: OpenClawConfig, signal: 
               abortSignal: signal,
               assertCurrent: () => {
                 signal.throwIfAborted();
-                if (!notificationsEnabled(getRuntimeConfigSnapshot() ?? cfg, scope.agentId)) {
+                if (!notificationsEnabled(getRuntimeConfigSnapshot() ?? cfg, agentId)) {
                   throw new Error("Exec completion notifications are disabled");
                 }
               },
@@ -238,7 +240,7 @@ export async function recoverExecExitNotifications(cfg: OpenClawConfig, signal: 
           if (signal.aborted) {
             return;
           }
-          if (!notificationsEnabled(getRuntimeConfigSnapshot() ?? cfg, scope.agentId)) {
+          if (!notificationsEnabled(getRuntimeConfigSnapshot() ?? cfg, agentId)) {
             await clear();
           } else {
             logWarn(`exec: restart notice was not admitted (${formatErrorMessage(error)})`);
