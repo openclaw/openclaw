@@ -23,8 +23,57 @@ import {
   type SessionRowProjection,
 } from "../session-row-projection.js";
 import * as rowInputs from "../session-utils-row.js";
+import { loadProjectSessionStore } from "./projects-session-store.js";
 import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
 import { initializeRepository, invokeProjectMethod } from "./projects.test-support.js";
+
+test("projects.list reuses durable metadata until a committed session change", async () => {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-reuse-" });
+  let projection: SessionRowProjection | undefined;
+  try {
+    const profile = ensureProfileForEmail("projects-reuse@example.test");
+    const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+    const target = { agentId: "main", sessionKey: "agent:main:recent" };
+    const entry = {
+      sessionId: "recent",
+      updatedAt: 100,
+      createdActor: { type: "human" as const, source: "profile" as const, id: profile.id },
+      spawnedCwd: "/work/before",
+    };
+    replaceSessionEntrySync(target, entry);
+    projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const list = () =>
+      invokeProjectMethod(
+        "projects.list",
+        {},
+        cfg,
+        ["operator.write"],
+        profile.id,
+        registeredProjectsHandlers,
+        projection,
+      );
+    expect(await list()).toMatchObject({
+      ok: true,
+      payload: { recents: [{ kind: "folder", folder: "/work/before", displayName: "before" }] },
+    });
+    const snapshot = loadProjectSessionStore(projection, []);
+    expect(Object.isFrozen(snapshot.store)).toBe(true);
+    await list();
+    expect(loadProjectSessionStore(projection, [])).toBe(snapshot);
+    replaceSessionEntrySync(target, { ...entry, updatedAt: 200, spawnedCwd: "/work/after" });
+    expect(await list()).toMatchObject({
+      ok: true,
+      payload: { recents: [{ kind: "folder", folder: "/work/after", displayName: "after" }] },
+    });
+    expect(snapshot.store[target.sessionKey]?.spawnedCwd).toBe("/work/before");
+    expect(loadProjectSessionStore(projection, []).store[target.sessionKey]?.spawnedCwd).toBe(
+      "/work/after",
+    );
+  } finally {
+    projection?.dispose();
+    await state.cleanup();
+  }
+});
 
 test("projects.list returns only the caller's deterministic resolved recents", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
