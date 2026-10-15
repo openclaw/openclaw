@@ -181,6 +181,7 @@ export function createCodexSessionCatalogControl(params: {
           }
         },
         readNative: async (query, remainingRows, foreground) => {
+          source?.assertCurrent();
           const requests = createRequestSnapshot(
             agentId,
             source,
@@ -192,6 +193,7 @@ export function createCodexSessionCatalogControl(params: {
                 }
               : undefined,
             Math.min(64, remainingRows),
+            requestOptions,
           );
           const attempt = foreground
             ? requests.beginList(foreground)
@@ -273,7 +275,7 @@ export function createCodexSessionCatalogControl(params: {
   ): CodexCatalogRequestOptions => {
     source?.assertCurrent();
     const runtimeConfig = params.getRuntimeConfig();
-    // Config reload replaces immutable owner snapshots; requests keep the captured facts.
+    // Keep owner-published config and prepared connection facts without copying them.
     return {
       agentDir:
         source?.agentDir ?? (agentId ? resolveAgentDir(runtimeConfig ?? {}, agentId) : undefined),
@@ -287,10 +289,12 @@ export function createCodexSessionCatalogControl(params: {
     catalogPreview?: true,
     catalogPreviewCache?: CodexCatalogPreviewCache,
     catalogRows?: number,
+    preparedRequestOptions?: CodexCatalogRequestOptions,
   ): CodexSessionCatalogRequestSnapshot => {
     const pluginConfig = params.getPluginConfig();
     const runtime = source?.appServer ?? resolveRuntimeOptions({ pluginConfig });
-    const requestOptions = resolveRequestOptions(runtime.start, agentId, source);
+    const requestOptions =
+      preparedRequestOptions ?? resolveRequestOptions(runtime.start, agentId, source);
     return createCodexCatalogRequestSnapshot(
       runtime.requestTimeoutMs,
       async (method, requestParams, timeoutMs, assertCurrent, observation) => {
