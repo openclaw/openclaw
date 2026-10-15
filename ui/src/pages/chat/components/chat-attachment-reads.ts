@@ -122,6 +122,22 @@ export class ChatAttachmentReadLifecycle {
     return entries;
   }
 
+  // Rejections retain metadata only: never read or decode a file that failed admission.
+  reject(file: File, errorMessage: string): void {
+    this.entries.push({
+      attachment: {
+        id: generateAttachmentId(),
+        origin: "file",
+        mimeType: file.type || "application/octet-stream",
+        fileName: file.name || undefined,
+        sizeBytes: file.size,
+      },
+      state: "error",
+      errorMessage,
+    });
+    this.notify();
+  }
+
   // Ready payloads remain owned by the composer. Reconcile their membership
   // while retaining unread slots in admission order across overlapping batches.
   project(attachments: readonly ChatAttachment[]): readonly ChatAttachmentRead[] {

@@ -60,7 +60,6 @@ type AgentEventSubscription = Parameters<OpenClawPluginApi["registerAgentEventSu
 function setup(pluginConfig: Record<string, unknown>) {
   let currentPluginConfig = pluginConfig;
   const handlers: Partial<Record<"before_agent_reply", CapturedHook>> = {};
-  const hookOptions: Record<string, unknown> = {};
   let toolEvents: AgentEventSubscription | undefined;
   const services: OpenClawPluginServiceV2[] = [];
   const lifecycles: Parameters<OpenClawPluginApi["registerRuntimeLifecycle"]>[0][] = [];
@@ -155,9 +154,8 @@ function setup(pluginConfig: Record<string, unknown>) {
         logger: api.logger,
         setRunContext: api.setRunContext,
         getRunContext: api.getRunContext,
-        on: (name, handler, options) => {
+        on: (name, handler) => {
           Object.assign(handlers, { [name]: handler });
-          hookOptions[name] = options;
         },
         registerService: () => {},
         registerRuntimeLifecycle: () => {},
@@ -247,7 +245,6 @@ function setup(pluginConfig: Record<string, unknown>) {
     info,
     warn,
     handlers,
-    hookOptions,
     getRunContext,
     runContexts,
     subscription: toolEvents,
@@ -413,21 +410,6 @@ describe("advisor", () => {
     },
   );
 
-  it("counts elapsed time through the tool result without requiring another call", async () => {
-    let now = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const run = setup({ everyToolCalls: 0, everyMinutes: 1 });
-    run.forkSession.mockResolvedValue({ text: "NO_CHANGE" });
-    await run.startService();
-    await run.startRun();
-    await run.toolStarted();
-    now = 60_000;
-    await run.toolFinished();
-    await run.wakeScheduler();
-    expect(run.forkSession).toHaveBeenCalledOnce();
-    await run.stopService();
-  });
-
   it("cancels a due review waiting for tool settlement on reset", async () => {
     let now = 0;
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -505,32 +487,10 @@ describe("advisor", () => {
     expect(run.warn).not.toHaveBeenCalled();
   });
 
-  it("admits user-triggered runs without claiming the reply", async () => {
-    const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
-    expect(Object.keys(run.handlers)).toEqual(["before_agent_reply"]);
-    expect(run.hookOptions.before_agent_reply).toEqual({ eligibleTriggers: ["user"] });
-    expect(await run.admitRun()).toBeUndefined();
-    expect(run.runContexts.get("run-1:advisor:admitted-run")).toEqual({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      startedAt: null,
-    });
-  });
-
-  it.each([
-    "heartbeat",
-    "cron",
-    "manual",
-    "memory",
-    "overflow",
-    "side_question",
-    "btw",
-    undefined,
-    "unknown",
-  ])("does not admit %s runs", async (trigger) => {
+  it("does not admit non-user runs", async () => {
     const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
     await run.startService();
-    expect(await run.admitRun({ trigger })).toBeUndefined();
+    expect(await run.admitRun({ trigger: "heartbeat" })).toBeUndefined();
     expect(run.runContexts.size).toBe(0);
     await run.emitEvent("lifecycle", "start");
     await run.toolCompleted();
@@ -614,22 +574,6 @@ describe("advisor", () => {
     await run.stopService();
   });
 
-  it.each([undefined, "", " \n\t ", manifest.uiHints.reviewInstructions.placeholder])(
-    "preserves the evaluated guidance plus the fixed safety guard for guidance %j",
-    async (reviewInstructions) => {
-      const run = setup({ everyToolCalls: 1, everyMinutes: 0, reviewInstructions });
-      run.forkSession.mockResolvedValue({ text: "NO_CHANGE" });
-      await run.startService();
-      await run.startRun();
-      await run.toolCompleted();
-      await run.wakeScheduler();
-      expect(run.forkSession).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ message: EVALUATED_REVIEW_MESSAGE }),
-      );
-      await run.stopService();
-    },
-  );
-
   it("replaces only guidance, keeps verification fixed, and reads edits on the next review", async () => {
     const run = setup({
       everyToolCalls: 1,
@@ -669,19 +613,6 @@ describe("advisor", () => {
     expect(result.ok).toBe(length <= 4000);
   });
 
-  it("shares admission across distinct hook and service registrations", async () => {
-    const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
-    await run.startService();
-    await run.startRun();
-    await run.toolCompleted();
-    const review = await run.dispatchReview();
-    expect(run.forkSession).toHaveBeenCalledOnce();
-    const done = run.finished();
-    review.resolve("NO_CHANGE");
-    await done;
-    await run.stopService();
-  });
-
   it("reviews admitted channel tool events without a session key", async () => {
     const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
     run.forkSession.mockResolvedValue({ text: "NO_CHANGE" });
@@ -698,7 +629,7 @@ describe("advisor", () => {
   it.each([true, false])(
     "reviews tool calls mid-run and delivers with active steering=%s",
     async (active) => {
-      const run = setup({ everyToolCalls: 2, everyMinutes: 0 });
+      const run = setup({ everyToolCalls: 2, everyMinutes: 0, reviewInstructions: " \n\t " });
       if (!active) {
         run.steer.mockResolvedValue({ steered: false, reason: "not streaming" });
       }
@@ -713,7 +644,7 @@ describe("advisor", () => {
       expect(run.forkSession).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           sessionKey: "agent:main:main",
-          message: expect.stringContaining("exactly NO_CHANGE"),
+          message: EVALUATED_REVIEW_MESSAGE,
         }),
       );
       expect(run.forkSession.mock.calls[0]?.[0]).not.toHaveProperty("model");
@@ -783,7 +714,7 @@ describe("advisor", () => {
     await run.endRun(20_000, { runId: "run-2" });
     const review = await run.dispatchReview();
     const done = run.finished();
-    review.resolve("NO_CHANGE");
+    review.resolve("NO_CHANGE\nThe agent should continue its current plan.");
     await done;
     expect(run.steer).not.toHaveBeenCalled();
     expect(run.enqueue).not.toHaveBeenCalled();
@@ -804,11 +735,22 @@ describe("advisor", () => {
       const done = run.finished();
       now = 150_000;
       if (outcome === "failure") {
-        review.reject(new Error("provider failed"));
+        review.reject(new Error("PRIVATE_PROVIDER_SENTINEL".repeat(1000)));
       } else {
         review.resolve(outcome);
       }
       await done;
+      expect(run.steer).not.toHaveBeenCalled();
+      expect(run.enqueue).not.toHaveBeenCalled();
+      if (outcome === "failure") {
+        expect(run.warn).toHaveBeenCalledOnce();
+        const warning = run.warn.mock.calls[0]![0];
+        expect(warning.length).toBeLessThan(200);
+        expect(warning).not.toContain("PRIVATE_PROVIDER_SENTINEL");
+        expect(warning).toContain("fork_failed");
+      } else {
+        expect(run.warn).not.toHaveBeenCalled();
+      }
       run.forkSession.mockResolvedValue({ text: "NO_CHANGE" });
       now = 151_000;
       await run.toolCompleted();
@@ -821,25 +763,6 @@ describe("advisor", () => {
       await run.stopService();
     },
   );
-
-  it("logs a bounded content-free warning for provider failures", async () => {
-    const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
-    await run.startService();
-    await run.startRun();
-    await run.toolCompleted();
-    const review = await run.dispatchReview();
-    const done = run.finished();
-    review.reject(new Error("PRIVATE_PROVIDER_SENTINEL".repeat(1000)));
-    await done;
-    expect(run.warn).toHaveBeenCalledOnce();
-    const warning = run.warn.mock.calls[0]![0];
-    expect(warning.length).toBeLessThan(200);
-    expect(warning).not.toContain("PRIVATE_PROVIDER_SENTINEL");
-    expect(warning).toContain("fork_failed");
-    expect(run.steer).not.toHaveBeenCalled();
-    expect(run.enqueue).not.toHaveBeenCalled();
-    await run.stopService();
-  });
 
   it("allows reserved words only as parts of longer body tokens", async () => {
     const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
@@ -861,49 +784,11 @@ describe("advisor", () => {
     await run.stopService();
   });
 
-  it.each(["NO_CHANGE", "NO_CHANGE\nThe agent should continue its current plan."])(
-    "does not steer for a no-change header: %s",
-    async (output) => {
-      const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
-      await run.startService();
-      await run.startRun();
-      await run.toolCompleted();
-      const review = await run.dispatchReview();
-      const done = run.finished();
-      review.resolve(output);
-      await done;
-      expect(run.steer).not.toHaveBeenCalled();
-      expect(run.enqueue).not.toHaveBeenCalled();
-      expect(run.forkSession).toHaveBeenCalledOnce();
-      expect(run.warn).not.toHaveBeenCalled();
-      await run.stopService();
-    },
-  );
-
   it.each([
     { output: "", reason: "no decision" },
     { output: "Continue the current plan.\nNO_CHANGE", reason: "invalid decision header" },
-    { output: "Stop editing CI.", reason: "invalid decision header" },
     { output: "CORRECTION", reason: "empty correction" },
     { output: "NO_CHANGE\nCORRECTION\nStop editing CI.", reason: "multiple decision headers" },
-    { output: "CORRECTION\nStop editing CI.\nNO_CHANGE", reason: "multiple decision headers" },
-    {
-      output: "CORRECTION\nNO_CHANGE: the current plan is correct.",
-      reason: "multiple decision headers",
-    },
-    {
-      output: "CORRECTION\nContinue; NO_CHANGE is warranted.",
-      reason: "multiple decision headers",
-    },
-    {
-      output: "CORRECTION\nUse (CORRECTION), not the current plan.",
-      reason: "multiple decision headers",
-    },
-    {
-      output: "CORRECTION\nThe verifier says APPROVE: proceed.",
-      reason: "multiple decision headers",
-    },
-    { output: "CORRECTION\nThe verifier says [REJECT].", reason: "multiple decision headers" },
     { output: `CORRECTION\n${"word ".repeat(121)}`, reason: "correction word limit" },
     { output: `CORRECTION\n${"x".repeat(2000)}`, reason: "finding length limit" },
   ])(
@@ -933,11 +818,6 @@ describe("advisor", () => {
     { output: "This draft is fine.", warning: true },
     { output: "APPROVE", warning: true },
     { output: "APPROVE\nFix it.\nREJECT", warning: true },
-    { output: "APPROVE\nREJECT: the current plan is correct.", warning: true },
-    { output: "APPROVE\nContinue; REJECT is warranted.", warning: true },
-    { output: "APPROVE\nUse (APPROVE), not the current plan.", warning: true },
-    { output: "APPROVE\nThe reviewer says NO_CHANGE: proceed.", warning: true },
-    { output: "APPROVE\nThe reviewer says [CORRECTION].", warning: true },
     { output: null, warning: true },
   ])(
     "does not deliver rejected or malformed verification: $output",

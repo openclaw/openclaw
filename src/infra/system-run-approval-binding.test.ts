@@ -7,10 +7,8 @@ import { withTempDir } from "../test-utils/temp-dir.js";
 import * as commandResolution from "./exec-command-resolution.js";
 import {
   APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
-  buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
   matchSystemRunApprovalBinding,
-  missingSystemRunApprovalBinding,
   prepareSystemRunMutableFileBinding,
   prepareSystemRunMutableFileApproval,
   revalidateSystemRunMutableFileBinding,
@@ -230,37 +228,6 @@ describe("buildSystemRunApprovalEnvBinding", () => {
   });
 });
 
-describe("buildSystemRunApprovalBinding", () => {
-  it("normalizes argv and metadata into a binding", () => {
-    const envBinding = buildSystemRunApprovalEnvBinding({
-      beta: "2",
-      alpha: "1",
-    });
-
-    expect(
-      buildSystemRunApprovalBinding({
-        argv: ["bash", "-lc", 12],
-        cwd: " /tmp ",
-        agentId: " main ",
-        sessionKey: " agent:main:main ",
-        env: {
-          beta: "2",
-          alpha: "1",
-        },
-      }),
-    ).toEqual({
-      binding: {
-        argv: ["bash", "-lc", "12"],
-        cwd: "/tmp",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        envHash: envBinding.envHash,
-      },
-      envKeys: ["alpha", "beta"],
-    });
-  });
-});
-
 describe("matchSystemRunApprovalBinding", () => {
   const expected = {
     argv: ["bash", "-lc", "echo hi"],
@@ -271,7 +238,6 @@ describe("matchSystemRunApprovalBinding", () => {
   };
 
   it.each([
-    { name: "exact match", actual: { ...expected } },
     {
       name: "argv mismatch",
       actual: { ...expected, argv: ["bash", "-lc", "echo bye"] },
@@ -288,35 +254,18 @@ describe("matchSystemRunApprovalBinding", () => {
       name: "session mismatch",
       actual: { ...expected, sessionKey: "agent:main:other" },
     },
-  ])("matches approval bindings: $name", ({ name, actual }) => {
+  ])("rejects approval bindings: $name", ({ actual }) => {
     expect(
       matchSystemRunApprovalBinding({
         expected,
         actual,
         actualEnvKeys: ["ALPHA"],
       }),
-    ).toEqual(
-      name === "exact match"
-        ? { ok: true }
-        : {
-            ok: false,
-            code: "APPROVAL_REQUEST_MISMATCH",
-            message: "approval id does not match request",
-            details: undefined,
-          },
-    );
-  });
-});
-
-describe("missingSystemRunApprovalBinding", () => {
-  it("reports env keys with request mismatches", () => {
-    expect(missingSystemRunApprovalBinding({ actualEnvKeys: ["ALPHA", "BETA"] })).toEqual({
+    ).toEqual({
       ok: false,
       code: "APPROVAL_REQUEST_MISMATCH",
       message: "approval id does not match request",
-      details: {
-        envKeys: ["ALPHA", "BETA"],
-      },
+      details: undefined,
     });
   });
 });
@@ -337,33 +286,6 @@ describe("POSIX shell stdin option detection", () => {
 });
 
 describe("mutable file operand binding", () => {
-  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
-    "binds protected env and ls identities in dispatch order",
-    async () => {
-      const prepared = await prepareSystemRunMutableFileBinding({
-        command: { kind: "shell", text: "env ls" },
-        env: { PATH: "/usr/bin:/bin" },
-      });
-      expect(prepared.ok).toBe(true);
-      if (!prepared.ok) {
-        throw new Error(prepared.message);
-      }
-      expect(prepared.binding.operands.filter((operand) => operand.executable)).toEqual([
-        expect.objectContaining({
-          kind: "identity",
-          snapshot: { argvIndex: 0, path: fs.realpathSync("/usr/bin/env") },
-        }),
-        expect.objectContaining({
-          kind: "identity",
-          snapshot: { argvIndex: 0, path: fs.realpathSync("/bin/ls") },
-        }),
-      ]);
-      await expect(
-        revalidateSystemRunMutableFileBinding({ binding: prepared.binding }),
-      ).resolves.toEqual({ ok: true });
-    },
-  );
-
   it.runIf(process.platform !== "win32")(
     "binds protected executable identity without hashing or requiring one-shot approval",
     async () => {

@@ -606,12 +606,7 @@ export class LogbookService {
         purpose: "logbook.standup",
         maxTokens: 800,
       });
-      await store.saveStandup(day, result.text.trim());
-      const saved = await store.getStandup(day);
-      if (!saved) {
-        throw new Error("standup save failed");
-      }
-      return saved;
+      return await store.saveStandup(day, result.text.trim());
     });
   }
 

@@ -13,9 +13,6 @@ export function registerSlackShortcutHandler(params: {
   ctx: SlackMonitorContext;
   trackEvent?: () => void;
 }): void {
-  if (typeof params.ctx.app.shortcut !== "function") {
-    return;
-  }
   params.ctx.app.shortcut(/.+/, async (args: SlackShortcutHandlerArgs) => {
     const { ack, body } = args;
     await ack();

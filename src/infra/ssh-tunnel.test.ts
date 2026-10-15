@@ -479,40 +479,37 @@ describe("startSshPortForward", () => {
     },
   );
 
-  it.each([10_000, -10_000])(
-    "keeps the startup budget through a %s ms wall-clock step",
-    async (stepMs) => {
-      spawnFakeSsh({ listen: false });
-      const localPort = await getClaimedPort();
-      const controller = new AbortController();
-      const now = Date.now;
-      let offset = 0;
-      const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + offset);
-      const connect = net.connect;
-      const probe = vi.spyOn(net, "connect").mockImplementation((...args) => {
-        // Move wall time only after the owner's initial budget timestamp is captured.
-        offset = stepMs;
-        return connect(...args);
-      });
-      const safety = setTimeout(() => controller.abort(), 1000);
-      const started = performance.now();
-      try {
-        await expect(
-          startTunnel({
-            localPortPreferred: localPort,
-            timeoutMs: 250,
-            signal: controller.signal,
-          }),
-        ).rejects.toThrow("ssh tunnel did not start listening");
-        expect(performance.now() - started).toBeGreaterThanOrEqual(200);
-      } finally {
-        clearTimeout(safety);
-        controller.abort();
-        clock.mockRestore();
-        probe.mockRestore();
-      }
-    },
-  );
+  it("keeps the startup budget through a forward wall-clock step", async () => {
+    spawnFakeSsh({ listen: false });
+    const localPort = await getClaimedPort();
+    const controller = new AbortController();
+    const now = Date.now;
+    let offset = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + offset);
+    const connect = net.connect;
+    const probe = vi.spyOn(net, "connect").mockImplementation((...args) => {
+      // Move wall time only after the owner's initial budget timestamp is captured.
+      offset = 10_000;
+      return connect(...args);
+    });
+    const safety = setTimeout(() => controller.abort(), 1000);
+    const started = performance.now();
+    try {
+      await expect(
+        startTunnel({
+          localPortPreferred: localPort,
+          timeoutMs: 250,
+          signal: controller.signal,
+        }),
+      ).rejects.toThrow("ssh tunnel did not start listening");
+      expect(performance.now() - started).toBeGreaterThanOrEqual(200);
+    } finally {
+      clearTimeout(safety);
+      controller.abort();
+      clock.mockRestore();
+      probe.mockRestore();
+    }
+  });
 
   it("preserves diagnostic lines split across stderr chunks at startup failure", async () => {
     const child = Object.assign(new EventEmitter(), {

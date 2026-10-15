@@ -399,9 +399,7 @@ function isScopedInheritedChannelDefaultFinding(finding: HealthFinding): boolean
 function ensureRecord(parent: ConfigRecord, key: string): ConfigRecord {
   const current = parent[key];
   if (isRecord(current)) {
-    const copy = { ...current };
-    parent[key] = copy;
-    return copy;
+    return current;
   }
   const next: ConfigRecord = {};
   parent[key] = next;

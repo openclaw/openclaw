@@ -118,26 +118,42 @@ it.each(["source", "connection", "expiry"] as const)(
   },
 );
 
-it.each(["image", "file", "invalid-image", "gif", "apng", "apng-metadata", "compact"] as const)(
-  "serves best-effort HTTP thumbnails and preserves original downloads (%s)",
+it.each([
+  "image",
+  "large",
+  "file",
+  "invalid-image",
+  "corrupt-png",
+  "gif",
+  "apng",
+  "apng-metadata",
+  "compact",
+] as const)(
+  "serves bounded HTTP thumbnails without falling back to original images (%s)",
   async (kind) => {
     const source =
-      kind === "image"
+      kind === "image" || kind === "corrupt-png"
         ? createSolidPngBuffer(1600, 800, { r: 24, g: 64, b: 128 })
-        : kind === "gif"
-          ? ANIMATED_GIF_BYTES
-          : kind === "apng"
-            ? APNG_BYTES
-            : kind === "apng-metadata"
-              ? apngWithLargeMetadata()
-              : kind === "compact"
-                ? (
-                    await createImageProcessor().encode(createNoisyPngBuffer(32, 32), {
-                      format: "jpeg",
-                      quality: 10,
-                    })
-                  ).data
-                : Buffer.from("original");
+        : kind === "large"
+          ? createNoisyPngBuffer(600, 300)
+          : kind === "gif"
+            ? ANIMATED_GIF_BYTES
+            : kind === "apng"
+              ? APNG_BYTES
+              : kind === "apng-metadata"
+                ? apngWithLargeMetadata()
+                : kind === "compact"
+                  ? (
+                      await createImageProcessor().encode(createNoisyPngBuffer(32, 32), {
+                        format: "jpeg",
+                        quality: 10,
+                      })
+                    ).data
+                  : Buffer.from("original");
+    if (kind === "corrupt-png") {
+      const start = source.indexOf("IDAT") + 4;
+      source.fill(0, start, start + source.readUInt32BE(start - 8));
+    }
     if (kind === "compact") {
       expect((await encodeImageThumbnail(source)).byteLength).toBeGreaterThan(source.byteLength);
     }
@@ -180,6 +196,11 @@ it.each(["image", "file", "invalid-image", "gif", "apng", "apng-metadata", "comp
       expect(full.end).toHaveBeenCalledExactlyOnceWith(new Uint8Array(source));
     }
     const thumbnail = await fetch("?variant=thumbnail");
+    if (["invalid-image", "corrupt-png", "gif", "apng", "apng-metadata"].includes(kind)) {
+      expect(thumbnail.res.statusCode).toBe(404);
+      expect(thumbnail.end).toHaveBeenCalledExactlyOnceWith("Not Found");
+      return;
+    }
     const bytes = thumbnail.end.mock.calls[0]?.[0];
     expect(bytes).toBeInstanceOf(Uint8Array);
     if (!(bytes instanceof Uint8Array)) {
@@ -187,7 +208,7 @@ it.each(["image", "file", "invalid-image", "gif", "apng", "apng-metadata", "comp
     }
     expect(thumbnail.res.statusCode).toBe(200);
     for (const [name, value] of Object.entries({
-      "content-type": artifact.mimeType,
+      "content-type": kind === "file" ? "text/plain" : "image/png",
       "content-security-policy": "default-src 'none'; sandbox",
       "x-content-type-options": "nosniff",
       "referrer-policy": "no-referrer",
@@ -204,6 +225,20 @@ it.each(["image", "file", "invalid-image", "gif", "apng", "apng-metadata", "comp
       expect(await createImageProcessor().probe(bytes)).toMatchObject({ width: 1200, height: 600 });
       expect(bytes).not.toEqual(new Uint8Array(source));
       expect(bytes.byteLength).toBeLessThan(source.byteLength);
+    } else if (kind === "large") {
+      expect(await createImageProcessor().probe(bytes)).toMatchObject({
+        format: "png",
+        width: 400,
+        height: 200,
+      });
+      expect(bytes.byteLength).toBeLessThanOrEqual(512 * 1024);
+      expect(bytes.byteLength).toBeLessThan(source.byteLength);
+    } else if (kind === "compact") {
+      expect(await createImageProcessor().probe(bytes)).toMatchObject({
+        format: "png",
+        width: 32,
+        height: 32,
+      });
     } else {
       expect(Buffer.from(bytes).equals(source)).toBe(true);
     }

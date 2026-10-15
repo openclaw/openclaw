@@ -63,7 +63,7 @@ export type EnqueueFollowupRunOptions = {
   steerCandidate?: boolean;
 };
 
-export type FollowupQueueDisposition = Parameters<
+type FollowupQueueDisposition = Parameters<
   NonNullable<GetReplyOptions["onFollowupQueueDisposition"]>
 >[0];
 

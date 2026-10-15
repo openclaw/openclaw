@@ -269,6 +269,22 @@ The gateway prints WebSocket protocol logs in two modes:
 - **Normal mode (no `--verbose`)**: failed RPC results (`ok=false`), slow calls (`>= 1,000ms`), and parse errors remain visible at the default log level. Successful responses below one second, including large session lists, log at `debug`. Set `logging.level: "debug"` to retain them in file logs or `logging.consoleLevel: "debug"` to print them.
 - **Verbose mode (`--verbose`)**: prints all WS request/response traffic.
 
+The validated `connect` handshake also participates in the existing Gateway RPC
+metrics as `method="connect"`, including handler duration, first-response latency,
+response bytes, and delivery failures. Handler time includes completion work after
+the hello write; first-response time ends at the transport's write callback, not
+at browser receipt. These are server wall times, including awaited work. A validated connect rejected
+by restart or suspension admission reports a rejected dispatch and its response;
+it has no handler sample because authentication was never entered.
+
+Connect response logs follow the same slow-response threshold and include `authMs`
+(credentials through authentication), `attachMs` (device authorization, identity,
+scopes, and session attachment), `helloMs` (hello payload preparation), and
+`sendMs` (serialization and transport write callback). Unreached phases are absent.
+Bootstrap redemption or admission work between payload preparation and writing
+can make total response time exceed the sum of these fields. No payload fields
+or credentials are included.
+
 With `diagnostics.enabled: true` and warning logging enabled, `sessions.list`
 handlers and `sessions.subscribe` snapshot handlers taking at least one second
 also emit `slow session list`. The `operation` field identifies which request

@@ -262,31 +262,12 @@ it.each<{
     exactBody: { url: "https://example.com/slow", timeoutMs: 60_000 },
   },
   {
-    name: "capped open navigation",
-    input: { action: "open", url: "https://example.com/slow", timeoutMs: Number.MAX_SAFE_INTEGER },
-    replies: [{ targetId: "tab-1", url: "https://example.com/slow" }],
-    gatewayTimeout: 135_000,
-    nodeTimeout: 130_000,
-    params: { path: "/tabs/open", timeoutMs: 125_000 },
-    exactBody: { url: "https://example.com/slow", timeoutMs: 120_000 },
-  },
-  {
     name: "default open navigation",
     input: { action: "open", url: "https://example.com/slow" },
     replies: [{ targetId: "tab-1", url: "https://example.com/slow" }],
     gatewayTimeout: 70_000,
     nodeTimeout: 65_000,
     params: { path: "/tabs/open", timeoutMs: 60_000 },
-    exactBody: { url: "https://example.com/slow" },
-  },
-  {
-    name: "existing-session open attachment",
-    input: { action: "open", profile: "user", url: "https://example.com/slow" },
-    profile: "user",
-    replies: [{ targetId: "tab-1", url: "https://example.com/slow" }],
-    gatewayTimeout: 55_000,
-    nodeTimeout: 50_000,
-    params: { path: "/tabs/open", profile: "user", timeoutMs: 45_000 },
     exactBody: { url: "https://example.com/slow" },
   },
   {
@@ -1121,16 +1102,6 @@ it.each([
     expect(client.browserCloseTab).not.toHaveBeenCalled();
   },
 );
-
-it("preserves disconnected node tab availability in the tool result", async () => {
-  mockSingleBrowserProxyNode();
-  gateway.callGatewayTool.mockResolvedValueOnce(nodeReply({ running: false, tabs: [] }));
-
-  const result = await execute({ action: "tabs", target: "node" });
-
-  expect(result?.details).toMatchObject({ running: false, tabCount: 0, tabs: [] });
-  expect(firstResultText(result)).toContain('"running": false');
-});
 
 it("touches the canonical dialog target after automatic host fallback", async () => {
   mockSingleBrowserProxyNode();

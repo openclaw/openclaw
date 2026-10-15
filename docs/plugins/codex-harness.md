@@ -64,9 +64,8 @@ catalog refreshes. Larger responses use a worker owned by their app-server clien
 Both paths apply the same projection. The stdout reader waits for the compact result
 before delivering later responses or notifications. It transfers larger responses
 as bytes, admits one worker task at a time, and pauses the transport while that task runs.
-Incomplete-frame recovery stays in the worker, including when a malformed
-frame hides its routing header until a later line; its decoded ID selects the catalog
-projection and the captured row admission. Native control reads, normal streaming notifications,
+Malformed JSON frames produce a redacted diagnostic and are dropped; subsequent
+valid frames continue normally. Native control reads, normal streaming notifications,
 and full-history reads keep their in-process decoder. Control reads preserve complete
 native metadata, including model selection and direct-input capability; transcript
 consumers require complete native raw items.

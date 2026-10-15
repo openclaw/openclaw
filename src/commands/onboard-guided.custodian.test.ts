@@ -261,22 +261,6 @@ describe("runGuidedOnboarding", () => {
     );
   });
 
-  it("enables default hooks in the persisted setup config", async () => {
-    const applySetup = vi.fn<NonNullable<GuidedOnboardingDeps["applySetup"]>>(async (params) => {
-      const sourceConfig = localOnboarding.persisted.config ?? {};
-      localOnboarding.persisted.config =
-        params.finalizeConfig?.(sourceConfig, sourceConfig) ?? sourceConfig;
-      return setupApplyResult();
-    });
-    const deps = setupDeps({ prompter: createWizardPrompter(), applySetup });
-
-    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
-
-    expect(
-      localOnboarding.persisted.config?.hooks?.internal?.entries?.["session-memory"]?.enabled,
-    ).toBe(true);
-  });
-
   it("resumes an interrupted gateway install using its approved workspace", async () => {
     const first = setupDeps({
       prompter: createWizardPrompter(),

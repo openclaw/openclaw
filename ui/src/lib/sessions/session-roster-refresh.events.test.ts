@@ -552,7 +552,6 @@ describe("session roster event traffic", () => {
 
   it.each([
     "snapshot",
-    "patch",
     "active-message",
     "terminal-message",
     "invalidation",

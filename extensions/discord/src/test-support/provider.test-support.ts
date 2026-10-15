@@ -292,6 +292,7 @@ vi.mock("../internal/discord.js", async () => {
   class Client {
     listeners: unknown[];
     rest: {
+      options: { timeout: number };
       get: ReturnType<typeof vi.fn>;
       post: ReturnType<typeof vi.fn>;
       put: ReturnType<typeof vi.fn>;
@@ -303,6 +304,7 @@ vi.mock("../internal/discord.js", async () => {
       this.options = options;
       this.listeners = handlers.listeners ?? [];
       this.rest = {
+        options: { timeout: 15_000 },
         get: vi.fn(async () => undefined),
         post: vi.fn(async () => undefined),
         put: vi.fn(async () => undefined),
