@@ -239,8 +239,10 @@ class RealTransportChannelManager implements ChannelManager {
   getAutostartSuppression() {
     return null;
   }
-  async recoverAutostartSuppression() {
-    return false;
+  recoverAutostartSuppression() {
+    // Inert stub: getAutostartSuppression() is always null, so the monitor
+    // never invokes recovery on this single-account fixture.
+    return undefined;
   }
   setAmbientAutostartSuppressedChannelIds() {}
   isAmbientAutostartSuppressed() {
