@@ -86,7 +86,7 @@ export function extractWhatsAppInboundPollRecord(
   const key = (msg.key ?? {}) as WAMessageKeyWithAlt;
   const chatJids = normalizeWhatsAppPollJids([key.remoteJid, key.remoteJidAlt]);
   const isGroup = Boolean(key.remoteJid && isJidGroup(key.remoteJid));
-  // A poll sent from the linked phone is ours; its creator JID comes from the vote key later.
+  // A poll sent from the linked phone is the owner's; the recorder adds the owner's JIDs.
   const creatorJids = key.fromMe
     ? normalizeWhatsAppPollJids([key.participant, key.participantAlt])
     : normalizeWhatsAppPollJids(
@@ -145,7 +145,13 @@ export async function recordWhatsAppInboundPoll(params: {
         pollMessageId: params.msg.key?.id ?? "",
         origin: "received",
         ...extracted,
-        creatorE164: params.msg.key?.fromMe ? params.self?.e164 : params.senderE164,
+        // The owner's own poll, posted from the linked phone; a direct chat has no participant.
+        ...(params.msg.key?.fromMe
+          ? {
+              creatorJids: [...extracted.creatorJids, params.self?.jid, params.self?.lid],
+              creatorE164: params.self?.e164,
+            }
+          : { creatorE164: params.senderE164 }),
         ...(params.recordedAt !== undefined ? { recordedAt: params.recordedAt } : {}),
       },
       { mode: "ifAbsent" },

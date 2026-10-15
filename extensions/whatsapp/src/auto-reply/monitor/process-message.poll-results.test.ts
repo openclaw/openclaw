@@ -496,6 +496,17 @@ describe("processMessage poll results context", () => {
       expect(preparedPollPayload()?.polls[0]).toMatchObject({ poll_id: "POLL2" });
     });
 
+    it("keeps a poll posted from the linked phone and labels it as such, not as a member's", async () => {
+      await addReceivedPoll(["15550001111@s.whatsapp.net"], "Owner");
+      resolvePolicyMock.mockReturnValue(allowlistPolicy);
+      await callProcessMessage(makeMsg({ kind: "group" }), "main", visibility("allowlist"));
+      expect(preparedPollPayload()?.polls[0]).toMatchObject({
+        poll_id: "POLL2",
+        created_by: "linked phone",
+      });
+      expect(JSON.stringify(preparedPollPayload())).not.toContain("15550001111");
+    });
+
     it("keeps the assistant's own poll and drops a blocked creator's poll in the same chat", async () => {
       await addPollWithStranger();
       await addReceivedPoll([STRANGER_PN], "Mallory");

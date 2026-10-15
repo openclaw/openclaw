@@ -383,12 +383,13 @@ describe("web monitor inbox incoming poll records", () => {
     remoteJid: string;
     participant?: string;
     secret?: boolean;
+    fromMe?: boolean;
   }) {
     return {
       key: {
         id: params.id,
         remoteJid: params.remoteJid,
-        fromMe: false,
+        fromMe: params.fromMe ?? false,
         ...(params.participant ? { participant: params.participant } : {}),
       },
       message: {
@@ -488,6 +489,18 @@ describe("web monitor inbox incoming poll records", () => {
     expect(await readWhatsAppPollRecord(ACCOUNT, "GRNUM")).toMatchObject({
       creatorJids: [MEMBER],
       creatorE164: "+15550003333",
+    });
+    await listener.close();
+  });
+
+  it("(t) records a poll posted from the linked phone with the owner as creator", async () => {
+    const onMessage = vi.fn();
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    await emit(sock, pollMessage({ id: "OWNPOLL", remoteJid: GROUP, fromMe: true }));
+    expect(await readWhatsAppPollRecord(ACCOUNT, "OWNPOLL")).toMatchObject({
+      origin: "received",
+      creatorJids: [SELF],
+      creatorE164: "+123",
     });
     await listener.close();
   });
