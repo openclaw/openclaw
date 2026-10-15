@@ -148,6 +148,8 @@ describe("feishu streaming card error-path body release", () => {
     expect(loopback.releases).toEqual([
       { bodyIsNull: false, bodyUsed: true },
       { bodyIsNull: false, bodyUsed: true },
+      // The empty completion clears the visible acknowledgement before closing.
+      { bodyIsNull: false, bodyUsed: true },
       { bodyIsNull: false, bodyUsed: true },
     ]);
   });

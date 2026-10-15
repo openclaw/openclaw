@@ -1,7 +1,14 @@
+import {
+  addTimerTimeoutGraceMs,
+  finiteSecondsToTimerSafeMilliseconds,
+  MAX_TIMER_TIMEOUT_MS,
+} from "openclaw/plugin-sdk/number-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import type { handleFeishuMessage } from "./bot.js";
+import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import {
   claimUnprocessedFeishuMessage,
   type FeishuMessageProcessingClaim,
@@ -151,6 +158,26 @@ export function createFeishuMessageReceiveHandler({
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const enqueue = createSequentialQueue({
+    // Snapshot the current budget when each task starts; queued turns see config
+    // changes while the running turn retains its deadline and final-delivery grace.
+    taskTimeoutMs: () => {
+      const currentCfg = readConfig();
+      const agentTimeoutSeconds = currentCfg.agents?.defaults?.timeoutSeconds;
+      const agentTimeoutMs =
+        agentTimeoutSeconds === 0
+          ? MAX_TIMER_TIMEOUT_MS
+          : finiteSecondsToTimerSafeMilliseconds(agentTimeoutSeconds, { floorSeconds: true });
+      if (agentTimeoutMs === undefined) {
+        return 5 * 60_000;
+      }
+      const deliveryGraceMs = resolveConfiguredHttpTimeoutMs(
+        resolveFeishuRuntimeAccount({ cfg: currentCfg, accountId }),
+      );
+      return Math.max(
+        5 * 60_000,
+        addTimerTimeoutGraceMs(agentTimeoutMs, deliveryGraceMs) ?? agentTimeoutMs,
+      );
+    },
     onTaskTimeout: (key, timeoutMs) => {
       log(
         `feishu[${accountId}]: per-chat task exceeded ${timeoutMs}ms cap (key=${key}); evicting from queue so later same-key messages can proceed (#70133)`,

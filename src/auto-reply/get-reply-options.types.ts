@@ -301,6 +301,8 @@ export type GetReplyOptions = {
   onPartialReply?: (
     payload: PartialReplyPayload,
   ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
+  /** Early receipt after run admission, gated by the same policy as channel previews. */
+  onPreviewStart?: () => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   onReasoningStream?: (
     payload: ReasoningStreamPayload,
   ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;

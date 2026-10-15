@@ -25,7 +25,7 @@ import type { ClawdbotConfig, OutboundIdentity, ReplyPayload, RuntimeEnv } from 
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { createFeishuClient } from "./client.js";
-import { resolveFeishuIdentityEmoji } from "./identity-header.js";
+import { normalizeEpochMs, resolveCardHeader, resolveCardNote } from "./identity-header.js";
 import {
   chunkFeishuPostMarkdown,
   materializeFeishuPostMarkdownSoftBreaks,
@@ -55,7 +55,6 @@ import {
   sendCardFeishu,
   sendMessageFeishu,
   sendStructuredCardFeishu,
-  type CardHeaderConfig,
 } from "./send.js";
 import {
   FeishuStreamingFinalizationError,
@@ -83,7 +82,6 @@ function mergeStreamingFinalText(
 /** Maximum age (ms) for a message to receive a typing indicator reaction.
  * Messages older than this are likely replays after context compaction (#30418). */
 const TYPING_INDICATOR_MAX_AGE_MS = 2 * 60_000;
-const MS_EPOCH_MIN = 1_000_000_000_000;
 const STREAMING_START_FAILURE_BACKOFF_MS = 60_000;
 const NO_VISIBLE_REPLY_FALLBACK_TEXT =
   "⚠️ This reply completed without visible content. The turn may have been interrupted; please retry or ask me to recover from recent context.";
@@ -98,47 +96,6 @@ function isStreamingStartBackedOff(accountId: string, now = Date.now()): boolean
     return false;
   }
   return true;
-}
-
-function normalizeEpochMs(timestamp: number | undefined): number | undefined {
-  if (!Number.isFinite(timestamp) || timestamp === undefined || timestamp <= 0) {
-    return undefined;
-  }
-  // Defensive normalization: some payloads use seconds, others milliseconds.
-  // Values below 1e12 are treated as epoch-seconds.
-  return timestamp < MS_EPOCH_MIN ? timestamp * 1000 : timestamp;
-}
-
-function resolveCardHeader(
-  agentId: string,
-  identity: OutboundIdentity | undefined,
-): CardHeaderConfig | undefined {
-  const name = identity?.name?.trim() || (agentId === "main" ? "" : agentId);
-  const emoji = resolveFeishuIdentityEmoji(identity?.emoji);
-  const title = (emoji ? `${emoji} ${name}` : name).trim();
-  if (!title) {
-    return undefined;
-  }
-  return {
-    title,
-    template: identity?.theme ?? "blue",
-  };
-}
-
-function resolveCardNote(
-  agentId: string,
-  identity: OutboundIdentity | undefined,
-  prefixCtx: { model?: string; provider?: string },
-): string {
-  const name = identity?.name?.trim() || agentId;
-  const parts: string[] = [`Agent: ${name}`];
-  if (prefixCtx.model) {
-    parts.push(`Model: ${prefixCtx.model}`);
-  }
-  if (prefixCtx.provider) {
-    parts.push(`Provider: ${prefixCtx.provider}`);
-  }
-  return parts.join(" | ");
 }
 
 type CreateFeishuReplyDispatcherParams = {
@@ -438,6 +395,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           rootId,
           header: cardHeader,
           note: cardNote,
+          messageCreateTimeMs: normalizeEpochMs(params.messageCreateTimeMs),
         });
         streamingStartBackoffUntilByAccount.delete(account.accountId);
       } catch (error) {
@@ -456,6 +414,28 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
       }
     })();
+  };
+
+  const refreshStreamingNote = () => {
+    const session = streaming;
+    const startPromise = streamingStartPromise;
+    if (!session) {
+      return;
+    }
+    void (async () => {
+      if (startPromise) {
+        await startPromise;
+      }
+      if (streaming === session && session.isActive()) {
+        await session.updateNoteBase(
+          resolveCardNote(agentId, identity, responsePrefixContextProvider()),
+        );
+      }
+    })().catch((error: unknown) =>
+      params.runtime.error?.(
+        `feishu[${account.accountId}] streaming note refresh failed: ${String(error)}`,
+      ),
+    );
   };
 
   const resetStreamingState = () => {
@@ -499,7 +479,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const text = buildCombinedStreamText(finalizedReasoningText, finalizedAnswerText);
         let closed;
         try {
-          if (disposition === "discarded") {
+          if (
+            disposition === "discarded" ||
+            (!text.trim() &&
+              (visibleReplySent ||
+                replyOutcome?.kind === "suppressed" ||
+                (replyOutcome?.kind === "skipped" && replyOutcome.reason === "silent")))
+          ) {
             closed = await streamingToClose.discard();
           } else {
             const finalNote = resolveCardNote(agentId, identity, responsePrefixContextProvider());
@@ -1387,7 +1373,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     dispatcherOptions,
     delivery,
     replyOptions: {
-      onModelSelected,
+      // Core admits the run and applies preview visibility before this receipt.
+      onPreviewStart: previewStreamingEnabled
+        ? () => {
+            startStreaming();
+            return false;
+          }
+        : undefined,
+      onModelSelected: (selection: Parameters<typeof onModelSelected>[0]) => {
+        onModelSelected(selection);
+        refreshStreamingNote();
+      },
       disableBlockStreaming: !coreBlockStreamingEnabled,
       onPartialReply: previewStreamingEnabled
         ? (payload: ReplyPayload) => {

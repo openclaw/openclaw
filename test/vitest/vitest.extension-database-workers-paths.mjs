@@ -78,6 +78,8 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/discord/src/monitor/message-handler.ingress-recovery.test.ts",
   "extensions/discord/src/monitor/native-command.guild-guards.test.ts",
   "extensions/feishu/src/monitor.message-handler.ingress.test.ts",
+  // The submitted reply path includes core admission and its database worker owner.
+  "extensions/feishu/src/reply-dispatcher.streaming-backlog.test.ts",
   "extensions/feishu/src/doctor.test.ts",
   "extensions/googlechat/src/monitor-ingress.test.ts",
   "extensions/googlechat/src/monitor.test.ts",

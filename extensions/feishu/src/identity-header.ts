@@ -1,3 +1,6 @@
+import type { OutboundIdentity } from "../runtime-api.js";
+import type { CardHeaderConfig } from "./send.js";
+
 // Feishu identity header helpers keep card titles free of prose-only emoji config.
 
 type IdentityHeaderInput = {
@@ -33,4 +36,45 @@ export function resolveFeishuIdentityHeaderTitle(identity: IdentityHeaderInput |
   const name = identity.name?.trim() ?? "";
   const emoji = resolveFeishuIdentityEmoji(identity.emoji);
   return (emoji ? `${emoji} ${name}` : name).trim();
+}
+
+export function resolveCardHeader(
+  agentId: string,
+  identity: OutboundIdentity | undefined,
+): CardHeaderConfig | undefined {
+  const name = identity?.name?.trim() || (agentId === "main" ? "" : agentId);
+  const emoji = resolveFeishuIdentityEmoji(identity?.emoji);
+  const title = (emoji ? `${emoji} ${name}` : name).trim();
+  if (!title) {
+    return undefined;
+  }
+  return {
+    title,
+    template: identity?.theme ?? "blue",
+  };
+}
+
+export function resolveCardNote(
+  agentId: string,
+  identity: OutboundIdentity | undefined,
+  prefixCtx: { model?: string; provider?: string },
+): string {
+  const name = identity?.name?.trim() || agentId;
+  const parts: string[] = [`Agent: ${name}`];
+  if (prefixCtx.model) {
+    parts.push(`Model: ${prefixCtx.model}`);
+  }
+  if (prefixCtx.provider) {
+    parts.push(`Provider: ${prefixCtx.provider}`);
+  }
+  return parts.join(" | ");
+}
+
+export function normalizeEpochMs(timestamp: number | undefined): number | undefined {
+  if (!Number.isFinite(timestamp) || timestamp === undefined || timestamp <= 0) {
+    return undefined;
+  }
+  // Defensive normalization: some payloads use seconds, others milliseconds.
+  // Values below 1e12 are treated as epoch-seconds.
+  return timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp;
 }

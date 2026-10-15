@@ -159,6 +159,11 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     forwardWhenSourceDeliverySuppressed?: boolean;
     requiresToolSummaryVisibility?: boolean;
   }) => {
+    // Previews bypass the outbound dispatcher, so denied delivery must be
+    // enforced here as well as at final payload admission.
+    if (state.sendPolicyDenied) {
+      return false;
+    }
     if (
       params.replyOptions?.progressRequiresReply === true &&
       state.replyOperationRunState.replyCompletion?.expectation !== "required"
@@ -176,7 +181,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     return (
       !state.suppressAutomaticSourceDelivery ||
       (allowSuppressedSourceProgressCallbacks &&
-        !state.sendPolicyDenied &&
         options?.forwardWhenSourceDeliverySuppressed === true)
     );
   };

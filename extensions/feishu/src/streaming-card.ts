@@ -27,6 +27,7 @@ type CardState = {
   currentText: string;
   sentText: string;
   hasNote: boolean;
+  acknowledgementVisible?: boolean;
 };
 
 type CardKitResponse = { code?: number; msg?: string };
@@ -60,10 +61,11 @@ type StreamingStartOptions = {
   rootId?: string;
   header?: CardHeaderConfig;
   note?: string;
+  messageCreateTimeMs?: number;
 };
 
-const STREAMING_UPDATE_THROTTLE_MS = 160;
-const STREAMING_SIGNIFICANT_DELTA_CHARS = 18;
+const STREAMING_UPDATE_THROTTLE_MS = 5_000;
+const STREAMING_ACKNOWLEDGEMENT = "Received, processing…";
 const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
 
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
@@ -183,14 +185,6 @@ function truncateSummary(text: string, max = 50): string {
   return clean.length <= max ? clean : sliceUtf16Safe(clean, 0, max - 3) + "...";
 }
 
-function shouldPushStreamingUpdate(previousText: string, nextText: string): boolean {
-  return (
-    !previousText ||
-    /[\n。！？!?；;：:]$/.test(nextText) ||
-    nextText.length - previousText.length >= STREAMING_SIGNIFICANT_DELTA_CHARS
-  );
-}
-
 /** Merges cumulative or overlapping streaming snapshots without duplicating content. */
 export function mergeStreamingText(
   previousText: string | undefined,
@@ -230,6 +224,10 @@ export class FeishuStreamingSession {
   private pendingText: string | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private updateThrottleMs = STREAMING_UPDATE_THROTTLE_MS;
+  private elapsedStartAt = 0;
+  private noteBase = "";
+  private elapsedTimer: ReturnType<typeof setInterval> | null = null;
+  private elapsedUpdatePending = false;
 
   constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
     this.client = client;
@@ -279,14 +277,24 @@ export class FeishuStreamingSession {
       return;
     }
 
+    const now = resolveDateTimestampMs(Date.now());
+    const timestamp = asDateTimestampMs(options?.messageCreateTimeMs);
+    const messageTimestamp =
+      timestamp !== undefined && timestamp > 0
+        ? timestamp < 1_000_000_000_000
+          ? timestamp * 1_000
+          : timestamp
+        : now;
+    this.elapsedStartAt = messageTimestamp <= now ? messageTimestamp : now;
+    this.noteBase = options?.note ?? "";
     const elements: Record<string, unknown>[] = [
-      { tag: "markdown", content: "", element_id: "content" },
+      { tag: "markdown", content: STREAMING_ACKNOWLEDGEMENT, element_id: "content" },
     ];
     if (options?.note) {
       elements.push({ tag: "hr" });
       elements.push({
         tag: "markdown",
-        content: `<font color='grey'>${options.note}</font>`,
+        content: `<font color='grey'>${this.renderNoteContent()}</font>`,
         element_id: "note",
       });
     }
@@ -294,7 +302,7 @@ export class FeishuStreamingSession {
       schema: "2.0",
       config: {
         streaming_mode: true,
-        summary: { content: "[Generating...]" },
+        summary: { content: STREAMING_ACKNOWLEDGEMENT },
         streaming_config: { print_frequency_ms: { default: 50 }, print_step: { default: 1 } },
       },
       body: { elements },
@@ -369,7 +377,29 @@ export class FeishuStreamingSession {
       currentText: "",
       sentText: "",
       hasNote: Boolean(options?.note),
+      acknowledgementVisible: true,
     };
+    if (this.state.hasNote) {
+      this.elapsedTimer = setInterval(() => {
+        if (!this.state || this.closed || this.elapsedUpdatePending) {
+          return;
+        }
+        this.elapsedUpdatePending = true;
+        this.queue = this.queue
+          .then(async () => {
+            if (this.state && !this.closed) {
+              await this.updateNoteContent();
+            }
+          })
+          .finally(() => {
+            this.elapsedUpdatePending = false;
+          });
+        void this.queue.catch((error: unknown) =>
+          this.log?.(`Scheduled elapsed update failed: ${String(error)}`),
+        );
+      }, STREAMING_UPDATE_THROTTLE_MS);
+      this.elapsedTimer.unref?.();
+    }
     this.log?.(`Started streaming: cardId=${cardId}${messageId ? `, messageId=${messageId}` : ""}`);
   }
 
@@ -381,26 +411,28 @@ export class FeishuStreamingSession {
     if (!this.state) {
       return false;
     }
+    const shouldReplace = replace || this.state.acknowledgementVisible === true;
     this.state.sequence += 1;
     try {
       await this.requestCardKit(
-        `/${this.state.cardId}/elements/content${replace ? "" : "/content"}`,
-        replace ? "replace" : "update",
+        `/${this.state.cardId}/elements/content${shouldReplace ? "" : "/content"}`,
+        shouldReplace ? "replace" : "update",
         "PUT",
         () => ({
-          ...(replace
+          ...(shouldReplace
             ? { element: JSON.stringify({ tag: "markdown", content: text, element_id: "content" }) }
             : { content: text }),
           sequence: this.state!.sequence,
-          uuid: `${replace ? "r" : "s"}_${this.state!.cardId}_${this.state!.sequence}`,
+          uuid: `${shouldReplace ? "r" : "s"}_${this.state!.cardId}_${this.state!.sequence}`,
         }),
         (response, auditContext) =>
           assertSuccessfulCardKitResponse(
             response,
             auditContext,
-            replace ? "Replace card content" : "Update card content",
+            shouldReplace ? "Replace card content" : "Update card content",
           ),
       );
+      this.state.acknowledgementVisible = false;
       return true;
     } catch (error) {
       onError?.(error);
@@ -425,7 +457,6 @@ export class FeishuStreamingSession {
       if (!this.pendingText || this.closed) {
         return;
       }
-      this.lastUpdateTime = Date.now();
       void this.flushPendingUpdate().catch((error: unknown) =>
         this.log?.(`Scheduled flush update failed: ${String(error)}`),
       );
@@ -441,10 +472,18 @@ export class FeishuStreamingSession {
       if (!nextText) {
         return;
       }
-      this.pendingText = null;
       if (nextText === this.state.sentText) {
+        this.pendingText = null;
         return;
       }
+      // New previews may arrive while a previous CardKit request is in flight.
+      // Check cadence at the serialized write, not at snapshot admission.
+      if (this.lastUpdateTime > 0 && Date.now() - this.lastUpdateTime < this.updateThrottleMs) {
+        this.schedulePendingFlush();
+        return;
+      }
+      this.pendingText = null;
+      this.lastUpdateTime = Date.now();
       const sent = await this.writeCardContent(nextText, false, (e) =>
         this.log?.(`Update failed: ${String(e)}`),
       );
@@ -465,36 +504,62 @@ export class FeishuStreamingSession {
     this.pendingText = text;
     this.clearFlushTimer();
 
-    const shouldForceUpdate = shouldPushStreamingUpdate(this.state.sentText, text);
     const now = Date.now();
-    if (!shouldForceUpdate && now - this.lastUpdateTime < this.updateThrottleMs) {
+    if (this.lastUpdateTime > 0 && now - this.lastUpdateTime < this.updateThrottleMs) {
       this.schedulePendingFlush();
       return;
     }
-    this.lastUpdateTime = now;
     await this.flushPendingUpdate();
   }
 
-  private async updateNoteContent(note: string): Promise<void> {
+  private clearElapsedTimer(): void {
+    if (this.elapsedTimer) {
+      clearInterval(this.elapsedTimer);
+      this.elapsedTimer = null;
+    }
+  }
+
+  private renderNoteContent(): string {
+    const seconds = Math.max(0, Date.now() - this.elapsedStartAt) / 1_000;
+    const elapsed =
+      seconds < 60
+        ? `${seconds.toFixed(1)}s`
+        : `${Math.floor(seconds / 60)}m${Math.floor(seconds % 60)}s`;
+    return `${this.noteBase} ⏱ ${elapsed}`;
+  }
+
+  async updateNoteBase(note: string): Promise<void> {
+    if (this.closed) {
+      return;
+    }
+    this.noteBase = note;
+    this.queue = this.queue.then(async () => {
+      if (this.state && !this.closed) {
+        await this.updateNoteContent();
+      }
+    });
+    await this.queue;
+  }
+
+  private async updateNoteContent(): Promise<void> {
     if (!this.state || !this.state.hasNote) {
       return;
     }
     this.state.sequence += 1;
     const path = `/${this.state.cardId}/elements/note/content`;
-    // Token failures propagate; only the note request itself is best effort.
-    const token = await getToken(this.creds);
+    // Attribution is best effort, including token renewal. A note failure must
+    // not prevent delivery of the authoritative final answer or card close.
     await this.requestCardKit(
       path,
       "note-update",
       "PUT",
       () => ({
-        content: `<font color='grey'>${note}</font>`,
+        content: `<font color='grey'>${this.renderNoteContent()}</font>`,
         sequence: this.state!.sequence,
         uuid: `n_${this.state!.cardId}_${this.state!.sequence}`,
       }),
       (response, auditContext) =>
         assertSuccessfulCardKitResponse(response, auditContext, "Update card note"),
-      token,
     ).catch((e: unknown) => this.log?.(`Note update failed: ${String(e)}`));
   }
 
@@ -505,8 +570,12 @@ export class FeishuStreamingSession {
     if (!this.state || this.closed) {
       return { visibleReplySent: false };
     }
+    if (options?.note !== undefined) {
+      this.noteBase = options.note;
+    }
     this.closed = true;
     this.clearFlushTimer();
+    this.clearElapsedTimer();
     await this.queue;
 
     const text = finalText ?? this.pendingText ?? this.state.currentText;
@@ -517,7 +586,10 @@ export class FeishuStreamingSession {
 
     // Only send final update if content differs from what's already displayed.
     // An explicit empty final text clears a transient preview before closeout.
-    if ((text || finalText !== undefined) && text !== this.state.sentText) {
+    if (
+      (text || finalText !== undefined || this.state.acknowledgementVisible) &&
+      (text !== this.state.sentText || this.state.acknowledgementVisible)
+    ) {
       const replace = !text.startsWith(this.state.sentText);
       const sent = await this.writeCardContent(text, replace, (e) => {
         finalWriteError = e;
@@ -530,9 +602,7 @@ export class FeishuStreamingSession {
       }
     }
 
-    if (options?.note) {
-      await this.updateNoteContent(options.note);
-    }
+    await this.updateNoteContent();
 
     // A rejected final write must not advertise content that CardKit never accepted.
     const acceptedText = this.state.sentText;
@@ -547,7 +617,7 @@ export class FeishuStreamingSession {
           settings: JSON.stringify({
             config: {
               streaming_mode: false,
-              summary: { content: truncateSummary(acceptedText) },
+              summary: { content: truncateSummary(acceptedText) || "Completed" },
             },
           }),
           sequence: this.state!.sequence,
@@ -595,6 +665,7 @@ export class FeishuStreamingSession {
     }
     this.closed = true;
     this.clearFlushTimer();
+    this.clearElapsedTimer();
     await this.queue;
 
     try {

@@ -277,7 +277,9 @@ describe("FeishuStreamingSession", () => {
       return jsonResponse(
         params.rejectClose && url.pathname.endsWith("/settings")
           ? { code: 91400, msg: "close rejected" }
-          : params.rejectClear && url.pathname.endsWith("/elements/content")
+          : params.rejectClear &&
+              url.pathname.endsWith("/elements/content") &&
+              (JSON.parse(body) as { element?: string }).element?.includes('"content":""')
             ? { code: 19002, msg: "clear rejected" }
             : { code: 0, msg: "ok" },
       );
@@ -343,7 +345,7 @@ describe("FeishuStreamingSession", () => {
         );
       }
       expect(requests.map(({ path }) => path)).toEqual([
-        "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",
+        "/open-apis/cardkit/v1/cards/card_accepted/elements/content",
         "/open-apis/cardkit/v1/cards/card_accepted/settings",
       ]);
       expect(session.isActive()).toBe(false);
@@ -361,7 +363,7 @@ describe("FeishuStreamingSession", () => {
 
     expect(remove).not.toHaveBeenCalled();
     expect(requests.map(({ path }) => path)).toEqual([
-      "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",
+      "/open-apis/cardkit/v1/cards/card_accepted/elements/content",
       "/open-apis/cardkit/v1/cards/card_accepted/elements/content",
       "/open-apis/cardkit/v1/cards/card_accepted/settings",
     ]);
@@ -385,7 +387,7 @@ describe("FeishuStreamingSession", () => {
 
     expect(remove).toHaveBeenCalledExactlyOnceWith({ path: { message_id: "om_accepted" } });
     expect(requests.map(({ path }) => path)).toEqual([
-      "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",
+      "/open-apis/cardkit/v1/cards/card_accepted/elements/content",
     ]);
     expect(session.isActive()).toBe(false);
   });
@@ -611,7 +613,7 @@ describe("FeishuStreamingSession", () => {
     await session.update("draft two");
     expect(updateBodies).toHaveLength(0);
 
-    await vi.advanceTimersByTimeAsync(160);
+    await vi.advanceTimersByTimeAsync(5_000);
 
     expect(updateBodies).toHaveLength(1);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
@@ -654,9 +656,9 @@ describe("FeishuStreamingSession", () => {
     });
 
     await session.update("hello small");
-    await vi.advanceTimersByTimeAsync(160);
+    await vi.advanceTimersByTimeAsync(5_000);
     await session.update("hello small");
-    await vi.advanceTimersByTimeAsync(160);
+    await vi.advanceTimersByTimeAsync(5_000);
 
     expect(log).toHaveBeenCalledWith(
       "Update failed: Error: Update card content failed: sequence rejected (code=19001)",
@@ -668,7 +670,7 @@ describe("FeishuStreamingSession", () => {
     ]);
   });
 
-  it("pushes natural-boundary updates immediately inside the throttle window", async () => {
+  it("keeps natural-boundary updates inside the same throttle window", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(2_000);
     const updateBodies: string[] = [];
@@ -683,6 +685,8 @@ describe("FeishuStreamingSession", () => {
 
     await session.update("hello!");
 
+    expect(updateBodies).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(updateBodies).toHaveLength(1);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
       content: "hello!",
@@ -853,7 +857,9 @@ describe("FeishuStreamingSession", () => {
     });
 
     await session.update("hello world");
+    await vi.advanceTimersByTimeAsync(4_000);
     await session.update("hello world!");
+    await vi.advanceTimersByTimeAsync(5_000);
 
     expect(updateBodies).toHaveLength(2);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({
@@ -882,7 +888,9 @@ describe("FeishuStreamingSession", () => {
     });
 
     await session.update("hello world");
+    await vi.advanceTimersByTimeAsync(3_500);
     await session.update("hello world!");
+    await vi.advanceTimersByTimeAsync(5_000);
 
     expect(updateBodies).toHaveLength(2);
     expect(JSON.parse(updateBodies[0] ?? "{}")).toEqual({

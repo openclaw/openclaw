@@ -14,6 +14,7 @@ type StreamingSessionStub = {
   credentials: unknown;
   start: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
+  updateNoteBase: ReturnType<typeof vi.fn>;
   closeWithResult: Mock<FeishuStreamingSession["closeWithResult"]>;
   discard: Mock<FeishuStreamingSession["discard"]>;
   isActive: ReturnType<typeof vi.fn>;
@@ -81,6 +82,7 @@ vi.mock("./typing.js", () => ({
   addTypingIndicator: addTypingIndicatorMock,
   removeTypingIndicator: removeTypingIndicatorMock,
 }));
+// mock-isolation: Keep CardKit and its timers outside dispatcher delivery fixtures.
 vi.mock("./streaming-card.js", async () => {
   const { mergeStreamingText } = await import("./card-test-helpers.js");
   class FeishuStreamingFinalizationError extends Error {
@@ -103,6 +105,7 @@ vi.mock("./streaming-card.js", async () => {
         this.active = true;
       });
       update = vi.fn(async () => {});
+      updateNoteBase = vi.fn(async () => {});
       closeWithResult = vi.fn<FeishuStreamingSession["closeWithResult"]>(async (text, _options) => {
         this.active = false;
         return {
@@ -243,6 +246,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       });
       resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "partial", "lark"));
       const { result, options } = createDispatcherHarness();
+      expect(result.replyOptions.onPreviewStart).toBeUndefined();
       await options.onReplyStart?.();
       expect(result.replyOptions.onPartialReply).toBeUndefined();
       expect(result.replyOptions.onReasoningStream).toBeUndefined();

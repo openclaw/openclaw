@@ -78,6 +78,31 @@ If Card Kit rejects the completed answer after accepting a streaming preview, Op
 
 Set `streaming.mode: "off"` to send the completed reply without streaming updates; long replies still split at the message limits above. `renderMode: "raw"` (plain text instead of cards) also disables streaming cards. `streaming.block.enabled` is off by default; enable it only when you want completed assistant blocks flushed before the final reply. Legacy boolean `streaming` and the flat `blockStreaming` / `blockStreamingCoalesce` / `chunkMode` keys migrate to this nested shape via `openclaw doctor --fix`.
 
+Streaming cards show "Received, processing…" once the agent run starts, including
+with `renderMode: "auto"`. After the first preview, body updates coalesce to the
+latest text at most once every five seconds; finalization sends the complete
+answer immediately. The footer preserves the agent, selected model, and provider,
+and adds elapsed time from the incoming message timestamp, refreshing every five
+seconds while the card is active. Silent replies discard their receipt card.
+Successful attachment-only replies also discard an unused receipt, preserving
+any answer text already accepted by the streaming card and the attachment's
+delivery receipt. Message hooks that can rewrite or suppress a reply continue to
+disable early previews.
+
+For long tasks, the per-chat queue honors an explicitly configured
+`agents.defaults.timeoutSeconds`. Its watchdog reserves one configured Feishu HTTP
+request timeout as best-effort delivery grace, with a minimum five-minute cap.
+Without an explicit agent timeout, the queue keeps its five-minute cap. Setting
+the agent timeout to `0` uses the runtime's maximum timer duration. Each queued
+task reads the current configuration when it starts; a running task keeps its
+existing deadline. Existing canonical settings require no migration.
+
+Queued messages in the same chat wait for the running task or its cap; other
+chats continue independently. The watchdog releases the queue without cancelling
+the original task. Model fallback attempts, media uploads, token renewal, and
+multiple CardKit requests can exceed the reserved grace; it is not a guarantee
+that all final delivery work finishes before the queue advances.
+
 Replies with controls use native cards for command buttons and HTTP(S) links, including when streaming is off. The card carries the reply text; attachments remain separate messages. Unsupported controls and cards that exceed Feishu's size limits keep their full labels in a readable fallback. That fallback remains a separate message when a later reply streams. A final controls reply replaces an active streaming preview without sending the preview text again; error controls after a completed answer remain separate. If Feishu cannot delete or clear a replaced preview, delivery reports a failure and retains the original message receipt.
 
 ### Quota optimization

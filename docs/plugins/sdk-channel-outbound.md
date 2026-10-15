@@ -65,6 +65,19 @@ duplicates. `context.isNew` is `true` if and only if this admission inserted the
 delivery. If retention previously pruned the row, a later admission may insert
 it again and report `isNew: true`.
 
+For an early channel receipt, supply the optional `replyOptions.onPreviewStart`.
+Core invokes it after run admission and applies the same visibility policy as
+partial previews. Denied, aborted, and message-tool-only delivery cannot emit a
+receipt through this callback. A receipt confirms processing has started; it does
+not establish accepted answer content, a final delivery receipt, or completion
+ownership. Return `false` when feedback was only scheduled. Repeated invocations
+must reuse the active preview; the channel owns its finalization or discard.
+
+`onPreparedAgentRunStart` retains its synchronous completion-owner result and
+delegates legacy run-start observers. Use that callback for execution ownership.
+The receipt callback does not change other channels unless they supply it; Feishu
+supplies it only when streaming previews and message hooks permit early feedback.
+
 `deliver` receives `onAdopted`, `onDeferred`, `onAdoptionFinalizing`, `onFailed`,
 `onCancelled`, `onAbandoned`, and `abortSignal`. Use `onFailed` for delivery
 errors, `onCancelled` for explicit pre-adoption cancellation that must preserve

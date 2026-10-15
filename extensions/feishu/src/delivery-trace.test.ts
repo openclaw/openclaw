@@ -10,12 +10,17 @@ import {
   expectDeliveryTraceMatchesGolden,
   runDeliveryTraceScenario,
   type DeliveryTraceInStep,
+  type DeliveryTraceScenario,
   type DeliveryTraceScenarioName,
   type WireRecorder,
 } from "openclaw/plugin-sdk/channel-contract-testing";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
+import type {
+  FeishuReplyDeliveryResult,
+  FeishuReplyDeliveryResultWithFinalization,
+} from "./reply-delivery-result.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 type RecordedWireCall = Parameters<WireRecorder["recordWireCall"]>[0];
@@ -381,6 +386,18 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
     replyToMessageId: "om-inbound",
   });
   const options = created.dispatcherOptions;
+  const finalizations: Promise<FeishuReplyDeliveryResult>[] = [];
+  const deliver: typeof created.delivery.deliver = async (payload, info) => {
+    const delivered = await created.delivery.deliver(payload, info);
+    if (delivered && "finalization" in delivered) {
+      const finalization = (delivered as FeishuReplyDeliveryResultWithFinalization).finalization;
+      // Attach the observer before idle closes the card. The caller must await
+      // provider finalization, including rejected final writes, just as core does.
+      finalizations.push(finalization);
+      void finalization.catch(() => {});
+    }
+    return delivered;
+  };
 
   return async (step: DeliveryTraceInStep) => {
     switch (step.kind) {
@@ -391,7 +408,7 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
         created.replyOptions.onPartialReply?.({ text: step.text });
         break;
       case "block-final":
-        await created.delivery.deliver({ text: step.text }, { kind: "block" });
+        await deliver({ text: step.text }, { kind: "block" });
         break;
       case "tool-progress":
         created.replyOptions.onItemEvent?.({
@@ -404,7 +421,7 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
         });
         break;
       case "final":
-        await created.delivery.deliver(
+        await deliver(
           {
             ...(step.text !== undefined ? { text: step.text } : {}),
             ...(step.mediaUrls ? { mediaUrls: step.mediaUrls } : {}),
@@ -417,8 +434,12 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
         // An aborted run stops emitting payloads; closeout happens on idle.
         break;
       case "idle":
-        await options.onIdle?.();
-        options.onCleanup?.();
+        try {
+          // Join both idle cleanup and every payload settlement even on error.
+          await Promise.all([Promise.resolve(options.onIdle?.()), ...finalizations]);
+        } finally {
+          options.onCleanup?.();
+        }
         break;
       case "wire-fault":
         if (step.fault !== "rate-limit") {
@@ -438,6 +459,25 @@ const FEISHU_TRACE_SCENARIOS: readonly DeliveryTraceScenarioName[] = [
   "overflow-pagination",
 ];
 
+// The shared scenario emits a second preview at 300 ms. With Feishu's five-
+// second cadence that fault would hit the final write instead of a preview.
+// Keep the original fault and recovery contract at the channel's wire cadence.
+const rateLimitedPreviewScenario: DeliveryTraceScenario = {
+  name: "rate-limit-during-preview",
+  steps: [
+    { kind: "reply-start" },
+    { kind: "partial", text: "Collecting logs" },
+    { kind: "advance", ms: 5_000 },
+    { kind: "wire-fault", fault: "rate-limit", retryAfterMs: 1_000 },
+    { kind: "partial", text: "Collecting logs from the gateway." },
+    { kind: "advance", ms: 5_000 },
+    { kind: "partial", text: "Collecting logs from the gateway. Found the failure." },
+    { kind: "advance", ms: 300 },
+    { kind: "final", text: "Collecting logs from the gateway. Found the failure." },
+    { kind: "idle" },
+  ],
+};
+
 describe("feishu delivery trace goldens", () => {
   it("updates the accepted card without a duplicate send when its message receipt is absent", async () => {
     const events = await runDeliveryTraceScenario({
@@ -455,14 +495,66 @@ describe("feishu delivery trace goldens", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({ data: { result: {} } });
     expect(
-      events.some((event) =>
-        event.kind.startsWith("PUT /cardkit/v1/cards/card-1/elements/content/content"),
-      ),
-    ).toBe(true);
+      events.find((event) => event.kind === "PUT /cardkit/v1/cards/card-1/elements/content"),
+    ).toMatchObject({
+      data: { payload: { element: { content: "All checks passed." } } },
+    });
     expect(events.some((event) => event.kind === "PATCH /cardkit/v1/cards/card-1/settings")).toBe(
       true,
     );
     expect(streamingStartBackoffUntilByAccount.has("main")).toBe(false);
+  });
+
+  it("reports a rejected final body while preserving the preview and delivering a static final", async () => {
+    const recorded: RecordedWireCall[] = [];
+    await expect(
+      runDeliveryTraceScenario({
+        scenario: {
+          name: "feishu-final-rate-limit",
+          steps: [
+            { kind: "reply-start" },
+            { kind: "partial", text: "Accepted preview" },
+            { kind: "wire-fault", fault: "rate-limit", retryAfterMs: 1_000 },
+            { kind: "final", text: "Accepted preview with final content" },
+            { kind: "idle" },
+          ],
+        },
+        setup: (recorder) =>
+          setupFeishuTrace(
+            {
+              ...recorder,
+              recordWireCall: (call) => {
+                recorded.push(call);
+                recorder.recordWireCall(call);
+              },
+            },
+            "final-only",
+          ),
+      }),
+    ).rejects.toThrow("Update card content failed with HTTP 429");
+    const replies = recorded.filter((call) => call.method === "im.message.reply");
+    expect(replies).toHaveLength(2);
+    expect(replies[0]).toMatchObject({
+      payload: { content: { type: "card", data: { card_id: "card-1" } } },
+    });
+    expect(replies[1]).toMatchObject({
+      payload: {
+        msg_type: "interactive",
+        content: {
+          body: {
+            elements: expect.arrayContaining([
+              expect.objectContaining({ content: "Accepted preview with final content" }),
+            ]),
+          },
+        },
+      },
+      result: { message_id: "om-2" },
+    });
+    expect(recorded.find((call) => call.method.endsWith("/settings"))).toMatchObject({
+      payload: {
+        settings: { config: { streaming_mode: false, summary: { content: "Accepted preview" } } },
+      },
+    });
   });
 
   it.each(["outbound", "dispatcher"] as const)(
@@ -595,9 +687,22 @@ describe("feishu delivery trace goldens", () => {
   for (const scenarioName of FEISHU_TRACE_SCENARIOS) {
     it(`records ${scenarioName}`, async () => {
       const events = await runDeliveryTraceScenario({
-        scenario: deliveryTraceScenarios[scenarioName],
+        scenario:
+          scenarioName === "rate-limit-during-preview"
+            ? rateLimitedPreviewScenario
+            : deliveryTraceScenarios[scenarioName],
         setup: (recorder) => setupFeishuTrace(recorder, scenarioName),
       });
+      if (scenarioName === "rate-limit-during-preview") {
+        const writes = events.filter(
+          (event) => event.kind === "PUT /cardkit/v1/cards/card-1/elements/content/content",
+        );
+        expect(writes).toMatchObject([
+          { at: 5_000, data: { result: { status: 429 } } },
+          { at: 10_000, data: { result: { code: 0 } } },
+        ]);
+        expect(events.filter((event) => event.kind === "im.message.reply")).toHaveLength(1);
+      }
       expectDeliveryTraceMatchesGolden({
         goldenUrl: new URL(`./__traces__/${scenarioName}.trace.jsonl`, import.meta.url),
         events,
