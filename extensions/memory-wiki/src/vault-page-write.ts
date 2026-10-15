@@ -20,9 +20,14 @@ export async function readWikiPageStat(vault: VaultRoot, pagePath: string) {
   });
 }
 
+export function isMissingWikiPageError(error: unknown): boolean {
+  return error instanceof FsSafeError && error.code === "not-found";
+}
+
 export async function readExistingWikiPage(
   read: () => Promise<string>,
   emptyOn: (error: unknown) => boolean,
+  fallback: () => string = () => "",
 ): Promise<string> {
   try {
     return await read();
@@ -32,7 +37,7 @@ export async function readExistingWikiPage(
       return await read();
     } catch (error) {
       if (emptyOn(error)) {
-        return "";
+        return fallback();
       }
       throw error;
     }
