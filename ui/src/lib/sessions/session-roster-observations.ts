@@ -258,12 +258,12 @@ export function createSessionRosterObservations(
         observeReadRow(row, issuedRevision, agentId);
       }
     }
-    const offered = indexRows(rows, agentId);
+    const offered = [...indexRows(rows, agentId).values()];
     return stageManagedResults(
       scope,
       (entry) => merge(entry.snapshot.result, managed ? rows : [], entry.snapshot.agentId, agentId),
       (entry) => {
-        const matching = [...offered.values()].find((row) => matchesTarget(row, entry.target));
+        const matching = offered.find((row) => matchesTarget(row, entry.target));
         return {
           row: matching
             ? entry.row && entry.row.sessionId === matching.sessionId

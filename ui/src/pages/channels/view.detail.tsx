@@ -11,6 +11,7 @@ import "../../components/modal-dialog.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { LitContent } from "../../lit/solid-bridge.ts";
+import { channelDetailPresentations } from "./detail-presentation.ts";
 import { channelDocsUrl } from "./hub-meta.ts";
 import { ChannelConfig } from "./view.config.tsx";
 import { NostrCard } from "./view.nostr.tsx";
@@ -29,79 +30,67 @@ import {
 import type { ChannelsProps } from "./view.types.ts";
 import { WhatsAppCard } from "./view.whatsapp.tsx";
 
-const STANDARD_CHANNEL_LOCALE_KEYS = {
-  discord: "discord",
-  googlechat: "googleChat",
-  imessage: "imessage",
-  signal: "signal",
-  slack: "slack",
-  telegram: "telegram",
-} as const;
-
-type StandardChannelKey = keyof typeof STANDARD_CHANNEL_LOCALE_KEYS;
-
-function isStandardChannel(key: string): key is StandardChannelKey {
-  return Object.hasOwn(STANDARD_CHANNEL_LOCALE_KEYS, key);
-}
-
 function ChannelStatusBody(params: {
   channelId: string;
   props: ChannelsProps;
   accountCount?: number;
 }) {
-  const standardKey = createMemo(() => {
-    const key = params.channelId;
-    return isStandardChannel(key) ? key : null;
-  });
-  const localeKey = createMemo(() => {
-    const key = standardKey();
-    return key ? STANDARD_CHANNEL_LOCALE_KEYS[key] : null;
-  });
+  const presentation = createMemo(() => channelDetailPresentations.get(params.channelId));
+  const accountPresentation = createMemo(() => presentation()?.accounts);
   const snapshot = createMemo(() => params.props.channels.channelsSnapshot);
   const status = createMemo(() => {
-    const key = standardKey();
+    const profile = presentation();
     // SAFETY: The bundled channel ID selects its schema-light channels.status summary contract.
-    return (key ? snapshot()?.channels[key] : undefined) as ChannelStatus | null | undefined;
+    return (profile ? snapshot()?.channels[params.channelId] : undefined) as
+      | ChannelStatus
+      | null
+      | undefined;
   });
   const displayState = createMemo(() => resolveChannelDisplayState(params.channelId, params.props));
   const configured = createMemo(() => displayState().configured);
   const accounts = createMemo(() =>
     resolveChannelAccounts(snapshot()?.channelAccounts, params.channelId),
   );
-  const showAccounts = createMemo(() =>
-    standardKey() === "telegram" ? accounts().length > 1 : !standardKey() && accounts().length > 0,
-  );
+  const showAccounts = createMemo(() => {
+    const policy = accountPresentation();
+    return presentation()
+      ? Boolean(policy && accounts().length >= policy.minimumCount)
+      : accounts().length > 0;
+  });
   const extraRows = createMemo(() =>
-    standardKey() === "googlechat"
-      ? [
-          {
+    (presentation()?.extraFacts ?? []).map((fact) => {
+      switch (fact) {
+        case "credential":
+          return {
             label: t("common.credential"),
             value: status()?.credentialSource ?? t("common.na"),
-          },
-          {
+          };
+        case "audience":
+          return {
             label: t("common.audience"),
             value: status()?.audienceType
               ? `${status()?.audienceType}${status()?.audience ? ` · ${status()?.audience}` : ""}`
               : t("common.na"),
-          },
-        ]
-      : standardKey() === "signal"
-        ? [{ label: t("common.baseUrl"), value: status()?.baseUrl ?? t("common.na") }]
-        : standardKey() === "telegram"
-          ? [{ label: t("common.mode"), value: status()?.mode ?? t("common.na") }]
-          : [],
+          };
+        case "baseUrl":
+          return { label: t("common.baseUrl"), value: status()?.baseUrl ?? t("common.na") };
+        case "mode":
+          return { label: t("common.mode"), value: status()?.mode ?? t("common.na") };
+      }
+      throw new Error("Unknown bundled channel detail fact");
+    }),
   );
   const statusRows = createMemo(() => [
     booleanChannelFact("configured", configured()),
     booleanChannelFact(
       "running",
-      !standardKey()
+      !presentation()
         ? displayState().running
-        : standardKey() === "googlechat" && !status()
+        : presentation()?.runningWhenStatusMissing === "unknown" && !status()
           ? null
           : (status()?.running ?? false),
     ),
-    ...(standardKey()
+    ...(presentation()
       ? [
           ...extraRows(),
           ...(["lastStartAt", "lastProbeAt"] as const).map((field) => ({
@@ -115,7 +104,7 @@ function ChannelStatusBody(params: {
   ]);
   const lastError = createMemo(() =>
     readStringField(
-      asNullableRecord(standardKey() ? status() : displayState().status),
+      asNullableRecord(presentation() ? status() : displayState().status),
       "lastError",
     ),
   );
@@ -123,23 +112,21 @@ function ChannelStatusBody(params: {
   return (
     <SettingsSection
       title={
-        localeKey()
-          ? t(`channels.${localeKey()}.title`)
+        presentation()
+          ? t(presentation()!.titleKey)
           : (readStringField(
               params.props.channels.channelsSnapshot?.channelLabels,
               params.channelId,
             ) ?? params.channelId)
       }
-      description={
-        localeKey() ? t(`channels.${localeKey()}.subtitle`) : t("channels.generic.subtitle")
-      }
+      description={presentation() ? t(presentation()!.subtitleKey) : t("channels.generic.subtitle")}
       count={params.accountCount !== undefined ? params.accountCount : undefined}
     >
       {showAccounts() ? (
         <For each={accounts()} keyed={(account) => account.accountId}>
           {(account) => {
             const username = createMemo(() =>
-              standardKey() === "telegram"
+              accountPresentation()?.titleSource === "botUsername"
                 ? readStringField(
                     asNullableRecord(asNullableRecord(account().probe)?.bot),
                     "username",
@@ -151,7 +138,7 @@ function ChannelStatusBody(params: {
                 title={username() ? `@${username()}` : account().name || account().accountId}
                 accountId={account().accountId}
                 facts={
-                  standardKey() === "telegram"
+                  accountPresentation()?.showConfigured
                     ? [
                         `${t("common.configured")}: ${account().configured ? t("common.yes") : t("common.no")}`,
                       ]
@@ -159,13 +146,13 @@ function ChannelStatusBody(params: {
                 }
                 status={{
                   kind: boolStatusKind(
-                    standardKey() === "telegram"
+                    accountPresentation()?.status === "running"
                       ? account().running
                       : (account().running ?? account().configured),
                   ),
                   label: account().running
                     ? t("common.running")
-                    : !standardKey() && account().configured
+                    : accountPresentation()?.status !== "running" && account().configured
                       ? t("common.configured")
                       : t("common.no"),
                 }}
@@ -179,11 +166,11 @@ function ChannelStatusBody(params: {
         <ChannelFacts rows={statusRows()} />
       )}
       {lastError() ? <ChannelError message={lastError()} /> : undefined}
-      {standardKey() ? (
+      {presentation() ? (
         <Show when={status()?.probe}>{(probe) => <ChannelProbe probe={probe()} />}</Show>
       ) : undefined}
       <ChannelConfig channelId={params.channelId} props={params.props} />
-      {standardKey() ? (
+      {presentation() ? (
         <ChannelActions>
           <button
             class="btn"
@@ -213,7 +200,11 @@ export function renderChannelDetail(params: {
     ),
   );
   return (
-    <openclaw-modal-dialog label={params.label} onModal-cancel={() => params.onClose()}>
+    <openclaw-modal-dialog
+      label={params.label}
+      style={{ "--openclaw-modal-width": "680px" }}
+      onModal-cancel={() => params.onClose()}
+    >
       <div class="channels-detail">
         <div class="channels-detail__header">
           <LitContent
@@ -224,23 +215,6 @@ export function renderChannelDetail(params: {
             }
           />
           <div class="channels-detail__header-actions">
-            <a
-              class="btn btn--sm"
-              href={channelDocsUrl(params.channelId)}
-              target="_blank"
-              rel="noreferrer"
-            >
-              {t("common.docs")}
-            </a>
-            <button
-              type="button"
-              class="btn btn--sm"
-              title={params.props.canAdmin ? "" : t("channels.hub.adminRequired")}
-              disabled={!params.props.canAdmin}
-              onClick={() => params.onSetup()}
-            >
-              {t("channels.hub.runSetup")}
-            </button>
             <button
               type="button"
               class="btn channels-detail__close"
@@ -282,6 +256,26 @@ export function renderChannelDetail(params: {
             />
           )}
         </div>
+
+        <openclaw-modal-actions class="channels-detail__footer">
+          <a
+            class="btn btn--sm"
+            href={channelDocsUrl(params.channelId)}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {t("common.docs")}
+          </a>
+          <button
+            type="button"
+            class="btn btn--sm"
+            title={params.props.canAdmin ? "" : t("channels.hub.adminRequired")}
+            disabled={!params.props.canAdmin}
+            onClick={() => params.onSetup()}
+          >
+            {t("channels.hub.runSetup")}
+          </button>
+        </openclaw-modal-actions>
       </div>
     </openclaw-modal-dialog>
   );

@@ -188,7 +188,7 @@ result is moved only when exactly one unresolved occurrence can own it; ambiguou
 extras are dropped and missing occurrences receive synthetic error results.
 
 Synthetic missing results tell the model that the outcome is unknown: retry only
-read-only or idempotent operations, and verify current state before repeating an
+read-only operations or operations safe to repeat, and verify current state before repeating an
 operation that may have had side effects. Responses-family transports retain
 their `aborted` placeholder. Neither placeholder proves that the tool did not run.
 
@@ -265,7 +265,7 @@ inter-session user turns that only have provenance metadata.
   transcript reload so reopening a session does not change its cached prefix;
   an absent container stays absent.
   Native ChatGPT Responses retains its upstream Codex payload semantics.
-- SDK Responses streams canonicalize fresh reasoning signatures before returning the
+- SDK Responses streams normalize fresh reasoning signatures before returning the
   completed assistant message, so live continuation and transcript storage use
   the same terminal response item's signature bytes, even if `output_item.done`
   carried different ciphertext. Async tool prefixes wait for terminal reasoning
@@ -280,8 +280,8 @@ inter-session user turns that only have provenance metadata.
 - Native ChatGPT Codex Responses follows Codex wire parity by replaying
   prior Responses reasoning/message/function payloads without prior item
   IDs while preserving session `prompt_cache_key`.
-- OpenAI Responses-family replay preserves canonical `call_*|fc_*`
-  tool-call pairs, but deterministically normalizes malformed or
+- OpenAI Responses-family replay preserves valid `call_*|fc_*`
+  tool-call pairs, but uses fixed rules to normalize malformed or
   overlong `call_id`/function-call item ids before pi-ai payload conversion.
   When an assistant turn lacks preceding reasoning with an `rs_*` ID, the transport
   omits its `fc_*` item IDs from the outbound payload without changing the

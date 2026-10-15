@@ -71,7 +71,7 @@ function latestAssistantProvider(messages: unknown[] | undefined): string | null
   return null;
 }
 
-function getContextNoticeViewModel(session: GatewaySessionRow | undefined) {
+export function getContextNoticeViewModel(session: GatewaySessionRow | undefined) {
   const used = asNonNegativeFiniteNumber(session?.totalTokens);
   const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(session);
   if (used === undefined || !limit) {

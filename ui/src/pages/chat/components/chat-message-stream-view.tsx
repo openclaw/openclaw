@@ -156,7 +156,8 @@ function NonstreamPart(props: {
   options: StreamGroupOptions;
   presentation: "standalone" | "continuation";
 }) {
-  const content = createMemo(() => {
+  const indicator = () => (props.part.kind === "reading-indicator" ? props.part : undefined);
+  const question = createMemo(() => {
     const prompt =
       props.part.kind === "question"
         ? props.options.questionPrompts?.get(props.part.questionId)
@@ -164,10 +165,7 @@ function NonstreamPart(props: {
     return prompt ? renderChatQuestionSummary(prompt) : litNothing;
   });
   return (
-    <Show
-      when={props.part.kind === "reading-indicator" ? props.part : undefined}
-      fallback={<LitContent value={content()} />}
-    >
+    <Show when={indicator()} fallback={<LitContent value={question()} />}>
       {(part) => (
         <ChatWorkingIndicator
           part={part()}

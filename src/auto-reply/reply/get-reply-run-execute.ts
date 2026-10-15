@@ -519,7 +519,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
           sessionEntry: preparedSessionState.sessionEntry,
         });
         return {
-          fastMode: params.resolvedFastMode ?? fastModeState.mode,
+          fastMode: params.resolvedFastModeOverride
+            ? params.resolvedFastMode
+            : fastModeState.requestMode,
           fastModeAutoOnSeconds:
             params.resolvedFastModeAutoOnSeconds ?? fastModeState.fastAutoOnSeconds,
           ...(params.resolvedFastModeOverride ? { fastModeOverride: true } : {}),

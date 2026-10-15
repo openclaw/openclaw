@@ -13,7 +13,10 @@ import {
   prepareConversationCapabilityProfile,
   resolveConversationCapabilityProfile,
 } from "./conversation-capability-profile.js";
-import { projectConversationToolNames } from "./conversation-tool-policy-pipeline.js";
+import {
+  isConversationToolAllowed,
+  projectConversationToolNames,
+} from "./conversation-tool-policy-pipeline.js";
 import { preparePluginHarnessPolicyToolsAllow } from "./harness/execution-environment.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import { resolveWebSearchToolPolicy } from "./web-search-tool-policy.js";
@@ -21,6 +24,43 @@ import { resolveWebSearchToolPolicy } from "./web-search-tool-policy.js";
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-capability-profile-");
 
 describe("resolveConversationCapabilityProfile", () => {
+  it.each(["fixture-reader", "group:plugins"])(
+    "uses registered ownership for %s without granting name-only callers",
+    (allow) => {
+      const profile = resolveConversationCapabilityProfile({
+        config: { tools: { allow: [allow, "read"] } },
+      });
+      expect(
+        isConversationToolAllowed(profile, "read_public_item", { pluginId: "fixture-reader" }),
+      ).toBe(true);
+      expect(isConversationToolAllowed(profile, "read_public_item")).toBe(false);
+      expect(isConversationToolAllowed(profile, "read")).toBe(true);
+    },
+  );
+
+  it.each(["read_public_item", "fixture-reader", "group:plugins"])(
+    "keeps %s denied when rechecking a registered plugin tool",
+    (deny) => {
+      const profile = resolveConversationCapabilityProfile({
+        config: { tools: { allow: ["group:plugins"], deny: [deny] } },
+      });
+      expect(
+        isConversationToolAllowed(profile, "read_public_item", { pluginId: "fixture-reader" }),
+      ).toBe(false);
+    },
+  );
+
+  it("does not let plugin ownership widen a narrower conversation policy", () => {
+    const profile = resolveConversationCapabilityProfile({
+      config: { tools: { allow: ["group:plugins", "read"] } },
+      conversationToolPolicy: { allow: ["read"] },
+    });
+    expect(
+      isConversationToolAllowed(profile, "read_public_item", { pluginId: "fixture-reader" }),
+    ).toBe(false);
+    expect(isConversationToolAllowed(profile, "read")).toBe(true);
+  });
+
   it("intersects base and provider profile contributions from plugin manifests", () => {
     const profile = resolveConversationCapabilityProfile({
       config: {

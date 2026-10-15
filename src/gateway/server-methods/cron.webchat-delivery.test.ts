@@ -56,13 +56,26 @@ async function withWebchatTool(
   await withOpenClawTestState({ layout: "home" }, async (state) => {
     const sessionStorePath = path.join(state.sessionsDir(), "sessions.json");
     const cfg: OpenClawConfig = {
-      agents: { entries: { main: { workspace: state.workspaceDir } } },
+      agents: {
+        entries: { main: { workspace: state.workspaceDir } },
+        defaults: { model: "openai/gpt-4.1" },
+      },
       session: { store: sessionStorePath },
       channels: channelsEnabled
         ? { discord: { token: "test-token" }, telegram: { botToken: "test-token" } }
         : {},
       plugins: { entries: { discord: { enabled: true }, telegram: { enabled: true } } },
     };
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "openai:webchat-fixture": {
+          type: "api_key",
+          provider: "openai",
+          key: "synthetic-webchat-inference-key",
+        },
+      },
+    });
     setRuntimeConfigSnapshot(cfg);
     setActivePluginRegistry(
       createTestRegistry(

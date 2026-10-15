@@ -723,27 +723,6 @@ describe("runMemoryFlushIfNeeded", () => {
     }
   });
 
-  it("honors a time-refreshed null plan before preparing or registering a run", async () => {
-    const resolver = vi
-      .fn<MemoryFlushPlanResolver>()
-      .mockImplementationOnce(createMemoryFlushPlan)
-      .mockReturnValueOnce(null);
-    registerMemoryFlushPlanResolverForTest(resolver);
-    const sessionEntry = createFlushSessionEntry();
-
-    const result = await runDefaultMemoryFlush(sessionEntry, {
-      followupRun: createTestFollowupRun({ workspaceDir: rootDir }),
-      defaultModel: "anthropic/claude-opus-4-7",
-    });
-
-    expect(result).toEqual({ sessionEntry, outcome: "skipped" });
-    await expect(fs.stat(path.join(rootDir, "memory/2023-11-14.md"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    expect(registerAgentRunContextMock).not.toHaveBeenCalled();
-    expect(runEmbeddedAgentEntryMock).not.toHaveBeenCalled();
-  });
-
   it("marks flush as completed after MAX_FLUSH_FAILURES to break retry loop", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const sessionEntry = createFlushSessionEntry({

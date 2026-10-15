@@ -10,7 +10,6 @@ import type WaTabPanel from "@awesome.me/webawesome/dist/components/tab-panel/ta
 import type WaTab from "@awesome.me/webawesome/dist/components/tab/tab.js";
 import type { JSX } from "@solidjs/web";
 import type { NodePermissionRequest } from "../../../packages/gateway-protocol/src/node-permissions.js";
-import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { ControlUiSurfaceProps } from "../../../src/plugin-sdk/control-ui.js";
 import type { ClawHubRecommendation } from "../../../src/shared/clawhub-recommendations.js";
 import type { LobsterPetProps } from "../components/lobster-pet-contract.ts";
@@ -41,11 +40,7 @@ declare module "@solidjs/web" {
       messageActions: MessageActionDetails | null | undefined;
     }
     interface IntrinsicElements {
-      "openclaw-working-phrase": HTMLAttributes<HTMLElement> & {
-        "prop:startMs"?: number | null;
-        "prop:seed"?: string;
-        "prop:phrases"?: readonly string[];
-      };
+      "openclaw-modal-actions": HTMLAttributes<HTMLElement>;
       "openclaw-github-identity": HTMLAttributes<HTMLElement>;
       "openclaw-chat-permission-card": HTMLAttributes<HTMLElement> & {
         "prop:request"?: NodePermissionRequest | null;
@@ -55,14 +50,10 @@ declare module "@solidjs/web" {
         HTMLElementTagNameMap["openclaw-chat-run-failure-notice"]
       > &
         ElementProperties<
-          Pick<
-            HTMLElementTagNameMap["openclaw-chat-run-failure-notice"],
-            "onRetry" | "onChangeModel"
-          >
+          Pick<HTMLElementTagNameMap["openclaw-chat-run-failure-notice"], "onRetry">
         >;
-      "openclaw-chat-retry-status": LegacyAttributes<
-        HTMLElementTagNameMap["openclaw-chat-retry-status"]
-      >;
+      "openclaw-mcp-servers-card": HTMLAttributes<HTMLElement>;
+      "openclaw-update-run-view": HTMLAttributes<HTMLElement>;
       "openclaw-plugins-page": HTMLAttributes<HTMLElement>;
       "openclaw-dashboards-page": HTMLAttributes<HTMLElement>;
       "openclaw-lobster-pet": HTMLAttributes<HTMLElement> & ElementProperties<LobsterPetProps>;
@@ -75,10 +66,6 @@ declare module "@solidjs/web" {
       // Each caller validates the picker option/callback pairing before the DOM boundary.
       "openclaw-select-picker": HTMLAttributes<HTMLElementTagNameMap["openclaw-select-picker"]> & {
         "prop:params": unknown;
-      };
-      "openclaw-update-run-view": HTMLAttributes<HTMLElement> & {
-        "prop:run": UpdateRunRecord | null;
-        "prop:connected": boolean;
       };
       "openclaw-plugin-view": HTMLAttributes<HTMLElement> &
         PluginViewProperties & {

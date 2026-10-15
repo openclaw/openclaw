@@ -51,12 +51,9 @@ function createDevRun() {
 }
 
 async function openUpdateConfirmation(page: Page): Promise<void> {
-  await page.locator(".sidebar-issues-button").click();
-  const updateIssue = page.locator(
-    'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
-  );
-  await updateIssue.locator("summary").click();
-  await updateIssue.locator(".sidebar-update-card__action").click();
+  await page.locator(".sidebar-identity-card").click();
+  await page.locator('.sidebar-identity-menu [data-value="command:updates"]').click();
+  await page.getByRole("button", { name: "Update now", exact: true }).click();
 }
 
 suite.define(() => {
@@ -84,7 +81,12 @@ suite.define(() => {
             methodResponses: {
               "update.run": { ok: true, runId: run.runId, handoff: { status: "started" } },
               "update.runs.get": { run },
-              "update.status": { activeRun: null, lastRun: null },
+              "update.status": {
+                activeRun: null,
+                lastRun: null,
+                updateAvailable: DEV_UPDATE_AVAILABLE,
+                schedule: DEV_UPDATE_SCHEDULE,
+              },
             },
           });
 
@@ -112,7 +114,9 @@ suite.define(() => {
             .getByRole("button", { name: "Update and restart", exact: true })
             .click();
 
-          const updating = page.getByRole("button", { name: "Updating…", exact: true });
+          const updating = page
+            .locator("openclaw-modal-dialog")
+            .getByRole("button", { name: "Updating…", exact: true });
           await updating.waitFor();
           expect(await updating.isEnabled()).toBe(false);
           await page
@@ -216,7 +220,12 @@ suite.define(() => {
             methodResponses: {
               "update.run": { ok: true, runId: run.runId, handoff: { status: "started" } },
               "update.runs.get": { run },
-              "update.status": { activeRun: null, lastRun: null },
+              "update.status": {
+                activeRun: null,
+                lastRun: null,
+                updateAvailable: DEV_UPDATE_AVAILABLE,
+                schedule: DEV_UPDATE_SCHEDULE,
+              },
             },
           });
 
@@ -233,7 +242,10 @@ suite.define(() => {
             .locator("openclaw-modal-dialog")
             .getByRole("button", { name: "Update and restart", exact: true })
             .click();
-          await page.getByRole("button", { name: "Updating…", exact: true }).waitFor();
+          await page
+            .locator("openclaw-modal-dialog")
+            .getByRole("button", { name: "Updating…", exact: true })
+            .waitFor();
           await gateway.waitForRequest("update.runs.get");
           await gateway.setOnline(false);
           run = {
