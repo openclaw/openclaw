@@ -52,6 +52,7 @@ vi.mock("../dashboard-session-title.js", async (importOriginal) => {
 vi.mock("../session-transcript-title-reader.js", () => ({
   readSessionTitleFieldsFromTranscriptAsync: mocks.readSessionTitleFields,
 }));
+// mock-isolation: Capture title lifecycle notifications without starting Gateway broadcast workers.
 vi.mock("./session-change-event.js", () => ({
   emitSessionTitleChanged: mocks.emitSessionTitleChanged,
 }));
