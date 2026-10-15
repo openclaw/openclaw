@@ -436,7 +436,7 @@ describe("sendMessageDiscord", () => {
       id: "msg1",
       channel_id: "789",
     });
-    await sendMessageDiscord("channel:789", "ping @Alice", {
+    await sendMessageDiscord("channel:789", "ping @Alice.", {
       rest,
       token: "t",
       cfg: {
@@ -455,7 +455,7 @@ describe("sendMessageDiscord", () => {
       } as never,
     });
     expectRestRoute(postMock, 0, Routes.channelMessages("789"));
-    expect(requireRestBody(postMock).content).toBe("ping <@222333444555666777>");
+    expect(requireRestBody(postMock).content).toBe("ping <@222333444555666777>.");
     expect(requireRestBody(postMock).flags).toBe(MessageFlags.SuppressEmbeds);
   });
 

@@ -3,7 +3,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import * as diagnostics from "./diagnostic-events.js";
 import { runGitWorkerOperation } from "./git-worker.js";
+import { getTrackedWorkerLifecycleSnapshot } from "./worker-cpu.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
+
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  availableParallelism: () => 3,
+}));
 
 const logs = vi.hoisted(() => ({ info: vi.fn(), isEnabled: () => true }));
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
@@ -21,6 +27,41 @@ afterEach(async () => {
   await drainGlobalSingletonLifecycleState();
   vi.restoreAllMocks();
   logs.info.mockClear();
+});
+
+it("reuses concurrent Git readers across recurring sub-minute polls and releases them when idle", async () => {
+  const lifecycle = () =>
+    getTrackedWorkerLifecycleSnapshot().workerLifecycle.find(
+      (worker) => worker.script === "git-operation.worker.js",
+    );
+  const starts = () => lifecycle()?.started ?? 0;
+  const idleExits = () =>
+    lifecycle()?.retired.find((entry) => entry.reason === "idle_timeout")?.count ?? 0;
+  const before = starts();
+  const exitsBefore = idleExits();
+  const poll = () =>
+    Promise.all(
+      [0, 1].map(() =>
+        runGitWorkerOperation({ type: "repository.identities", input: { roots: [] } }),
+      ),
+    );
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  try {
+    await expect(poll()).resolves.toEqual([[], []]);
+    expect(starts() - before).toBe(2);
+    for (let round = 0; round < 3; round++) {
+      await vi.advanceTimersByTimeAsync(45_000);
+      await expect(poll()).resolves.toEqual([[], []]);
+      expect(starts() - before).toBe(2);
+    }
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.waitFor(() => expect(idleExits() - exitsBefore).toBe(2));
+    await expect(poll()).resolves.toEqual([[], []]);
+    expect(starts() - before).toBe(4);
+  } finally {
+    await drainGlobalSingletonLifecycleState();
+    vi.useRealTimers();
+  }
 });
 
 it.each([

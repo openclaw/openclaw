@@ -231,6 +231,12 @@ export class ModelProviderLoginController {
     });
   }
 
+  connectProvider(models: ModelCatalogEntry[]): Promise<void> {
+    return this.open(undefined, undefined, {
+      allowSetup: !models.some((model) => model.available !== false),
+    });
+  }
+
   async open(
     providers?: string[],
     authChoice?: string,

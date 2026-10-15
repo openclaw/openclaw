@@ -125,7 +125,7 @@ function readPublishedStateSchemaVersion(database: EngineConnection): number {
 
 function repairDoctorStateDatabase(
   options: OpenClawStateDatabaseOptions,
-  scope: "doctor" | "indexes" | "readability",
+  scope: "doctor" | "indexes" | "readability" | "version",
 ): { changes: string[]; warnings: string[] } {
   if (isStatePostgres()) {
     requireNativeDatabaseFile("postgres", "repair");
@@ -145,11 +145,13 @@ function repairDoctorStateDatabase(
   );
 }
 
-export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabaseOptions = {}): {
+export function repairOpenClawStateDatabaseSchema(
+  options: OpenClawStateDatabaseOptions & { versionMigrationOnly?: boolean } = {},
+): {
   changes: string[];
   warnings: string[];
 } {
-  return repairDoctorStateDatabase(options, "doctor");
+  return repairDoctorStateDatabase(options, options.versionMigrationOnly ? "version" : "doctor");
 }
 
 /** Explicit Doctor maintenance before config readers encounter a quarantined index. */

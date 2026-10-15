@@ -1,7 +1,9 @@
 // Gateway WebSocket connection tests cover handshake auth, shared sessions, and message-handler attachment.
 import { once } from "node:events";
+import type { IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { rawDataToString } from "../../../packages/gateway-client/src/websocket-data.js";
 import * as Ws from "../../../packages/gateway-client/src/websocket.test-support.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import {
@@ -485,6 +487,79 @@ describe("attachGatewayWsConnectionHandler", () => {
 
     expect(socket.terminate).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("batches a broadcast burst into one socket write while preserving response order", async () => {
+    const server = new Ws.WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await once(server, "listening");
+    const accepted = once(server, "connection");
+    const peer = new Ws.WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}`);
+    await once(peer, "open");
+    const [socket, request] = (await accepted) as [Ws.WebSocket, IncomingMessage];
+    try {
+      const { clients } = attachGatewayWsForTest({
+        attach: attachGatewayWsConnectionHandler,
+        socket: socket as unknown as GatewayWsTestSocket,
+        requestSocket: request.socket,
+      });
+      await waitForLazyMessageHandler();
+      const handler = firstAttachedHandlerParams() as {
+        connId: string;
+        setClient: (client: GatewayWsClient) => boolean;
+        send: (frame: unknown) => unknown;
+      };
+      expect(
+        handler.setClient({
+          socket,
+          connId: handler.connId,
+          connect: {
+            minProtocol: PROTOCOL_VERSION,
+            maxProtocol: PROTOCOL_VERSION,
+            client: {
+              id: "openclaw-control-ui",
+              version: "test",
+              platform: "test",
+              mode: "webchat",
+            },
+            role: "operator",
+            scopes: ["operator.read"],
+          },
+          usesSharedGatewayAuth: false,
+        }),
+      ).toBe(true);
+      const writes = vi.spyOn(request.socket, "_writev");
+      const received: unknown[] = [];
+      const complete = createDeferred();
+      peer.on("message", (data) => {
+        const frame = JSON.parse(rawDataToString(data));
+        if (frame.event === "connect.challenge") {
+          return;
+        }
+        received.push(frame);
+        if (received.length === 4) {
+          complete.resolve();
+        }
+      });
+      const { broadcast } = createGatewayBroadcaster({ clients });
+      broadcast("tick", { value: 1 });
+      broadcast("tick", { value: 2 });
+      handler.send({ type: "res", id: "between", ok: true });
+      broadcast("tick", { value: 3 });
+      await complete.promise;
+      expect(received).toEqual([
+        { type: "event", event: "tick", payload: { value: 1 }, seq: 1 },
+        { type: "event", event: "tick", payload: { value: 2 }, seq: 2 },
+        { type: "res", id: "between", ok: true },
+        { type: "event", event: "tick", payload: { value: 3 }, seq: 3 },
+      ]);
+      expect(writes).toHaveBeenCalledTimes(1);
+    } finally {
+      peer.terminate();
+      socket.terminate();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 
   it.each(["closing", "failed-send"] as const)(

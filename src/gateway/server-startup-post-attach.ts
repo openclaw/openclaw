@@ -44,10 +44,7 @@ import {
   hydrateConfiguredExternalCliAuth,
   publishConfiguredModelRuntimeSnapshots,
 } from "./server-startup-model-runtime.js";
-import {
-  markGatewayStartupMainSessionOrphans,
-  runGatewayStartupObservers,
-} from "./server-startup-observers.js";
+import { runGatewayStartupObservers } from "./server-startup-observers.js";
 import {
   createGatewayStartupOutcomeRecorder,
   formatGatewayStartupOutcomes,
@@ -519,7 +516,7 @@ export async function startGatewayPostAttachRuntime(
     startChannels: () => Promise<void>;
     refreshChatMetadata?: () => Promise<void>;
     recoveryRuntime: GatewayRecoveryRuntime;
-    isRestartRecoverySuppressed: () => boolean;
+    mainSessionRecoveryStartupCheckedStorePaths: Set<string>;
     resolveGatewayContext: GatewayContextResolver;
     logHooks: {
       info: (msg: string) => void;
@@ -567,7 +564,6 @@ export async function startGatewayPostAttachRuntime(
   // Rehearsal loads plugins without resuming copied jobs, services, or notices.
   const candidateCanary = params.updateCanary === true;
   const controlUiRootLifecycle = params.controlUiRootLifecycle;
-  const mainSessionRecoveryStartupCheckedStorePaths = new Set<string>();
   const controlUiAssetsSidecar =
     !params.minimalTestGateway && controlUiRootLifecycle
       ? schedulePostReadySidecarTask({
@@ -730,19 +726,7 @@ export async function startGatewayPostAttachRuntime(
             skipStartupLog();
             return pluginRegistry;
           }
-          const prepared = await Promise.allSettled([
-            candidateCanary
-              ? Promise.resolve()
-              : markGatewayStartupMainSessionOrphans(
-                  params,
-                  mainSessionRecoveryStartupCheckedStorePaths,
-                ),
-            loadStartupPluginsIfNeeded(),
-          ]);
-          const failed = prepared.find((outcome) => outcome.status === "rejected");
-          if (failed?.status === "rejected") {
-            throw failed.reason;
-          }
+          await loadStartupPluginsIfNeeded();
           if (params.isClosing?.()) {
             skipStartupLog();
             return pluginRegistry;
@@ -874,7 +858,7 @@ export async function startGatewayPostAttachRuntime(
                 delayMs: 0,
                 getConfig: params.getConfig,
                 shouldContinue: () => params.isClosing?.() !== true,
-                startupCheckedStorePaths: mainSessionRecoveryStartupCheckedStorePaths,
+                startupCheckedStorePaths: params.mainSessionRecoveryStartupCheckedStorePaths,
                 waitForStart: params.waitForPostReadyWork,
                 gatewayRuntime: params.recoveryRuntime,
               });

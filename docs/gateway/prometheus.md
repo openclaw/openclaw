@@ -103,6 +103,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gc_duration_seconds`                            | histogram | `kind`, `thread`                                                                          |
 | `openclaw_gateway_rpc_requests_total`                     | counter   | `method`                                                                                  |
 | `openclaw_models_list_requests_total`                     | counter   | `client_kind`, `source`, `view`, `scope`, `refresh`, `prepared_only`                      |
+| `openclaw_sessions_list_requests_total`                   | counter   | `client_kind`, `source`, `caller_source`, `row_mode`, `filter`                            |
+| `openclaw_cron_list_requests_total`                       | counter   | `client_kind`, `source`, `scope`, `compact`, `page`                                       |
 | `openclaw_gateway_rpc_first_response_seconds`             | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_response_bytes`                     | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_handler_heap_delta_bytes`           | histogram | `method`                                                                                  |
@@ -254,6 +256,28 @@ scope does not describe the authorized result. No agent, session, profile,
 connection, user-agent, or display-name values are exported. Each observed label
 combination uses one sample in the existing shared cap. The method-only request
 counter and timing histograms retain their existing labels.
+
+`openclaw_sessions_list_requests_total` uses the same `client_kind` and `source`
+attribution for session reads. `caller_source` records the protocol's bounded
+caller tag (`sidebar`, `dashboard`, `activity`, `sessions-page`, `chat-pane`,
+`agent-roster`, `command-palette`, or `skill-workshop`); missing or unknown tags
+become `unspecified`. `row_mode` is `full` when omitted, `compact`, `dashboard`,
+`sidebar`, or `other` for an invalid value. `filter` records the first matching
+primary filter family: `search`, `children` (`spawnedBy`), `owner` (`ownerId`),
+`involving` (`involvingMe=true`, `involvingProfileId`, or `profileRelation`),
+`active` (`activeOnly=true` or `activeMinutes`), or `general` when none applies.
+Other selection and presentation options do not add labels. Counts include
+later-rejected requests and export no filter values, limits, offsets, or revision
+tokens. Each observed combination uses one sample in the existing shared cap.
+
+`openclaw_cron_list_requests_total` uses the same `client_kind` and `source`
+attribution for cron reads. `scope` records parameter presence: `session` when
+`sessionKey` is supplied, then `agent` for `agentId`, otherwise `global`.
+`compact` records whether the parameter is exactly `true`; `page` is `append`
+for a positive numeric offset and `first` otherwise. Counts include
+later-rejected requests; scope does not describe the authorized result. No
+session, agent, query, or offset values are exported. Each observed combination
+uses one sample in the existing shared cap.
 
 Outcome totals aggregate by phase and outcome without a
 method dimension. Each method with all four timings, both byte histograms, and the exclusive-sample counter occupies eight aggregate
@@ -740,6 +764,14 @@ sum by (method) (rate(openclaw_gateway_rpc_requests_total[5m]))
 # Model catalog calls per minute by caller and request shape over ten minutes
 60 * sum by (client_kind, source, view, scope, refresh, prepared_only)
   (rate(openclaw_models_list_requests_total[10m]))
+
+# Session list calls per minute by caller and request shape over ten minutes
+60 * sum by (client_kind, source, caller_source, row_mode, filter)
+  (rate(openclaw_sessions_list_requests_total[10m]))
+
+# Cron list calls per minute by caller and request shape over ten minutes
+60 * sum by (client_kind, source, scope, compact, page)
+  (rate(openclaw_cron_list_requests_total[10m]))
 
 # 95th percentile first-response latency by method
 histogram_quantile(

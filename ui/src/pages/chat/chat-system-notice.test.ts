@@ -48,12 +48,7 @@ afterEach(() => resetChatThreadState());
 
 describe("system notices through pending-to-history promotion", () => {
   it.each([
-    [
-      "main_session_restart_recovery",
-      "System · restart recovery",
-      "Gateway restarted. Resuming your interrupted request.",
-      false,
-    ],
+    ["main_session_restart_recovery", "System · restart recovery", "", false],
     [
       "cron_failure_repair",
       "System · automation recovery",
