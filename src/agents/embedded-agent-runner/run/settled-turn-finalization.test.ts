@@ -8,8 +8,8 @@ import {
   prepareSystemAgentRunAdmission,
   type AdmittedRunContext,
 } from "../../admitted-run-context.js";
-import { EmptySettledTurnFinalizationError } from "../../harness/settled-turn-finalization-outcome.js";
-import { assertSettledTurnFinalizationResult } from "../../harness/settled-turn-finalization-result.js";
+import { runAgentHarnessLifecycleFinalization } from "../../harness/lifecycle.js";
+import type { AgentHarness } from "../../harness/types.js";
 import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
 import {
   buildEmbeddedRunnerAssistant,
@@ -148,18 +148,16 @@ function finalizationInput(attempt: ReturnType<typeof settledFailedAttempt>) {
   return createSettledFinalizationTestInput(attempt, admittedRunContext);
 }
 
-// Mirrors runAgentHarnessLifecycleFinalization so the suite exercises the real
-// echo rejection rather than a stubbed outcome.
-function settleThroughHarness(assistant: AssistantMessage) {
-  try {
-    assertSettledTurnFinalizationResult({ assistant });
-    return { outcome: "answered" as const, result: { assistant } };
-  } catch (error) {
-    if (error instanceof EmptySettledTurnFinalizationError) {
-      return { outcome: "empty" as const, result: error.result };
-    }
-    throw error;
-  }
+// Drives the real lifecycle owner so the suite exercises the production echo
+// rejection and its empty-finalization translation, not a stubbed outcome.
+const FINALIZATION_HARNESS = { id: "test-settled-finalization" } as AgentHarness;
+
+function settleThroughHarness(assistant: AssistantMessage, params: EmbeddedRunAttemptParams) {
+  return runAgentHarnessLifecycleFinalization(
+    FINALIZATION_HARNESS,
+    params as unknown as Parameters<typeof runAgentHarnessLifecycleFinalization>[1],
+    async () => ({ assistant }),
+  );
 }
 
 describe("prepareTerminalWithSettledTurnFinalization", () => {
@@ -389,8 +387,12 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       content: [{ type: "text", text: "The disk has 12 GB free; nothing needs cleanup." }],
     });
     backendMocks.runSettledFinalization
-      .mockImplementationOnce(async () => settleThroughHarness(echoedAssistant))
-      .mockImplementationOnce(async () => settleThroughHarness(answerAssistant));
+      .mockImplementationOnce(async (params: EmbeddedRunAttemptParams) =>
+        settleThroughHarness(echoedAssistant, params),
+      )
+      .mockImplementationOnce(async (params: EmbeddedRunAttemptParams) =>
+        settleThroughHarness(answerAssistant, params),
+      );
 
     const result = await prepareTerminalWithSettledTurnFinalization(finalizationInput(attempt));
 
