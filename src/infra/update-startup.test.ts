@@ -83,6 +83,7 @@ describe("update-startup", () => {
   let getUpdateEffectiveChannel: (typeof import("./update-startup.js"))["getUpdateEffectiveChannel"];
   let getUpdateSchedule: (typeof import("./update-status-state.js"))["getUpdateSchedule"];
   let refreshGatewayUpdateStatus: (typeof import("./update-status-schedule.js"))["refreshGatewayUpdateStatus"];
+  let getGatewayUpdateSchedule: (typeof import("./update-status-schedule.js"))["getGatewayUpdateSchedule"];
   let resetUpdateAvailableStateForTest: (typeof import("./update-startup.js"))["resetUpdateAvailableStateForTest"];
   let loaded = false;
   const updateChecks = new Set<ReturnType<typeof createGatewayUpdateCheck>>();
@@ -198,7 +199,8 @@ describe("update-startup", () => {
         getUpdateEffectiveChannel,
         resetUpdateAvailableStateForTest,
       } = await import("./update-startup.js"));
-      ({ refreshGatewayUpdateStatus } = await import("./update-status-schedule.js"));
+      ({ getGatewayUpdateSchedule, refreshGatewayUpdateStatus } =
+        await import("./update-status-schedule.js"));
       ({ getUpdateAvailable, getUpdateSchedule } = await import("./update-status-state.js"));
       loaded = true;
     }
@@ -507,6 +509,43 @@ describe("update-startup", () => {
     });
     expect(onUpdateAvailableChange).toHaveBeenNthCalledWith(2, null);
     expect(getUpdateAvailable()).toBeNull();
+  });
+
+  it("republishes discovered package install facts when the shared throttle skips the probe", async () => {
+    writePersistedUpdateCheckState({
+      lastCheckedAt: new Date(Date.now()).toISOString(),
+      lastCheckedChannel: "stable",
+      lastAvailableVersion: "2.0.0",
+    });
+    mockPackageInstallStatus();
+    const cfg: OpenClawConfig = { update: { channel: "stable" } };
+
+    await runGatewayUpdateCheck({ cfg });
+
+    // The cached check skipped the npm lookup, so the Updates page depends on
+    // the installation identity discovery already established.
+    expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
+    expect(resolveNpmChannelTag).not.toHaveBeenCalled();
+    expect(getUpdateSchedule()?.install).toEqual({ kind: "package" });
+    expect(getGatewayUpdateSchedule(cfg, "stable").install).toEqual({ kind: "package" });
+  });
+
+  it("keeps an unknown install kind out of the package identity on a cached check", async () => {
+    writePersistedUpdateCheckState({
+      lastCheckedAt: new Date(Date.now()).toISOString(),
+      lastCheckedChannel: "stable",
+    });
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root: "/opt/openclaw",
+      installKind: "unknown",
+      packageManager: "unknown",
+    } satisfies UpdateCheckResult);
+
+    await runGatewayUpdateCheck({ cfg: { update: { channel: "stable" } } });
+
+    // Undiscovered installs must not read as an installed package.
+    expect(getUpdateSchedule()?.install).toEqual({ kind: "unknown" });
   });
 
   it("uses the exact selector for an installed final extended-stable package", async () => {

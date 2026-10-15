@@ -431,16 +431,8 @@ async function runGatewayUpdateCheckOwned(
   const checkIntervalMs = shouldRunAutoUpdate
     ? resolveCheckIntervalMs(cfg, installStatus?.status.installKind)
     : UPDATE_CHECK_INTERVAL_MS;
-  if (
-    !shouldBypassSharedThrottle &&
-    rawNowIsValid &&
-    lastCheckedAt &&
-    Number.isFinite(lastCheckedAt) &&
-    now - lastCheckedAt < checkIntervalMs
-  ) {
-    return;
-  }
-
+  // Publish discovery facts before the shared-throttle return. A cached check
+  // must not drop an installation identity discovery already established.
   const { root, status, installReceipt } = installStatus;
   setSchedule(
     withUpdateInstallStatus(
@@ -451,6 +443,15 @@ async function runGatewayUpdateCheckOwned(
       root,
     ),
   );
+  if (
+    !shouldBypassSharedThrottle &&
+    rawNowIsValid &&
+    lastCheckedAt &&
+    Number.isFinite(lastCheckedAt) &&
+    now - lastCheckedAt < checkIntervalMs
+  ) {
+    return;
+  }
 
   const nextState: UpdateCheckState = {
     ...state,

@@ -148,6 +148,20 @@ describe("renderUpdates", () => {
       title: "",
     },
     {
+      name: "an install the check has not identified yet",
+      props: {
+        update: {
+          updateSchedule: { channel: "stable", autoEnabled: false },
+          updateAvailable: null,
+        },
+      },
+      status: "Update status unavailable",
+      tone: "muted",
+      label: "Update now",
+      disabled: false,
+      title: "",
+    },
+    {
       name: "update available",
       props: {},
       status: "Update available v2026.8.2",
