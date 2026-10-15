@@ -66,6 +66,10 @@ function messageIds(messages: unknown[]) {
   return messages.map((entry) => (entry as { __openclaw: { id: string } })["__openclaw"].id);
 }
 
+function openClawMeta(message: unknown): Record<string, unknown> {
+  return (message as { __openclaw: Record<string, unknown> })["__openclaw"];
+}
+
 function historicalWindowIds(
   events: Array<{ id: string; type?: string }>,
   targetId: string,
@@ -143,6 +147,56 @@ describe("session transcript reader marker projection", () => {
       ]),
     );
   });
+
+  test("returns the stored compaction summary only to exact-message reads", async () => {
+    const scope = await writeTranscript("compaction-summary", [
+      message("before", "Original conversation"),
+      compaction("summary", "before"),
+      message("after", "Continued conversation", "assistant"),
+    ]);
+    const paged = await readSessionMessagesAsync(scope, {
+      mode: "full",
+      reason: "Compaction summary stays out of history pages",
+    });
+    const defaultRead = await readSessionMessageByIdAsync(scope, "summary");
+    const requestedRead = await readSessionMessageByIdAsync(scope, "summary", {
+      includeCompactionSummary: true,
+    });
+
+    expect(openClawMeta(requestedRead.message)).toMatchObject({
+      kind: "compaction",
+      id: "summary",
+      tokensBefore: 100,
+      tokensAfter: 25,
+      summary: "summary summary",
+    });
+    expect(openClawMeta(defaultRead.message)).not.toHaveProperty("summary");
+    for (const entry of paged) {
+      expect(openClawMeta(entry)).not.toHaveProperty("summary");
+    }
+  });
+
+  test.each([
+    { stored: "x".repeat(16_000), expected: "x".repeat(16_000) },
+    { stored: `prefix${"x".repeat(16_001)}`, expected: undefined },
+  ])(
+    "bounds a requested compaction summary at the stored cap ($stored.length chars)",
+    async ({ stored, expected }) => {
+      const scope = await writeTranscript("compaction-summary-cap", [
+        message("before", "Original conversation"),
+        { ...compaction("bounded", "before"), summary: stored },
+      ]);
+      const requestedRead = await readSessionMessageByIdAsync(scope, "bounded", {
+        includeCompactionSummary: true,
+      });
+
+      expect(openClawMeta(requestedRead.message)).toMatchObject({
+        kind: "compaction",
+        id: "bounded",
+      });
+      expect(openClawMeta(requestedRead.message)["summary"]).toBe(expected);
+    },
+  );
 
   test("reads a bounded ended window without successor turns after same-ID reset", async () => {
     const boundaryId = "ended-boundary";

@@ -213,7 +213,7 @@ function selectSessionTranscriptProjection(
         displaySource: page.displaySource,
         hasOverreadContext: page.hasOverreadContext,
         messages: capAnchorEventsByBytes(page.events, selection.options.maxBytes)
-          .map(sqliteMessageEventWithSeq)
+          .map((entry) => sqliteMessageEventWithSeq(entry))
           .filter((message) => message !== undefined),
         offset: page.offset,
         totalMessages: page.totalMessages,
@@ -236,7 +236,9 @@ function selectSessionTranscriptProjection(
       return event
         ? {
             found: true,
-            message: sqliteMessageEventWithSeq(event),
+            message: sqliteMessageEventWithSeq(event, {
+              includeCompactionSummary: selection.options?.includeCompactionSummary,
+            }),
             ...(selection.options?.historyVisibility
               ? {
                   historyContext: {

@@ -136,6 +136,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         max: 1,
         maxHistoryBytes: MAX_PAYLOAD_BYTES,
         effectiveMaxChars,
+        includeCompactionSummary: true,
         offset: undefined,
       });
       // Async transcript/archive reads cannot publish under a stale sharing or

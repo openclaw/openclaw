@@ -176,6 +176,8 @@ export type SessionConversationBinding = Pick<
 export type ChatHistoryMessageParams = ChatHistoryPageParams & {
   sessionId: string;
   messageId: string;
+  /** Exact-message reads request the stored compaction summary; history pages never do. */
+  includeCompactionSummary?: boolean;
 };
 export type ChatHistoryDisplayRequest =
   | { kind: "rpc"; params: ChatHistoryPageParams }
