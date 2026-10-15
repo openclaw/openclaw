@@ -88,7 +88,21 @@ export function recordMemorySample(
     string,
     { count: number; sampled: number; heapUsed: number | undefined }
   >();
+  store.clearGauges("openclaw_code_mode_worker_heap_bytes");
   for (const worker of memory.workerHeaps ?? []) {
+    if (worker.workerSlot !== undefined) {
+      for (const [kind, value] of [
+        ["used", worker.heapUsed],
+        ["limit", worker.heapSizeLimitBytes],
+      ] as const) {
+        store.gauge(
+          "openclaw_code_mode_worker_heap_bytes",
+          "Latest live Code Mode isolate heap usage and limit by reusable worker slot.",
+          { slot: String(worker.workerSlot), kind },
+          value,
+        );
+      }
+    }
     const totals = workers.get(worker.script) ?? { count: 0, sampled: 0, heapUsed: undefined };
     totals.count++;
     totals.sampled++;

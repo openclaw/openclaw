@@ -192,7 +192,7 @@ describe("Node Code Mode executor", () => {
   });
   // Bun lacks perf_hooks GC entries and V8's --expose_gc; native OOM is covered above.
   it.skipIf(!PerformanceObserver.supportedEntryTypes.includes("gc"))(
-    "stops sustained native GC pressure near the heap limit and recovers",
+    "stops sustained near-limit major collections even with zero reported duration and recovers",
     async () => {
       // Keep retained allocations live and measure occupancy after native collections.
       const pressureSource = `

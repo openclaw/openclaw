@@ -683,8 +683,28 @@ test("retains event-loop and GC durations only as metrics with all preloaded SDK
         { "openclaw.gc.kind": "scavenge", "openclaw.gc.thread": "main" },
       ]),
     );
-    expect(deliveredSamples).toBe(6);
+    emitInternalDiagnosticEventForTest({
+      type: "diagnostic.gc",
+      kind: "mark_sweep_compact",
+      thread: "code-mode-node.worker.js",
+      workerSlot: 2,
+      durationMs: 8,
+    });
+    await waitForDiagnosticEventsDrained();
+    await meterProvider.forceFlush();
+    expect(sampleMetrics()["openclaw.gc.duration_ms"]?.points).toContainEqual(
+      expect.objectContaining({
+        attributes: {
+          "openclaw.gc.kind": "mark_sweep_compact",
+          "openclaw.gc.thread": "code-mode-node.worker.js",
+          "openclaw.gc.worker_slot": 2,
+        },
+        value: expect.objectContaining({ count: 1, sum: 8 }),
+      }),
+    );
+    expect(deliveredSamples).toBe(7);
     expect(observedParents).toEqual([
+      undefined,
       undefined,
       undefined,
       undefined,

@@ -475,6 +475,12 @@ async function sendSubagentAnnounceDirectlyBound(
               }
               return await runAnnounceAgentCall({
                 agentParams: directAgentParams,
+                // Individual result delivery and an owed public synthesis remain
+                // required; optional settle intake may complete without repeating it.
+                replyExpectation:
+                  params.expectsCompletionMessage || params.requireVisibleReply
+                    ? "required"
+                    : "optional",
                 // A resumed parent has no inbound channel dispatcher to keep activity visible.
                 typing:
                   sourceToolId === "subagent_settle" &&

@@ -1,3 +1,4 @@
+import { serialize } from "node:v8";
 import { expect, it, vi } from "vitest";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
@@ -124,4 +125,54 @@ it("detaches complete append deltas and omits unavailable, incomplete, or replac
   expect(create(hot(3))).toBeUndefined();
   expect(create(hot(2, "replacement"))).toBeUndefined();
   expect(create(hot(0))).toBeUndefined();
+});
+
+it("keeps append receipts independent of retained transcript length", async () => {
+  await withActor(async (f) => {
+    const history = Array.from({ length: 256 }, (_, index) => ({
+      type: "message",
+      id: `history-${index}`,
+      parentId: index ? `history-${index - 1}` : null,
+      timestamp: "2026-01-01T00:00:00Z",
+      message: { role: "user", content: "synthetic history", idempotencyKey: `input-${index}` },
+    }));
+    runSqliteImmediateTransactionSync(f.database.db, () =>
+      appendTranscriptEventsInTransaction(f.database, f.scope, history),
+    );
+    const event = {
+      type: "custom",
+      customType: "synthetic-receipt",
+      id: "new-event",
+      parentId: "history-255",
+      timestamp: "2026-01-01T00:00:01Z",
+      data: { content: "x".repeat(6 * 1024) },
+    };
+    const command: Mutation = {
+      type: "session.actor.appendTranscriptEvent",
+      input: {
+        target: f.target,
+        commandId: "bounded-receipt",
+        phaseId: "turn",
+        sessionId: f.scope.sessionId,
+        lifecycleRevision: null,
+        eventJson: JSON.stringify(event),
+      },
+    };
+    await f.prepare(command);
+    const outcome = f.mutate(command);
+    if (outcome.kind !== "committed") {
+      throw new Error("Expected append commit");
+    }
+    expect(serialize(outcome).byteLength).toBeLessThan(16 * 1024);
+    expect(outcome.receipt.transcript.appendedEvents).toEqual([
+      { rawSeq: 256, event, serializedBytes: Buffer.byteLength(JSON.stringify(event)) + 1 },
+    ]);
+    expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toHaveLength(257);
+    const retry = f.mutate({ ...command, input: { ...command.input, commandId: "retry" } });
+    expect(retry).toMatchObject({
+      kind: "committed",
+      receipt: { transcript: { appendedEvents: [] } },
+    });
+    expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toHaveLength(257);
+  });
 });
