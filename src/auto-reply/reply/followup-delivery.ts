@@ -356,7 +356,7 @@ async function sendFollowupPayloads(params: {
   mirror?: boolean;
   resolved?: { provider: string; model: string };
   onObservedReplyDelivery?: () => Promise<void> | void;
-}): Promise<ReplyPayload[]> {
+}): Promise<FollowupDeliveryResult> {
   const { turn, defaults } = params;
   const { originatingChannel, originatingTo } = turn.queued;
   const originRoutable = Boolean(isRoutableChannel(originatingChannel) && originatingTo);
@@ -374,12 +374,12 @@ async function sendFollowupPayloads(params: {
         getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
   );
   if (payloads.length === 0) {
-    return [];
+    return { kind: "completed", payloads: [] };
   }
   const sourceDisposition = turn.queued.queuedFollowupReplyDisposition;
   if (sourceDisposition?.kind === "drop") {
     logVerbose(`followup queue: source delivery dropped (${sourceDisposition.reason})`);
-    return [];
+    return { kind: "completed", payloads: [] };
   }
   const deliverQueuedBatch = sourceDisposition?.deliver;
   if (turn.queued.run.internalEventExecution) {
@@ -395,7 +395,7 @@ async function sendFollowupPayloads(params: {
         completion: { kind: "progress" },
       });
     }
-    return payloads;
+    return { kind: "completed", payloads };
   }
   const fallbackDispatcher = sourceDisposition ? undefined : defaults.opts?.onBlockReply;
   const dispatcherAvailable = Boolean(deliverQueuedBatch || fallbackDispatcher);
@@ -403,7 +403,7 @@ async function sendFollowupPayloads(params: {
     defaultRuntime.error?.(
       "followup queue: completed with payloads but no origin route or visible dispatcher is available",
     );
-    return [];
+    return { kind: "completed", payloads: [] };
   }
   const typing = createTypingSignaler({
     typing: defaults.typing,
@@ -412,11 +412,13 @@ async function sendFollowupPayloads(params: {
   });
   const crossChannelFailures: ReplyPayload[] = [];
   const queuedPayloads: ReplyPayload[] = [];
+  let pending = false;
   const dispatchPayload = async (payload: ReplyPayload) => {
     if (deliverQueuedBatch) {
       queuedPayloads.push(payload);
     } else if (fallbackDispatcher) {
       const delivery = await deliverBlockReply(() => fallbackDispatcher(payload));
+      pending ||= delivery.pending === true || delivery.outcome === "recovery-owned";
       if (
         delivery.outcome === "delivered" &&
         !delivery.pending &&
@@ -485,6 +487,7 @@ async function sendFollowupPayloads(params: {
         runId: params.runId,
       });
       if (!result.delivered && (result.queueCustody === "held" || result.ambiguous)) {
+        pending = true;
         logVerbose(
           `followup queue: route-reply remains pending: ${result.error ?? "unconfirmed delivery"}`,
         );
@@ -536,11 +539,11 @@ async function sendFollowupPayloads(params: {
       completion: { kind: "progress" },
     });
   }
-  return queuedPayloads;
+  return { kind: pending ? "pending" : "completed", payloads: queuedPayloads };
 }
 
 export type FollowupDeliveryResult =
-  | { kind: "completed"; payloads: ReplyPayload[] }
+  | { kind: "completed" | "pending"; payloads: ReplyPayload[] }
   | { kind: "source-retry" };
 
 export async function deliverFollowupDecision(params: {
@@ -605,7 +608,7 @@ export async function deliverFollowupDecision(params: {
   } else {
     payloads = decision.payloads;
   }
-  const delivered = await sendFollowupPayloads({
+  return await sendFollowupPayloads({
     payloads,
     turn,
     defaults,
@@ -616,5 +619,4 @@ export async function deliverFollowupDecision(params: {
     resolved: decision.resolved,
     onObservedReplyDelivery: params.onObservedReplyDelivery,
   });
-  return { kind: "completed", payloads: delivered };
 }

@@ -121,7 +121,7 @@ export function createFollowupRunner(
     const admissionNotices: ReplyPayload[] = [];
     let completion: QueuedFollowupReplyBatch["completion"] = { kind: "completed" };
     let visibleReplySent = false;
-    let sourceRetry = false;
+    let deliveryPending = false;
     const onObservedReplyDelivery = async () => {
       if (visibleReplySent) {
         return;
@@ -134,7 +134,7 @@ export function createFollowupRunner(
       payloads: ReplyPayload[],
       kind: "tool" | "block",
     ) => {
-      await deliverFollowupDecision({
+      const delivery = await deliverFollowupDecision({
         decision: { kind: "deliver", payloads },
         turn,
         defaults,
@@ -143,6 +143,7 @@ export function createFollowupRunner(
         kind,
         onObservedReplyDelivery,
       });
+      deliveryPending ||= delivery.kind !== "completed";
     };
     const endDeliveryCorrelations = (queued.deliveryCorrelations ?? [])
       .map((correlation) => correlation.begin())
@@ -289,8 +290,8 @@ export function createFollowupRunner(
         onObservedReplyDelivery,
       });
       // Source recovery has its own queued callback; this execution still closes once.
-      terminalPayloads = delivery.kind === "completed" ? delivery.payloads : [];
-      sourceRetry = delivery.kind === "source-retry";
+      terminalPayloads = delivery.kind === "source-retry" ? [] : delivery.payloads;
+      deliveryPending ||= delivery.kind !== "completed";
       // Gateway final batches are returned above, not delivered: their one-shot
       // source owner settles in finally. Allocate its successor before that boundary.
       if (
@@ -384,7 +385,9 @@ export function createFollowupRunner(
         try {
           end(
             // Source-owned batches settle through their own owner, whose void callback is not a receipt.
-            disposition.kind === "consumed" && !sourceRetry && sourceDisposition?.kind !== "deliver"
+            disposition.kind === "consumed" &&
+              (!deliveryPending || visibleReplySent || completion.kind === "failed") &&
+              sourceDisposition?.kind !== "deliver"
               ? { visibleReplySent, failed: !admittedTurn || completion.kind === "failed" }
               : undefined,
           );

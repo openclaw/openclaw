@@ -165,6 +165,31 @@ beforeEach(() => {
 });
 
 describe("createFollowupRunner", () => {
+  it.each([false, true])(
+    "keeps pending transport unsettled unless execution failed (%s)",
+    async (failed) => {
+      const turn = createTurn();
+      const end = vi.fn();
+      turn.queued.deliveryCorrelations = [{ begin: () => end }];
+      state.admit.mockResolvedValue({ kind: "admitted", turn });
+      state.execute.mockResolvedValue(
+        failed ? createRejectedExecution() : createSettledExecution(),
+      );
+      state.account.mockResolvedValue(undefined);
+      state.deliver.mockResolvedValue({ kind: "pending", payloads: [] });
+
+      await createFollowupRunner({
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+      })(turn.queued);
+
+      expect(end).toHaveBeenCalledExactlyOnceWith(
+        failed ? { visibleReplySent: false, failed: true } : undefined,
+      );
+    },
+  );
+
   it("reads the current transcript without borrowing the interrupted turn's admission fence", async () => {
     const turn = createTurn();
     const admission = {

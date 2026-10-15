@@ -98,7 +98,7 @@ export type TaskSuggestionDeliveryMode = "gateway";
 
 /** Correlates queued reply ownership transfer with later delivery drains. */
 export type QueuedReplyDeliveryCorrelation = {
-  /** No settlement means deferred/retry work or a separate source-owned delivery outcome. */
+  /** No settlement means pending/retry work or a separate source-owned delivery outcome. */
   begin: () => ((settlement?: { visibleReplySent: boolean; failed: boolean }) => void) | void;
 };
 
