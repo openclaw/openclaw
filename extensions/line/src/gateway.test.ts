@@ -8,13 +8,18 @@ import { lineGatewayAdapter } from "./gateway.js";
 import { setLineRuntime } from "./runtime.js";
 import type { LineProbeResult, ResolvedLineAccount } from "./types.js";
 
-const { probeLineBotMock, monitorLineProviderMock } = vi.hoisted(() => ({
+const { probeLineBotMock, monitorLineProviderMock, rememberLineBotUserIdMock } = vi.hoisted(() => ({
   probeLineBotMock: vi.fn(),
   monitorLineProviderMock: vi.fn(async () => ({ stop: async () => {} })),
+  rememberLineBotUserIdMock: vi.fn(),
 }));
 
 vi.mock("./probe.runtime.js", () => ({ probeLineBot: probeLineBotMock }));
 vi.mock("./monitor.runtime.js", () => ({ monitorLineProvider: monitorLineProviderMock }));
+vi.mock("./outbound-message-log.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./outbound-message-log.js")>()),
+  rememberLineBotUserId: rememberLineBotUserIdMock,
+}));
 
 function lineAccount(config: ResolvedLineAccount["config"] = {}): ResolvedLineAccount {
   return {
@@ -42,12 +47,14 @@ describe("lineGatewayAdapter.startAccount", () => {
   beforeEach(() => {
     probeLineBotMock.mockReset();
     monitorLineProviderMock.mockClear();
+    rememberLineBotUserIdMock.mockClear();
     setLineRuntime(createPluginRuntimeMock());
   });
 
   afterAll(() => {
     vi.doUnmock("./probe.runtime.js");
     vi.doUnmock("./monitor.runtime.js");
+    vi.doUnmock("./outbound-message-log.js");
     vi.resetModules();
   });
 
@@ -105,4 +112,22 @@ describe("lineGatewayAdapter.startAccount", () => {
     expect(warn.mock.calls[0]?.[0]).not.toContain("/hooks/line-primary");
     expect(warn.mock.calls[0]?.[0]).toContain("channels.line.webhookPath");
   });
+
+  // Sent ids persist under the bot's own user id, so a re-pointed account never
+  // inherits the previous bot's record, and an unknown bot stays memory-only.
+  it.each([
+    {
+      name: "the probe reports the bot",
+      probe: { ok: true, bot: { userId: "U-bot" } },
+      last: "U-bot",
+    },
+    { name: "the probe failed", probe: { ok: false, error: "timeout" }, last: undefined },
+  ] satisfies { name: string; probe: LineProbeResult; last: string | undefined }[])(
+    "records the bot user id for sent messages when $name",
+    async ({ probe, last }) => {
+      await startWithProbe(probe);
+
+      expect(rememberLineBotUserIdMock.mock.calls).toEqual([["default", last]]);
+    },
+  );
 });

@@ -1007,7 +1007,7 @@ describe("handleLineWebhookEvents", () => {
   ])("respects $name for a quote of the bot", async ({ quotedBot, mentioned, dispatched }) => {
     const processMessage = vi.fn();
     const groupHistories = new Map<string, HistoryEntry[]>();
-    recordLineSentMessages("default", ["m-bot-quote-policy"]);
+    await recordLineSentMessages("default", ["m-bot-quote-policy"]);
     const text = mentioned ? "@Bot explain this" : "does quoting you count as addressing you";
     const event = createTestMessageEvent({
       message: {
