@@ -354,6 +354,7 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
         ...(route === "batch"
           ? {
               OPENCLAW_VITEST_RUNTIME: "bun",
+              OPENCLAW_BUN_PATH: process.execPath,
               NODE_COMPILE_CACHE: nodeCompileCache,
               NODE_COMPILE_CACHE_PORTABLE: "1",
               NODE_DISABLE_COMPILE_CACHE: undefined,
@@ -379,7 +380,7 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
           prepared: ready && route !== "batch",
           ...(route === "batch"
             ? {
-                command: "bun",
+                command: process.execPath,
                 orchestratorRuntime: "node",
                 orchestratorCache: expectedCache,
               }

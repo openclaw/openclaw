@@ -8,11 +8,7 @@ import type {
 } from "./chat-question-types.ts";
 import "./chat-question-card-view.tsx";
 
-export type {
-  QuestionPanelOptions,
-  QuestionPanelProps,
-  QuestionPanelQuestion,
-} from "./chat-question-types.ts";
+export type { QuestionPanelOptions, QuestionPanelProps } from "./chat-question-types.ts";
 
 export function createGatewayQuestionPanelProps(
   prompt: QuestionPrompt,

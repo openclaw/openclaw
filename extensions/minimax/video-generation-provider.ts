@@ -4,7 +4,6 @@ import {
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
@@ -276,28 +275,19 @@ export function buildMinimaxVideoGenerationProvider(
       if ((req.inputVideos?.length ?? 0) > 0) {
         throw new Error("MiniMax video generation does not support video reference inputs.");
       }
-      const auth = await resolveApiKeyForProvider({
-        provider: providerId,
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("MiniMax API key missing");
-      }
-
       const fetchFn = fetch;
+      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+        await resolveMinimaxMediaRequestConfig({
+          cfg: req.cfg,
+          providerId,
+          agentDir: req.agentDir,
+          authStore: req.authStore,
+          capability: "video",
+        });
       const deadline = createProviderOperationDeadline({
         timeoutMs: req.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
         label: "MiniMax video generation",
       });
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveMinimaxMediaRequestConfig({
-          cfg: req.cfg,
-          providerId,
-          apiKey: auth.apiKey,
-          capability: "video",
-        });
       const requestPolicy: MinimaxRequestPolicy = { allowPrivateNetwork, dispatcherPolicy };
       const model = normalizeOptionalString(req.model) ?? DEFAULT_MINIMAX_VIDEO_MODEL;
       const body: Record<string, unknown> = {

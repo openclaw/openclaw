@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { openNodeSqliteDatabase } from "../../../../src/infra/node-sqlite.js";
 import {
+  captureSqliteDatabaseAdmissions,
   prepareSqliteDatabaseCleanClose,
   revokeSqliteDatabaseAdmissions,
 } from "../../../../src/infra/sqlite-database-admission.js";
@@ -37,6 +38,9 @@ describe("memory physical schema admission", () => {
       db.close();
       expect(seal.publish()).toBe(true);
     }
+    expect(
+      captureSqliteDatabaseAdmissions().filter((entry) => entry.location === filename),
+    ).toEqual([]);
     if (close === "missing seal") {
       fs.unlinkSync(`${filename}.seal`);
     }
@@ -47,7 +51,11 @@ describe("memory physical schema admission", () => {
       expect(ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true })).toEqual({
         ftsAvailable: true,
       });
-      expect(schemaStatements(observed.queries)).toEqual([]);
+      if (close === "clean") {
+        expect(schemaStatements(observed.queries)).toEqual([]);
+      } else {
+        expect(schemaStatements(observed.queries).length).toBeGreaterThan(0);
+      }
       db.exec("DROP INDEX idx_memory_index_chunks_source");
       ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
       expect(

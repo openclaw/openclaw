@@ -106,6 +106,7 @@ describe("scripts/run-vitest", () => {
       const directory = tempDirs.make("oc-test-runtime-cache-");
       const env = Object.freeze({
         OPENCLAW_VITEST_RUNTIME: runtime,
+        OPENCLAW_BUN_PATH: process.execPath,
         NODE_COMPILE_CACHE: nodePath.join(directory, "node-cache"),
         NODE_COMPILE_CACHE_PORTABLE: "1",
         NODE_DISABLE_COMPILE_CACHE: "0",
@@ -124,8 +125,8 @@ describe("scripts/run-vitest", () => {
       ];
       const flags = ["--no-maglev", "--no-concurrent-sparkplug"];
       expect(testRuntime.resolveVitestTestCommand([...flags, ...operands], env)).toEqual({
-        command: "bun",
-        envOverrides: { NODE_DISABLE_COMPILE_CACHE: "1" },
+        command: process.execPath,
+        envOverrides: { NODE_DISABLE_COMPILE_CACHE: "1", PATH: nodePath.dirname(process.execPath) },
         args: [
           "--tsconfig-override",
           fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
@@ -230,6 +231,7 @@ describe("scripts/run-vitest", () => {
       const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
       const directory = tempDirs.make("oc-native-bun-cache-");
       const env = Object.freeze({
+        OPENCLAW_BUN_PATH: process.execPath,
         NODE_COMPILE_CACHE: nodePath.join(directory, "node-cache"),
         NODE_COMPILE_CACHE_PORTABLE: "1",
         NODE_DISABLE_COMPILE_CACHE: "0",
@@ -238,10 +240,10 @@ describe("scripts/run-vitest", () => {
         TEMP: directory,
       });
       const parentCacheDisabled = process.env.NODE_DISABLE_COMPILE_CACHE;
-      const expectedCommand = testRuntime.resolveNativeBunTestCommand(files);
+      const expectedCommand = testRuntime.resolveNativeBunTestCommand(files, undefined, env);
       expect(expectedCommand).toEqual({
-        command: "bun",
-        envOverrides: { NODE_DISABLE_COMPILE_CACHE: "1" },
+        command: process.execPath,
+        envOverrides: { NODE_DISABLE_COMPILE_CACHE: "1", PATH: nodePath.dirname(process.execPath) },
         args: [
           "test",
           "--no-env-file",
@@ -271,7 +273,7 @@ describe("scripts/run-vitest", () => {
       const exitCode = process.exitCode;
       try {
         await runVitest(vi.fn(), ["--native-bun", ...files], env);
-        expect(command).toHaveBeenCalledWith(files);
+        expect(command).toHaveBeenCalledWith(files, undefined, expect.objectContaining(env));
         expect(process.exitCode).toBe(7);
         expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("0");
         expect(process.env.NODE_DISABLE_COMPILE_CACHE).toBe(parentCacheDisabled);

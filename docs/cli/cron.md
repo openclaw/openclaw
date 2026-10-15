@@ -137,7 +137,7 @@ An isolated agent-turn job created from a conversation also captures that conver
   </Accordion>
 </AccordionGroup>
 
-When an operator removes an automation with an active run, OpenClaw requests cancellation of that run. An admitted automation can remove its own job without cancelling the active run. The JSON removal response includes `activeRunCancellationRequested: true` when cancellation was requested. For an isolated automation, reusable-session cleanup then waits for the active run to stop and reports `sessionCleanup: "pending"` while cleanup is deferred. Run history is retained.
+When an operator removes an automation with an active run, OpenClaw requests cancellation of that run. An admitted automation can remove its own job without cancelling the active run. If the caller cannot be confirmed as the job's exact live run, self-removal fails without deleting the job or cancelling the active run. The JSON removal response includes `activeRunCancellationRequested: true` when cancellation was requested. For an isolated automation, reusable-session cleanup then waits for the active run to stop and reports `sessionCleanup: "pending"` while cleanup is deferred. Run history is retained.
 
 If session cleanup fails, the error is logged. A removal with no active run also returns the cleanup error to the caller. Use `openclaw sessions list --json` to find the remaining session, then `openclaw sessions delete <key> --yes` to retry cleanup after the Gateway or worker recovers.
 

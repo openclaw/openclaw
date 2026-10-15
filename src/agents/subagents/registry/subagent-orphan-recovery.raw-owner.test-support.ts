@@ -1,4 +1,5 @@
-import { expect, it, vi } from "vitest";
+import { existsSync } from "node:fs";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
   loadExactSessionEntry,
@@ -9,7 +10,10 @@ import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../../infra/agent-events.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
+import {
+  resolveIncognitoOpenClawAgentSqlitePath,
+  resolveOpenClawAgentSqlitePath,
+} from "../../../state/openclaw-agent-db.paths.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
@@ -22,6 +26,7 @@ import {
   resetSubagentRegistryForTests,
   testing,
 } from "./subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   makeRestartRecoveryRun as makeRunRecord,
   type useSubagentRestartRecoveryFixture,
@@ -71,6 +76,95 @@ export function registerAbsentChildRestoreOwnershipTest() {
       }
     });
   });
+}
+
+export function registerMissingStorageRecoveryTests() {
+  it.each(["durable", "incognito"] as const)(
+    "classifies missing %s storage for recovery without creating its database",
+    async (storage) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        setRuntimeConfigSnapshot({});
+        const databasePath = (
+          storage === "incognito"
+            ? resolveIncognitoOpenClawAgentSqlitePath
+            : resolveOpenClawAgentSqlitePath
+        )({ agentId: "main", env: state.env });
+        if (storage === "incognito") {
+          onTestFinished(() =>
+            memorySessionActorOwners.closeDatabase({ agentId: "main", path: databasePath }),
+          );
+        }
+        const childSessionKey = `agent:main:subagent:${storage === "incognito" ? "incognito-" : ""}missing-store`;
+        const entry = makeRunRecord({
+          runId: "missing-store-run",
+          childSessionKey,
+          childSessionIdentity: { sessionId: "lost-session", lifecycleRevision: "lost-revision" },
+          execution: { status: "interrupted", startedAt: Date.now() - 1_000 },
+        });
+        const recover = (candidate: SubagentRunRecord) =>
+          recoverInterruptedSubagentRow({
+            entry: candidate,
+            runId: candidate.runId,
+            gatewayRuntime: undefined,
+            isCurrent: () => true,
+            warn: vi.fn(),
+          });
+        expect(existsSync(databasePath)).toBe(false);
+        expect(
+          memorySessionActorOwners.read({ agentId: "main", path: databasePath }),
+        ).toBeUndefined();
+        const running = { ...entry, execution: { ...entry.execution, status: "running" as const } };
+        expect(await recover(running)).toEqual({ status: "ignored" });
+        const result = await recover(entry);
+        expect(result).toMatchObject({ status: "terminal", suppressSessionEffects: true });
+        if (result.status !== "terminal") {
+          throw new Error("Expected missing child storage to permit terminal settlement");
+        }
+        expect(await result.recoveryCurrent?.prepare()).toBe(true);
+        expect(result.recoveryCurrent?.isHostCurrent()).toBe(true);
+        expect(
+          await recover({
+            ...running,
+            execution: {
+              ...running.execution,
+              restartRecovery: {
+                phase: "accepted",
+                sessionId: "lost-session",
+                sessionMarker: "lost-session:1",
+                idempotencyKey: "lost-recovery",
+              },
+            },
+          }),
+        ).toMatchObject({ status: "terminal", suppressSessionEffects: true });
+        expect(existsSync(databasePath)).toBe(false);
+        expect(
+          memorySessionActorOwners.read({ agentId: "main", path: databasePath }),
+        ).toBeUndefined();
+
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey: childSessionKey },
+          {
+            sessionId: "successor-session",
+            lifecycleRevision: "successor-lifecycle",
+            updatedAt: Date.now(),
+          },
+        );
+        if (storage === "durable") {
+          expect(result.recoveryCurrent?.isHostCurrent()).toBe(false);
+          expect(await result.recoveryCurrent?.prepare()).toBe(false);
+          expect(await result.sessionEffects?.isCurrent()).toBe(false);
+        } else {
+          // Old recovery bookkeeping may finish after creation; it cannot apply session effects.
+          expect(result.suppressSessionEffects).toBe(true);
+        }
+        const missingRow = await recover({ ...entry, childSessionKey: `${childSessionKey}-other` });
+        expect(missingRow.status).toBe("terminal");
+        if (missingRow.status === "terminal") {
+          expect(missingRow.suppressSessionEffects).not.toBe(true);
+        }
+      });
+    },
+  );
 }
 
 export function registerRawChildRestoreOwnershipTest(

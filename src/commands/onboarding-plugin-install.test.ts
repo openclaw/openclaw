@@ -133,45 +133,12 @@ vi.mock("../plugins/capability-consent.js", async (importOriginal) => ({
 }));
 
 import { ensureChannelSetupPluginInstalled } from "./channel-setup/plugin-install.js";
+import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js";
 import {
-  ensureOnboardingPluginInstalled,
-  type OnboardingPluginInstallEntry,
-} from "./onboarding-plugin-install.js";
-
-function installEntry(
-  install: OnboardingPluginInstallEntry["install"],
-  details: Partial<Omit<OnboardingPluginInstallEntry, "install">> = {},
-): OnboardingPluginInstallEntry {
-  return { pluginId: "demo-plugin", label: "Demo Plugin", install, ...details };
-}
-
-function installPolicyConfig(): OpenClawConfig {
-  return {
-    security: {
-      installPolicy: {
-        enabled: true,
-        exec: { source: "exec", command: process.execPath, args: ["-e", "process.exit(1)"] },
-      },
-    },
-  };
-}
-
-function clawHubRecord() {
-  return {
-    source: "clawhub",
-    clawhubUrl: "https://clawhub.ai",
-    clawhubPackage: "demo-plugin",
-    clawhubFamily: "code-plugin",
-    clawhubChannel: "official",
-    version: "2026.5.2",
-    integrity: "sha256-clawpack",
-    resolvedAt: "2026-05-02T00:00:00.000Z",
-    clawpackSha256: "a".repeat(64),
-    clawpackSpecVersion: 1,
-    clawpackManifestSha256: "b".repeat(64),
-    clawpackSize: 4096,
-  };
-}
+  clawHubRecord,
+  installEntry,
+  installPolicyConfig,
+} from "./onboarding-plugin-install.test-fixtures.js";
 
 function requireCapturedPrompt<T>(captured: T | undefined): T {
   if (!captured) {
@@ -1201,16 +1168,20 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(runtimeMessage).not.toContain("");
   });
 
-  it.each(["spoofed", "linked", "outside"] as const)(
+  it.each(["spoofed", "linked", "outside", "symlink"] as const)(
     "offers local paths only inside trusted %s workspaces",
     async (kind) => {
       await withTestDir({ prefix: "openclaw-onboarding-local-choice-" }, async (temp) => {
         const workspaceDir = path.join(temp, "workspace");
         const cwdDir = path.join(temp, "cwd");
-        const pluginDir = path.join(kind === "outside" ? temp : workspaceDir, "plugins", "demo");
+        const outside = kind === "outside" || kind === "symlink";
+        const pluginDir = path.join(outside ? temp : workspaceDir, "plugins", "demo");
         await fs.mkdir(workspaceDir, { recursive: true });
         await fs.mkdir(cwdDir, { recursive: true });
         await fs.mkdir(pluginDir, { recursive: true });
+        if (kind === "symlink") {
+          await fs.symlink(path.join(temp, "plugins"), path.join(workspaceDir, "plugins"), "dir");
+        }
         const gitRoot = workspaceDir;
         if (kind === "spoofed") {
           await fs.writeFile(path.join(gitRoot, ".git"), "not-a-gitdir-pointer\n");
@@ -1225,7 +1196,7 @@ describe("ensureOnboardingPluginInstalled", () => {
           await fs.mkdir(path.join(gitRoot, ".git"));
         }
         const hasNpm = kind === "linked";
-        const allowed = kind !== "spoofed" && kind !== "outside";
+        const allowed = kind !== "spoofed" && !outside;
         let captured: InstallPrompt | undefined;
         const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         try {

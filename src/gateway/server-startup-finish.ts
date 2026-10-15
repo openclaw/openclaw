@@ -284,7 +284,6 @@ export async function finishGatewayStartup(params: {
           getCurrentPluginRegistry: () => pluginRuntime.registry,
           getCurrentPluginServices: () => kernel.pluginRuntimeGeneration.currentServices(),
           getCurrentPluginMetadataSnapshot: getPluginMetadataSnapshot,
-          getCurrentActivationSourceConfig: getRuntimeConfigSourceSnapshot,
           ambientEnvTriggers,
           pluginRegistry: pluginRuntime.registry,
           defaultWorkspaceDir,

@@ -6,6 +6,10 @@ import {
 } from "../../../../../src/shared/markdown-code.js";
 import { downloadArtifact, isHttpArtifactDownloadUrl } from "../../../api/artifact-download.ts";
 import { GatewayRequestError } from "../../../api/gateway.ts";
+import {
+  downloadSessionFile,
+  type SessionFileDownload,
+} from "../../../api/session-file-download.ts";
 import type { ArtifactDownloadResult, SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
@@ -66,6 +70,7 @@ function formatFileUpdatedAt(updatedAtMs: number | undefined): string | null {
 function unsupportedFileSidebarContent(
   file: SessionWorkspaceGetResult["file"],
   fallbackPath: string,
+  download: (signal: AbortSignal) => Promise<SessionFileDownload | null>,
 ): SidebarContent {
   const filePath = file.workspacePath || file.path || fallbackPath;
   const updatedAt = formatFileUpdatedAt(file.updatedAtMs);
@@ -82,6 +87,11 @@ function unsupportedFileSidebarContent(
     kind: "markdown",
     content,
     rawText: content,
+    fileDownload: {
+      path: filePath,
+      name: file.name || pathDisplayName(filePath),
+      download,
+    },
   };
 }
 
@@ -188,10 +198,36 @@ function openFile(
     state,
     workspace,
     viewingSession ? `file:${requestPath}` : JSON.stringify(["file", sessionKey, requestPath]),
-    () =>
-      state.sessions.getFile(sessionKey, requestPath, {
-        agentId,
-      }),
+    async () => {
+      try {
+        return await state.sessions.getFile(sessionKey, requestPath, { agentId });
+      } catch (error) {
+        const details = error instanceof GatewayRequestError ? error.details : null;
+        if (
+          details &&
+          typeof details === "object" &&
+          "type" in details &&
+          details.type === "session_file_too_large" &&
+          "size" in details &&
+          typeof details.size === "number"
+        ) {
+          // The authorized read supplies metadata even when its preview bytes are unavailable.
+          const metadata: SessionWorkspaceGetResult = {
+            sessionKey,
+            file: {
+              path: requestPath,
+              name: pathDisplayName(path),
+              size: details.size,
+              kind: "read",
+              missing: false,
+              previewKind: "unsupported",
+            },
+          };
+          return metadata;
+        }
+        throw error;
+      }
+    },
     (result) => {
       const file = result.file;
       if (!file) {
@@ -199,6 +235,12 @@ function openFile(
       }
       const name = file.name || pathDisplayName(path);
       const filePath = file.workspacePath || file.path || path;
+      const download = (signal: AbortSignal) =>
+        downloadSessionFile(
+          state,
+          { sessionKey: result.sessionKey, agentId, path: requestPath },
+          signal,
+        );
       if (file.previewKind === "image") {
         if (
           file.contentEncoding !== "base64" ||
@@ -218,7 +260,7 @@ function openFile(
       }
       if (file.previewKind === "unsupported") {
         return {
-          ...unsupportedFileSidebarContent(file, path),
+          ...unsupportedFileSidebarContent(file, path, download),
           fileLinkSessionKey: result.sessionKey,
         };
       }
@@ -307,6 +349,7 @@ function openFile(
         path: filePath,
         name,
         content: text,
+        download,
         sessionFileSource: {
           sessionKey: result.sessionKey,
           agentId,
@@ -492,6 +535,18 @@ export function createSessionWorkspaceProps(
     filter: workspace.filter,
     browserPath: workspace.browserPath,
     browserSearch: workspace.browserSearch,
+    connectionEpoch: state.connectionEpoch,
+    onDownloadFile: (path, origin, signal) =>
+      downloadSessionFile(
+        state,
+        {
+          sessionKey: workspace.sessionKey,
+          agentId: workspace.agentId,
+          path:
+            origin === "workspace" ? workspaceBrowserFilePath(workspace.list?.root, path) : path,
+        },
+        signal,
+      ),
     onSetFilter: (filter) => {
       workspace.filter = filter;
       state.requestUpdate?.();

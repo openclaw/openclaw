@@ -164,13 +164,6 @@ export function notifyEmbeddedRunEnded(
     if (waiter.handle ? waiter.handle !== endedHandle : !sessionIdle) {
       continue;
     }
-    waiters.delete(waiter);
-    if (waiter.timer) {
-      clearTimeout(waiter.timer);
-    }
     waiter.resolve(true);
-  }
-  if (waiters.size === 0) {
-    EMBEDDED_RUN_WAITERS.delete(sessionId);
   }
 }

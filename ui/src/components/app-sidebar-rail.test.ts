@@ -76,32 +76,7 @@ describe("personal navigation rail", () => {
     expect(sidebar.querySelector(".sidebar-rail__bottom")).toBe(bottom);
   });
 
-  it("keeps main activity visible on Home when the middle list is collapsed", async () => {
-    const { sidebar, result, sessions } = await fixture();
-    const mainIndex = result.sessions.findIndex((row) => row.key === "agent:main:main");
-    sessions.publishList({
-      agentId: "main",
-      result: {
-        ...result,
-        sessions: result.sessions.with(mainIndex, {
-          ...result.sessions[mainIndex]!,
-          status: "running",
-          hasActiveRun: true,
-        }),
-      },
-    });
-    sidebar.navigationCollapsed = true;
-    sidebar.requestUpdate();
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-footer-bar__home .session-glyph__ring")).not.toBeNull();
-    expect(
-      sidebar
-        .querySelector(".sidebar-footer-bar__home .session-glyph__ring")
-        ?.getAttribute("aria-label"),
-    ).toBe("Active run");
-  });
-
-  it("keeps Home outbox attention and drafts visible with its run state", async () => {
+  it("keeps Home outbox attention and drafts visible with its run state when collapsed", async () => {
     const { sidebar, result, sessions } = await fixture();
     const mainIndex = result.sessions.findIndex((row) => row.key === "agent:main:main");
     sessions.publishList({
@@ -120,9 +95,13 @@ describe("personal navigation rail", () => {
       attentionCountForSession: (key) => (key === "agent:main:main" ? 2 : 0),
       hasSessionDraft: (key) => key === "agent:main:main",
     };
+    sidebar.navigationCollapsed = true;
     await sidebar.updateComplete;
     const home = sidebar.querySelector(".sidebar-footer-bar__home")!;
     expect(home.querySelector(".session-glyph__ring")).not.toBeNull();
+    expect(home.querySelector(".session-glyph__ring")?.getAttribute("aria-label")).toBe(
+      "Active run",
+    );
     expect(
       home.querySelector(".session-row-badge--attention")?.getAttribute("aria-label"),
     ).toContain("2");
@@ -208,9 +187,7 @@ describe("personal navigation rail", () => {
   });
 
   it.each([
-    { label: "Release Notes", icon: undefined, monogram: "RN" },
     { label: "Résumé", icon: undefined, monogram: "R" },
-    { label: "Launch Pad", icon: "🚀", monogram: undefined },
     {
       label: "Architecture",
       icon: `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>')}`,

@@ -141,6 +141,7 @@ export const Tooltip = Object.assign(
         prop:hoverDismissDelay={props.hoverDismissDelay}
         prop:delay={props.delay}
         prop:describe={props.describe ?? true}
+        prop:pointerThrough={props.pointerThrough ?? false}
         prop:autoSize={props.autoSize ?? false}
         prop:disabled={props.disabled ?? false}
         prop:openOnClick={props.openOnClick ?? false}

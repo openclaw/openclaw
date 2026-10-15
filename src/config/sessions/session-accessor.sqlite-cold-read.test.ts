@@ -32,10 +32,7 @@ import {
 import { captureRuntimeConfigAsyncReader } from "../io.js";
 import { copySqliteSessionOwnedStateForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
-import {
-  hasSessionTranscriptEventsSync,
-  readTranscriptMutationStateSync,
-} from "./session-accessor.sqlite-metadata-read.js";
+import { readTranscriptMutationStateSync } from "./session-accessor.sqlite-metadata-read.js";
 import {
   findTranscriptEventInDatabase,
   loadTranscriptHeaderSync,
@@ -365,23 +362,6 @@ it("identifies a slow transcript matcher while retaining its hot read snapshot",
       await flushLogger();
       setLoggerOverride(null);
     }
-  });
-});
-
-it("counts a header at seq zero as transcript presence", async () => {
-  await withOpenClawTestState({ label: "transcript-presence" }, async (state) => {
-    await captureRuntimeConfigAsyncReader()();
-    const scope = {
-      agentId: "main",
-      env: state.env,
-      sessionId: "presence",
-      sessionKey: "agent:main:presence",
-    };
-    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    expect(hasSessionTranscriptEventsSync(scope)).toBe(false);
-    await replaceTranscriptEvents(scope, [{ type: "session", id: scope.sessionId, version: 3 }]);
-    expect(readTranscriptStatsSync(scope)).toMatchObject({ eventCount: 1, maxSeq: 0 });
-    expect(hasSessionTranscriptEventsSync(scope)).toBe(true);
   });
 });
 

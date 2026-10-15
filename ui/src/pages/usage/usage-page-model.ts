@@ -111,7 +111,6 @@ export class UsagePageModel {
       this.refreshPolicy.interrupt();
       this.usageRequest.cancel();
       this.details.cancel();
-      this.usageExportRequest.cancel();
     },
     onSnapshot: (change) => this.handleGatewaySnapshot(change),
     onPageActivation: () => this.refreshPolicy.request("focus"),

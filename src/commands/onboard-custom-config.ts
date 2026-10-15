@@ -423,13 +423,6 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams) {
     );
   }
 
-  if (!isCustomApiCompatibility(params.compatibility)) {
-    throw new CustomApiError(
-      "invalid_compatibility",
-      'Custom provider compatibility must be "openai", "openai-responses", or "anthropic".',
-    );
-  }
-
   const modelId = normalizeOptionalString(params.modelId) ?? "";
   if (!modelId) {
     throw new CustomApiError("invalid_model_id", "Custom provider model ID is required.");

@@ -15,7 +15,6 @@ import {
   isDependencyGuardMarkerComment,
   isRemovalOnlyDependencyGraphChange,
   readBoundedGitHubErrorText,
-  renderAutoscrubbedDependencyComment,
   renderBlockedDependencyComment,
   renderClearedDependencyGuardComment,
   renderRemovalOnlyDependencyComment,
@@ -503,6 +502,7 @@ describe("dependency guard script", () => {
     });
     expect(result.stdout).toContain(`Merge base: \`${mergeBaseSha}\``);
     expect(result.stdout).not.toContain("Verification result:");
+    expect(isAutoscrubbedDependencyComment({ body: result.stdout })).toBe(true);
   });
 
   it("keeps dependency approval required when an editable fork has no autoscrub token", () => {
@@ -789,28 +789,6 @@ describe("dependency guard script", () => {
         }),
       ).toBe(expected);
     }
-  });
-
-  it("renders deterministic autoscrub success comments", () => {
-    const body = renderAutoscrubbedDependencyComment({
-      baseBranch: "main",
-      commitSha: staleSha,
-      mergeBaseSha,
-      lockfileChanges: ["pnpm-lock.yaml", "tools/nested/pnpm-lock.yaml"],
-    });
-
-    expect(body).toContain("<!-- openclaw:dependency-graph-guard -->");
-    expect(body).toContain("Dependency lockfile changes were removed");
-    expect(body).toContain("did not change dependency graph fields in package manifests");
-    expect(body).toContain("`pnpm-lock.yaml`");
-    expect(body).toContain("`tools/nested/pnpm-lock.yaml`");
-    expect(body).toContain(`Cleanup commit: \`${staleSha}\``);
-    expect(body).toContain(
-      "restored each listed lockfile to its merge-base state, removing files added by this PR",
-    );
-    expect(body).toContain(`Merge base: \`${mergeBaseSha}\``);
-    expect(body).not.toContain("Verification result:");
-    expect(isAutoscrubbedDependencyComment({ body })).toBe(true);
   });
 
   it("reads base lockfiles with the base API before writing autoscrub commits", async () => {

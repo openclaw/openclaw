@@ -16,12 +16,20 @@ import {
   scheduleChatMediaResourceRefresh,
   trimManagedImageMissResources,
   type ChatMediaResource,
+  type ImageBlock,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
 
 const MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS = 30_000;
 const MANAGED_OUTGOING_IMAGE_RETRY_MS = 5_000;
 type ManagedImageVariant = "full" | "thumbnail";
+
+export function managedImageInlineVariant(image: ImageBlock): ManagedImageVariant {
+  // Bounded still previews intentionally do not encode GIF animation.
+  return image.mimeType?.split(";", 1)[0]?.trim().toLowerCase() === "image/gif"
+    ? "full"
+    : "thumbnail";
+}
 
 function managedImageResourceIdentity(
   source: string | undefined,
@@ -52,8 +60,11 @@ export function readCachedManagedImageUrl(
   source: string | undefined,
   opts?: ImageRenderOptions,
   artifactId?: string,
+  variant: ManagedImageVariant = "thumbnail",
 ) {
-  return readManagedImageBlobUrl(managedImageResourceIdentity(source, opts, artifactId).cacheKey);
+  return readManagedImageBlobUrl(
+    managedImageResourceIdentity(source, opts, artifactId, variant).cacheKey,
+  );
 }
 
 export function resolveManagedImageResource(
@@ -145,8 +156,8 @@ function buildManagedOutgoingImageVariantUrl(
     const parsed = new URL(source, window.location.origin);
     parsed.pathname = parsed.pathname.replace(/\/(?:full|thumbnail)$/u, `/${variant}`);
     if (variant === "thumbnail") {
-      // Thumbnails are immutable in HTTP caches; replace the former 300px rendition.
-      parsed.searchParams.set("v", "2");
+      // Thumbnails are immutable in HTTP caches; replace pre-byte-limit renditions.
+      parsed.searchParams.set("v", "3");
     }
     if (/^https?:\/\//iu.test(source)) {
       return parsed.href;

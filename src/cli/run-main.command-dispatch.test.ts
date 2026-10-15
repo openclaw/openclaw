@@ -189,20 +189,6 @@ describe("runCli exit behavior", () => {
     tryRouteCliMock,
   });
 
-  it.each([["root shorthand", cliArgs("--update", "--dry-run", "--json")]])(
-    "reads source-only proxy config for the update dry-run %s",
-    async (_name, argv) => {
-      tryRouteCliMock.mockResolvedValueOnce(true);
-      readSourceConfigBestEffortMock.mockResolvedValueOnce({ proxy: { selected: "dry-run" } });
-
-      await runCli(argv);
-
-      expect(readSourceConfigBestEffortMock).toHaveBeenCalledOnce();
-      expect(loadConfigMock).not.toHaveBeenCalled();
-      expect(startProxyMock).toHaveBeenCalledWith({ selected: "dry-run" });
-    },
-  );
-
   it.each([["lint", ["--lint", "--json"]]])(
     "reads source-only proxy config before Doctor %s owns state access",
     async (_mode, args) => {

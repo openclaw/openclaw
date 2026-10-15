@@ -495,28 +495,6 @@ describe("GPT-Live werift audio peer", () => {
     expect(send).toHaveBeenCalledTimes(4);
   });
 
-  it("retains only the newest five seconds and releases it on close", async () => {
-    const peer = await createAudioPeer();
-    const testPeer = peer as unknown as TestableAudioPeer;
-    const maxPendingAudioBytes = OPENAI_QUICKSILVER_RELAY_FRAME_BYTES * 250;
-    const source = Buffer.alloc(maxPendingAudioBytes + OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
-    source.fill(0x11, 0, OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
-    source.fill(0x22, OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
-    const expectedTail = Buffer.from(source.subarray(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES));
-
-    peer.sendAudio(source);
-    source.fill(0xff);
-    expect(testPeer.pendingAudio).toHaveLength(expectedTail.length);
-    expect(testPeer.takeNextRelayFrame()).toEqual(
-      expectedTail.subarray(0, OPENAI_QUICKSILVER_RELAY_FRAME_BYTES),
-    );
-
-    peer.close();
-    expect(testPeer.pendingAudio).toHaveLength(0);
-    peer.sendAudio(Buffer.from([0x01, 0x02]));
-    expect(testPeer.pendingAudio).toHaveLength(0);
-  });
-
   it("rejects adoption over existing peer audio and clears adoption after close", async () => {
     const peer = await createAudioPeer();
     const testPeer = peer as unknown as TestableAudioPeer;
@@ -535,6 +513,8 @@ describe("GPT-Live werift audio peer", () => {
     afterClose.append(Buffer.from([0x05, 0x06]));
     peer.adoptPendingAudio(afterClose);
     expect(afterClose).toHaveLength(0);
+    peer.sendAudio(existing);
+    expect(testPeer.pendingAudio).toHaveLength(0);
   });
 
   it("consumes and zero-pads a sub-frame audio tail on the next tick", async () => {

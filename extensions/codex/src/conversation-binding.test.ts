@@ -1453,7 +1453,7 @@ describe("codex conversation binding", () => {
         async () => undefined,
       );
     }
-    expect(releaseEvicted).toHaveBeenCalledExactlyOnceWith("thread-evicted");
+    expect(releaseEvicted).toHaveBeenCalledExactlyOnceWith("thread-evicted", undefined, undefined);
     sharedClientMocks.retainSharedCodexAppServerClientByInstanceId.mockReturnValue({
       client,
       release: vi.fn(),

@@ -85,6 +85,7 @@ const defaults = {
   hoverDismissDelay: undefined,
   delay: undefined,
   describe: true,
+  pointerThrough: false,
   autoSize: false,
   disabled: false,
   openOnClick: false,
@@ -114,6 +115,7 @@ export class TooltipElement extends HTMLElement implements TooltipProps {
   declare hoverDismissDelay: number | undefined;
   declare delay: number | undefined;
   declare describe: boolean;
+  declare pointerThrough: boolean;
   declare autoSize: boolean;
   declare disabled: boolean;
   declare openOnClick: boolean;

@@ -180,7 +180,7 @@ function readIndexedLogicalParents(
   contextSequences: number[],
 ): Map<string, string | null> {
   const actor = readSessionActorTransactionState(projection.database, projection.resolved);
-  if (actor) {
+  if (actor?.transcript.complete) {
     const idsByPosition = new Map<number, string>();
     for (const identity of actor.transcript.identities.values()) {
       const active = actor.transcript.active.get(identity.seq);

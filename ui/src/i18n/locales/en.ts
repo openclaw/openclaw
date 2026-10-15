@@ -3975,6 +3975,8 @@ export const en: TranslationMap & {
       readFailed: "Could not attach: {names}{more}",
       imagesOnly: "Side chat accepts image attachments only.",
       tooLarge: "Too large to send: {names}{more}",
+      openOriginal: "Open original",
+      retryHelp: "Choose a smaller file, remove other attachments, or try attaching it again.",
       compressToFit: "Compress to fit",
       compressionHint:
         "Video is too large. Compress a copy on this device; the original stays unchanged.",
