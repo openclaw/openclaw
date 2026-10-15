@@ -416,7 +416,7 @@ export function createGatewayEventLoopHealthMonitor(
       id: "event-loop-health",
       delayMs,
       phase: delayMs === IDLE_SAMPLE_INTERVAL_MS ? "maintenance" : undefined,
-      // Let the blocking callback's after hook publish its stall before resetting the window.
+      // Let the blocking task scope publish its stall before resetting the window.
       run: () => queueMicrotask(sample),
     });
     sampleDueAt = nowMs() + (job.atMs - scheduler.now());

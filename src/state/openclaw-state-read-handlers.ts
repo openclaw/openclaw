@@ -369,13 +369,12 @@ export function readOpenClawStateDatabaseCommand(
     };
   }
   if (command.type === "githubPublication.sharedObservation") {
-    const { kind, session, selector, entry } = command.input;
+    const { session, selector, entry } = command.input;
     return {
       type: command.type,
       row:
-        kind === "repository"
-          ? readSharedRepositoryGitHubPublicationInDatabase(db, session, selector, entry)
-          : readSharedGitHubPublicationRequestInDatabase(db, session, selector, entry),
+        readSharedRepositoryGitHubPublicationInDatabase(db, session, selector, entry) ??
+        readSharedGitHubPublicationRequestInDatabase(db, session, selector, entry),
     };
   }
   if (command.type === "githubPublication.request") {
@@ -440,6 +439,7 @@ export function readOpenClawStateDatabaseCommand(
     };
   }
   if (
+    command.type === "userModelAccounts.authorization" ||
     command.type === "userModelAccounts.links" ||
     command.type === "userModelAccounts.summary" ||
     command.type === "userModelAccounts.selection" ||

@@ -100,6 +100,9 @@ const webkitTestFiles = [
   "src/components/agent-emoji-picker.browser.test.ts",
   "src/components/appearance-picker.browser.test.ts",
   "src/components/confirm-dialog.browser.test.ts",
+  "src/pages/channels/view.detail.browser.test.tsx",
+  "src/pages/agents/agent-file-preview.browser.test.ts",
+  "src/pages/skills/reader-shell.browser.test.tsx",
   "src/lib/toast.browser.test.ts",
   "src/components/session-menu.browser.test.ts",
   "src/components/web-awesome-dropdown.browser.test.ts",
@@ -415,7 +418,7 @@ export default defineConfig({
           ...sharedUiTestConfig,
           deps: jsdomOptimizedDeps,
           name: "unit-node",
-          exclude: timingTests,
+          exclude: [...timingTests, ...mockRegistryUnitTests],
           // No cleanup runner: this project also carries the Playwright-driven
           // layout tests, whose browser lives in module scope. Resetting the
           // module graph between files churns that browser and flakes them.

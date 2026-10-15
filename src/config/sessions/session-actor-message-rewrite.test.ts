@@ -13,6 +13,7 @@ import {
   applySessionMessageRewrite,
   prepareSessionMessageRewrite,
 } from "./session-message-rewrite.worker.js";
+import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
 import type { SessionMessageRewriteSelection } from "./session-transcript-mutation.types.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 
@@ -45,8 +46,10 @@ function fixture(f: Fixture, pretty = false) {
     appendTranscriptEventInTransaction(f.database, f.scope, header);
     appendTranscriptEventInTransaction(f.database, f.scope, question, { eventJson });
   });
-  const hot = f.read();
-  const anchor = hot.transcript.anchors.find((candidate) => candidate.entryId === question.id);
+  f.read();
+  const anchor = readSessionTranscriptAnchorFactsInDatabase(f.database, f.scope, {
+    entryIds: [question.id],
+  }).anchors[0];
   assert(anchor);
   const selection: SessionMessageRewriteSelection = {
     scope: f.scope,

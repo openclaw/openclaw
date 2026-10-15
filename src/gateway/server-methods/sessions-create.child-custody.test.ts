@@ -13,7 +13,7 @@ import {
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
 import { callInProcessGatewayToolWithCreation } from "../../agents/tools/in-process-gateway.js";
-import { prepareSandboxSessionRename } from "../../agents/tools/sessions-operator-authority.js";
+import { prepareSandboxSessionTools } from "../../agents/tools/sessions-operator-authority.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.tool-authority.js";
 import { withVisibleWorkSessionReporter } from "../../auto-reply/reply/visible-work-sessions.js";
@@ -179,7 +179,7 @@ async function createHostedChildFixture(
       const allow = ["read"];
       // Reply tool-policy preparation runs before the child binds its own tool caller.
       renamePolicy(
-        prepareSandboxSessionRename({
+        prepareSandboxSessionTools({
           policy: { allow, deny: [], [SANDBOX_DEFAULT_TOOL_ALLOW]: allow },
           senderIsOwner: false,
           authority: replyOptions?.operatorAuthority,

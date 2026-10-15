@@ -55,15 +55,27 @@ suite.define(() => {
           `.chat-thread a.markdown-session-link[href="${destinationPath}"]`,
         );
         await link.waitFor({ state: "visible" });
+        // Settle title decoration before deferring the separate navigation lookup.
+        await link
+          .and(page.locator(`[data-session-key="${destinationKey}"]`))
+          .waitFor({ state: "visible" });
         await page.locator('openclaw-app-sidebar [data-navigation-view="pages"]').click();
         await page
           .locator('openclaw-app-sidebar a[href="/activity"]')
           .waitFor({ state: "visible" });
         const initialHistoryLength = await page.evaluate(() => history.length);
         const resolutionMatch = { shortId: "12345678", agentId: "main" };
+        // Lazy hovercard initialization resolves before and after receiving its context.
+        const initialTitleResolutions = 2;
+        expect(await gateway.getRequests("sessions.resolve", resolutionMatch)).toHaveLength(
+          initialTitleResolutions,
+        );
         await gateway.deferNext("sessions.resolve", resolutionMatch);
         await link.click();
-        await gateway.waitForRequest("sessions.resolve", { match: resolutionMatch });
+        await gateway.waitForRequest("sessions.resolve", {
+          match: resolutionMatch,
+          after: initialTitleResolutions,
+        });
         expect(await gateway.getRequests("chat.startup", { sessionKey: destinationKey })).toEqual(
           [],
         );
@@ -101,7 +113,7 @@ suite.define(() => {
           initialHistoryLength + (navigateAway ? 2 : 1),
         );
         expect(await gateway.getRequests("sessions.resolve", resolutionMatch)).toHaveLength(
-          navigateAway ? 1 : 2,
+          initialTitleResolutions + (navigateAway ? 1 : 2),
         );
         expect(await page.locator(".lazy-view-error").count()).toBe(0);
       });

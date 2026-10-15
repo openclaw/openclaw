@@ -22,6 +22,11 @@ import {
   type Operation,
   type TrialDependencies,
 } from "../ios-release-e2e.js";
+import {
+  collectGatewayProcessDiagnostics,
+  summarizeGatewayLanes,
+  summarizeGatewayLogs,
+} from "./ios-release-e2e-diagnostics.js";
 import { prepareIOSReleaseGateway } from "./ios-release-gateway.js";
 import { hasUnjoinedWork, runManagedCommand } from "./managed-child-process.mjs";
 
@@ -443,6 +448,41 @@ export async function createNativeDependencies(options: {
             }
           };
           const requestLog = path.join(root, `requests-${index}.jsonl`);
+          const captureSetupDiagnostics = async (stage: string, sample = false) => {
+            const active = instance;
+            const child = active?.child;
+            const live = child && child.exitCode === null && child.signalCode === null;
+            const [resources, lanes] = await Promise.allSettled([
+              collectGatewayProcessDiagnostics(live ? child.pid : undefined, { sample }),
+              sample && live && active
+                ? callGateway<unknown>({
+                    config: {},
+                    configPath: active.configPath,
+                    url: active.url,
+                    token: active.gatewayToken,
+                    ignoreEnvUrlOverride: true,
+                    deviceIdentity: null,
+                    sharedStateMode: "read-only",
+                    method: "diagnostics.lanes",
+                    params: {},
+                    timeoutMs: 3_000,
+                    signal: options.signal,
+                  })
+                : Promise.resolve(undefined),
+            ]);
+            const snapshots = (fixtureEvidence.setupDiagnostics ??= []) as unknown[];
+            snapshots.push({
+              stage,
+              resources: resources.status === "fulfilled" ? resources.value : { unavailable: true },
+              lanes:
+                lanes.status === "fulfilled"
+                  ? summarizeGatewayLanes(lanes.value)
+                  : { error: operationError("setup-code", lanes.reason).diagnostic.code },
+              gatewayExited: Boolean(child && !live),
+              events: summarizeGatewayLogs(active?.logs() ?? ""),
+            });
+            await options.onProgress?.();
+          };
           let fixtureCleanup: Promise<void> | undefined;
           const releaseFixture = () =>
             (fixtureCleanup ??= (async () => {
@@ -457,6 +497,19 @@ export async function createNativeDependencies(options: {
               ]);
               const failure = results.find((entry) => entry.status === "rejected");
               if (failure?.status === "rejected") {
+                fixtureEvidence.cleanupFailures = results.flatMap((entry, ownerIndex) =>
+                  entry.status === "rejected"
+                    ? [
+                        {
+                          source: ownerIndex === 0 ? "gateway" : "mock",
+                          code: operationError("cleanup", entry.reason).diagnostic.code,
+                          events: summarizeGatewayLogs(
+                            `${instance?.logs() ?? ""}\n${entry.reason instanceof Error ? entry.reason.message : ""}`,
+                          ),
+                        },
+                      ]
+                    : [],
+                );
                 preserveResources();
                 fixtureEvidence.cleanupConfirmed = false;
                 throw new OperationError("cleanup", "cleanup-unconfirmed");
@@ -633,6 +686,7 @@ export async function createNativeDependencies(options: {
                   requireLiveFixture();
                   return result;
                 } catch (error) {
+                  await captureSetupDiagnostics(operation, true);
                   if (hasUnjoinedWork(error)) {
                     preserveResources();
                   }
@@ -658,6 +712,7 @@ export async function createNativeDependencies(options: {
               // Prepare the real setup handler and worker before cold Simulator boot.
               // Status prunes expired completion records but issues no credential.
               await callSetupRpc("setup-status", { setupId: randomUUID() });
+              await captureSetupDiagnostics("before-simulator");
               try {
                 if (!options.gatewayOnly) {
                   // Capture the created device before reacting to Gateway death; cleanup needs its identity.
@@ -707,6 +762,7 @@ export async function createNativeDependencies(options: {
                 throw error;
               }
               // Issue the consumed credential after boot so preparation cannot spend its TTL.
+              await captureSetupDiagnostics("after-simulator");
               const setup = await callSetupRpc<DevicePairSetupCodeResult>("setup-code", {
                 publicUrl: readyInstance.url,
                 includeQr: false,
