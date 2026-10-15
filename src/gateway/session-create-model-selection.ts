@@ -26,7 +26,9 @@ import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { prepareUserModelAccountAuthority } from "../state/user-model-account-operations.js";
 import type { ModelAccountConnectAction } from "./model-account-authority.js";
 import { ModelAccountConnectAuthorityError } from "./model-account-connect-errors.js";
+import { ADMIN_SCOPE } from "./operator-scopes.js";
 import {
+  prepareSessionPatchRuntimeSelection,
   prepareSessionPatchModelSelection,
   resolveSessionPatchModelSelection,
 } from "./server-methods/sessions-patch-model-selection.js";
@@ -34,6 +36,75 @@ import type {
   CreateGatewaySessionParams,
   GatewaySessionTitleModelSelection,
 } from "./session-create-service.types.js";
+import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
+
+/** Creation and adoption retain the settings mutation owner's native permission guard. */
+export async function prepareSessionCreateRuntimeSelection(params: {
+  request: Pick<
+    CreateGatewaySessionParams,
+    "cfg" | "model" | "agentRuntime" | "requestingOperatorScopes"
+  >;
+  agentId: string;
+  sessionKey: string;
+  storePath: string;
+  entry: SessionEntry;
+  existingEntry: SessionEntry | undefined;
+  catalog: ModelCatalogSnapshot | undefined;
+  validateModelSelection: (() => ErrorShape | undefined) | undefined;
+}): Promise<
+  | { ok: true; validate?: () => ErrorShape | undefined; release?: () => void }
+  | { ok: false; error: ErrorShape }
+> {
+  const { request, entry, existingEntry, sessionKey } = params;
+  const context =
+    request.agentRuntime !== undefined || request.model !== undefined
+      ? resolveSessionWorkerPlacementContext()
+      : undefined;
+  const selection = await prepareSessionPatchRuntimeSelection({
+    cfg: request.cfg,
+    agentId: params.agentId,
+    callerCanConsent: request.requestingOperatorScopes?.includes(ADMIN_SCOPE) === true,
+    patch: { key: sessionKey, agentRuntime: request.agentRuntime, model: request.model },
+    entry,
+    catalog: params.catalog?.entries,
+    // Thinking policy was already validated by the patch owner; create discards hydration.
+    hydrateThinkingCatalog: false,
+    validateModelSelection: params.validateModelSelection,
+    ...(context ? { placement: { context, sessionKey } } : {}),
+  });
+  if (
+    !selection.ok ||
+    (entry.permissionMode === existingEntry?.permissionMode &&
+      entry.sandboxMode === existingEntry?.sandboxMode)
+  ) {
+    return selection;
+  }
+  try {
+    // Keep execution runtime imports lazy for creation without permission changes.
+    const { prepareSessionPatchSandboxChange } =
+      await import("./server-methods/sessions-patch-sandbox.runtime.js");
+    const validatePermissions = await prepareSessionPatchSandboxChange({
+      client: null,
+      context: context ?? resolveSessionWorkerPlacementContext(),
+      patch: { key: sessionKey },
+      existingEntry,
+      entry,
+      sessionKey,
+      storePath: params.storePath,
+      lifecycleIdentities: [sessionKey, existingEntry?.sessionId],
+    });
+    const validate = () => validatePermissions() || selection.validate?.();
+    const error = validate();
+    if (error) {
+      selection.release?.();
+      return { ok: false, error };
+    }
+    return { ...selection, validate };
+  } catch (error) {
+    selection.release?.();
+    throw error;
+  }
+}
 
 /** Keep automatic selection provenance distinct from an explicit model pin. */
 export function projectSessionCreateSpawnModelSelection(params: {

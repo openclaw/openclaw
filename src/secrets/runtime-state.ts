@@ -817,6 +817,8 @@ export function activateSecretsRuntimeSnapshotState(params: {
   runtimeSourceConfig?: OpenClawConfig;
   mergeLiveAuthBookkeeping?: boolean;
   preserveActivationLineage?: boolean;
+  /** Provider-only refreshes retain admission when resolved config is unchanged. */
+  preserveRuntimeConfigPublication?: boolean;
 }): void {
   if (!hasCurrentAuthStoreCredentialsRevision(params.snapshot)) {
     throw new Error(
@@ -848,7 +850,9 @@ export function activateSecretsRuntimeSnapshotState(params: {
   const nextRefreshContext = params.refreshContext
     ? cloneSecretsRuntimeRefreshContext(params.refreshContext)
     : null;
-  setRuntimeConfigSnapshot(next.config, params.runtimeSourceConfig ?? next.sourceConfig);
+  if (!params.preserveRuntimeConfigPublication) {
+    setRuntimeConfigSnapshot(next.config, params.runtimeSourceConfig ?? next.sourceConfig);
+  }
   replaceOwnedRuntimeAuthProfileStoreSnapshots(next.authStores);
   next.authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
   next.authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();

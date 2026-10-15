@@ -86,12 +86,8 @@ function currentFailures(): Map<string, string> {
 /** The marker records its outcome; diagnostics never infer successful recovery from a reread. */
 export function recordStartupRecoveryStoreResult(params: {
   target: RestartRecoveryStoreTarget;
-  lifecycleGeneration: string;
   outcome: { ok: true } | { ok: false; error: unknown };
 }): void {
-  if (params.lifecycleGeneration !== getAgentRunLifecycleGeneration()) {
-    return;
-  }
   const pending = currentFailures();
   const key = restartRecoveryStoreTargetKey(params.target);
   if (params.outcome.ok) {

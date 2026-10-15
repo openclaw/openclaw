@@ -49,7 +49,7 @@ export function ConfirmDialogView(props: {
             <span>{t("common.dontAskAgain")}</span>
           </label>
         ) : undefined}
-        <div class="exec-approval-actions">
+        <openclaw-modal-actions class="exec-approval-actions">
           <button
             type="button"
             class={["btn", options.danger ? "danger" : "primary"]}
@@ -69,7 +69,7 @@ export function ConfirmDialogView(props: {
           <button type="button" class="btn" autofocus onClick={() => props.finish(false)}>
             {options.cancelLabel ?? t("common.cancel")}
           </button>
-        </div>
+        </openclaw-modal-actions>
       </div>
     </openclaw-modal-dialog>
   );

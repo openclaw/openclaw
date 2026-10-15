@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { onAgentEvent } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
@@ -151,16 +152,22 @@ describe("Muse native MSP harness", () => {
 
   it("streams reasoning and text, journals native tool pairs, and resumes after restart", async () => {
     const first = setup();
+    const globalEvents: Array<{ stream: string; data: Record<string, unknown> }> = [];
+    const unsubscribe = onAgentEvent((event) => void globalEvents.push(event));
     try {
       const result = await first.harness.runAttempt({ ...first.params, prompt: "tool" });
       expect(terminal(result).kind).toBe("ok");
       expect(result.assistantTexts).toEqual(["started: hello"]);
-      expect(
-        first.events
-          .filter((event) => event.stream === "assistant")
-          .map((event) => event.data.delta)
-          .join(""),
-      ).toBe("started: hello");
+      for (const events of [first.events, globalEvents]) {
+        expect(
+          events
+            .filter((event) => event.stream === "assistant")
+            .map((event) => event.data.delta)
+            .join(""),
+        ).toBe("started: hello");
+      }
+      expect(globalEvents.at(0)?.data.phase).toBe("start");
+      expect(globalEvents.at(-1)?.data.phase).toBe("end");
       expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
         "assistant",
         "assistant",
@@ -178,6 +185,7 @@ describe("Muse native MSP harness", () => {
         }),
       );
     } finally {
+      unsubscribe();
       await first.harness.dispose?.();
     }
     const resumed = createMuseAgentHarness({
@@ -458,6 +466,23 @@ describe("Muse native MSP harness", () => {
           }),
         }),
       );
+    } finally {
+      await harness.dispose?.();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("runs a consented turn whose conversation tool policy is restricted", async () => {
+    const { harness, params } = setup();
+    const log = join(workspace, `${params.runId}.jsonl`);
+    vi.stubEnv("MUSE_REQUEST_LOG", log);
+    try {
+      await harness.runAttempt({ ...params, pluginHarnessToolPolicyRestricted: true });
+      const requests = (await readFile(log, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(requests.map((request) => request.method)).toContain("turn/start");
     } finally {
       await harness.dispose?.();
       vi.unstubAllEnvs();
@@ -886,9 +911,19 @@ describe("Muse native MSP harness", () => {
       }
       try {
         await harness.verifySetup(verification);
+        await harness.verifySetup(verification);
         await harness.loadModelCatalog(scope);
         expect(harness.readModelCatalogReadiness(verification)).toEqual({ accountType: "native" });
+        const initialRequests = (await readFile(log, "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(initialRequests.filter((request) => request.event === "spawn")).toHaveLength(1);
+        expect(initialRequests.filter((request) => request.method === "model/list")).toHaveLength(
+          3,
+        );
         vi.stubEnv("MUSE_FIXTURE_CATALOG_SOURCE", "bundledCatalog");
+        await writeFile(join(stateDir, "muse", "muse", "auth.json"), '{"changed":true}');
         await expect(harness.verifySetup(verification)).rejects.toThrow("authenticate");
         await expect(harness.loadModelCatalog(scope)).rejects.toThrow("authenticate");
         expect(harness.readModelCatalogReadiness(verification)).toBeUndefined();
@@ -910,12 +945,9 @@ describe("Muse native MSP harness", () => {
     },
   );
 
-  it("rejects sandbox and restricted-tool attempts before starting native work", async () => {
+  it("rejects sandbox and workspace-only attempts before starting native work", async () => {
     const { harness, params, bindings } = setup();
     try {
-      await expect(
-        harness.runAttempt({ ...params, pluginHarnessToolPolicyRestricted: true }),
-      ).rejects.toThrow("cannot enforce");
       await expect(harness.runAttempt({ ...params, requireWorkspaceOnly: true })).rejects.toThrow(
         "cannot enforce",
       );

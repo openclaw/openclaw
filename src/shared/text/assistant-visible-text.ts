@@ -298,7 +298,8 @@ export const assistantTraceTextFilter: TextFilter = {
 export const plainToolCallTextFilter: TextFilter = {
   transform: (text) =>
     stripPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions }),
-  activationTokens: ["[", "<function=", "to="],
+  activationTokens: ["{", "<parameter=", "<function=", "to="],
+  ignoreBlockCode: true,
 };
 
 export function sanitizeAssistantVisibleTextWithProfile(

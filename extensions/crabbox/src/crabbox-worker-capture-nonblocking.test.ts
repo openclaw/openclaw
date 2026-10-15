@@ -110,7 +110,10 @@ describe("Crabbox first capture without upload wait", () => {
       } else {
         expect(argv).toEqual(expect.arrayContaining(["--wait", "--wait-timeout", "2700000ms"]));
       }
-      expect(calls.filter((call) => call.argv[1] === "inspect")).toHaveLength(nonBlocking ? 1 : 2);
+      const captureCallIndex = calls.findIndex((call) => call.argv[2] === "create");
+      expect(
+        calls.slice(captureCallIndex + 1).filter((call) => call.argv[1] === "inspect"),
+      ).toHaveLength(nonBlocking ? 0 : 1);
       expect(managedBinary.ensureManagedCrabboxBinary).toHaveBeenCalledOnce();
       expect(Object.values(openWarmImageStore().entries()[0]!.value.allocations)[0]?.phase).toBe(
         "enrolled",

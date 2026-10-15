@@ -35,16 +35,15 @@ export function openControlUiDatabase(): Promise<IDBDatabase> {
   if (databasePromise) {
     return databasePromise;
   }
+  if (typeof indexedDB === "undefined") {
+    return Promise.reject(new Error("IndexedDB is unavailable"));
+  }
   const opening = new Promise<IDBDatabase>((resolve, reject) => {
     const release = () => {
       if (databasePromise === opening) {
         databasePromise = null;
       }
     };
-    if (typeof indexedDB === "undefined") {
-      reject(new Error("IndexedDB is unavailable"));
-      return;
-    }
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
     request.addEventListener(
       "upgradeneeded",

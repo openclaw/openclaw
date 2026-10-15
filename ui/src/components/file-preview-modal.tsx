@@ -398,10 +398,11 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
               <span class="foot-group">
                 <Kbd keys={["↑", "↓"]} class="kbd" /> {t("filePreview.navigate")}
               </span>
-              <span class="spacer" />
-              <button class="button" onClick={close}>
-                {t("common.close")} <Kbd keys="esc" class="kbd" />
-              </button>
+              <openclaw-modal-actions>
+                <button class="button" onClick={close}>
+                  {t("common.close")} <Kbd keys="esc" class="kbd" />
+                </button>
+              </openclaw-modal-actions>
             </footer>
           </Show>
         </div>
