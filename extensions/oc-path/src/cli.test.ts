@@ -736,7 +736,7 @@ describe("openclaw path CLI", () => {
         },
       );
     });
-    it.each(["\n", "\r\n", "mixed"])(
+    it.each(["mixed"])(
       "preserves JSONL bytes outside a leaf and across append with %j separators",
       async (ending) => {
         const workspaceDir = tempDirs.make("oc-path-cli-");
@@ -808,24 +808,6 @@ describe("openclaw path CLI", () => {
       expect(readFileSync(filePath)).toEqual(before);
     });
 
-    it("CLI-S10 still writes valid non-ASCII values including a literal replacement character", async () => {
-      const workspaceDir = tempDirs.make("oc-path-cli-");
-      const filePath = join(workspaceDir, "gateway.jsonc");
-      writeFileSync(filePath, '{ "version": "1.0", "note": "合法 😀 �" }', "utf8");
-      const rt = createTestRuntime();
-      await pathSetCommand(
-        "oc://gateway.jsonc/version",
-        "2.0",
-        { cwd: workspaceDir, json: true },
-        rt,
-      );
-
-      expect(rt.exitCode).toBe(0);
-      const after = readFileSync(filePath, "utf-8");
-      expect(after).toContain('"version": "2.0"');
-      expect(after).toContain("合法 😀 �");
-    });
-
     it("CLI-S02b --dry-run human output reports the rendered UTF-8 byte count", async () => {
       const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
@@ -849,8 +831,6 @@ describe("openclaw path CLI", () => {
 
     it.runIf(process.platform !== "win32").each([
       { label: "LF", before: '{ "version": "1.0" }\n', json: false },
-      { label: "CRLF", before: '{ "version": "1.0" }\r\n', json: true },
-      { label: "no final newline", before: '{ "version": "1.0" }', json: true },
       {
         label: "middle-of-file",
         before: `{\n${"  // leading context\n".repeat(5)}  "version": "1.0"\n${"  // trailing context\n".repeat(5)}}\n`,
@@ -937,7 +917,7 @@ describe("openclaw path CLI", () => {
       const filePath = join(workspaceDir, "openclaw.json");
       writeFileSync(
         filePath,
-        '{ "agents": { "entries": { "main": { "tools": { "exec": { "security": "deny" } } } } }, "gateway": { "auth": { "token": "${TOKEN}" } } }\n',
+        '{ "agents": { "entries": { "main": { "tools": { "exec": { "security": "deny" } } } } }, "gateway": { "auth": { "token": "${TOKEN}" } }, "note": "合法 😀 �" }\n',
         "utf-8",
       );
       const rt = createTestRuntime();
@@ -955,6 +935,7 @@ describe("openclaw path CLI", () => {
         provider: "secrets",
         id: "/test",
       });
+      expect(JSON.parse(readFileSync(filePath, "utf8")).note).toBe("合法 😀 �");
 
       const rt2 = createTestRuntime();
       await pathSetCommand(

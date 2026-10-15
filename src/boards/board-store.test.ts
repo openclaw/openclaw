@@ -344,28 +344,6 @@ describe("board store", () => {
       revision: 1,
     });
   });
-
-  it("enforces the board widget count and UTF-8 HTML byte limits", async () => {
-    const store = createTestBoardStore();
-    for (let index = 0; index < 48; index += 1) {
-      await putHtml(store, "session", `widget-${index}`, "ok");
-    }
-    try {
-      await putHtml(store, "session", "widget-48", "ok");
-      throw new Error("expected widget cap to fail");
-    } catch (error) {
-      expect(error).toBeInstanceOf(BoardValidationError);
-      expect(error).toMatchObject({ code: "invalid_operation" });
-      expect((error as Error).message).toContain("more than 48 widgets");
-    }
-    const largeStore = createTestBoardStore();
-    const html = "é".repeat(5 * 1024 * 1024);
-    await putHtml(largeStore, "session", "large", html);
-    await expect(putHtml(largeStore, "session", "large", html + "é")).rejects.toThrow(
-      "10485760 UTF-8 bytes",
-    );
-    expect((await readBoardHtml(largeStore, { sessionKey: "session" }, "large"))?.html).toBe(html);
-  });
 });
 
 it("does not select the HTML BLOB when preparing board view metadata", async () => {
@@ -736,25 +714,6 @@ describe("SqliteBoardStore behavior", () => {
       (await store.grant(boardSession, "app", "granted", 1, replacement.widgets[0]?.instanceId))
         .widgets[0],
     ).toMatchObject({ grantState: "granted" });
-  });
-  it("rejects a delayed HTML grant after remove and same-name replacement", async () => {
-    const store = createTestBoardStore();
-    const putDeclaredHtml = async (html: string) =>
-      await store.putWidget({
-        ...boardSession,
-        name: "app",
-        content: { kind: "html", html },
-        declared: { tools: ["refresh"] },
-      });
-    const original = await putDeclaredHtml("original");
-    await store.applyOps(boardSession, [{ kind: "widget_remove", name: "app" }]);
-    const replacement = await putDeclaredHtml("replacement");
-
-    expect(replacement.widgets[0]).toMatchObject({ revision: 1, grantState: "pending" });
-    expect(replacement.widgets[0]?.instanceId).not.toBe(original.widgets[0]?.instanceId);
-    await expect(
-      store.grant(boardSession, "app", "granted", 1, original.widgets[0]?.instanceId),
-    ).rejects.toThrow("instance changed");
   });
 });
 

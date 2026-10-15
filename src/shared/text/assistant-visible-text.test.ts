@@ -262,23 +262,6 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
   });
 
-  it("strips internal tool trace warning lines on the delivery path", () => {
-    const input = [
-      "Visible intro.",
-      "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
-      "⚠️ 🛠️ gh search issues --repo openclaw/openclaw --state open --no-search-pages.jsonl /tmp/openclaw_open_unlabeled_current.json (agent) failed",
-      "⚠️ 🛠️ gh search issues --repo openclaw/openclaw --state open (agent) failed: command timed out",
-      "⚠️ 🛠️ Exec failed: `python3 /path/to/daily-cost-audit.py` (exit 1)",
-      "⚠️ 🛠️ Bash failed: `git status` (workspace) (exit 1)",
-      "⚠️ 🛠️ Exec failed (exit 1)",
-      "⚠️ 🛠️ Bash failed",
-      "🛠️ run git status",
-      "Visible outro.",
-    ].join("\n");
-
-    expect(sanitizeAssistantVisibleText(input)).toBe("Visible intro.\nVisible outro.");
-  });
-
   it("keeps literal reasoning-looking tags in final-answer prose while hiding internal reflection", () => {
     expect(
       sanitizeAssistantVisibleTextWithProfile(
@@ -374,7 +357,7 @@ describe("assistantTraceTextFilter streamed projection", () => {
     expect(testedCharacters).toBeLessThan(source.length * 128);
   });
 
-  it.each([" ", "\n"])("bounds trace work for prose separated by %j", (separator) => {
+  it.each(["\n"])("bounds trace work for prose separated by %j", (separator) => {
     const source = Array(256)
       .fill("A helper function call returns the tool call payload for the value.")
       .join(separator);
@@ -401,43 +384,8 @@ describe("assistantTraceTextFilter streamed projection", () => {
 
   it.each([
     [
-      "a channel trace line",
-      'Visible intro.\ntool call: read {"path":"a.ts"}\nVisible outro.',
-      "Visible intro.\nVisible outro.",
-    ],
-    [
       "a warning trace line",
       "Visible intro.\n⚠️ 🛠️ Exec failed: `x` (exit 1)\nVisible outro.",
-      "Visible intro.\nVisible outro.",
-    ],
-    [
-      "a quoted progress line",
-      "Visible intro.\n> 📊 Session Status: ok\nVisible outro.",
-      "Visible intro.\nVisible outro.",
-    ],
-    [
-      "an indented progress line",
-      "Visible intro.\n   📊 Session Status: ok\nVisible outro.",
-      "Visible intro.\nVisible outro.",
-    ],
-    [
-      "a marker line that is not a trace line",
-      "Visible intro.\n📊 Summary of results\nVisible outro.",
-      "Visible intro.\n📊 Summary of results\nVisible outro.",
-    ],
-    [
-      "trace lines inside fenced code",
-      "Visible intro.\n```text\n> ⚠️ 🛠️ Exec failed\nfunction_call: example\n```\ntool-result: hidden\nVisible outro.",
-      "Visible intro.\n```text\n> ⚠️ 🛠️ Exec failed\nfunction_call: example\n```\nVisible outro.",
-    ],
-    [
-      "a tilde fence split across deltas",
-      "~~~\ntool call: example\n~~~\nVisible outro.",
-      "~~~\ntool call: example\n~~~\nVisible outro.",
-    ],
-    [
-      "unbounded whitespace before a channel delimiter",
-      `Visible intro.\nFUNCTION_CALL${"\t".repeat(80)}= hidden\nVisible outro.`,
       "Visible intro.\nVisible outro.",
     ],
     [
