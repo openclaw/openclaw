@@ -253,8 +253,8 @@ snapshots contain no run authority or cancellation signal. A retired plugin or
 closed invocation still rejects retained callbacks, including callbacks reached
 after rebuilding a tool's hooks. Definition accessors remain lazy and scoped, so
 an unreadable schema can be quarantined without invoking the tool.
-Proxy-backed tool objects and prototypes retain admitted live property access,
-including virtual properties and execution methods supplied by `get` traps.
+Callable tools and Proxy-backed objects retain their admitted callable and live
+property contracts, including execution methods supplied by `get` traps.
 
 `before_tool_call` inputs and approval parameters retain detached snapshots so
 plugin mutations cannot alter caller arguments or an approved request. These

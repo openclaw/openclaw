@@ -367,60 +367,81 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     }
   });
 
-  it("revokes normalized tool execution with its consumer while sibling admission remains live", async () => {
-    const builder = createTestPluginRegistry();
-    const record = createPluginRecord({
-      id: "consumer-normalizer",
-      source: "/synthetic/consumer-normalizer.ts",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    });
-    builder.registry.plugins.push(record);
-    const api = builder.createApi(record, { config: {} });
-    const instance = getPluginInstance(record)!;
-    api.registerProvider({
-      id: record.id,
-      label: "Consumer normalizer",
-      auth: [],
-      normalizeToolSchemas: ({ tools }) => tools,
-    });
-    const provider = expectDefined(builder.registry.providers[0], "registered provider").provider;
-    const first = instance.retainConsumer();
-    const second = instance.retainConsumer();
-    const execute = vi.fn(async () => ({ content: [], details: {} }));
-    const source = wrapToolWithBeforeToolCallHook({ ...createParameterFreeTool(), execute });
-    const normalize = (consumer: typeof first) => {
-      const scopedProvider = consumer.wrap(provider);
-      mocks.normalizeProviderToolSchemas.mockImplementationOnce(({ tools }) =>
-        scopedProvider.normalizeToolSchemas!({ tools, provider: provider.id }),
-      );
-      return expectDefined(
-        normalizeAgentRuntimeTools({ tools: [source], provider: record.id })[0],
-        "normalized consumer tool",
-      );
-    };
-    try {
-      const firstTool = normalize(first);
-      const secondTool = normalize(second);
-      const rewrapped = rewrapToolWithBeforeToolCallHook(firstTool, { runId: "retained-first" });
-      const retainedExecute = firstTool.execute;
-      await retainedExecute("first-active", {});
-      await secondTool.execute("second-active", {});
-      first.release();
-      expect(() => retainedExecute("first-closed", {})).toThrow("consumer is closed");
-      await expect(rewrapped.execute("rewrapped-closed", {})).rejects.toThrow("consumer is closed");
-      await expect(secondTool.execute("second-still-active", {})).resolves.toMatchObject({
-        content: [],
+  it.each(["object", "callable", "callable-source"] as const)(
+    "revokes normalized %s tool execution with its consumer while sibling admission remains live",
+    async (shape) => {
+      const builder = createTestPluginRegistry();
+      const record = createPluginRecord({
+        id: "consumer-normalizer",
+        source: "/synthetic/consumer-normalizer.ts",
+        origin: "bundled",
+        enabled: true,
+        configSchema: false,
       });
-      expect(instance.acceptingCalls).toBe(true);
-      expect(execute).toHaveBeenCalledTimes(3);
-    } finally {
-      first.release();
-      second.release();
-      await instance.dispose();
-    }
-  });
+      builder.registry.plugins.push(record);
+      const api = builder.createApi(record, { config: {} });
+      const instance = getPluginInstance(record)!;
+      api.registerProvider({
+        id: record.id,
+        label: "Consumer normalizer",
+        auth: [],
+        normalizeToolSchemas: ({ tools }) =>
+          shape !== "callable"
+            ? tools
+            : tools.map((tool) => {
+                const { name, ...definition } = tool;
+                const callable = Object.assign(() => undefined, definition);
+                Object.defineProperty(callable, "name", { value: name, enumerable: true });
+                return callable;
+              }),
+      });
+      const provider = expectDefined(builder.registry.providers[0], "registered provider").provider;
+      const first = instance.retainConsumer();
+      const second = instance.retainConsumer();
+      const execute = vi.fn(async () => ({ content: [], details: {} }));
+      const definition = { ...createParameterFreeTool(), label: "Consumer tool", execute };
+      const { name, ...callableDefinition } = definition;
+      const callableSource = Object.assign(() => undefined, callableDefinition);
+      Object.defineProperty(callableSource, "name", { value: name, enumerable: true });
+      const source = wrapToolWithBeforeToolCallHook(
+        shape === "callable-source" ? callableSource : definition,
+      );
+      const normalize = (consumer: typeof first) => {
+        const scopedProvider = consumer.wrap(provider);
+        mocks.normalizeProviderToolSchemas.mockImplementationOnce(({ tools }) =>
+          scopedProvider.normalizeToolSchemas!({ tools, provider: provider.id }),
+        );
+        return expectDefined(
+          normalizeAgentRuntimeTools({ tools: [source], provider: record.id })[0],
+          "normalized consumer tool",
+        );
+      };
+      try {
+        const firstTool = normalize(first);
+        const secondTool = normalize(second);
+        expect(typeof firstTool).toBe(shape === "callable" ? "function" : "object");
+        const rewrapped = rewrapToolWithBeforeToolCallHook(firstTool, { runId: "retained-first" });
+        const retainedExecute = firstTool.execute;
+        await retainedExecute("first-active", {});
+        await rewrapped.execute("rewrapped-active", {});
+        await secondTool.execute("second-active", {});
+        first.release();
+        expect(() => retainedExecute("first-closed", {})).toThrow("consumer is closed");
+        await expect(rewrapped.execute("rewrapped-closed", {})).rejects.toThrow(
+          "consumer is closed",
+        );
+        await expect(secondTool.execute("second-still-active", {})).resolves.toMatchObject({
+          content: [],
+        });
+        expect(instance.acceptingCalls).toBe(true);
+        expect(execute).toHaveBeenCalledTimes(4);
+      } finally {
+        first.release();
+        second.release();
+        await instance.dispose();
+      }
+    },
+  );
 
   it.each(["direct", "inherited"] as const)(
     "preserves %s Proxy execution and leaves unreadable schemas to quarantine",
@@ -467,9 +488,10 @@ describe("AgentRuntimePlan tool policy helpers", () => {
       try {
         const normalized = normalizeAgentRuntimeTools({
           tools: ["healthy", "unreadable"].map((name) => {
-            const tool = createParameterFreeTool(name);
-            tool.execute = underlyingExecute;
-            return tool;
+            return Object.assign(createParameterFreeTool(name), {
+              label: name,
+              execute: underlyingExecute,
+            });
           }),
           provider: record.id,
         });

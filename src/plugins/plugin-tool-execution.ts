@@ -44,9 +44,8 @@ export function createPluginToolExecutionBinding(context: {
       return cached as T;
     }
     for (let source: object | null = tool; source; source = Object.getPrototypeOf(source)) {
-      // A plugin Proxy can supply virtual fields or execution guards through get.
-      // Its public object contract requires live admitted reflection, not snapshots.
-      if (types.isProxy(source)) {
+      // Callable tools and Proxy fields require the generic callable/reflective contract.
+      if (typeof source === "function" || types.isProxy(source)) {
         const view = context.wrapProxy(tool);
         views.set(tool, view);
         views.set(view, view);
@@ -60,7 +59,11 @@ export function createPluginToolExecutionBinding(context: {
     void new ToolExecutionOwner(view, bind);
     context.register(view, tool);
     const bindValue = (key: PropertyKey, value: unknown): unknown => {
-      if (key === SOURCE_TOOL && value !== null && typeof value === "object") {
+      if (
+        key === SOURCE_TOOL &&
+        value !== null &&
+        (typeof value === "object" || typeof value === "function")
+      ) {
         return bind(value);
       }
       return typeof value === "function"
@@ -104,7 +107,7 @@ export function createPluginToolExecutionBinding(context: {
     return view as T;
   };
   const bindResultItem = (tool: unknown) =>
-    tool !== null && typeof tool === "object" ? bind(tool) : tool;
+    tool !== null && (typeof tool === "object" || typeof tool === "function") ? bind(tool) : tool;
   return <T>(value: T): T => {
     // SAFETY: Tool factories preserve their scalar/array/null result shape.
     return (Array.isArray(value) ? value.map(bindResultItem) : bindResultItem(value)) as T;
