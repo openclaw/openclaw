@@ -115,8 +115,13 @@ describe("proxy stream wrappers", () => {
     expect(calls[0]?.headers).toBeUndefined();
   });
 
-  it("injects cache_control markers for declared OpenRouter Anthropic models on the default route", () => {
-    const payload = runSystemCacheWrapper({});
+  it.each([
+    "anthropic/claude-sonnet-4.6",
+    "~anthropic/claude-haiku-latest",
+    "openrouter/anthropic/claude-sonnet-4.6",
+    "openrouter/~anthropic/claude-haiku-latest",
+  ])("injects cache_control markers for OpenRouter model %s on the default route", (id) => {
+    const payload = runSystemCacheWrapper({ id });
 
     expect(payload.messages[0]?.content).toEqual([
       { type: "text", text: "system prompt", cache_control: { type: "ephemeral" } },
@@ -131,13 +136,14 @@ describe("proxy stream wrappers", () => {
     expect(payload.messages[0]?.content).toBe("system prompt");
   });
 
-  it("does not inject Anthropic cache_control markers for automatic OpenRouter DeepSeek cache models", () => {
-    const payload = runSystemCacheWrapper({
-      id: "deepseek/deepseek-v3.2",
-    });
+  it.each(["deepseek/deepseek-v3.2", "~openai/gpt-4o", "openrouter/~openai/gpt-4o"])(
+    "does not inject Anthropic cache_control markers for OpenRouter model %s",
+    (id) => {
+      const payload = runSystemCacheWrapper({ id });
 
-    expect(payload.messages[0]?.content).toBe("system prompt");
-  });
+      expect(payload.messages[0]?.content).toBe("system prompt");
+    },
+  );
 
   it("injects cache_control markers for native OpenRouter hosts behind custom provider ids", () => {
     const payload = runSystemCacheWrapper({
