@@ -21,8 +21,7 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
   const injection = await import("../auto-reply/reply/reply-run-registry.message-injection.js");
   const { enqueueMessageInjection } =
     await import("../auto-reply/reply/message-injection-authority.js");
-  const { replyMessageInjectionTargetOwner } =
-    await import("../auto-reply/reply/reply-run-registry.contracts.js");
+  const contracts = await import("../auto-reply/reply/reply-run-registry.contracts.js");
   const previousSetting = getRuntimeConfig().messages?.queue?.allowCollaborativeSteering;
   try {
     await patchProofConfig(
@@ -76,7 +75,7 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
           if (queuedTarget) {
             const blockerEntered = createDeferred();
             queuedPreparation = enqueueMessageInjection(
-              queuedTarget[replyMessageInjectionTargetOwner].backendIdentity,
+              queuedTarget[contracts.replyMessageInjectionTargetOwner].backendIdentity,
               async () => {
                 blockerEntered.resolve();
                 await resume.promise;
@@ -99,8 +98,8 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
               if (args[1].includes(scenario.sourcePrompt)) {
                 injectionStarted = true;
                 if (queuedTarget) {
-                  expect(args[0][replyMessageInjectionTargetOwner].backendIdentity).toBe(
-                    queuedTarget[replyMessageInjectionTargetOwner].backendIdentity,
+                  expect(args[0][contracts.replyMessageInjectionTargetOwner].backendIdentity).toBe(
+                    queuedTarget[contracts.replyMessageInjectionTargetOwner].backendIdentity,
                   );
                   const pending = begin(...args);
                   // Bob is behind the real FIFO blocker, before his first preparation.
