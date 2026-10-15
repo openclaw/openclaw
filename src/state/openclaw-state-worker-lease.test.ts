@@ -50,6 +50,7 @@ vi.mock("../shared/global-singleton.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: the synthetic physical database must not reach the real cache singleton lifecycle.
 vi.mock("./openclaw-state-db-cache.js", () => ({
   // The synthetic cache is the only lifecycle this file publishes.
   assertPublishedOpenClawStateDatabaseLifecycle: () => {},
