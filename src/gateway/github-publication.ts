@@ -50,6 +50,7 @@ import {
   readGitHubPublicationRequestAsync,
   runGitHubPublicationMaintenanceAsync,
 } from "./github-publication-store-async.js";
+import type { GitHubPublicationTranscriptReport } from "./github-publication-transcript.js";
 import { assertGitHubPublicationWorkflowChangesAllowed } from "./github-publication-workflows.js";
 import {
   prepareGitHubPublicationClaimWorkspace,
@@ -438,6 +439,10 @@ export function createGitHubPublicationCoordinator(params: {
     assertCurrent,
     signal,
   );
+  // A publication processed inside its run's tool call reports into that run, so
+  // the transcript notice stays within the turn. Process-local by design: after a
+  // restart before reporting, the notice is recorded without a run, as it was before.
+  const requestingRuns = new Map<string, string>();
   const methods = createGitHubPublicationCoordinatorMethods({
     placements: params.placements,
     assertCurrent,
@@ -446,6 +451,7 @@ export function createGitHubPublicationCoordinator(params: {
     signal,
     sameWorktree,
     processRow,
+    recordRequestingRun: (requestId, runId) => requestingRuns.set(requestId, runId),
   });
   return {
     ...methods,
@@ -602,10 +608,17 @@ export function createGitHubPublicationCoordinator(params: {
       return refuseLegacyPublication("listUnreportedResults", "listUnreportedResultsAsync");
     },
     async listUnreportedResultsAsync() {
-      return [
+      const publications: GitHubPublicationTranscriptReport[] = [
         ...(await methods.listUnreportedResultsAsync()),
         ...(await repository.listUnreportedResultsAsync()),
       ];
+      for (const publication of publications) {
+        const runId = requestingRuns.get(publication.result.requestId);
+        if (runId) {
+          publication.runId = runId;
+        }
+      }
+      return publications;
     },
     /** @deprecated Use readAsync and await completion. */
     read(_requestId: string): SessionGitHubPublicationResult | undefined {
@@ -620,6 +633,7 @@ export function createGitHubPublicationCoordinator(params: {
     },
     async markReportedAsync(requestId: string) {
       await runGitHubPublicationMaintenanceAsync({ operation: "report", requestId }, assertCurrent);
+      requestingRuns.delete(requestId);
     },
   };
 }
