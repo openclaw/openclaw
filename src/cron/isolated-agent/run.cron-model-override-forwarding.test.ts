@@ -10,6 +10,7 @@ import {
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import type { CliSessionReseedReceipt } from "../../config/sessions.js";
+import { contextBudgetStatusFixture } from "../../config/sessions/context-budget.test-support.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
@@ -927,9 +928,11 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
         agentRuntimeOverride: "openclaw",
         contextTokens: 272_000,
         contextTokensSource: "runtime",
-        contextBudgetStatus: {} as NonNullable<
-          ReturnType<typeof makeCronSessionEntry>["contextBudgetStatus"]
-        >,
+        contextBudgetStatus: contextBudgetStatusFixture({
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          contextTokenBudget: 272_000,
+        }),
       }),
       isNewSession: false,
     });

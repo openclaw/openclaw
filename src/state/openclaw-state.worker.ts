@@ -224,8 +224,9 @@ function createSharedStateWorkerBackend(
     );
   const writeAdmitted: WorkerWriteOperationContext["writeAdmitted"] = (
     operation,
-    { receipt, transactionEnvironment, ...options } = {},
+    transactionOptions = {},
   ) => {
+    const { receipt, transactionEnvironment, ...options } = transactionOptions;
     const openedDatabase = open();
     return write(
       (database) => {

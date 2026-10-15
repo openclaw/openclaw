@@ -18,8 +18,8 @@ For a tool made with `defineToolPlugin`, declare the schema beside
 `parameters`:
 
 ```typescript
-import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+import { Type } from "typebox";
 
 const Shipment = Type.Object(
   {
