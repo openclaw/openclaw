@@ -4,6 +4,7 @@ import {
   getActiveGatewayRootWorkCount,
   isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
+  tryBeginGatewayIndependentRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
@@ -98,6 +99,68 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     expect(emitRestart).not.toHaveBeenCalled();
   });
 
+  it("reprepares after new root work prevents the final fenced idle check", async () => {
+    const work: { root: ReturnType<typeof tryBeginGatewayIndependentRootWorkAdmission> } = {
+      root: null,
+    };
+    const prepareEmission = vi.fn(async () => {
+      if (prepareEmission.mock.calls.length === 1) {
+        work.root = tryBeginGatewayIndependentRootWorkAdmission();
+        expect(work.root).not.toBeNull();
+      }
+    });
+    const handle = deferGatewayRestartUntilIdle({
+      getPendingCount: () => 0,
+      pollMs: 10,
+      prepareEmission,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(prepareEmission).toHaveBeenCalledOnce();
+      expect(restartSignalHandler).not.toHaveBeenCalled();
+      expect(isGatewayWorkAdmissionClosed()).toBe(false);
+      work.root?.release();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(prepareEmission).toHaveBeenCalledTimes(2);
+      expect(restartSignalHandler).toHaveBeenCalledOnce();
+    } finally {
+      work.root?.release();
+      handle.cancel();
+    }
+  });
+
+  it.each(["cancel", "failure"] as const)(
+    "does not emit from %s of runtime preparation",
+    async (outcome) => {
+      const gate = Promise.withResolvers<void>();
+      const prepareEmission = vi.fn(() => gate.promise);
+      const onCheckError = vi.fn();
+      const handle = deferGatewayRestartUntilIdle({
+        getPendingCount: () => 0,
+        pollMs: 10,
+        prepareEmission,
+        hooks: { onCheckError },
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(prepareEmission).toHaveBeenCalledOnce();
+        expect(isGatewayWorkAdmissionClosed()).toBe(false);
+        if (outcome === "cancel") {
+          handle.cancel();
+          gate.resolve();
+        } else {
+          gate.reject(new Error("runtime preparation failed"));
+        }
+        await vi.advanceTimersByTimeAsync(0);
+        expect(restartSignalHandler).not.toHaveBeenCalled();
+        expect(onCheckError).toHaveBeenCalledTimes(outcome === "failure" ? 1 : 0);
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      } finally {
+        handle.cancel();
+      }
+    },
+  );
+
   it("forces a timed-out restart while an admitted root remains", async () => {
     const root = tryBeginGatewayRootWorkAdmission();
     expect(root).not.toBeNull();
@@ -190,61 +253,69 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     expect(hooks.onTimeout).toHaveBeenCalledOnce();
   });
 
-  it("supersedes stuck initial and forced preparations with fresh preparation", async () => {
-    const hooks: RestartDeferralHooks = { onTimeout: vi.fn() };
-    const emitRestart = vi.fn(() => ({ status: "emitted" as const }));
-    let beforeEmitCalls = 0;
-    const beforeEmit = vi.fn(() => {
-      beforeEmitCalls += 1;
-      return beforeEmitCalls <= 2 ? new Promise<void>(() => {}) : Promise.resolve();
-    });
-    deferGatewayRestartUntilIdle({
-      getPendingCount: () => 0,
-      maxWaitMs: 100,
-      pollMs: 10,
-      hooks,
-      timeoutIntent: { force: true },
-      emitHooks: { beforeEmit, emitRestart },
-    });
-    await vi.advanceTimersByTimeAsync(250);
-    expect(hooks.onTimeout).toHaveBeenCalledOnce();
-    expect(beforeEmitCalls).toBeGreaterThanOrEqual(3);
-    expect(emitRestart).toHaveBeenCalledOnce();
-  });
+  it.each(["beforeEmit", "prepareEmission"] as const)(
+    "supersedes stuck initial and forced %s with fresh preparation",
+    async (stage) => {
+      const hooks: RestartDeferralHooks = { onTimeout: vi.fn() };
+      const emitRestart = vi.fn(() => ({ status: "emitted" as const }));
+      let beforeEmitCalls = 0;
+      const beforeEmit = vi.fn(() => {
+        beforeEmitCalls += 1;
+        return beforeEmitCalls <= 2 ? new Promise<void>(() => {}) : Promise.resolve();
+      });
+      deferGatewayRestartUntilIdle({
+        getPendingCount: () => 0,
+        maxWaitMs: 100,
+        pollMs: 10,
+        hooks,
+        timeoutIntent: { force: true },
+        ...(stage === "prepareEmission" ? { prepareEmission: beforeEmit } : {}),
+        emitHooks: { ...(stage === "beforeEmit" ? { beforeEmit } : {}), emitRestart },
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(hooks.onTimeout).toHaveBeenCalledOnce();
+      expect(beforeEmitCalls).toBeGreaterThanOrEqual(3);
+      expect(emitRestart).toHaveBeenCalledOnce();
+    },
+  );
 
-  it("does not supersede a slow forced preparation that spans several poll intervals", async () => {
-    const hooks: RestartDeferralHooks = { onTimeout: vi.fn() };
-    const emitRestart = vi.fn(() => ({ status: "emitted" as const }));
-    let beforeEmitCalls = 0;
-    let releaseForced: (() => void) | undefined;
-    const beforeEmit = vi.fn(() => {
-      beforeEmitCalls += 1;
-      return beforeEmitCalls === 1
-        ? new Promise<void>(() => {})
-        : new Promise<void>((resolve) => {
-            releaseForced = resolve;
-          });
-    });
+  it.each(["beforeEmit", "prepareEmission"] as const)(
+    "does not supersede slow forced %s across poll intervals",
+    async (stage) => {
+      const hooks: RestartDeferralHooks = { onTimeout: vi.fn() };
+      const emitRestart = vi.fn(() => ({ status: "emitted" as const }));
+      let beforeEmitCalls = 0;
+      let releaseForced: (() => void) | undefined;
+      const beforeEmit = vi.fn(() => {
+        beforeEmitCalls += 1;
+        return beforeEmitCalls === 1
+          ? new Promise<void>(() => {})
+          : new Promise<void>((resolve) => {
+              releaseForced = resolve;
+            });
+      });
 
-    deferGatewayRestartUntilIdle({
-      getPendingCount: () => 0,
-      maxWaitMs: 100,
-      pollMs: 10,
-      hooks,
-      timeoutIntent: { force: true },
-      emitHooks: { beforeEmit, emitRestart },
-    });
+      deferGatewayRestartUntilIdle({
+        getPendingCount: () => 0,
+        maxWaitMs: 100,
+        pollMs: 10,
+        hooks,
+        timeoutIntent: { force: true },
+        ...(stage === "prepareEmission" ? { prepareEmission: beforeEmit } : {}),
+        emitHooks: { ...(stage === "beforeEmit" ? { beforeEmit } : {}), emitRestart },
+      });
 
-    await vi.advanceTimersByTimeAsync(100);
-    expect(beforeEmitCalls).toBe(2);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(beforeEmitCalls).toBe(2);
 
-    await vi.advanceTimersByTimeAsync(50);
-    expect(beforeEmitCalls).toBe(2);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(beforeEmitCalls).toBe(2);
 
-    releaseForced?.();
-    await vi.advanceTimersByTimeAsync(10);
-    expect(emitRestart).toHaveBeenCalledOnce();
-  });
+      releaseForced?.();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(emitRestart).toHaveBeenCalledOnce();
+    },
+  );
 
   it("keeps retrying the forced restart when its emission rejects after the deadline", async () => {
     const hooks: RestartDeferralHooks = { onTimeout: vi.fn() };

@@ -2,8 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import * as restartModule from "../infra/restart.js";
-import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import {
+  isGatewayWorkAdmissionClosed,
+  resetGatewayWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
 import { nextGatewayReloadGeneration } from "./server-reload-generation.js";
@@ -124,6 +130,75 @@ describe("gateway restart readiness preflight", () => {
       expect(assertRestartReady).toHaveBeenCalledTimes(2);
       expect(prepareRuntimeConfig).toHaveBeenCalledOnce();
       expect(requestRecoveryRestart).toHaveBeenCalledOnce();
+    } finally {
+      coordinator.stopRestartRetries();
+    }
+  });
+
+  it("prepares outside the signal fence while a real lifecycle lease holder needs root admission", async () => {
+    await withOpenClawTestState({ label: "restart-lease-cycle" }, async (state) => {
+      const holderReady = Promise.withResolvers<void>();
+      const holderGate = Promise.withResolvers<void>();
+      const prepareEntered = Promise.withResolvers<void>();
+      const emitted = Promise.withResolvers<void>();
+      const holder = withPluginLifecycleLease({ env: state.env, processBound: true }, async () => {
+        holderReady.resolve();
+        await holderGate.promise;
+        await runWithGatewayIndependentRootWorkAdmission(async () => {}, "reload:config");
+      });
+      await holderReady.promise;
+      const prepareRuntimeConfig = vi.fn(async () => {
+        holderGate.resolve();
+        prepareEntered.resolve();
+        return await withPluginLifecycleLease(
+          { env: state.env, processBound: true },
+          async () => ({}),
+        );
+      });
+      const requestRecoveryRestart = vi.fn(() => {
+        expect(isGatewayWorkAdmissionClosed()).toBe(true);
+        emitted.resolve();
+        return { status: "emitted" as const };
+      });
+      const coordinator = createCoordinator({ requestRecoveryRestart });
+      try {
+        coordinator.requestGatewayRestart(restartPlan, {}, { prepareRuntimeConfig });
+        await prepareEntered.promise;
+        // The real lease holder cannot release while the signal fence blocks its root.
+        expect(isGatewayWorkAdmissionClosed()).toBe(false);
+        await emitted.promise;
+        await holder;
+        expect(prepareRuntimeConfig).toHaveBeenCalledOnce();
+        expect(requestRecoveryRestart).toHaveBeenCalledExactlyOnceWith(
+          "config reload: gateway.port",
+          undefined,
+        );
+      } finally {
+        coordinator.stopRestartRetries();
+        holderGate.resolve();
+        await holder;
+      }
+    });
+  });
+
+  it("reports a pending restart preparation instead of waiting silently", async () => {
+    vi.useFakeTimers();
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const coordinator = createCoordinator({ logReload, requestRecoveryRestart });
+
+    try {
+      coordinator.requestGatewayRestart(restartPlan, {} as OpenClawConfig, {
+        prepareRuntimeConfig: () => new Promise<OpenClawConfig>(() => {}),
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+      expect(logReload.warn).toHaveBeenLastCalledWith(
+        expect.stringMatching(
+          /^restart still deferred after \d+ms with restart preparation pending; no active work$/,
+        ),
+      );
     } finally {
       coordinator.stopRestartRetries();
     }
