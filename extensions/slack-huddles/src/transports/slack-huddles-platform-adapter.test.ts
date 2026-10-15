@@ -171,6 +171,26 @@ describe("Slack huddle browser adapter", () => {
     },
   );
 
+  it("keeps huddle ownership through a Slack SPA URL rewrite and rejects a different channel view", async () => {
+    const { document, marker } = inCall();
+    const browser = fixture({ document, joined: true });
+    expect(await browser.status()).toMatchObject({ inCall: true });
+    browser.location.href = CLIENT_URL;
+    expect(await browser.status()).toMatchObject({ inCall: true });
+    expect(browser.window).toMatchObject({
+      __openclawSlackHuddle: {
+        identity: "slack-huddle:T0123ABCD:C0123ABCD",
+        inCallUrl: CLIENT_URL,
+      },
+    });
+    browser.location.href = "https://app.slack.com/client/T0123ABCD/C9999ABCD";
+    expect(await browser.status()).toMatchObject({
+      inCall: false,
+      manualAction: { reason: "slack-session-conflict" },
+    });
+    expect(marker.clicks).toBe(0);
+  });
+
   it.each([false, true])(
     "retains ownership through a toolbar rerender (channelOnly=%s)",
     async (channelOnly) => {
