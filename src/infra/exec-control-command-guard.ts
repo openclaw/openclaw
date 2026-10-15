@@ -184,10 +184,13 @@ function parseSqliteDatabaseTokens(argv: string[]): string[] {
 }
 
 // Recognized variable-bearing file: URI bodies whose variables the shell
-// expands even inside double quotes. Other file: URIs (absolute, relative,
-// opaque, tilde) keep fileURLToPath semantics.
+// expands even inside double quotes. An optional empty or "localhost"
+// authority ("file://$VAR/…") expands to the valid URI "file:///<path>/…".
+// Other file: URIs (absolute, relative, opaque, tilde) keep fileURLToPath
+// semantics.
 const SQLITE_URI_RECOGNIZED_VARIABLE_BODY =
-  /^\$(?:\{?OPENCLAW_STATE_DIR\}?|\{?HOME\}?)(?=$|[\\/])/u;
+  /^(?:\/\/(?:localhost)?)?\$(?:\{?OPENCLAW_STATE_DIR\}?|\{?HOME\}?)(?=$|[\\/])/iu;
+const SQLITE_URI_EMPTY_AUTHORITY = /^\/\/(?:localhost)?(?=\$)/iu;
 
 function expandSqliteDatabaseToken(token: string, stateDir: string): string | null {
   let expanded = token.trim();
@@ -202,7 +205,7 @@ function expandSqliteDatabaseToken(token: string, stateDir: string): string | nu
     // is not an absolute file URL: fileURLToPath would prefix the literal
     // variable with "/" and hide it from expansion. Strip the scheme and any
     // query/fragment, percent-decode, then run the variable expansions below.
-    const filename = fileUriBody.split(/[?#]/u, 1)[0] ?? "";
+    const filename = fileUriBody.replace(SQLITE_URI_EMPTY_AUTHORITY, "").split(/[?#]/u, 1)[0] ?? "";
     if (!filename) {
       return null;
     }

@@ -127,6 +127,19 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
         detectUnsafeExecControlShellCommand(`sqlite3 "file:${databasePath}?mode=ro"`, context),
       ).resolves.toBe("live-state-sqlite");
 
+      // The shell expands "file://$VAR/…" to the valid URI "file:///<state>/…",
+      // so empty and localhost authorities in front of the variable are refused too.
+      for (const command of [
+        'sqlite3 "file://$OPENCLAW_STATE_DIR/state/openclaw.sqlite?mode=ro" "PRAGMA user_version"',
+        'sqlite3 "file://${OPENCLAW_STATE_DIR}/state/openclaw.sqlite" "PRAGMA user_version"',
+        'sqlite3 "file://localhost$OPENCLAW_STATE_DIR/state/openclaw.sqlite" "PRAGMA user_version"',
+        'sqlite3 "FILE://$OPENCLAW_STATE_DIR/state/openclaw.sqlite" "PRAGMA user_version"',
+      ]) {
+        await expect(detectUnsafeExecControlShellCommand(command, context)).resolves.toBe(
+          "live-state-sqlite",
+        );
+      }
+
       // Parity with the private-copy allowance is preserved for URI spellings.
       const copiedDatabasePath = path.join(root, "snapshot", "openclaw.sqlite");
       await fs.mkdir(path.dirname(copiedDatabasePath), { recursive: true });
@@ -134,6 +147,13 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
       await expect(
         detectUnsafeExecControlShellCommand(
           `sqlite3 "file:${copiedDatabasePath}?mode=ro"`,
+          context,
+        ),
+      ).resolves.toBeNull();
+      // A triple-slash private copy stays allowed.
+      await expect(
+        detectUnsafeExecControlShellCommand(
+          `sqlite3 "file://${copiedDatabasePath}?mode=ro"`,
           context,
         ),
       ).resolves.toBeNull();
