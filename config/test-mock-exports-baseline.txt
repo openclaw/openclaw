@@ -7374,7 +7374,6 @@
 ["src/gateway/server-plugin-in-process-dispatch.authorization.test.ts","./agent-turn/agent-turn-service.js","1ee7bc0f9e37aecf7b018abe8d239e1daae30d7113ee139168bd53be03f39c5a",1]
 ["src/gateway/server-plugin-in-process-dispatch.continuation.test.ts","./agent-turn/agent-turn-service.js","686318a6dd7603145648dcfb41a8a36420e9fd4848708c2e31f233157f4c5b04",1]
 ["src/gateway/server-plugin-in-process-dispatch.session-scopes.test.ts","../agents/subagents/spawn/subagent-spawn.runtime.js","37a45aaf9388c1a9cad2dff6ac250240a2fc2120c7ce92ddeca54d3118678427",1]
-["src/gateway/server-plugin-in-process-dispatch.session-scopes.test.ts","./server-methods/chat-send-external-entry.js","d2be07be4d02bc4d03f237cc56a21bffe236190c201dcf5bd9a39214aea66b7e",1]
 ["src/gateway/server-plugin-reload.recovery.test.ts","../agents/main-session-recovery/main-session-restart-recovery.js","e9485d27e2abfacd958656e337fa68f31ed648044c2216feb5c81d79dcda04ff",1]
 ["src/gateway/server-plugin-subagent-runtime.overrides.test.ts","../agents/provider-model-normalization.runtime.js","a5c6650ad159c759469f522755081fd55bd6202e8c0fe8a603394ff3b8de20a7",1]
 ["src/gateway/server-plugin-subagent-runtime.test.ts","../agents/isolated-completion.js","dc94f6a9116e194ea8d222afd05d7e0770a9e0c5639b9ad25fa7ff927794c655",1]

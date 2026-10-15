@@ -40,6 +40,7 @@ import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 import { roleClient } from "./session-sharing.test-utils.js";
 
 const kickoff = vi.hoisted(() => ({ internal: vi.fn(), external: vi.fn() }));
+// mock-isolation: Control kickoff receipts without admitting or running a chat turn after creation.
 vi.mock("./server-methods/chat-send-handler.js", () => ({
   handleTrustedInternalChatSend: kickoff.internal,
 }));
@@ -56,6 +57,7 @@ vi.mock("../agents/subagents/spawn/subagent-spawn.runtime.js", () => ({
     model: { id: "scope-model", provider: "test-provider" },
   }),
 }));
+// mock-isolation: Isolate external chat and cron-creator admission while checking kickoff routing.
 vi.mock("./server-methods/chat-send-external-entry.js", () => ({
   handleDirectExternalChatSend: async (options: GatewayRequestHandlerOptions) => {
     kickoff.external(options);

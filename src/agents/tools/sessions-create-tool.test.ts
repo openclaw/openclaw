@@ -8,6 +8,7 @@ import { prepareSandboxSessionTools } from "./sessions-operator-authority.js";
 import { withSessionToolTestCaller } from "./sessions-tool.test-helpers.js";
 
 const gateway = vi.hoisted(() => ({ request: vi.fn(), available: true }));
+// mock-isolation: Keep Gateway runtime state and dispatch outside this tool-contract fixture.
 vi.mock("./in-process-gateway.js", () => ({
   getInProcessGatewayToolContext: () => (gateway.available ? {} : undefined),
   bindAgentToolGatewayRequest: () => gateway.request,
