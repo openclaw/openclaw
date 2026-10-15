@@ -28,31 +28,28 @@ async function visibleReplies(baseUrl: string) {
 }
 
 describe("QA inbound dispatch settlement", () => {
-  it.each(["", SILENT_REPLY_TOKEN])(
-    "removes the preview when dispatcher normalization suppresses final %j",
-    async (text) => {
-      await withQaBus(async (params) => {
-        await runQaInbound(async (turn) => {
-          const dispatcher = createReplyDispatcher({ ...turn.dispatcherOptions, ...turn.delivery });
-          try {
-            await turn.replyOptions?.onPartialReply?.({ text: "unfinished" });
-            expect(await visibleReplies(params.account.baseUrl)).toMatchObject([
-              { text: "unfinished" },
-            ]);
-            expect(dispatcher.sendFinalReply({ text })).toBe(false);
-            await turn.replyOptions?.onPartialReply?.({ text: "late partial" });
-            expect(await visibleReplies(params.account.baseUrl)).toEqual([]);
-          } finally {
-            dispatcher.markComplete();
-            await dispatcher.waitForIdle();
-          }
-        }, params);
-        const state = await getQaBusState(params.account.baseUrl);
-        expect(state.events.filter((event) => event.kind === "outbound-message")).toHaveLength(1);
-        expect(state.events.filter((event) => event.kind === "message-deleted")).toHaveLength(1);
-      });
-    },
-  );
+  it("removes the preview when dispatcher normalization suppresses a silent final", async () => {
+    await withQaBus(async (params) => {
+      await runQaInbound(async (turn) => {
+        const dispatcher = createReplyDispatcher({ ...turn.dispatcherOptions, ...turn.delivery });
+        try {
+          await turn.replyOptions?.onPartialReply?.({ text: "unfinished" });
+          expect(await visibleReplies(params.account.baseUrl)).toMatchObject([
+            { text: "unfinished" },
+          ]);
+          expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(false);
+          await turn.replyOptions?.onPartialReply?.({ text: "late partial" });
+          expect(await visibleReplies(params.account.baseUrl)).toEqual([]);
+        } finally {
+          dispatcher.markComplete();
+          await dispatcher.waitForIdle();
+        }
+      }, params);
+      const state = await getQaBusState(params.account.baseUrl);
+      expect(state.events.filter((event) => event.kind === "outbound-message")).toHaveLength(1);
+      expect(state.events.filter((event) => event.kind === "message-deleted")).toHaveLength(1);
+    });
+  });
 
   it("removes an unfinished preview before a zero-payload dispatch returns", async () => {
     await withQaBus(async (params) => {

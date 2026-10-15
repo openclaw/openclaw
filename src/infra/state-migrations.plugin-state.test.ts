@@ -5,6 +5,7 @@ import {
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -19,7 +20,8 @@ describe("legacy migration plan failure isolation", () => {
   });
 
   afterEach(async () => {
-    resetPluginStateStoreForTests();
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests({ closeDatabase: false });
     await state.cleanup();
   });
 

@@ -4,16 +4,20 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   readStringValue,
+  resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import { hasExplicitModelPolicyAllow } from "../config/model-policy-allowlist-migration.js";
 import { resolveStateDir } from "../config/paths.js";
+import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import type {
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
 } from "../config/types.agent-defaults.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { resolveUserPath } from "../utils.js";
 import { registerResolvedAgentDir } from "./agent-dir-registry.js";
 import {
@@ -38,7 +42,7 @@ export {
   type ListedAgentEntry,
 } from "./agent-roster.js";
 
-type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type AgentEntry = AgentConfig;
 type AgentEntriesConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>;
 type MutableAgentEntry = AgentEntry | AgentEntriesConfig[string];
 export type AgentSelectionContext = {
@@ -75,8 +79,8 @@ export type ResolvedAgentConfig = {
   params?: AgentEntry["params"];
   runtime?: AgentEntry["runtime"];
   modelPolicy?: AgentEntry["modelPolicy"];
-  agentRuntime?: AgentEntry["agentRuntime"];
   utilityModel?: AgentEntry["utilityModel"];
+  decisionModel?: AgentEntry["decisionModel"];
   thinkingDefault?: AgentEntry["thinkingDefault"];
   verboseDefault?: AgentDefaultsConfig["verboseDefault"];
   toolProgressDetail?: AgentDefaultsConfig["toolProgressDetail"];
@@ -101,6 +105,41 @@ export type ResolvedAgentConfig = {
   tools?: AgentEntry["tools"];
 };
 
+/** ACP primaries select the harness; explicit fallback lists still configure native calls. */
+export function resolveAgentModelConfigForRuntime(
+  agent: Pick<ResolvedAgentConfig, "model" | "runtime"> | undefined,
+  runtime: "native" | "acp" = "native",
+): ResolvedAgentConfig["model"] {
+  const model = agent?.model;
+  if (runtime === "acp" || agent?.runtime?.type !== "acp") {
+    return model;
+  }
+  return model && typeof model === "object" && Array.isArray(model.fallbacks)
+    ? { fallbacks: model.fallbacks }
+    : undefined;
+}
+
+/** Native overrides exclude ACP harness primaries without changing authored configuration. */
+export function resolveAgentNativeModelPrimary(
+  cfg: OpenClawConfig,
+  agentId: string,
+): string | undefined {
+  return resolvePrimaryStringValue(
+    resolveAgentModelConfigForRuntime(resolveAgentConfig(cfg, agentId)),
+  );
+}
+
+/** Native requests inherit the raw default, including its configured auth-profile suffix. */
+export function resolveNativeModelPrimary(
+  cfg: OpenClawConfig,
+  agentId: string,
+): string | undefined {
+  return (
+    resolveAgentNativeModelPrimary(cfg, agentId) ??
+    resolvePrimaryStringValue(cfg.agents?.defaults?.model)
+  );
+}
+
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
 function stripNullBytes(s: string): string {
   return s.replaceAll("\0", "");
@@ -118,17 +157,16 @@ type AgentRosterFactsBatch = {
 };
 
 let activeAgentRosterFactsBatch: AgentRosterFactsBatch | undefined;
+const agentRosterFacts = new WeakMap<
+  OpenClawConfig,
+  { publication: object | undefined; facts: AgentRosterFacts }
+>();
 
-/**
- * Runs a read-only callback with batch-scoped roster memoization.
- *
- * Runtime discovery calls the owner helpers for every configured model. Keep
- * their derived facts on this exact config and discard them before returning,
- * so later config mutations cannot observe a stale process cache.
- */
+/** Share roster reads synchronously; unbound mutable configs expire when the callback returns. */
 export function withAgentRosterFactsBatch<T>(config: OpenClawConfig, callback: () => T): T {
   const parent = activeAgentRosterFactsBatch;
-  activeAgentRosterFactsBatch = parent?.config === config ? parent : { config, facts: {} };
+  activeAgentRosterFactsBatch =
+    parent?.config === config ? parent : { config, facts: readAgentRosterFacts(config) ?? {} };
   try {
     return callback();
   } finally {
@@ -137,9 +175,20 @@ export function withAgentRosterFactsBatch<T>(config: OpenClawConfig, callback: (
 }
 
 function readAgentRosterFacts(cfg: OpenClawConfig): AgentRosterFacts | undefined {
-  return activeAgentRosterFactsBatch?.config === cfg
-    ? activeAgentRosterFactsBatch.facts
-    : undefined;
+  if (activeAgentRosterFactsBatch?.config === cfg) {
+    return activeAgentRosterFactsBatch.facts;
+  }
+  const current = runtimeConfigPublication.current;
+  const publication = current?.config === cfg ? current.revision : undefined;
+  if (publication === undefined && !isDeeplyFrozenPlainData(cfg)) {
+    return undefined;
+  }
+  let cached = agentRosterFacts.get(cfg);
+  if (!cached || cached.publication !== publication) {
+    cached = { publication, facts: {} };
+    agentRosterFacts.set(cfg, cached);
+  }
+  return cached.facts;
 }
 
 /** Converts either supported roster representation into the canonical keyed shape. */
@@ -362,8 +411,8 @@ export function resolveAgentConfig(
     ...(entry.params ? { params: entry.params } : {}),
     ...(entry.runtime ? { runtime: entry.runtime } : {}),
     ...(hasExplicitModelPolicyAllow(entry.modelPolicy) ? { modelPolicy: entry.modelPolicy } : {}),
-    ...(entry.agentRuntime ? { agentRuntime: entry.agentRuntime } : {}),
     utilityModel: readStringValue(entry.utilityModel),
+    decisionModel: readStringValue(entry.decisionModel),
     thinkingDefault: entry.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
     toolProgressDetail: entry.toolProgressDetail ?? agentDefaults?.toolProgressDetail,

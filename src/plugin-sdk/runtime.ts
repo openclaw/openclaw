@@ -8,6 +8,7 @@ export { getChannelsCommandSecretTargetIds } from "../cli/command-secret-targets
 export { createLoggerBackedRuntime, resolveRuntimeEnv } from "./runtime-logger.internal.js";
 
 export { waitForAbortSignal } from "../infra/abort-signal.js";
+export { resolvePluginServiceScheduler } from "../plugins/service-scheduler-binding.js";
 export {
   registerUncaughtExceptionHandler,
   registerUnhandledRejectionHandler,

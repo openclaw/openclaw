@@ -1,7 +1,4 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-/**
- * Wraps stream functions with pre-call message transforms.
- */
 import {
   PROVIDER_CONTEXT_HANDOFF,
   type ProviderContext,
@@ -9,16 +6,15 @@ import {
 } from "../../../../packages/ai/src/provider-types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 
-/**
- * Stream wrapper for applying message transforms immediately before provider dispatch.
- */
-type MessageTransform = (messages: AgentMessage[], model: unknown) => AgentMessage[];
+type MessageTransform = (
+  messages: AgentMessage[],
+  model: Parameters<StreamFn>[0],
+) => AgentMessage[];
 type ProviderContextMaterializer = (input: {
   context: Parameters<StreamFn>[1];
   signal?: AbortSignal;
 }) => Promise<ProviderContext>;
 
-/** Wraps a stream function with a conditional message-list transform. */
 export function wrapStreamFnWithMessageTransform(
   streamFn: StreamFn,
   transform: MessageTransform,

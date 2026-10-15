@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listCoreGatewayMethodMetadata } from "./core-descriptors.js";
+import { listCoreGatewayMethodMetadata } from "./core-method-policy.js";
 
 const TRAIN_2026_7_METHODS = [
   "question.request",
@@ -76,8 +76,6 @@ const TRAIN_2026_7_METHODS = [
   "skills.proposals.evaluate",
   "skills.proposals.events.list",
   "hooks.status",
-  "tasks.retry",
-  "tasks.dismiss",
 ] as const;
 
 const TRAIN_2026_8_METHODS = [

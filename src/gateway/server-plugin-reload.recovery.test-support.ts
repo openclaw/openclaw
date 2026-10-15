@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expect, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
 import { adoptPluginHttpRouteHandoffs, registerPluginHttpRoute } from "../plugins/http-registry.js";
-import { activatePluginRegistry } from "../plugins/loader-shared.js";
+import { activatePluginRegistry, PluginLoadFailureError } from "../plugins/loader-shared.js";
 import {
   createPluginCommandRuntime,
   type PluginCommandCatalogDecision,
@@ -17,22 +18,29 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { projectPluginContributions } from "../plugins/registry-contributions.js";
 import { createPluginRegistry } from "../plugins/registry.js";
+import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import {
   createPluginRegistryOwner,
   disposePluginRegistryInstances,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
-import { startPluginServices, type PluginServicesHandle } from "../plugins/services.js";
+import { createPluginRuntime } from "../plugins/runtime/index.js";
+import {
+  startPluginServices,
+  type PluginServicesHandle,
+} from "../plugins/services.test-support.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createChannelManager } from "./server-channels.js";
 import { reloadGatewayPlugins } from "./server-plugin-reload.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
+import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 
 export async function createPluginReloadRecoveryFixture(
@@ -49,10 +57,13 @@ export async function createPluginReloadRecoveryFixture(
     env?: NodeJS.ProcessEnv;
     register?: (
       api: OpenClawPluginApi,
-      owner: "first" | "sibling",
+      pluginOwner: "first" | "sibling",
       record: ReturnType<typeof createPluginRecord>,
     ) => void;
     abortOnCandidateStart?: boolean;
+    waitForDrain?: boolean;
+    drainSignal?: AbortSignal;
+    checkpoint?: Parameters<typeof reloadGatewayPlugins>[1]["checkpoint"];
     prepareAttached?: () => Promise<void>;
     initialStop?: () => Promise<void>;
     beforePublish?: () => Promise<void>;
@@ -63,6 +74,7 @@ export async function createPluginReloadRecoveryFixture(
     candidateStop?: () => Promise<void>;
     recoveryStart?: () => Promise<void>;
     recoveryStop?: () => Promise<void>;
+    expectedMetadataCloseError?: Error;
   } = {},
 ) {
   let config: OpenClawConfig = options.config ?? {
@@ -73,7 +85,7 @@ export async function createPluginReloadRecoveryFixture(
   const createBuilder = () =>
     createPluginRegistry({
       logger: log,
-      runtime: {} as PluginRuntime,
+      runtime: createPluginRuntime(),
       activateGlobalSideEffects: false,
     });
   const previous = createBuilder();
@@ -123,16 +135,38 @@ export async function createPluginReloadRecoveryFixture(
     },
   });
   const candidateStop = vi.fn(async () => await options.candidateStop?.());
+  const rollbackConfigEffects = vi.fn(async () => {});
   const candidates: ReturnType<typeof createBuilder>[] = [];
-  const preparePlugins = ({
+  const recoveries: ReturnType<typeof createBuilder>[] = [];
+  const preparePlugins = async ({
     cfg,
     replacePluginIds = new Set<string>(),
+    loadModules = true,
+    moduleRecoveries,
   }: {
     cfg: OpenClawConfig;
     replacePluginIds?: ReadonlySet<string>;
+    loadModules?: boolean;
+    moduleRecoveries?: ReadonlyMap<string, unknown>;
   }) => {
     const candidate = createBuilder();
-    candidates.push(candidate);
+    if (loadModules) {
+      (moduleRecoveries ? recoveries : candidates).push(candidate);
+    }
+    const register = (
+      pluginOwner: "first" | "sibling",
+      record: ReturnType<typeof createPluginRecord>,
+    ) => {
+      const api = candidate.createApi(record, { config: cfg });
+      try {
+        options.register?.(api, pluginOwner, record);
+      } catch (error) {
+        record.status = "error";
+        record.error = error instanceof Error ? error.message : String(error);
+        throw new PluginLoadFailureError(candidate.registry, [record]);
+      }
+      return api;
+    };
     if (!replacePluginIds.has("first")) {
       const retained = registryOwner.registry.plugins.find((record) => record.id === "first");
       assert(retained);
@@ -141,23 +175,29 @@ export async function createPluginReloadRecoveryFixture(
     } else if (cfg.plugins?.entries?.first?.enabled !== false) {
       const record = createPluginRecord({ id: "first" });
       candidate.registry.plugins.push(record);
-      const api = candidate.createApi(record, { config: cfg });
-      options.register?.(api, "first", record);
-      api.registerService({
-        id: "first",
-        start: () => {
-          aborted = options.abortOnCandidateStart !== false;
-          options.candidateStart?.();
-        },
-        stop: async () => await candidateStop(),
-      });
+      if (loadModules) {
+        const api = register("first", record);
+        api.registerService(
+          moduleRecoveries
+            ? { id: "first", start: firstStart, stop: firstStop }
+            : {
+                id: "first",
+                start: () => {
+                  aborted = options.abortOnCandidateStart !== false;
+                  options.candidateStart?.();
+                },
+                stop: async () => await candidateStop(),
+              },
+        );
+      }
     }
     if (replacePluginIds.has("sibling")) {
       const record = createPluginRecord({ id: "sibling" });
       candidate.registry.plugins.push(record);
-      const api = candidate.createApi(record, { config: cfg });
-      options.register?.(api, "sibling", record);
-      api.registerService({ id: "sibling", start: siblingStart, stop: siblingStop });
+      if (loadModules) {
+        const api = register("sibling", record);
+        api.registerService({ id: "sibling", start: siblingStart, stop: siblingStop });
+      }
     } else {
       const retained = registryOwner.registry.plugins.find((record) => record.id === "sibling");
       assert(retained);
@@ -172,12 +212,23 @@ export async function createPluginReloadRecoveryFixture(
     };
   };
   const lifetime = createGatewaySidecarStopOwner();
-  const metadata = retainGatewayPluginMetadata();
+  const scheduler = createTestGatewayScheduler();
+  const metadata = retainGatewayPluginMetadata(scheduler);
+  const metadataState = resolveGlobalSingleton<{ owner?: unknown }>(
+    Symbol.for("openclaw.gatewayPluginMetadataOwner"),
+    () => ({}),
+  );
+  const fixtureMetadataOwner = metadataState.owner;
+  if (options.expectedMetadataCloseError) {
+    expect(fixtureMetadataOwner).toBeDefined();
+  }
   const snapshot =
     options.pluginMetadataSnapshot ??
     createPluginMetadataSnapshotFixture({ plugins: [{ id: "first" }, { id: "sibling" }] });
   metadata.publish(snapshot);
   const runtime = {
+    scheduler,
+    requestEntryLifetime: new GatewayRequestEntryLifetime(),
     pluginMetadataSnapshot: snapshot,
     pluginRuntime: registryOwner,
     kernel: {
@@ -203,12 +254,26 @@ export async function createPluginReloadRecoveryFixture(
     broadcast: vi.fn(),
   } as unknown as Parameters<typeof reloadGatewayPlugins>[0]["runtime"];
   cleanups.push(async () => {
+    await scheduler.stop();
     await currentServices?.stop().catch(() => {});
     await initial.stop().catch(() => {});
     const retirementFailure = await lifetime.stop().catch((error: unknown) => error);
     await registryOwner.close();
-    await metadata.close();
-    for (const candidate of candidates) {
+    if (options.expectedMetadataCloseError) {
+      try {
+        const failure = await metadata.close().catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(PluginRuntimeCloseRetainedError);
+        expect(collectNestedErrorCandidates(failure)).toContain(options.expectedMetadataCloseError);
+        expect(metadataState.owner).toBe(fixtureMetadataOwner);
+      } finally {
+        // This deliberately unrecoverable fixture has asserted the real shutdown
+        // fence. Release its owned state so later tests can create Gateways.
+        delete metadataState.owner;
+      }
+    } else {
+      await metadata.close();
+    }
+    for (const candidate of [...candidates, ...recoveries]) {
       try {
         await disposePluginRegistryInstances(candidate.registry, previous.registry);
       } catch (error) {
@@ -223,6 +288,7 @@ export async function createPluginReloadRecoveryFixture(
     nextConfig = config,
     pluginIds: readonly string[] = ["first"],
     changedPaths: string[] = [],
+    ownership?: Pick<Parameters<typeof reloadGatewayPlugins>[1], "checkpoint" | "isAborted">,
   ) => {
     aborted = false;
     return withPluginRuntimeRegistryScope(registryOwner.registry, () =>
@@ -234,7 +300,7 @@ export async function createPluginReloadRecoveryFixture(
           loadGatewayPluginBootstrapModule: async () => ({
             prepareGatewayPluginLoad: preparePlugins,
           }),
-          prepareAttachedPluginRuntime: async (candidate) => {
+          prepareAttachedPluginRuntime: async (candidate, trackActivationCleanup) => {
             await options.prepareAttached?.();
             return {
               publish: () => {
@@ -245,6 +311,7 @@ export async function createPluginReloadRecoveryFixture(
                   "gateway-bindable",
                   undefined,
                   registryOwner.registry,
+                  trackActivationCleanup,
                 );
                 registryOwner.publish(candidate.pluginRegistry);
               },
@@ -256,9 +323,14 @@ export async function createPluginReloadRecoveryFixture(
           nextConfig,
           sourceConfig: nextConfig,
           changedPaths,
-          prepareConfigEffects: options.prepareConfigEffects ?? (() => async () => {}),
+          checkpoint: ownership?.checkpoint ?? options.checkpoint,
+          prepareConfigEffects:
+            options.prepareConfigEffects ??
+            (() => ({ retire: () => {}, rollback: rollbackConfigEffects })),
           pluginLifecycle: {
             reason: "reload",
+            waitForDrain: options.waitForDrain,
+            drainSignal: options.drainSignal,
             operationId: "service-recovery",
             pluginIds,
           },
@@ -271,7 +343,7 @@ export async function createPluginReloadRecoveryFixture(
             await options.afterPublish?.();
           },
           env: options.env ?? {},
-          isAborted: () => aborted,
+          isAborted: () => aborted || ownership?.isAborted?.() === true,
           assertInvokerOwned: options.assertInvokerOwned,
         },
       ),
@@ -289,6 +361,7 @@ export async function createPluginReloadRecoveryFixture(
     siblingStart,
     siblingStop,
     candidateStop,
+    rollbackConfigEffects,
     candidates,
     lifetime,
   };
@@ -300,6 +373,7 @@ export type RecoveryFixtureFactory = (
 
 export function createRecoveryChannelManager(fixture: Awaited<ReturnType<RecoveryFixtureFactory>>) {
   return createChannelManager({
+    scheduler: createTestGatewayScheduler(),
     getRuntimeConfig: fixture.getConfig,
     getPluginRegistry: () => fixture.registryOwner.registry,
     channelLogs: {},
@@ -323,7 +397,7 @@ export async function verifyMalformedReloadFailureReceipt(
   };
   const fixture = await createRecoveryFixture({
     abortOnCandidateStart: false,
-    ...(boundary === "prepare" ? { prepareAttached: reject } : { afterPublish: reject }),
+    ...(boundary === "prepare" ? { checkpoint: reject } : { afterPublish: reject }),
   });
   const result = await fixture.reload().catch((error: unknown) => error);
   expect(result).toMatchObject({
@@ -572,25 +646,23 @@ export async function verifyChannelCleanupFailureFence(
     await stopEntered.promise;
     await vi.advanceTimersByTimeAsync(5_000);
     if (failure === "timeout") {
-      // The admitted stop callback also reaches the instance drain and disposal deadlines.
-      await vi.advanceTimersByTimeAsync(10_000);
+      // A timed-out stop still owns its resources. Let it finish while automatic
+      // recovery waits, before the fresh old registration can acquire them.
+      cleanupAllowed = true;
+      releaseStop.resolve();
+      await vi.advanceTimersByTimeAsync(0);
     }
     expect(await reloading).toMatchObject({
-      runtime: {
-        pluginIds: ["first"],
-        warnings: expect.arrayContaining([
-          expect.stringContaining("Plugin channel cleanup-first cleanup failed"),
-        ]),
-      },
+      details: { phase: "drain", committed: false, pluginIds: ["first"] },
     });
-    expect(fixture.registryOwner.registry).not.toBe(fixture.previousRegistry);
+    expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
     expect(() => first.run(() => "must remain fenced")).toThrow("reloaded or disabled");
-    expect(gatewayStart).toHaveBeenCalledOnce();
+    expect(gatewayStart).not.toHaveBeenCalled();
     expect(fixture.firstStart).toHaveBeenCalledOnce();
+    expect(fixture.candidates).toHaveLength(0);
     expect(stopAccount).toHaveBeenCalledOnce();
-    expect(signals.first).toHaveLength(2);
+    expect(signals.first).toHaveLength(1);
     expect(signals.first[0]?.aborted).toBe(true);
-    expect(signals.first[1]?.aborted).toBe(false);
     expect(sibling.run(() => "still live")).toBe("still live");
     expect(signals.sibling).toHaveLength(1);
     expect(signals.sibling[0]?.aborted).toBe(false);
@@ -598,13 +670,8 @@ export async function verifyChannelCleanupFailureFence(
     cleanupAllowed = true;
     releaseStop.resolve();
     await vi.advanceTimersByTimeAsync(0);
-    expect(signals.first).toHaveLength(2);
-    expect(signals.first[1]?.aborted).toBe(false);
-    await fixture.reload();
-    expect(signals.first).toHaveLength(3);
-    expect(signals.first[1]?.aborted).toBe(true);
-    expect(signals.first[2]?.aborted).toBe(false);
-    expect(gatewayStart).toHaveBeenCalledTimes(2);
+    expect(signals.first).toHaveLength(1);
+    expect(gatewayStart).not.toHaveBeenCalled();
     expect(signals.sibling).toHaveLength(1);
     expect(signals.sibling[0]?.aborted).toBe(false);
     expect(() => first.run(() => "still retired")).toThrow("reloaded or disabled");

@@ -20,6 +20,22 @@ async function readPreviousConfig(env: NodeJS.ProcessEnv) {
   return createConfigIO({ env, pluginValidation: "skip" }).readConfigFileSnapshot();
 }
 
+async function writeCandidateWorker(root: string) {
+  const worker = path.join(root, "dist/infra/update-candidate-state.worker.js");
+  await fs.mkdir(path.dirname(worker), { recursive: true });
+  // Run this source generation's child reader without an unrelated checkout build.
+  await fs.writeFile(
+    worker,
+    `
+      import { tsImport } from ${JSON.stringify(import.meta.resolve("tsx/esm/api"))};
+      await tsImport(${JSON.stringify(new URL("../../infra/update-candidate-state.worker.ts", import.meta.url).href)}, {
+        parentURL: import.meta.url,
+        tsconfig: ${JSON.stringify(path.resolve("tsconfig.json"))},
+      });
+    `,
+  );
+}
+
 describe("package rollback executor ownership", () => {
   it("checks the new history target after its admission environment changes", async () => {
     const env = { OPENCLAW_STATE_DIR: dirs.make("rollback-first-target-") };
@@ -48,6 +64,7 @@ describe("package rollback executor ownership", () => {
     });
     try {
       const result = await rollbackFailedUpdate({
+        definitionRecovery: {},
         result: { status: "error", mode: "npm", root, steps: [], durationMs: 0 },
         previousRoot: root,
         rollbackBlockedReason: "state-migrated-no-rollback",
@@ -69,18 +86,7 @@ describe("package rollback executor ownership", () => {
   it("preserves the real package and recovery material when its executor is lost during observation", async () => {
     const base = dirs.make("rollback-real-executor-");
     const { packageRoot, transaction } = await createRetainedPackageSwap(base);
-    const worker = path.join(packageRoot, "dist/infra/update-candidate-state.worker.js");
-    await fs.mkdir(path.dirname(worker), { recursive: true });
-    await fs.writeFile(
-      worker,
-      `
-        const { tsImport } = await import(${JSON.stringify(import.meta.resolve("tsx/esm/api"))});
-        await tsImport(${JSON.stringify(new URL("../../infra/update-candidate-state.worker.ts", import.meta.url).href)}, {
-          parentURL: import.meta.url,
-          tsconfig: ${JSON.stringify(path.resolve("tsconfig.json"))},
-        });
-      `,
-    );
+    await writeCandidateWorker(packageRoot);
     await fs.writeFile(
       path.join(packageRoot, "package.json"),
       '{"name":"openclaw","version":"2.0.0","type":"module"}',
@@ -136,6 +142,7 @@ describe("package rollback executor ownership", () => {
     });
     const restart = vi.spyOn(service, "maybeRestartService").mockResolvedValue("ok");
     const pending = rollbackFailedUpdate({
+      definitionRecovery: {},
       result: {
         status: "error",
         mode: "npm",
@@ -197,21 +204,8 @@ describe("package rollback executor ownership", () => {
   ] as const)("$name", async ({ boundary }) => {
     const candidateRoot = dirs.make("rollback-source-only-candidate-");
     if (boundary !== "missing worker") {
-      const worker = path.join(candidateRoot, "dist/infra/update-candidate-state.worker.js");
-      await fs.mkdir(path.dirname(worker), { recursive: true });
+      await writeCandidateWorker(candidateRoot);
       await fs.writeFile(path.join(candidateRoot, "package.json"), '{"type":"module"}');
-      // Exercise the real child reader from this source generation, without
-      // assuming an unrelated package build exists in the checkout's dist.
-      await fs.writeFile(
-        worker,
-        `
-          import { tsImport } from ${JSON.stringify(import.meta.resolve("tsx/esm/api"))};
-          await tsImport(${JSON.stringify(new URL("../../infra/update-candidate-state.worker.ts", import.meta.url).href)}, {
-            parentURL: import.meta.url,
-            tsconfig: ${JSON.stringify(path.resolve("tsconfig.json"))},
-          });
-        `,
-      );
     }
     const previousRoot = dirs.make("rollback-previous-");
     const env = { OPENCLAW_STATE_DIR: dirs.make("rollback-executor-loss-") };
@@ -257,6 +251,7 @@ describe("package rollback executor ownership", () => {
       };
     });
     const outcome = await rollbackFailedUpdate({
+      definitionRecovery: {},
       result: {
         status: "error",
         mode: "npm",

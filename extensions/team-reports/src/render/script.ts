@@ -34,6 +34,14 @@ export const REPORT_SCRIPT = `(() => {
       }
     };
     applyTheme(root.dataset.theme, false);
+    for (const link of document.querySelectorAll('[data-work-session-key]')) {
+      link.addEventListener('click', event => {
+        if (window.parent === window || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        // The authenticated host frame owns navigation; do not weaken its sandbox.
+        window.parent.postMessage({type: 'openclaw-plugin-session-open', sessionKey: link.dataset.workSessionKey, ...(link.dataset.workSessionAgent ? {agentId: link.dataset.workSessionAgent} : {})}, location.origin);
+      });
+    }
     query.addEventListener('change', event => { if (!fragmentTheme() && !storedTheme()) applyTheme(event.matches ? 'light' : 'dark', false); });
     for (const button of document.querySelectorAll('[data-theme-toggle]')) {
       button.addEventListener('click', () => applyTheme(root.dataset.theme === 'light' ? 'dark' : 'light', true));

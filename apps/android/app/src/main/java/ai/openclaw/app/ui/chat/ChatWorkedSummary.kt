@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatToolActivity
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.clickable
@@ -24,29 +25,36 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 
-// Match web assistantGroupIsForwardedBoundary: attribution labels do not establish turn ownership.
+internal enum class WorkedToolOutcome { Failed, Blocked, Skipped, Unknown }
 
 internal data class PreparedChatWorkSpan(
   val start: Int,
   val endExclusive: Int,
+  val workRowIndexes: List<Int>,
+  val preservedRowIndexes: List<Int>,
   val key: String,
   val durationMs: Long?,
+  val outcomes: Map<WorkedToolOutcome, Int>,
   val inLatestTurn: Boolean,
   val inLatestRunChain: Boolean,
+  val turnIndex: Int,
+  /** Shared by a continuation chain; an active descendant exposes its ancestors. */
+  val runLastTurnIndexes: Map<String, Int>,
 )
 
-/** Mirror web collapseCompletedTurnWork; retain ranges, not the temporary turn graph. */
+/** Prepare completed-work partitions once; live updates only select these row indexes. */
 internal fun prepareCompletedWorkSpans(
   rows: List<ChatTimelineItem>,
   messages: List<ChatMessage>,
   sessionKey: String,
+  mainSessionKey: String,
 ): List<PreparedChatWorkSpan> {
-  val sessionParts = sessionKey.trim().lowercase().split(':')
-  if (sessionParts.size != 4 || sessionParts[0] != "agent" || sessionParts[1].isBlank() ||
-    sessionParts[2] != "dashboard" || sessionParts[3].isBlank()
-  ) {
-    return emptyList()
-  }
+  val key = sessionKey.trim().lowercase()
+  val sessionParts = key.split(':')
+  val agentSession = sessionParts.size >= 3 && sessionParts[0] == "agent" && sessionParts[1].isNotBlank()
+  val main = key == "main" || key == mainSessionKey.trim().lowercase() || (agentSession && sessionParts.size == 3 && sessionParts[2] == "main")
+  val dashboard = agentSession && sessionParts.size == 4 && sessionParts[2] == "dashboard" && sessionParts[3].isNotBlank()
+  if (!main && !dashboard) return emptyList()
   val turns = mutableListOf<MutableList<ChatTimelineItem>>()
   rows.forEach { item ->
     val startsTurn =
@@ -58,8 +66,12 @@ internal fun prepareCompletedWorkSpans(
               .equals("user", ignoreCase = true) || item.message.isForwardedBoundary()
         }
 
-        is ChatTimelineItem.CompletedTools -> {
+        is ChatTimelineItem.ToolActivity -> {
           item.turnBoundary
+        }
+
+        is ChatTimelineItem.SystemDivider, is ChatTimelineItem.SystemNotice -> {
+          true
         }
 
         else -> {
@@ -69,65 +81,85 @@ internal fun prepareCompletedWorkSpans(
     if (turns.isEmpty() || startsTurn) turns.add(mutableListOf())
     turns.last().add(item)
   }
-  val timestamps = messages.associate { (it.entryId ?: it.idempotencyKey ?: it.id) to it.timestampMs }
+  val sourceMessages = messages.associateBy { it.entryId ?: it.idempotencyKey ?: it.id }
+  val sourcePositions = messages.withIndex().associate { it.value.id to it.index }
 
-  fun timestamp(item: ChatTimelineItem): Long? =
+  fun source(item: ChatTimelineItem): ChatMessage? =
     when (item) {
-      is ChatTimelineItem.Message -> item.message.timestampMs
-      is ChatTimelineItem.CompletedTools -> timestamps[item.key]
+      is ChatTimelineItem.Message -> item.message
+      is ChatTimelineItem.ToolActivity -> sourceMessages[item.key]
       else -> null
     }
 
-  fun isWork(item: ChatTimelineItem): Boolean =
+  fun knownRunIds(item: ChatTimelineItem): Set<String> =
     when (item) {
-      is ChatTimelineItem.CompletedTools -> {
+      is ChatTimelineItem.Message -> item.knownRunIds
+      is ChatTimelineItem.ToolActivity -> item.knownRunIds
+      else -> emptySet()
+    }
+
+  fun replyRunId(item: ChatTimelineItem.Message): String? = item.message.runId ?: item.knownRunIds.singleOrNull()
+
+  fun isOutput(item: ChatTimelineItem): Boolean =
+    when (item) {
+      is ChatTimelineItem.ToolActivity -> {
         true
       }
 
       is ChatTimelineItem.Message -> {
         item.message.role
           .trim()
-          .equals("assistant", ignoreCase = true) &&
-          !item.message.isForwardedBoundary() &&
-          // Tool activity is rendered separately; retain canonical content for full-message reads.
-          item.message.content.all { it.toolActivity != null || it.type == "text" }
+          .equals("assistant", ignoreCase = true) && !item.message.isForwardedBoundary()
       }
 
       else -> {
         false
       }
     }
+
+  fun hasMedia(message: ChatMessage) = message.content.any { it.toolActivity == null && it.type != "text" }
+
+  fun hasReplyContent(message: ChatMessage) = hasMedia(message) || message.content.any { it.type == "text" && !it.text.isNullOrBlank() }
+
+  fun hasUnresolvedWork(item: ChatTimelineItem): Boolean =
+    when (item) {
+      is ChatTimelineItem.ToolActivity -> item.hasUnresolvedTools
+      is ChatTimelineItem.Message -> item.message.isError || item.hasUnresolvedTools
+      else -> false
+    }
+
+  fun isCompletedReply(item: ChatTimelineItem): Boolean = item is ChatTimelineItem.Message && isOutput(item) && hasReplyContent(item.message) && item.message.phase != "commentary" && !hasUnresolvedWork(item)
+
+  fun isWork(item: ChatTimelineItem): Boolean = isOutput(item) && (item !is ChatTimelineItem.Message || (!hasMedia(item.message) && item.message.phase != "final_answer"))
   // Steering messages continue an existing run; they are not completed-turn boundaries.
   val runTurns = mutableMapOf<String, Int>()
-  val steeringTurns = linkedMapOf<String, MutableList<Int>>()
+  val continuations = mutableMapOf<Int, Int>()
+  val preceding = mutableMapOf<Int, Int>()
+  val tails = mutableMapOf<Int, Int>()
   turns.forEachIndexed { index, turn ->
     val user =
       (turn.firstOrNull() as? ChatTimelineItem.Message)?.message?.takeIf {
         it.role.equals("user", ignoreCase = true)
       }
     user?.runId?.let { runTurns.putIfAbsent(it, index) }
-    user?.steerTargetRunId?.let { steeringTurns.getOrPut(it) { mutableListOf() }.add(index) }
-  }
-  val continuations = mutableMapOf<Int, Int>()
-  val preceding = mutableMapOf<Int, Int>()
-  steeringTurns.forEach { (runId, indexes) ->
-    var previous = runTurns[runId] ?: return@forEach
-    indexes.forEach { index ->
-      if (index > previous) {
-        continuations[previous] = index
-        preceding[index] = previous
-        previous = index
-      }
+    var previous = user?.steerTargetRunId?.let(runTurns::get) ?: return@forEachIndexed
+    if (previous >= index) return@forEachIndexed
+    val ancestors = mutableListOf<Int>()
+    while (previous in tails) {
+      ancestors.add(previous)
+      previous = tails.getValue(previous)
     }
+    continuations[previous] = index
+    preceding[index] = previous
+    tails[previous] = index
+    ancestors.forEach { tails[it] = index }
   }
   val finalIndexes =
     turns.mapIndexed { index, turn ->
       if (index in continuations) {
         -1
       } else {
-        turn.indexOfLast {
-          it is ChatTimelineItem.Message && it.message.role.equals("assistant", ignoreCase = true) && !it.message.isForwardedBoundary()
-        }
+        turn.indexOfLast(::isCompletedReply)
       }
     }
   val terminalReplies =
@@ -139,46 +171,134 @@ internal fun prepareCompletedWorkSpans(
     if (terminalReplies[index] == null) continuations[index]?.let { terminalReplies[index] = terminalReplies[it] }
   }
   val latestRunChain = mutableSetOf<Int>()
-  var index = turns.lastIndex
-  while (index >= 0 && latestRunChain.add(index)) index = preceding[index] ?: break
+  var latestIndex = turns.lastIndex
+  while (latestIndex >= 0 && latestRunChain.add(latestIndex)) latestIndex = preceding[latestIndex] ?: break
+  val chainRoots = IntArray(turns.size)
+  val mutableChainRuns = mutableMapOf<Int, MutableMap<String, Int>>()
+  turns.forEachIndexed { index, turn ->
+    val root = preceding[index]?.let { chainRoots[it] } ?: index
+    chainRoots[index] = root
+    turn.forEach { item ->
+      knownRunIds(item).forEach { runId -> mutableChainRuns.getOrPut(root) { mutableMapOf() }[runId] = index }
+    }
+  }
+  val chainRuns = mutableChainRuns.mapValues { (_, runs) -> runs.toMap() }
   return buildList {
     var offset = 0
     turns.forEachIndexed { turnIndex, turn ->
-      val finalIndex = finalIndexes[turnIndex]
-      val terminal = terminalReplies[turnIndex]
-      val end = if (finalIndex >= 0) finalIndex else turn.size
-      var start = end
-      while (start > 0 && isWork(turn[start - 1])) start--
-      if (terminal != null && start != end) {
-        val continuationBoundary = continuations[turnIndex]?.let { turns[it].firstOrNull() } as? ChatTimelineItem.Message
-        val identity = if (finalIndex >= 0) terminal.message else continuationBoundary?.message ?: terminal.message
-        val key = identity.entryId ?: identity.idempotencyKey ?: identity.id
-        val boundary = turn.firstOrNull() as? ChatTimelineItem.Message
-        val startTime =
-          boundary
-            ?.takeIf {
-              it.message.role
-                .trim()
-                .equals("user", ignoreCase = true)
-            }?.message
-            ?.timestampMs ?: timestamp(turn[start])
-        val endTime = terminal.message.timestampMs
-        val duration = if (startTime != null && endTime != null && endTime > startTime) endTime - startTime else null
-        add(
-          PreparedChatWorkSpan(
-            start = offset + start,
-            endExclusive = offset + end,
-            key = key,
-            durationMs = duration,
-            inLatestTurn = turnIndex == turns.lastIndex,
-            inLatestRunChain = turnIndex in latestRunChain,
-          ),
-        )
-      }
+      val turnOffset = offset
       offset += turn.size
+      val finalIndex = finalIndexes[turnIndex]
+      val terminal = terminalReplies[turnIndex] ?: return@forEachIndexed
+      var start = if (finalIndex >= 0) finalIndex else turn.lastIndex
+      var end = start
+      if (!isOutput(turn[start])) {
+        return@forEachIndexed
+      }
+      while (start > 0 && isOutput(turn[start - 1])) start--
+      val terminalPosition = sourcePositions.getValue(terminal.message.id)
+      val replyPositions =
+        turn
+          .take(if (finalIndex >= 0) finalIndex + 1 else turn.size)
+          .mapNotNull { item ->
+            (item as? ChatTimelineItem.Message)?.takeIf(::isCompletedReply)?.let { reply ->
+              replyRunId(reply)?.let { it to sourcePositions.getValue(reply.message.id) }
+            }
+          }.toMap()
+          .toMutableMap()
+      replyRunId(terminal)?.let { replyPositions[it] = terminalPosition }
+      while (end < turn.lastIndex && isOutput(turn[end + 1])) {
+        if (knownRunIds(turn[end + 1]).any { it !in replyPositions }) break
+        end++
+      }
+      val work = mutableListOf<Int>()
+      val answers = mutableListOf<Int>()
+      for (index in start..end) {
+        val item = turn[index]
+        val message = source(item)
+        val owners = knownRunIds(item)
+        val sourcePosition = message?.let { sourcePositions.getValue(it.id) } ?: -1
+        val replyPosition = owners.mapNotNull(replyPositions::get).minOrNull() ?: terminalPosition
+        val unresolvedPosition = if (item is ChatTimelineItem.ToolActivity) maxOf(sourcePosition, item.lastFailureMessageIndex) else sourcePosition
+        val unansweredWork = hasUnresolvedWork(item) && unresolvedPosition >= replyPosition
+        val replylessRun = owners.any { it !in replyPositions }
+        if (index != finalIndex && isWork(item) && !unansweredWork && !replylessRun) work.add(turnOffset + index) else answers.add(turnOffset + index)
+      }
+      if (work.isEmpty()) {
+        return@forEachIndexed
+      }
+      val continuationBoundary = continuations[turnIndex]?.let { turns[it].firstOrNull() } as? ChatTimelineItem.Message
+      val identity = if (finalIndex >= 0) terminal.message else continuationBoundary?.message ?: terminal.message
+      val key = identity.entryId ?: identity.idempotencyKey ?: identity.id
+      val boundary = turn.firstOrNull() as? ChatTimelineItem.Message
+      val startTime =
+        boundary
+          ?.takeIf {
+            it.message.role
+              .trim()
+              .equals("user", ignoreCase = true)
+          }?.message
+          ?.timestampMs ?: source(rows[work.first()])?.timestampMs
+      val endTime = (work.mapNotNull { source(rows[it])?.timestampMs } + listOfNotNull(terminal.message.timestampMs)).maxOrNull()
+      val duration = if (startTime != null && endTime != null && terminal.message.timestampMs?.let { it > startTime } == true) endTime - startTime else null
+      add(
+        PreparedChatWorkSpan(
+          start = turnOffset + start,
+          endExclusive = turnOffset + end + 1,
+          workRowIndexes = work,
+          preservedRowIndexes = answers,
+          key = key,
+          durationMs = duration,
+          outcomes = workedToolOutcomes(rows, work),
+          inLatestTurn = turnIndex == turns.lastIndex,
+          inLatestRunChain = turnIndex in latestRunChain,
+          turnIndex = turnIndex,
+          runLastTurnIndexes = chainRuns[chainRoots[turnIndex]].orEmpty(),
+        ),
+      )
     }
   }
 }
+
+private fun workedToolOutcomes(
+  rows: List<ChatTimelineItem>,
+  work: List<Int>,
+): Map<WorkedToolOutcome, Int> {
+  val tools = linkedMapOf<Pair<String, String>, ChatToolActivity>()
+  for (index in work) {
+    val group = rows[index] as? ChatTimelineItem.ToolActivity ?: continue
+    group.tools.forEachIndexed { toolIndex, tool ->
+      if (tool.activity?.suppressChannelProgress != true) tools[group.disclosureKey to group.toolKeys[toolIndex]] = tool
+    }
+  }
+  // Prepared outcomes supersede raw error flags, including cleared or hidden facts.
+  // Keep invocation identity scoped: different runs may reuse a tool call ID.
+  return tools.values
+    .mapNotNull { tool ->
+      val activity = tool.activity
+      if (activity == null) return@mapNotNull if (!tool.activityPrepared && tool.isError) WorkedToolOutcome.Failed else null
+      if (!activity.isVisible) return@mapNotNull null
+      when (activity.status) {
+        "failed" -> WorkedToolOutcome.Failed
+        "blocked" -> WorkedToolOutcome.Blocked
+        "skipped" -> WorkedToolOutcome.Skipped
+        null -> WorkedToolOutcome.Unknown
+        else -> null
+      }
+    }.groupingBy { it }
+    .eachCount()
+}
+
+private fun workedToolOutcomeLabel(
+  outcome: WorkedToolOutcome,
+  count: Int,
+): String =
+  when (outcome) {
+    WorkedToolOutcome.Failed -> if (count == 1) nativeString("1 tool failed") else nativeString("\$count tools failed", count)
+    WorkedToolOutcome.Blocked -> if (count == 1) nativeString("1 tool blocked") else nativeString("\$count tools blocked", count)
+    WorkedToolOutcome.Skipped -> if (count == 1) nativeString("1 tool skipped") else nativeString("\$count tools skipped", count)
+    WorkedToolOutcome.Unknown -> if (count == 1) nativeString("1 tool outcome unknown") else nativeString("\$count tool outcomes unknown", count)
+  }
 
 internal fun workedSummaryLabel(durationMs: Long?): String {
   if (durationMs == null || durationMs <= 0) return nativeString("Worked")
@@ -201,23 +321,28 @@ internal fun ChatWorkedSummary(
 ) {
   val color = ClawTheme.colors.textMuted
   Column(modifier = Modifier.fillMaxWidth()) {
-    Row(
+    Column(
       modifier =
         Modifier
           .fillMaxWidth()
           .semantics { stateDescription = if (item.expanded) nativeString("Expanded") else nativeString("Collapsed") }
           .clickable(role = Role.Button, onClick = onToggle)
           .padding(vertical = 12.dp),
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
-      verticalAlignment = Alignment.CenterVertically,
+      verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-      Text(workedSummaryLabel(item.durationMs), style = ClawTheme.type.body, color = color)
-      Icon(
-        if (item.expanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
-        contentDescription = null,
-        tint = color,
-        modifier = Modifier.size(16.dp),
-      )
+      Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(workedSummaryLabel(item.durationMs), style = ClawTheme.type.body, color = color)
+        Icon(
+          if (item.expanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+          contentDescription = null,
+          tint = color,
+          modifier = Modifier.size(16.dp),
+        )
+      }
+      val outcomes = WorkedToolOutcome.entries.mapNotNull { outcome -> item.outcomes[outcome]?.let { workedToolOutcomeLabel(outcome, it) } }
+      if (outcomes.isNotEmpty()) {
+        Text(outcomes.joinToString(" · "), style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
+      }
     }
     HorizontalDivider(color = ClawTheme.colors.border)
   }

@@ -1,6 +1,7 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { isLocalModelLeanEnabled } from "./local-model-lean.js";
 import {
   applyToolCatalogCompaction,
   collectUniqueCatalogToolNames,
@@ -11,7 +12,6 @@ import {
 import { resolveToolSearchConfig } from "./tool-search-config.js";
 import {
   TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES,
-  TOOL_SEARCH_CONTROL_TOOL_NAMES,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type CatalogVisibilityOptions,
   type ToolSearchCatalogEntry,
@@ -19,9 +19,9 @@ import {
   type ToolSearchMode,
   type ToolSearchToolContext,
 } from "./tool-search-types.js";
-import { ToolInputError, type AnyAgentTool } from "./tools/common.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
-export const MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS = 18_000;
+const MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS = 18_000;
 const TOOL_DIRECTORY_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
 // Catalog entry arrays are immutable snapshots. Keying their rendered directory by
 // array identity preserves prompt-prefix bytes without retaining retired catalogs.
@@ -30,32 +30,17 @@ const toolSchemaDirectoryPromptCache = new WeakMap<ToolSearchCatalogEntry[], Map
 export function applyToolSchemaDirectoryCatalog(params: {
   tools: AnyAgentTool[];
   config?: Parameters<typeof resolveToolSearchConfig>[0];
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  runId?: string;
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: Parameters<typeof applyToolCatalogCompaction>[0]["toolHookContext"];
   directToolNames?: Iterable<string>;
 }) {
   const config = resolveToolSearchConfig(params.config);
-  if (!config.enabled) {
-    return {
-      tools: params.tools,
-      compacted: false,
-      catalogToolCount: 0,
-      catalogRegistered: false,
-      catalogReused: false,
-    };
-  }
-  if (!params.tools.some((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME)) {
-    return {
-      tools: params.tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)),
-      compacted: false,
-      catalogToolCount: 0,
-      catalogRegistered: false,
-      catalogReused: false,
-    };
+  if (!config.enabled || !params.tools.some((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME)) {
+    return applyToolCatalogCompaction({
+      ...params,
+      enabled: config.enabled,
+      isVisibleControlTool: () => false,
+    });
   }
   const directToolNames = new Set(normalizeStringEntries(Array.from(params.directToolNames ?? [])));
   const uniqueCatalogToolNames = collectUniqueCatalogToolNames(params.tools);
@@ -72,7 +57,10 @@ export function applyToolSchemaDirectoryCatalog(params: {
 
 export function buildToolSchemaDirectoryPrompt(
   ctx: ToolSearchToolContext,
-  options?: CatalogVisibilityOptions & { contextTokenBudget?: number },
+  options?: CatalogVisibilityOptions & {
+    contextTokenBudget?: number;
+    toolSearchDirectoryLean?: boolean;
+  },
 ): string {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
   const catalog = resolveCatalog(ctx);
@@ -86,7 +74,10 @@ export function buildToolSchemaDirectoryPrompt(
           Math.max(768, Math.floor(contextTokens / 10)),
         )
       : MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS;
-  const cacheKey = `${config.mode}:${options?.includeMcp === false ? "without-mcp" : "all"}:${maxChars}`;
+  // Lean filtering must not buy longer descriptions for the remaining tools.
+  const descriptionMaxChars =
+    (options?.toolSearchDirectoryLean ?? isLocalModelLeanEnabled(ctx)) ? 0 : 180;
+  const cacheKey = `${config.mode}:${options?.includeMcp === false ? "without-mcp" : "all"}:${maxChars}:${descriptionMaxChars}`;
   let cachedPrompts = toolSchemaDirectoryPromptCache.get(catalog.entries);
   // Caller-owned filters may change in place; cached text must not bypass them.
   const cachedPrompt = options?.allowedIds ? undefined : cachedPrompts?.get(cacheKey);
@@ -97,6 +88,7 @@ export function buildToolSchemaDirectoryPrompt(
     visibleCatalogEntries(catalog, options),
     config.mode,
     maxChars,
+    descriptionMaxChars,
   );
   if (options?.allowedIds) {
     return prompt;
@@ -115,24 +107,13 @@ export function resolveToolSearchCatalogTool(
   name: unknown,
   options?: CatalogVisibilityOptions,
 ): AnyAgentTool | undefined {
-  if (typeof name !== "string") {
+  const catalog = ctx.catalogRef?.current;
+  const needle = typeof name === "string" ? name.trim() : "";
+  if (!needle || !catalog) {
     return undefined;
   }
-  const needle = name.trim();
-  if (!needle) {
-    return undefined;
-  }
-  try {
-    const matches = visibleCatalogEntries(resolveCatalog(ctx), options).filter(
-      (entry) => entry.name === needle,
-    );
-    return matches.length === 1 ? (matches[0]?.tool as AnyAgentTool | undefined) : undefined;
-  } catch (error) {
-    if (error instanceof ToolInputError) {
-      return undefined;
-    }
-    throw error;
-  }
+  const matches = visibleCatalogEntries(catalog, options).filter((entry) => entry.name === needle);
+  return matches.length === 1 ? (matches[0]?.tool as AnyAgentTool | undefined) : undefined;
 }
 
 function compactDirectoryDescription(description: string, maxChars: number): string {
@@ -172,6 +153,7 @@ function formatToolSearchCatalogDirectory(
   entries: ToolSearchCatalogEntry[],
   mode: ToolSearchMode,
   maxChars: number,
+  initialDescriptionMaxChars: number,
 ): string {
   const deferredEntries = entries.filter((entry) => !entry.directVisible);
   if (deferredEntries.length === 0) {
@@ -189,7 +171,7 @@ function formatToolSearchCatalogDirectory(
         (left.name < right.name ? -1 : left.name > right.name ? 1 : 0) ||
         (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
     );
-  let descriptionMaxChars = 180;
+  let descriptionMaxChars = initialDescriptionMaxChars;
   const renderRows = () =>
     listedEntries
       .map((entry) => formatToolDirectoryEntry(entry, descriptionMaxChars))
@@ -204,17 +186,15 @@ function formatToolSearchCatalogDirectory(
   let guidance: string;
   for (;;) {
     guidance =
-      mode === "code"
-        ? "Use tool_search_code with openclaw.tools.search(query), openclaw.tools.describe(id), and openclaw.tools.call(id, args)."
-        : omitted > 0
-          ? "Use tool_search to find a tool and its input signature; use tool_describe when a full schema is needed."
-          : "Use tool_search for a compact input signature or tool_describe for a full schema.";
+      omitted > 0
+        ? "Use tool_search to find a tool and its input signature; use tool_describe when a full schema is needed."
+        : "Use tool_search for a compact input signature or tool_describe for a full schema.";
     if (mode === "tools") {
       guidance +=
-        " Deferred names are not directly callable. Call tool_call with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly.";
+        " Deferred names are not directly callable. Call dispatch_action with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly.";
     } else if (mode === "directory") {
       guidance +=
-        " Call a unique deferred tool name directly, or use tool_call with its id and args.";
+        " Call a unique deferred tool name directly, or use dispatch_action with its id and args.";
     }
     const footerChars =
       guidance.length + (omitted > 0 ? String(omitted).length + omittedLabel.length : 0);

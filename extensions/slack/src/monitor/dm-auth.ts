@@ -1,11 +1,10 @@
-// Slack plugin module implements dm auth behavior.
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { formatSlackTarget } from "../target-parsing.js";
 import { resolveSlackAllowListMatch } from "./allow-list.js";
 import type { SlackMonitorContext } from "./context.js";
-import { upsertChannelPairingRequest } from "./conversation.runtime.js";
 import type { SlackEventScope } from "./event-scope.js";
 
 export async function authorizeSlackDirectMessage(params: {

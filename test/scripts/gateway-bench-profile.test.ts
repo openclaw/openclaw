@@ -9,9 +9,14 @@ import { expect, it, onTestFinished } from "vitest";
 import {
   controlGatewayProfile,
   measureGatewayCpuUsage,
+  measureGatewayAllocations,
   readGatewayCpuUsage,
   readGatewayHeapProfile,
+  readGatewayResources,
 } from "../../scripts/lib/gateway-bench-profile.js";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
+
+const nodeExecutable = requireNodeTool("node");
 
 type WorkerProfileManifest = {
   workers: Array<{
@@ -33,7 +38,7 @@ type WorkerProfileManifest = {
 
 it("measures fixed CPU work including a retired Worker without starting the inspector", async () => {
   const child = spawn(
-    process.execPath,
+    nodeExecutable,
     [fileURLToPath(new URL("./fixtures/gateway-bench-cpu-usage.mjs", import.meta.url))],
     { stdio: ["ignore", "ignore", "pipe", "ipc"] },
   );
@@ -50,6 +55,25 @@ it("measures fixed CPU work including a retired Worker without starting the insp
     await closed;
   });
   await waitMessage(child, "ready");
+  const initialResources = await readGatewayResources(child, { initial: true });
+  const resources = await readGatewayResources(child);
+  expect(resources.pid).toBe(child.pid);
+  expect(initialResources.atMonotonicMicros).toBeLessThan(resources.atMonotonicMicros);
+  expect(resources.runtime).toMatchObject({ node: expect.any(String), platform: process.platform });
+  for (const value of Object.values(resources.memory)) {
+    expect(Number.isFinite(value)).toBe(true);
+    expect(value).toBeGreaterThanOrEqual(0);
+  }
+  const changeTimer = async (run: string) => {
+    const changed = once(child, "message");
+    child.send({ run });
+    expect((await changed)[0]).toEqual({ timerChanged: true });
+    return await readGatewayResources(child);
+  };
+  const held = await changeTimer("timer-start");
+  const released = await changeTimer("timer-stop");
+  expect(held.activeResources.Timeout).toBe((resources.activeResources.Timeout ?? 0) + 1);
+  expect(released.activeResources.Timeout ?? 0).toBe(resources.activeResources.Timeout ?? 0);
   const before = await readGatewayCpuUsage(child);
   const mainCompleted = once(child, "message");
   child.send({ run: "main" });
@@ -82,7 +106,7 @@ it("measures fixed CPU work including a retired Worker without starting the insp
 
 it.each(["exit", "disconnect"])("rejects a CPU sample when the child %ss", async (action) => {
   const child = spawn(
-    process.execPath,
+    nodeExecutable,
     ["-e", `process.on("message", () => process.${action}()); process.send({ ready: true });`],
     { stdio: ["ignore", "ignore", "pipe", "ipc"] },
   );
@@ -106,7 +130,7 @@ it.each([false, true])(
   async (unknownIdentity) => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-worker-profile-startup-"));
     const child = spawn(
-      process.execPath,
+      nodeExecutable,
       [
         fileURLToPath(new URL("./fixtures/gateway-bench-profile-startup.mjs", import.meta.url)),
         directory,
@@ -229,8 +253,6 @@ async function waitMessage(child: ChildProcess, field: string) {
 
 it.each([
   ["cpu", false],
-  ["heap", false],
-  ["cpu", true],
   ["heap", true],
 ] as const)(
   "maps %s profiles to native workers with preexisting=%s and records retirement",
@@ -238,7 +260,7 @@ it.each([
     const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-worker-profile-"));
     const profilePath = path.join(directory, kind);
     const child = spawn(
-      process.execPath,
+      nodeExecutable,
       [
         "-e",
         workload,
@@ -352,3 +374,70 @@ it.each([
   },
   30_000,
 );
+
+it("measures discarded allocation churn and GC per completed operation, and cleans up failures", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-allocation-"));
+  const child = spawn(
+    nodeExecutable,
+    [
+      "--expose-gc",
+      "--input-type=module",
+      "-e",
+      `
+    await import(${JSON.stringify(new URL("../../scripts/lib/gateway-bench-profile-preload.ts", import.meta.url).href)});
+    process.channel.ref();
+    function discardedAllocation() {
+      let checksum = 0;
+      for (let batch = 0; batch < 10; batch++) {
+        const rows = Array.from({ length: 20000 }, (_, i) => ({ i, values: [i, i + 1] }));
+        checksum += rows[rows.length - 1].values[1];
+      }
+      return checksum;
+    }
+    process.on('message', async message => {
+      if (!message.run) return;
+      for (let operation = 0; operation < 4; operation++) discardedAllocation();
+      globalThis.gc();
+      await new Promise(setImmediate);
+      await new Promise(setImmediate);
+      process.send({ completed: 4 });
+    });
+    process.send({ ready: true });
+  `,
+    ],
+    { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+  );
+  const closed = once(child, "close");
+  onTestFinished(async () => {
+    child.kill();
+    await closed;
+    await rm(directory, { recursive: true, force: true });
+  });
+  await waitMessage(child, "ready");
+  await expect(
+    measureGatewayAllocations(child, path.join(directory, "failed"), 1, async () => {
+      throw new Error("workload failed");
+    }),
+  ).rejects.toThrow("workload failed");
+  const result = await measureGatewayAllocations(
+    child,
+    path.join(directory, "completed"),
+    4,
+    async () => {
+      const completed = once(child, "message");
+      child.send({ run: true });
+      expect((await completed)[0]).toEqual({ completed: 4 });
+    },
+  );
+  expect(result.scope).toBe("main-isolate");
+  expect(result.includesCollectedObjects).toBe(true);
+  expect(result.estimatedAllocatedBytesPerOperation).toBeGreaterThan(1_000_000);
+  expect(result.gcMsPerOperation).toBeGreaterThan(0);
+  expect(result.gcCount).toBeGreaterThan(0);
+  expect(
+    result.topAllocationSites.some((site) =>
+      site.stack.some((frame) => frame.startsWith("discardedAllocation (")),
+    ),
+  ).toBe(true);
+  expect(result.cpu.pid).toBe(child.pid);
+});

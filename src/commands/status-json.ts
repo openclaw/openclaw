@@ -3,25 +3,15 @@
 
 import type { RuntimeEnv } from "../runtime.js";
 import { runStatusJsonCommand } from "./status-json-command.ts";
-import { scanStatusJsonFast } from "./status.scan.fast-json.js";
+import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 
 /** Runs status JSON with the standard fast scan and all-mode security audit behavior. */
 export async function statusJsonCommand(
-  opts: {
-    deep?: boolean;
-    usage?: boolean;
-    agent?: string;
-    timeoutMs?: number;
-    all?: boolean;
-  },
+  opts: Omit<Parameters<typeof runStatusJsonCommand>[0]["opts"], "gatewayProbeDeadlineMs">,
   runtime: RuntimeEnv,
 ) {
   await runStatusJsonCommand({
-    opts,
+    opts: { ...opts, ...createStatusGatewayProbeBudget(opts.timeoutMs) },
     runtime,
-    scanStatusJsonFast,
-    includeSecurityAudit: opts.all === true || opts.deep === true,
-    includePluginCompatibility: opts.all === true,
-    suppressHealthErrors: true,
   });
 }

@@ -1,4 +1,6 @@
 /** Resolves and validates session-target keys used by cron jobs and delivery. */
+import type { CronDelivery } from "./types.js";
+
 const INVALID_CRON_SESSION_TARGET_ID_ERROR = "invalid cron sessionTarget session id";
 
 /** Returns whether an error came from cron session target id validation. */
@@ -45,15 +47,23 @@ export function resolveCronCurrentSessionTarget(params: {
   return sessionKey ? "current" : "isolated";
 }
 
-/** Chooses the session key used for cron delivery, preferring explicit persistent targets. */
+/** Result conversation selection is independent from the execution session and channel target. */
 export function resolveCronDeliverySessionKey(job: {
   sessionTarget?: string | null;
   sessionKey?: string | null;
+  sourceConversation?: { sessionKey: string };
+  payload?: { kind: string };
+  delivery?: CronDelivery;
 }): string | undefined {
+  const conversationKey = job.sourceConversation?.sessionKey.trim();
+  if (conversationKey) {
+    return conversationKey;
+  }
   const sessionTargetKey = resolveCronSessionTargetSessionKey(job.sessionTarget);
   if (sessionTargetKey) {
     return sessionTargetKey;
   }
+
   return typeof job.sessionKey === "string" && job.sessionKey.trim()
     ? job.sessionKey.trim()
     : undefined;

@@ -4,13 +4,17 @@ import type {
   ImageTransparency,
   RastermillErrorCode,
 } from "rastermill";
+import type { ImageProcessorPixelLimits } from "./image-processor-config.js";
 
 export type ImageProcessorOperation =
   | { kind: "encode"; options?: EncodeOptions }
   | { kind: "transparency" }
   | { kind: "bmpToPng" };
 
-export type ImageProcessorRequest = { input: Uint8Array<ArrayBuffer> } & ImageProcessorOperation;
+export type ImageProcessorRequest = {
+  input: Uint8Array<ArrayBuffer>;
+  limits?: ImageProcessorPixelLimits;
+} & ImageProcessorOperation;
 
 export type ImageProcessorReply =
   | { kind: "encode"; value: Omit<EncodedImage, "data"> & { data: Uint8Array<ArrayBuffer> } }

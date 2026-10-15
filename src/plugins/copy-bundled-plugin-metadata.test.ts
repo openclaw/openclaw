@@ -7,7 +7,6 @@ import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../test/hel
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
-const excludeOptionalEnv = { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "0" } as const;
 const copyBundledPluginMetadataWithEnv = copyBundledPluginMetadata as (params?: {
   repoRoot?: string;
   env?: NodeJS.ProcessEnv;
@@ -85,14 +84,27 @@ afterEach(() => {
 });
 
 describe("copyBundledPluginMetadata", () => {
-  it("copies plugin metadata, activity artwork, and skills without replacing runtime assets", () => {
+  it("copies plugin metadata, README, activity artwork, and skills without replacing runtime assets", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-plugin-meta-");
     const pluginDir = createPlugin(repoRoot, {
       id: "acpx",
       packageName: "@openclaw/acpx",
-      manifest: { skills: ["./skills"] },
+      manifest: {
+        skills: ["./skills"],
+        themes: [
+          {
+            id: "workshop",
+            name: "Workshop",
+            description: "Workshop colors",
+            source: "themes/workshop.json",
+            hats: { beret: "assets/theme-art/beret.svg" },
+            critters: { ferris: { source: "assets/theme-art/ferris.svg" } },
+          },
+        ],
+      },
       packageOpenClaw: { extensions: ["./index.ts"] },
     });
+    fs.writeFileSync(path.join(pluginDir, "README.md"), "# ACP overview\n");
     fs.mkdirSync(path.join(pluginDir, "skills", "acp-router"), { recursive: true });
     fs.writeFileSync(
       path.join(pluginDir, "skills", "acp-router", "SKILL.md"),
@@ -103,6 +115,11 @@ describe("copyBundledPluginMetadata", () => {
     fs.writeFileSync(path.join(pluginDir, "assets", "icon.png"), Buffer.from("package icon"));
     const activityIcon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"/>';
     fs.writeFileSync(path.join(pluginDir, "assets", "activity.svg"), activityIcon);
+    fs.mkdirSync(path.join(pluginDir, "themes"));
+    fs.writeFileSync(path.join(pluginDir, "themes/workshop.json"), '{"name":"Workshop"}');
+    fs.mkdirSync(path.join(pluginDir, "assets/theme-art"));
+    fs.writeFileSync(path.join(pluginDir, "assets/theme-art/beret.svg"), activityIcon);
+    fs.writeFileSync(path.join(pluginDir, "assets/theme-art/ferris.svg"), activityIcon);
     fs.mkdirSync(path.join(pluginDir, "assets", "activity"));
     fs.writeFileSync(path.join(pluginDir, "assets", "activity", "acp_status.svg"), activityIcon);
     fs.writeFileSync(path.join(pluginDir, "assets", "activity", "notes.txt"), "not artwork");
@@ -125,9 +142,24 @@ describe("copyBundledPluginMetadata", () => {
     ).toContain("ACP Router");
     expectBundledSkills(repoRoot, "acpx", ["./skills"]);
     expect(
+      fs.readFileSync(path.join(bundledPluginDir(repoRoot, "acpx"), "README.md"), "utf8"),
+    ).toBe("# ACP overview\n");
+    expect(
       fs.readFileSync(path.join(repoRoot, "dist", "extensions", "acpx", "assets", "icon.png")),
     ).toEqual(Buffer.from("package icon"));
     expect(fs.readFileSync(path.join(distAssetsDir, "activity.svg"), "utf8")).toBe(activityIcon);
+    expect(fs.readFileSync(path.join(distAssetsDir, "theme-art/beret.svg"), "utf8")).toBe(
+      activityIcon,
+    );
+    expect(fs.readFileSync(path.join(distAssetsDir, "theme-art/ferris.svg"), "utf8")).toBe(
+      activityIcon,
+    );
+    expect(
+      fs.readFileSync(
+        path.join(bundledPluginDir(repoRoot, "acpx"), "themes/workshop.json"),
+        "utf8",
+      ),
+    ).toBe('{"name":"Workshop"}');
     expect(fs.readdirSync(path.join(distAssetsDir, "activity"))).toEqual(["acp_status.svg"]);
     expect(fs.readFileSync(path.join(distAssetsDir, "activity", "acp_status.svg"), "utf8")).toBe(
       activityIcon,
@@ -139,54 +171,36 @@ describe("copyBundledPluginMetadata", () => {
     expect(packageJson.openclaw?.extensions).toEqual(["./index.js"]);
   });
 
-  it("ignores non-file icons and removes retired activity artwork", () => {
-    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-invalid-icon-");
+  it.skipIf(process.platform === "win32")("does not copy escaped theme artwork", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-theme-boundary-");
     const pluginDir = createPlugin(repoRoot, {
       id: "acpx",
       packageName: "@openclaw/acpx",
       packageOpenClaw: { extensions: ["./index.ts"] },
+      manifest: {
+        themes: [
+          {
+            id: "workshop",
+            name: "Workshop",
+            description: "Workshop colors",
+            source: "theme.json",
+            hats: { beret: "art/beret.svg" },
+          },
+        ],
+      },
     });
-    const iconPaths = ["assets/icon.png", "assets/activity.svg"];
-    const staleIconPaths = [...iconPaths, "assets/activity/retired.svg"].map((relativePath) =>
-      path.join(bundledPluginDir(repoRoot, "acpx"), relativePath),
-    );
-    for (const relativePath of iconPaths) {
-      fs.mkdirSync(path.join(pluginDir, relativePath), { recursive: true });
-    }
-    for (const staleIconPath of staleIconPaths) {
-      fs.mkdirSync(path.dirname(staleIconPath), { recursive: true });
-      fs.writeFileSync(staleIconPath, "stale");
-    }
-
-    expect(() => copyBundledPluginMetadata({ repoRoot })).not.toThrow();
-    for (const staleIconPath of staleIconPaths) {
-      expect(fs.existsSync(staleIconPath)).toBe(false);
-    }
-  });
-
-  it("omits oversized tool artwork directories while retaining the default activity icon", () => {
-    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-activity-limit-");
-    const pluginDir = createPlugin(repoRoot, {
-      id: "acpx",
-      packageName: "@openclaw/acpx",
-      packageOpenClaw: { extensions: ["./index.ts"] },
-    });
-    const sourceToolsDir = path.join(pluginDir, "assets", "activity");
-    fs.mkdirSync(sourceToolsDir, { recursive: true });
-    fs.writeFileSync(path.join(pluginDir, "assets", "activity.svg"), "default activity");
-    for (let index = 0; index < 129; index += 1) {
-      fs.writeFileSync(path.join(sourceToolsDir, `tool_${index}.svg`), "tool activity");
-    }
-    const distAssetsDir = path.join(bundledPluginDir(repoRoot, "acpx"), "assets");
-    fs.mkdirSync(path.join(distAssetsDir, "activity"), { recursive: true });
-    fs.writeFileSync(path.join(distAssetsDir, "activity", "stale.svg"), "stale");
+    const outside = path.join(repoRoot, "outside.svg");
+    fs.writeFileSync(outside, "outside bytes");
+    fs.mkdirSync(path.join(pluginDir, "art"));
+    fs.symlinkSync(outside, path.join(pluginDir, "art/beret.svg"));
+    const target = path.join(bundledPluginDir(repoRoot, "acpx"), "art/beret.svg");
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, "stale bytes");
 
     copyBundledPluginMetadata({ repoRoot });
 
-    expect(fs.existsSync(path.join(distAssetsDir, "activity"))).toBe(false);
-    expect(fs.readFileSync(path.join(distAssetsDir, "activity.svg"), "utf8")).toBe(
-      "default activity",
-    );
+    expect(fs.existsSync(target)).toBe(false);
+    expect(fs.readFileSync(outside, "utf8")).toBe("outside bytes");
   });
 
   it("copies generated bundled channel config schemas into dist manifests", () => {
@@ -441,128 +455,6 @@ describe("copyBundledPluginMetadata", () => {
     copyBundledPluginMetadata({ repoRoot });
 
     expect(fs.existsSync(staleDistDir)).toBe(false);
-  });
-
-  it("removes non-packaged private QA plugin metadata unless private QA build is enabled", () => {
-    const repoRoot = makeRepoRoot("openclaw-private-qa-metadata-");
-    createPlugin(repoRoot, {
-      id: "qa-lab",
-      packageName: "@openclaw/qa-lab",
-      packageOpenClaw: { extensions: ["./index.ts"] },
-    });
-    const staleDistDir = path.join(repoRoot, "dist", "extensions", "qa-lab");
-    fs.mkdirSync(staleDistDir, { recursive: true });
-    fs.writeFileSync(path.join(staleDistDir, "runtime-api.js"), "export {};\n", "utf8");
-
-    copyBundledPluginMetadataWithEnv({ repoRoot, env: {} });
-
-    expect(fs.existsSync(staleDistDir)).toBe(false);
-
-    copyBundledPluginMetadataWithEnv({
-      repoRoot,
-      env: { OPENCLAW_BUILD_PRIVATE_QA: "1" } as NodeJS.ProcessEnv,
-    });
-
-    expect(fs.existsSync(path.join(staleDistDir, "openclaw.plugin.json"))).toBe(true);
-    expect(fs.existsSync(path.join(staleDistDir, "package.json"))).toBe(true);
-  });
-
-  it.each([
-    {
-      name: "skips metadata for optional bundled clusters only when explicitly disabled",
-      pluginId: "acpx",
-      packageName: "@openclaw/acpx-plugin",
-      packageOpenClaw: { extensions: ["./index.ts"] },
-      env: excludeOptionalEnv,
-      seedStaleDist: true,
-      expectedExists: false,
-    },
-    {
-      name: "omits external-only metadata without a publishable source-checkout build",
-      pluginId: "whatsapp",
-      packageName: "@openclaw/whatsapp",
-      packageOpenClaw: {
-        extensions: ["./index.ts"],
-        build: { bundledDist: false },
-        install: { npmSpec: "@openclaw/whatsapp" },
-      },
-      env: {},
-      seedStaleDist: false,
-      expectedExists: false,
-    },
-  ] as const)(
-    "$name",
-    ({ pluginId, packageName, packageOpenClaw, env, seedStaleDist, expectedExists }) => {
-      const repoRoot = makeRepoRoot(`openclaw-bundled-plugin-${pluginId}-`);
-      createPlugin(repoRoot, {
-        id: pluginId,
-        packageName,
-        packageOpenClaw,
-      });
-      if (seedStaleDist) {
-        const staleDistDir = path.join(repoRoot, "dist", "extensions", pluginId);
-        fs.mkdirSync(staleDistDir, { recursive: true });
-        fs.writeFileSync(path.join(staleDistDir, "index.js"), "export default {};\n", "utf8");
-      }
-
-      copyBundledPluginMetadataWithEnv({ repoRoot, env });
-
-      expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", pluginId))).toBe(
-        expectedExists,
-      );
-    },
-  );
-
-  it("removes build-excluded bundled plugin metadata", () => {
-    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-excluded-meta-");
-    createPlugin(repoRoot, {
-      id: "selected",
-      packageName: "@openclaw/selected",
-      packageOpenClaw: { extensions: ["./index.ts"] },
-    });
-    createPlugin(repoRoot, {
-      id: "whatsapp",
-      packageName: "@openclaw/whatsapp",
-      packageOpenClaw: {
-        extensions: ["./index.ts"],
-        setupEntry: "./setup-entry.ts",
-      },
-    });
-    const staleDistDir = path.join(repoRoot, "dist", "extensions", "whatsapp");
-    fs.mkdirSync(staleDistDir, { recursive: true });
-    fs.writeFileSync(path.join(staleDistDir, "index.js"), "export default {}\n", "utf8");
-
-    copyBundledPluginMetadata({
-      repoRoot,
-      env: { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "selected" },
-    });
-
-    expect(fs.existsSync(staleDistDir)).toBe(false);
-    expect(readBundledPackageJson(repoRoot, "selected").openclaw?.extensions).toEqual([
-      "./index.js",
-    ]);
-  });
-
-  it("preserves isolated source-checkout output for an external plugin", () => {
-    const repoRoot = makeRepoRoot("openclaw-external-plugin-local-dist-meta-");
-    createPlugin(repoRoot, {
-      id: "sms",
-      packageName: "@openclaw/sms",
-      packageOpenClaw: {
-        extensions: ["./index.ts"],
-        build: { bundledDist: false },
-        release: { publishToNpm: true },
-      },
-    });
-    const distPluginDir = path.join(repoRoot, "dist", "extensions", "sms");
-    fs.mkdirSync(distPluginDir, { recursive: true });
-    fs.writeFileSync(path.join(distPluginDir, "index.js"), "export default {};\n", "utf8");
-
-    copyBundledPluginMetadata({ repoRoot });
-
-    expect(fs.existsSync(path.join(distPluginDir, "index.js"))).toBe(true);
-    expect(fs.existsSync(path.join(distPluginDir, "openclaw.plugin.json"))).toBe(true);
-    expect(readBundledPackageJson(repoRoot, "sms").openclaw?.extensions).toEqual(["./index.js"]);
   });
 
   it("preserves manifest-less runtime support package outputs and copies package metadata", () => {

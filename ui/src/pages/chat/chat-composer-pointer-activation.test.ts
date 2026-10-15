@@ -1,17 +1,20 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { i18n, t } from "../../i18n/index.ts";
-import { createComposerProps } from "./chat-composer.test-support.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
+import { t } from "../../i18n/index.ts";
+import {
+  createComposerContainer,
+  createComposerProps,
+  renderComposerInto,
+  resetComposerFixture,
+} from "./chat-composer.test-support.ts";
 
-type ComposerProps = Parameters<typeof renderChatComposer>[0];
+type ComposerProps = ReturnType<typeof createComposerProps>;
 
 function renderComposer(overrides: Partial<ComposerProps> = {}): HTMLElement {
-  const container = document.createElement("div");
+  const container = createComposerContainer();
   document.body.append(container);
-  render(renderChatComposer(createComposerProps(overrides)), container);
+  renderComposerInto(container, createComposerProps(overrides));
   return container;
 }
 
@@ -35,20 +38,25 @@ function primaryPointerDown(): MouseEvent {
   return new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 });
 }
 
-function markComposerAtFocusInset(container: HTMLElement): void {
-  const shell = container.querySelector<HTMLElement>(".agent-chat__composer-shell");
-  expect(shell).not.toBeNull();
-  shell?.style.setProperty("margin-bottom", "0px");
-}
-
-afterEach(async () => {
-  resetChatComposerState();
-  document.body.replaceChildren();
-  await i18n.setLocale("en");
-  vi.restoreAllMocks();
-});
+afterEach(() => resetComposerFixture());
 
 describe("chat composer pointer activation", () => {
+  it("does not steal focus when a menu replaces the clicked content", () => {
+    const container = renderComposer({ draft: "Keep this draft" });
+    const input = textarea(container);
+    const focus = vi.spyOn(input, "focus");
+    const menu = container.querySelector(".agent-chat__capability-menu .oc-menu")!;
+    const label = document.createElement("span");
+    menu.append(label);
+    label.addEventListener("click", () => label.remove());
+    label.click();
+    expect(label.isConnected).toBe(false);
+    expect(focus).not.toHaveBeenCalled();
+    expect(input.value).toBe("Keep this draft");
+    container.querySelector<HTMLElement>(".agent-chat__input")!.click();
+    expect(document.activeElement).toBe(input);
+  });
+
   it("preserves only its own textarea focus during primary pointer actions", () => {
     const sendContainer = renderComposer({
       canAbort: true,
@@ -58,9 +66,10 @@ describe("chat composer pointer activation", () => {
     });
     const sendInput = textarea(sendContainer);
     const send = button(sendContainer, t("chat.runControls.sendMessage"));
-    markComposerAtFocusInset(sendContainer);
 
     sendInput.focus();
+    // A native target listener runs before Solid's delegated bubble handler.
+    send.addEventListener("pointerdown", () => sendInput.blur(), { once: true });
     const sendPointerDown = primaryPointerDown();
     send.dispatchEvent(sendPointerDown);
     expect(sendPointerDown.defaultPrevented).toBe(true);
@@ -68,7 +77,6 @@ describe("chat composer pointer activation", () => {
     const stopContainer = renderComposer({ canAbort: true, onAbort: vi.fn() });
     const stopInput = textarea(stopContainer);
     const stop = button(stopContainer, t("chat.runControls.stopGenerating"));
-    markComposerAtFocusInset(stopContainer);
     stopInput.focus();
     const stopPointerDown = primaryPointerDown();
     stop.dispatchEvent(stopPointerDown);
@@ -99,7 +107,6 @@ describe("chat composer pointer activation", () => {
     });
     const sendTextarea = textarea(sendContainer);
     const send = button(sendContainer, t("chat.runControls.sendMessage"));
-    markComposerAtFocusInset(sendContainer);
     sendTextarea.focus();
     send.dispatchEvent(primaryPointerDown());
     send.click();
@@ -118,7 +125,6 @@ describe("chat composer pointer activation", () => {
     });
     const stopTextarea = textarea(stopContainer);
     const stop = button(stopContainer, t("chat.runControls.stopGenerating"));
-    markComposerAtFocusInset(stopContainer);
     stopTextarea.focus();
     stop.dispatchEvent(primaryPointerDown());
     stop.click();
@@ -127,26 +133,6 @@ describe("chat composer pointer activation", () => {
     expect(stopTextarea.value).toBe("");
     expect(document.activeElement).toBe(stopTextarea);
     expect(onStopTypingChange).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["queue", t("chat.runControls.queueMessage")],
-    ["steer", t("chat.followUpModeSteer")],
-    ["interrupt", t("chat.runControls.sendMessage")],
-  ] as const)("preserves focus for the %s active-run action", (followUpMode, label) => {
-    const container = renderComposer({
-      canAbort: true,
-      draft: "Follow up",
-      followUpMode,
-      onAbort: vi.fn(),
-      onSend: vi.fn(),
-    });
-    const input = textarea(container);
-    markComposerAtFocusInset(container);
-    input.focus();
-    const event = primaryPointerDown();
-    button(container, label).dispatchEvent(event);
-    expect(event.defaultPrevented).toBe(true);
   });
 
   it("does not leave composition state stuck after pointer Send", () => {

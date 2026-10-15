@@ -46,17 +46,6 @@ extension OpenClawChatTranscriptCache {
     public func observeCanonicalMessageIdempotencyKeys(_: Set<String>) {}
 }
 
-/// Optional atomic merge seam for cache owners that also provide a durable
-/// outbox. Keeping this separate preserves source compatibility for read-only
-/// transcript-cache conformers.
-protocol OpenClawChatCanonicalTranscriptMerging: OpenClawChatTranscriptCache {
-    func mergeCanonicalTranscriptMessage(
-        sessionKey: String,
-        agentID: String?,
-        message: OpenClawChatMessage,
-        canonicalMessageIdempotencyKey: String) async
-}
-
 /// Durable branch ownership is scoped exactly like outbox delivery routing.
 public struct OpenClawChatOutboxScope: Hashable, Sendable {
     public let sessionKey: String
@@ -64,8 +53,7 @@ public struct OpenClawChatOutboxScope: Hashable, Sendable {
 
     public init(sessionKey: String, agentID: String?) {
         self.sessionKey = sessionKey
-        let normalizedAgentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        self.agentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
+        self.agentID = ChatPayloadDecoding.trimmedNonEmptyString(agentID)?.lowercased()
     }
 }
 
@@ -201,15 +189,9 @@ public struct OpenClawChatOutboxCommand: Hashable, Sendable, Identifiable {
     {
         self.id = id
         self.sessionKey = sessionKey
-        if let deliverySessionKey {
-            self.deliverySessionKey = deliverySessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        } else {
-            self.deliverySessionKey = sessionKey
-        }
-        let normalizedRoutingContract = routingContract?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.routingContract = normalizedRoutingContract?.isEmpty == false ? normalizedRoutingContract : nil
-        let normalizedAgentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        self.agentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
+        self.deliverySessionKey = deliverySessionKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? sessionKey
+        self.routingContract = ChatPayloadDecoding.trimmedNonEmptyString(routingContract)
+        self.agentID = ChatPayloadDecoding.trimmedNonEmptyString(agentID)?.lowercased()
         self.branchEpoch = branchEpoch
         self.scopeBranchEpoch = scopeBranchEpoch ?? branchEpoch
         self.text = text

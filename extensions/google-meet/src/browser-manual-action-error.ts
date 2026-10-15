@@ -28,9 +28,3 @@ export class GoogleMeetBrowserManualActionError extends Error {
     };
   }
 }
-
-export function isGoogleMeetBrowserManualActionError(
-  error: unknown,
-): error is GoogleMeetBrowserManualActionError {
-  return error instanceof GoogleMeetBrowserManualActionError;
-}

@@ -1,16 +1,20 @@
 import {
   buildChannelOutboundSessionRoute,
   createChatChannelPlugin,
+  type ChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
 } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  isHostNoticePayload,
+  isReplyPayloadTerminalContent,
+} from "openclaw/plugin-sdk/reply-payload";
 import { DEFAULT_ACCOUNT_ID } from "./accounts.js";
-import { A2A_CHANNEL_ID, createA2aChannelPluginBase } from "./channel-base.js";
+import { A2A_CHANNEL_ID, a2aChannelSetupPlugin } from "./channel-base.js";
 import { startA2aGatewayAccount } from "./gateway.js";
 import { sendA2aChannelText } from "./outbound.js";
-import type { ChannelPlugin } from "./runtime-api.js";
 import { a2aChannelStatus } from "./status.js";
 import type { ResolvedA2aChannelAccount } from "./types.js";
 
@@ -29,6 +33,7 @@ const a2aChannelMessageAdapter = defineChannelMessageAdapter({
         accountId: ctx.accountId,
         to: ctx.to,
         text: ctx.text,
+        assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
       });
       return {
         messageId: result.messageId,
@@ -43,8 +48,10 @@ const a2aChannelMessageAdapter = defineChannelMessageAdapter({
 
 export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = createChatChannelPlugin({
   base: {
-    ...createA2aChannelPluginBase(),
+    ...a2aChannelSetupPlugin,
     messaging: {
+      transformReplyPayload: ({ payload }) =>
+        isHostNoticePayload(payload) || !isReplyPayloadTerminalContent(payload) ? null : payload,
       normalizeTarget: normalizeA2aChannelTarget,
       inferTargetChatType: () => "direct",
       targetResolver: {
@@ -71,7 +78,7 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
     },
     status: a2aChannelStatus,
     gateway: {
-      startAccount: async (ctx) => await startA2aGatewayAccount(ctx),
+      startAccount: startA2aGatewayAccount,
     },
     message: a2aChannelMessageAdapter,
   },
@@ -79,8 +86,7 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
     base: { deliveryMode: "direct" },
     attachedResults: {
       channel: A2A_CHANNEL_ID,
-      sendText: async ({ cfg, to, text, accountId }) =>
-        await sendA2aChannelText({ cfg, accountId, to, text }),
+      sendText: sendA2aChannelText,
     },
   },
 });

@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -51,7 +52,12 @@ suite.define(() => {
         node.style.animationName = "none";
         void getComputedStyle(node).animationName;
         node.style.animationName = "";
-        const animation = node.getAnimations()[0];
+        const animation = node
+          .getAnimations()
+          .find(
+            (entry) =>
+              entry instanceof CSSAnimation && entry.animationName === "chat-skeleton-reveal",
+          );
         if (!animation) {
           throw new Error("The loading skeleton has no reveal animation");
         }
@@ -81,13 +87,21 @@ suite.define(() => {
               const started = performance.now();
               let revealAnimation: Animation | undefined;
               let previousVisible = false;
-              // Reduced-motion animations can finish before the first sampled frame.
-              // Retain their clock before getAnimations() drops the finished effect.
+              const findRevealAnimation = (skeleton: Element | null) =>
+                skeleton
+                  ?.getAnimations()
+                  .find(
+                    (entry) =>
+                      entry instanceof CSSAnimation &&
+                      entry.animationName === "chat-skeleton-reveal",
+                  );
+              // A concurrent reduced-motion transition can precede the reveal.
+              // Retain the reveal clock before getAnimations() drops its finished effect.
               const observer = new MutationObserver(() => {
                 const skeleton = document.querySelector(
                   ".chat-pane-cache__pane--visible .chat-thread openclaw-panel-loading-skeleton",
                 );
-                revealAnimation ??= skeleton?.getAnimations()[0];
+                revealAnimation ??= findRevealAnimation(skeleton);
                 if (revealAnimation) {
                   observer.disconnect();
                 }
@@ -103,7 +117,7 @@ suite.define(() => {
                   ".chat-pane-cache__pane--visible .chat-thread openclaw-panel-loading-skeleton",
                 );
                 if (skeleton) {
-                  revealAnimation ??= skeleton.getAnimations()[0];
+                  revealAnimation ??= findRevealAnimation(skeleton);
                   previousVisible ||= [...document.querySelectorAll("openclaw-chat-pane")].some(
                     (pane) =>
                       getComputedStyle(pane).opacity !== "0" &&
@@ -206,8 +220,11 @@ suite.define(() => {
         },
       });
       const referencePath = `chat/main/${reference === "named" ? "canonical-history" : "old-name-12345678"}`;
-      const canonicalPath = new URL("chat/main/canonical-history-12345678", suite.server.baseUrl)
-        .pathname;
+      const canonicalId = reference === "named" ? "1234567890abcdef1234567890abcdef" : "12345678";
+      const canonicalPath = new URL(
+        `chat/main/canonical-history-${canonicalId}`,
+        suite.server.baseUrl,
+      ).pathname;
       try {
         await page.goto(`${suite.server.baseUrl}chat/main`, { waitUntil: "domcontentloaded" });
         await page
@@ -216,14 +233,13 @@ suite.define(() => {
           .waitFor({ state: "visible" });
         const initialStartups = (await gateway.getRequests("chat.startup")).length;
         await gateway.deferNext("chat.startup");
-        await page.evaluate((pathname) => {
-          const app = document.querySelector("openclaw-app") as HTMLElement & {
-            runtime: {
-              context: { navigate: (routeId: string, options: { pathname: string }) => void };
-            };
-          };
-          app.runtime.context.navigate("chat", { pathname });
-        }, new URL(referencePath, suite.server.baseUrl).pathname);
+        await evaluateControlUiContext(
+          page,
+          (application, pathname) => {
+            application.navigate("chat", { pathname });
+          },
+          new URL(referencePath, suite.server.baseUrl).pathname,
+        );
         await gateway.waitForRequest("chat.startup", { after: initialStartups });
         if (reference === "named") {
           await page.waitForURL((url) => url.pathname === canonicalPath, {

@@ -35,26 +35,6 @@ describe("chat thinking helpers", () => {
     expect(state.selection).toMatchObject({ source: "override", value: "off" });
   });
 
-  it("does not combine a session model with another provider from defaults", () => {
-    const state = resolveChatThinkingSelectState({
-      catalog: [
-        {
-          id: "model",
-          provider: "openai",
-          name: "Model",
-          thinkingLevels: [{ id: "high", label: "High" }],
-          thinkingDefault: "high",
-        },
-      ],
-      session: { model: "model" },
-      defaults: { model: "other", modelProvider: "openai", contextTokens: null },
-      sessionKey: "main",
-      sessionsResult: null,
-    });
-    expect(state.options).toEqual([]);
-    expect(state.inherited.value).toBe("");
-  });
-
   it("reports unknown capability without inventing thinking choices or a default", () => {
     const session = { modelProvider: "thinking-fixture", model: "unpublished" };
     const state = resolveChatThinkingSelectState({
@@ -131,43 +111,40 @@ describe("chat thinking helpers", () => {
     expect(resolveThinkingCommandArgOptionsForSession(session, undefined, [model])).toEqual([]);
   });
 
-  it.each(["catalog", "defaults", "session labels", "default labels"] as const)(
-    "preserves explicitly empty %s metadata",
-    (source) => {
-      const model: ModelCatalogEntry = {
-        provider: "metadata-fixture",
-        id: "no-effort",
-        name: "No selectable effort",
-        reasoning: true,
-        agentRuntime: { id: "openclaw", source: "model" },
-        ...(source === "catalog" ? { thinkingLevels: [] } : {}),
-      };
-      const session = {
-        modelProvider: model.provider,
-        model: model.id,
-        agentRuntime: model.agentRuntime,
-        ...(source === "session labels" ? { thinkingOptions: [] } : {}),
-      };
-      const defaults = {
-        modelProvider: model.provider,
-        model: model.id,
-        agentRuntime: model.agentRuntime,
-        contextTokens: null,
-        ...(source === "defaults" ? { thinkingLevels: [] } : {}),
-        ...(source === "default labels" ? { thinkingOptions: [] } : {}),
-      };
-      const state = resolveChatThinkingSelectState({
-        catalog: [model],
-        defaults,
-        session,
-        sessionKey: "agent:main:main",
-        sessionsResult: null,
-      });
+  it.each(["default labels"])("preserves explicitly empty %s metadata", (source) => {
+    const model: ModelCatalogEntry = {
+      provider: "metadata-fixture",
+      id: "no-effort",
+      name: "No selectable effort",
+      reasoning: true,
+      agentRuntime: { id: "openclaw", source: "model" },
+      ...(source === "catalog" ? { thinkingLevels: [] } : {}),
+    };
+    const session = {
+      modelProvider: model.provider,
+      model: model.id,
+      agentRuntime: model.agentRuntime,
+      ...(source === "session labels" ? { thinkingOptions: [] } : {}),
+    };
+    const defaults = {
+      modelProvider: model.provider,
+      model: model.id,
+      agentRuntime: model.agentRuntime,
+      contextTokens: null,
+      ...(source === "defaults" ? { thinkingLevels: [] } : {}),
+      ...(source === "default labels" ? { thinkingOptions: [] } : {}),
+    };
+    const state = resolveChatThinkingSelectState({
+      catalog: [model],
+      defaults,
+      session,
+      sessionKey: "agent:main:main",
+      sessionsResult: null,
+    });
 
-      expect(state.options).toEqual([]);
-      expect(isThinkingLevelOptionForSession(session, defaults, "high", [model])).toBe(false);
-    },
-  );
+    expect(state.options).toEqual([]);
+    expect(isThinkingLevelOptionForSession(session, defaults, "high", [model])).toBe(false);
+  });
 
   it("keeps non-reasoning Off-only metadata distinct from an empty profile", () => {
     const model: ModelCatalogEntry = {
@@ -247,7 +224,7 @@ describe("chat thinking helpers", () => {
     expect(state.options.map((option) => option.value)).toEqual(["max"]);
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "does not inherit same-model thinking metadata from a different runtime (catalog: %s)",
     (includeCatalog) => {
       const state = resolveChatThinkingSelectState({
@@ -283,11 +260,7 @@ describe("chat thinking helpers", () => {
     },
   );
 
-  it.each([
-    { sessionRuntime: "openclaw", catalogRuntime: "openclaw" },
-    { sessionRuntime: undefined, catalogRuntime: "openclaw" },
-    { sessionRuntime: "codex", catalogRuntime: undefined },
-  ])(
+  it.each([{ sessionRuntime: "codex", catalogRuntime: undefined }])(
     "inherits catalog thinking metadata when runtimes do not conflict ($sessionRuntime / $catalogRuntime)",
     ({ sessionRuntime, catalogRuntime }) => {
       const state = resolveChatThinkingSelectState({

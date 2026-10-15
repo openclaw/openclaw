@@ -84,7 +84,7 @@ describe("lancedb runtime loader", () => {
     expectDependencyCause(error, dependencyFailure);
   });
 
-  test("fails fast when package dependencies are missing", async () => {
+  test("reports missing package dependencies and clears the cached failure so later calls can retry", async () => {
     const dependencyFailure = new Error("Cannot find package '@lancedb/lancedb'");
     vi.doMock("@lancedb/lancedb", () => {
       throw dependencyFailure;
@@ -98,15 +98,6 @@ describe("lancedb runtime loader", () => {
       ),
     );
     expectDependencyCause(error, dependencyFailure);
-  });
-
-  test("clears the cached failure so later calls can retry the package import", async () => {
-    const dependencyFailure = new Error("network down");
-    vi.doMock("@lancedb/lancedb", () => {
-      throw dependencyFailure;
-    });
-    const { loadLanceDbModule } = await loadRuntimeForHost("linux", "x64");
-    expectDependencyCause(await rejectedLoad(loadLanceDbModule), dependencyFailure);
 
     const connect = vi.fn();
     vi.doMock("@lancedb/lancedb", () => ({ connect }));

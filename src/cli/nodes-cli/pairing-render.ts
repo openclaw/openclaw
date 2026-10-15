@@ -1,8 +1,7 @@
-// Shared renderer for pending node pairing request tables.
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { renderTable } from "../../../packages/terminal-core/src/table.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
-import type { PendingRequest } from "./types.js";
+import type { PendingRequest } from "../../shared/node-list-types.js";
 
 /** Render pending pairing requests with sanitized labels and relative request age. */
 export function renderPendingPairingRequestsTable(params: {
@@ -11,16 +10,14 @@ export function renderPendingPairingRequestsTable(params: {
   tableWidth: number;
   theme: {
     heading: (text: string) => string;
-    warn: (text: string) => string;
     muted: (text: string) => string;
   };
 }) {
   const { pending, now, tableWidth, theme } = params;
   const rows = pending.map((r) => {
-    const nodeLabel = r.displayName?.trim() ? r.displayName.trim() : r.nodeId;
     return {
       Request: sanitizeTerminalText(r.requestId),
-      Node: sanitizeTerminalText(nodeLabel),
+      Node: sanitizeTerminalText(r.displayName?.trim() || r.nodeId),
       IP: sanitizeTerminalText(r.remoteIp ?? ""),
       Requested:
         typeof r.ts === "number" ? formatTimeAgo(Math.max(0, now - r.ts)) : theme.muted("unknown"),

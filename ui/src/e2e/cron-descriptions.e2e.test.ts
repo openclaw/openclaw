@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
+import type { CronJob } from "../api/types.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -13,7 +15,7 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}.`,
 });
 
-function cronJob(id: string, name: string) {
+function cronJob(id: string, name: string): CronJob {
   return {
     id,
     name,
@@ -31,8 +33,8 @@ function cronJob(id: string, name: string) {
 const captureDurationProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const requireDurationRecord = createRequireRecord("record", "expected-object-value");
 
-function durationResponses(jobs: unknown[]) {
-  const list = (entries: unknown[]) => ({
+function durationResponses(jobs: CronJob[]) {
+  const list = (entries: CronJob[]) => ({
     jobs: entries,
     snapshotRevision: "exact-duration-fixture",
     total: entries.length,
@@ -42,9 +44,10 @@ function durationResponses(jobs: unknown[]) {
     nextOffset: null,
   });
   return {
-    "cron.list": {
-      cases: [{ match: { lastRunStatus: "error" }, response: list([]) }, { response: list(jobs) }],
-    },
+    "cron.list": cronListResponseFixture([
+      { match: { lastRunStatus: "error" }, response: list([]) },
+      { response: list(jobs) },
+    ]),
     "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
     "cron.status": { enabled: true, jobs: jobs.length, nextWakeAtMs: null },
   };
@@ -93,7 +96,7 @@ suite.define(() => {
         description: "Explain the system-owned heartbeat",
         payload: { kind: "heartbeat" },
       },
-    ] as const;
+    ] satisfies [CronJob, ...CronJob[]];
     const undescribedJob = cronJob("without-description", "Plain task");
     await suite.withPage(
       {
@@ -104,7 +107,7 @@ suite.define(() => {
       async ({ page }) => {
         await installMockGateway(page, {
           methodResponses: {
-            "cron.list": {
+            "cron.list": cronListResponseFixture({
               jobs: [...jobs, undescribedJob],
               snapshotRevision: "cron-descriptions-fixture",
               total: jobs.length + 1,
@@ -112,7 +115,7 @@ suite.define(() => {
               limit: 50,
               hasMore: false,
               nextOffset: null,
-            },
+            }),
             "cron.runs": { entries: [], total: 0, offset: 0, hasMore: false },
             "cron.status": { enabled: true, jobs: jobs.length + 1, nextWakeAtMs: null },
           },
@@ -168,12 +171,15 @@ suite.define(() => {
         text: "Every 1h 1m 1s 1ms",
       },
     ] as const;
-    const jobs = cases.map(({ id, name, everyMs }) => ({
-      ...cronJob(id, name),
-      enabled: false,
-      configRevision: `${id}-definition`,
-      schedule: { kind: "every", everyMs },
-    }));
+    const jobs = cases.map(
+      ({ id, name, everyMs }) =>
+        ({
+          ...cronJob(id, name),
+          enabled: false,
+          configRevision: `${id}-definition`,
+          schedule: { kind: "every", everyMs },
+        }) satisfies CronJob,
+    );
     await suite.withPage(
       {
         locale: "en-US",
@@ -239,7 +245,7 @@ suite.define(() => {
       enabled: false,
       configRevision: "precise-stagger-definition",
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 1_001 },
-    };
+    } satisfies CronJob;
     await suite.withPage(
       {
         locale: "en-US",

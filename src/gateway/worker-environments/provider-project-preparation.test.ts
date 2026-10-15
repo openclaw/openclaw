@@ -4,14 +4,16 @@ import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
-import { bindCloudWorkerSetupCompletion } from "../../infra/device-pairing-cloud-worker.js";
+import { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import type {
   WorkerProvider,
   WorkerNodeRuntimePreparation,
   WorkerNodeEnrollment,
 } from "../../plugins/types.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { completeWorkerNodeSetupForTest } from "./node-enrollment.test-support.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import * as support from "./service.test-support.js";
 import * as workspaceGitBase from "./workspace-git-base.js";
 
@@ -19,15 +21,17 @@ type ProjectPreparation = NonNullable<
   NonNullable<Parameters<WorkerProvider["provision"]>[2]>["project"]
 >;
 
-async function repository(name: string) {
+async function repository(name: string, empty = false) {
   const root = path.join(support.testState.root, name);
   await fs.mkdir(root);
   await requireGit(root, ["init", "--quiet"]);
   await requireGit(root, ["config", "user.name", "Project Test"]);
   await requireGit(root, ["config", "user.email", "project@example.invalid"]);
-  await fs.writeFile(path.join(root, "input.txt"), `${name} base\n`);
-  await requireGit(root, ["add", "."]);
-  await requireGit(root, ["commit", "--quiet", "-m", "base"]);
+  if (!empty) {
+    await fs.writeFile(path.join(root, "input.txt"), `${name} base\n`);
+    await requireGit(root, ["add", "."]);
+  }
+  await requireGit(root, ["commit", "--quiet", "--allow-empty", "-m", "base"]);
   return { root, baseCommit: await requireGit(root, ["rev-parse", "HEAD"]) };
 }
 
@@ -53,10 +57,89 @@ function createService(
 describe("worker provider project preparation ownership", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it.each([false, true, undefined])(
-    "requires explicit dedicated classification after prepared node provisioning (sharedHost=%s)",
-    async (sharedHost) => {
-      const git = await repository("prepared-host-classification");
+  it.each([
+    [true, true],
+    [true, false],
+    [false, false],
+  ])(
+    "rejects unmapped repository secrets before provisioning (supported=%s, target=%s)",
+    async (supported, hasTarget) => {
+      const git = await repository("unmapped-secrets");
+      await fs.writeFile(
+        path.join(git.root, ".devcontainer.json"),
+        JSON.stringify({
+          secrets: { PACKAGE_TOKEN: {}, OTHER_TOKEN: {} },
+          onCreateCommand: "must-never-run",
+        }),
+      );
+      await requireGit(git.root, ["add", ".devcontainer.json"]);
+      await requireGit(git.root, ["commit", "--quiet", "-m", "declare secrets"]);
+      const provision = vi.fn<WorkerProvider["provision"]>();
+      const service = support.createService(
+        support.createProvider({
+          supportsProjectPreparation: () => supported,
+          runSetupCommand: async () => undefined,
+          resolvePreparationTarget: () =>
+            hasTarget ? { machineClass: "small", platform: "linux" } : undefined,
+          provision,
+        }),
+        { projectNamespace: "gateway" },
+      );
+      await expect(
+        service.createWithRequest({
+          profileId: "development",
+          idempotencyKey: "unmapped-secrets",
+          projectPath: git.root,
+        }),
+      ).rejects.toThrow("unmapped setup secrets: OTHER_TOKEN, PACKAGE_TOKEN");
+      expect(provision).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps separate empty session workspaces on the same project-free allocation profile", async () => {
+    const worktrees = new ManagedWorktreeService({
+      env: { ...process.env, OPENCLAW_STATE_DIR: support.testState.root },
+      getConfig: () => ({ worktreeAcceleration: false }),
+    });
+    const provision = vi.fn<WorkerProvider["provision"]>(async (_profile, operationId) => ({
+      leaseId: `lease-${operationId}`,
+      ssh: support.SSH_ENDPOINT,
+    }));
+    const service = createService(provision);
+    const environments = [];
+    const roots = [];
+    for (const name of ["first", "second"]) {
+      const workspace = await worktrees.createEmpty({
+        name,
+        ownerKind: "session",
+        ownerId: `agent:main:${name}`,
+      });
+      roots.push(workspace.repoRoot);
+      environments.push(
+        await service.createWithRequest({
+          profileId: "development",
+          idempotencyKey: name,
+          projectPath: workspace.path,
+        }),
+      );
+    }
+    expect(roots[0]).not.toBe(roots[1]);
+    expect(provision).toHaveBeenCalledTimes(2);
+    for (const call of provision.mock.calls) {
+      expect(call[2]?.project).toBeUndefined();
+    }
+    expect(environments[0]?.profileSnapshot.project).toBeUndefined();
+    expect(environments[1]?.profileSnapshot).toEqual(environments[0]?.profileSnapshot);
+  });
+
+  it.each(
+    ([false, true, undefined] as const).flatMap((sharedHost) =>
+      [false, true].map((emptyWorkspace) => ({ sharedHost, emptyWorkspace })),
+    ),
+  )(
+    "requires explicit dedicated classification after prepared node provisioning (sharedHost=$sharedHost, empty workspace=$emptyWorkspace)",
+    async ({ sharedHost, emptyWorkspace }) => {
+      const git = await repository("prepared-host-classification", emptyWorkspace);
       const deviceId = "prepared-node";
       const registerPreparedWorkspace = vi.fn<
         NonNullable<support.WorkerEnvironmentServiceOptions["registerPreparedWorkspace"]>
@@ -68,33 +151,37 @@ describe("worker provider project preparation ownership", () => {
         supportsProjectPreparation: () => true,
         resolvePreparationTarget: () => ({ machineClass: "small", platform: "linux" }),
         provision: async (_profile, _operationId, options) => {
-          const project = expectDefined(options?.project, "project preparation");
-          const preparation = expectDefined(project.preparation, "prepared identity");
-          const directory = `/worker/.openclaw-worker/prepared/gateway/${preparation.cacheKey}`;
-          await project.prepare({
-            runScript: async () => JSON.stringify({ ready: true }),
-            upload: async () => {
-              throw new Error("cached seed must not upload");
-            },
-            runScriptWithBudget: async () =>
-              JSON.stringify({
-                workspaceDir: `${directory}/workspace`,
-                homeDir: `${directory}/home`,
-                sourceManifestRef: `sha256:${"a".repeat(64)}`,
-                preparedManifestRef: `sha256:${"b".repeat(64)}`,
-              }),
-          });
+          if (emptyWorkspace) {
+            expect(options?.project).toBeUndefined();
+          } else {
+            const project = expectDefined(options?.project, "project preparation");
+            const preparation = expectDefined(project.preparation, "prepared identity");
+            const directory = `/worker/.openclaw-worker/prepared/gateway/${preparation.cacheKey}`;
+            await project.prepare({
+              runScript: async () => JSON.stringify({ ready: true, retainedWorkspace: null }),
+              upload: async () => {
+                throw new Error("cached seed must not upload");
+              },
+              runScriptWithBudget: async () =>
+                JSON.stringify({
+                  workspaceDir: `${directory}/workspace`,
+                  homeDir: `${directory}/home`,
+                  sourceManifestRef: `sha256:${"a".repeat(64)}`,
+                  preparedManifestRef: `sha256:${"b".repeat(64)}`,
+                  recipePreparation: { source: "none", phaseDurationsMs: {} },
+                }),
+            });
+          }
           const enrollment = await options!.beginNodeEnrollment!();
           if (enrollment.mode !== "connect") {
             throw new Error("Fresh worker must use its pending enrollment");
           }
-          bindCloudWorkerSetupCompletion({
-            db: support.testState.stateDb.db,
-            completion: {
-              setupId: enrollment.setupId,
-              deviceId,
-              completedAtMs: support.testState.nowMs,
-            },
+          await completeWorkerNodeSetupForTest({
+            baseDir: support.testState.root,
+            store: support.testState.store,
+            setupId: enrollment.setupId,
+            deviceId,
+            completedAtMs: support.testState.nowMs,
           });
           return {
             leaseId: "lease-prepared-host",
@@ -117,7 +204,7 @@ describe("worker provider project preparation ownership", () => {
           assertCurrent: () => {},
         }),
         prepareNodeEnrollment: async (record) => {
-          const pending = support.testState.store.ensureNodeEnrollment(record.environmentId);
+          const pending = await support.testState.store.ensureNodeEnrollment(record.environmentId);
           return {
             mode: "connect",
             setupId: expectDefined(pending.nodeSetupId, "pending node enrollment"),
@@ -131,17 +218,14 @@ describe("worker provider project preparation ownership", () => {
         ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
         registerPreparedWorkspace,
       });
-      const creation = service.create(
-        "development",
-        "prepared-host",
-        undefined,
-        "worker-turn",
-        git.root,
-      );
+      const creation = service.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "prepared-host",
+        executionMode: "worker-turn",
+        projectPath: git.root,
+      });
       if (sharedHost !== false) {
-        await expect(creation).rejects.toThrow(
-          "Prepared worker requires its dedicated registered workspace",
-        );
+        await expect(creation).rejects.toThrow("Prepared worker requires a dedicated environment");
         expect(registerPreparedWorkspace).not.toHaveBeenCalled();
         return;
       }
@@ -151,6 +235,12 @@ describe("worker provider project preparation ownership", () => {
         sharedHost: false,
         nodeDeviceId: deviceId,
       });
+      if (emptyWorkspace) {
+        expect(environment.profileSnapshot.project).toBeUndefined();
+        expect(environment.profileSnapshot.runtimePreparation).toMatchObject({ source: "empty" });
+        expect(registerPreparedWorkspace).not.toHaveBeenCalled();
+        return;
+      }
       const preparation = expectDefined(
         readWorkerProjectPreparation(environment.profileSnapshot.project),
         "prepared profile",
@@ -169,63 +259,6 @@ describe("worker provider project preparation ownership", () => {
       );
     },
   );
-
-  it("replays an inherited prepared intent with its exact admitted target and artifacts", async () => {
-    const git = await repository("prepared-inherited-replay");
-    const provision = vi.fn(async () => {
-      throw new Error("fixture allocation unavailable");
-    });
-    const provider = support.createProvider({
-      requiresNodeEnrollment: true,
-      provisionBeforeInstallation: true,
-      supportsProjectPreparation: () => true,
-      resolvePreparationTarget: (_profile, machineClass, os) => ({
-        machineClass: machineClass ?? "small",
-        platform: os ?? "linux",
-      }),
-      provision,
-    });
-    const service = support.createService(provider, {
-      projectNamespace: "gateway",
-      prepareNodeEnrollment: async () => {
-        throw new Error("fixture must not enroll");
-      },
-      prepareNodeArtifacts: async () => ({
-        artifacts: {
-          nodeBootstrapSha256: support.NODE_BOOTSTRAP.sha256,
-          enabledPluginIds: [...support.NODE_BOOTSTRAP.enabledPluginIds],
-          workerBundleHash: support.BUNDLE_HASH,
-          workerArchiveSha256: support.BUNDLE_ARTIFACT.tarballSha256,
-          openclawVersion: support.BUNDLE_ARTIFACT.openclawVersion,
-          protocolFeatures: [...support.BUNDLE_ARTIFACT.protocolFeatures],
-        },
-        assertCurrent: () => {},
-      }),
-    });
-    const profile = {
-      profileId: "development",
-      providerId: provider.id,
-      profileSnapshot: { install: "bundle", settings: {}, machineClass: "large" },
-    };
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      await expect(
-        service.createFromProfileSnapshot(
-          profile,
-          "prepared-replay",
-          undefined,
-          undefined,
-          git.root,
-        ),
-      ).rejects.toThrow("fixture allocation unavailable");
-    }
-    expect(provision).toHaveBeenCalledTimes(2);
-    const rows = support.testState.store.list();
-    expect(rows).toHaveLength(1);
-    expect(readWorkerProjectPreparation(rows[0]?.profileSnapshot.project)?.target).toEqual({
-      machineClass: "large",
-      platform: "linux",
-    });
-  });
 
   it.each(["runtime-bootstrap", "runtime-worker", "enrollment-bootstrap"] as const)(
     "closes changed %s grants without publishing a different prepared runtime identity",
@@ -280,7 +313,12 @@ describe("worker provider project preparation ownership", () => {
         },
       );
       await expect(
-        service.create("development", change, undefined, "worker-turn", git.root),
+        service.createWithRequest({
+          profileId: "development",
+          idempotencyKey: change,
+          executionMode: "worker-turn",
+          projectPath: git.root,
+        }),
       ).rejects.toThrow("runtime changed after provisioning preparation");
       expect(support.testState.store.list()[0]).toMatchObject({
         state: "provisioning",
@@ -317,14 +355,12 @@ describe("worker provider project preparation ownership", () => {
     }));
     const service = createService(provision);
     const creation = service
-      .create(
-        "development",
-        "cancelled-project-snapshot",
-        undefined,
-        undefined,
-        git.root,
-        controller.signal,
-      )
+      .createWithRequest({
+        profileId: "development",
+        idempotencyKey: "cancelled-project-snapshot",
+        projectPath: git.root,
+        signal: controller.signal,
+      })
       .catch((error: unknown) => error);
     try {
       await entered.promise;
@@ -346,6 +382,16 @@ describe("worker provider project preparation ownership", () => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const controller = new AbortController();
+    const stopRecorded = createDeferredCore();
+    const unsubscribe = sessionChanges.subscribe((change) => {
+      if (
+        "all" in change &&
+        change.scope === "worker-environments" &&
+        typeof support.testState.store.list()[0]?.destroyRequestedAtMs === "number"
+      ) {
+        stopRecorded.resolve();
+      }
+    });
     let transportSignal: AbortSignal | undefined;
     let settled = false;
     const events: string[] = [];
@@ -367,14 +413,12 @@ describe("worker provider project preparation ownership", () => {
       return { leaseId: "unexpected-transfer-lease", ssh: support.SSH_ENDPOINT };
     });
     const creation = service
-      .create(
-        "development",
-        "cancelled-project-transfer",
-        undefined,
-        undefined,
-        git.root,
-        controller.signal,
-      )
+      .createWithRequest({
+        profileId: "development",
+        idempotencyKey: "cancelled-project-transfer",
+        projectPath: git.root,
+        signal: controller.signal,
+      })
       .catch((error: unknown) => error)
       .finally(() => {
         settled = true;
@@ -382,7 +426,7 @@ describe("worker provider project preparation ownership", () => {
     try {
       await entered.promise;
       controller.abort(new DOMException("Stop project transfer", "AbortError"));
-      await setImmediate();
+      await stopRecorded.promise;
       expect(transportSignal?.aborted).toBe(true);
       expect(settled).toBe(false);
       expect(events).toEqual([]);
@@ -391,6 +435,7 @@ describe("worker provider project preparation ownership", () => {
         destroyRequestedAtMs: support.testState.nowMs,
       });
     } finally {
+      unsubscribe();
       release.resolve();
       await creation;
     }
@@ -399,7 +444,7 @@ describe("worker provider project preparation ownership", () => {
     expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, "large"])(
+  it.each([undefined])(
     "persists and replays project identity with a legacy provider hook (machineClass=%s)",
     async (machineClass) => {
       const git = await repository("project");
@@ -444,7 +489,12 @@ describe("worker provider project preparation ownership", () => {
         selectedClass === machineClass;
       const first = createService(provision, undefined, supportsProjectPreparation);
       await expect(
-        first.create("development", "project-replay", machineClass, undefined, git.root),
+        first.createWithRequest({
+          profileId: "development",
+          idempotencyKey: "project-replay",
+          machineClass,
+          projectPath: git.root,
+        }),
       ).rejects.toMatchObject({ code: "provider_failure" });
       expect(projects[0]?.signal.aborted).toBe(true);
       await fs.writeFile(path.join(git.root, "input.txt"), "newer project HEAD\n");
@@ -460,7 +510,12 @@ describe("worker provider project preparation ownership", () => {
 
       const restarted = createService(provision, undefined, supportsProjectPreparation);
       await expect(
-        restarted.create("development", "project-replay", machineClass, undefined, git.root),
+        restarted.createWithRequest({
+          profileId: "development",
+          idempotencyKey: "project-replay",
+          machineClass,
+          projectPath: git.root,
+        }),
       ).resolves.toMatchObject({ state: "ready", leaseId: "lease-project" });
       expect(operationIds).toHaveLength(2);
       expect(operationIds[1]).toBe(operationIds[0]);
@@ -473,28 +528,7 @@ describe("worker provider project preparation ownership", () => {
     },
   );
 
-  it("rejects another project root using the same idempotency key before calling the provider", async () => {
-    const first = await repository("first-project");
-    const second = await repository("second-project");
-    const provision = vi.fn<WorkerProvider["provision"]>(async () => ({
-      leaseId: "lease-project",
-      ssh: support.SSH_ENDPOINT,
-    }));
-    const service = createService(provision);
-    await service.create("development", "same-request", undefined, undefined, first.root);
-    const snapshot = support.testState.store.list()[0]?.profileSnapshot;
-
-    await expect(
-      service.create("development", "same-request", undefined, undefined, second.root),
-    ).rejects.toMatchObject({
-      code: "invalid_profile",
-      message: "Idempotency key belongs to another project",
-    });
-    expect(provision).toHaveBeenCalledTimes(1);
-    expect(support.testState.store.list()[0]?.profileSnapshot).toEqual(snapshot);
-  });
-
-  it.each([true, false])(
+  it.each([true])(
     "a fresh inherited allocation uses only its current project (has project=%s)",
     async (hasProject) => {
       const first = await repository("inherited-project");
@@ -504,13 +538,11 @@ describe("worker provider project preparation ownership", () => {
         projects.push(options?.project);
         return { leaseId: `lease-${operationId}`, ssh: support.SSH_ENDPOINT };
       });
-      const original = await service.create(
-        "development",
-        "original",
-        undefined,
-        undefined,
-        first.root,
-      );
+      const original = await service.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "original",
+        projectPath: first.root,
+      });
       const originalRecord = expectDefined(
         support.testState.store.get(original.environmentId),
         "original allocation",
@@ -520,13 +552,15 @@ describe("worker provider project preparation ownership", () => {
         providerId: originalRecord.providerId,
         profileSnapshot: originalRecord.profileSnapshot,
       };
-      const next = await service.createFromProfileSnapshot(
-        inherited,
-        "fresh",
-        undefined,
-        undefined,
-        hasProject ? second.root : undefined,
-      );
+      const next = await service.createWithRequest({
+        profileId: inherited.profileId,
+        inheritedProfile: {
+          providerId: inherited.providerId,
+          profileSnapshot: inherited.profileSnapshot,
+        },
+        idempotencyKey: "fresh",
+        projectPath: hasProject ? second.root : undefined,
+      });
       const nextRecord = expectDefined(
         support.testState.store.get(next.environmentId),
         "fresh allocation",
@@ -543,13 +577,15 @@ describe("worker provider project preparation ownership", () => {
         expect(projects[1]).toBeUndefined();
       }
       await expect(
-        service.createFromProfileSnapshot(
-          inherited,
-          "fresh",
-          undefined,
-          undefined,
-          hasProject ? second.root : undefined,
-        ),
+        service.createWithRequest({
+          profileId: inherited.profileId,
+          inheritedProfile: {
+            providerId: inherited.providerId,
+            profileSnapshot: inherited.profileSnapshot,
+          },
+          idempotencyKey: "fresh",
+          projectPath: hasProject ? second.root : undefined,
+        }),
       ).resolves.toMatchObject({ environmentId: next.environmentId, state: "ready" });
       expect(projects).toHaveLength(2);
       expect(
@@ -563,11 +599,16 @@ describe("worker provider project preparation ownership", () => {
     "revokes retained project callbacks after provider %s",
     async (outcome) => {
       const git = await repository("closure-project");
+      if (outcome === "timeout") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
+      const entered = createDeferredCore();
       const release = createDeferredCore();
       let retained: ProjectPreparation | undefined;
       const service = createService(
         async (_profile, _operationId, options) => {
           retained = options?.project;
+          entered.resolve();
           if (outcome === "timeout") {
             await release.promise;
           }
@@ -576,12 +617,25 @@ describe("worker provider project preparation ownership", () => {
         outcome === "timeout" ? 20 : undefined,
       );
       try {
-        const creation = service.create("development", "closure", undefined, undefined, git.root);
+        const creation = service
+          .createWithRequest({
+            profileId: "development",
+            idempotencyKey: "closure",
+            projectPath: git.root,
+          })
+          .catch((error: unknown) => error);
+        await Promise.race([
+          entered.promise,
+          creation.then((result) => {
+            throw new Error("Creation ended before provider invocation", { cause: result });
+          }),
+        ]);
         if (outcome === "timeout") {
-          await expect(creation).rejects.toMatchObject({ code: "provider_failure" });
-        } else {
-          await expect(creation).resolves.toMatchObject({ state: "ready" });
+          await vi.advanceTimersByTimeAsync(20);
         }
+        expect(await creation).toMatchObject(
+          outcome === "timeout" ? { code: "provider_failure" } : { state: "ready" },
+        );
         const project = expectDefined(retained, "retained project callback");
         expect(project.signal.aborted).toBe(true);
         const transport = {

@@ -1,5 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { WebSearchStatusResult } from "../../../packages/gateway-protocol/src/schema/web-search.ts";
+import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../api/types.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -30,6 +32,7 @@ const routes = [
   "cloud-workers",
   "agents",
   "model-providers",
+  "search",
   "plugin-settings",
   "skill-settings",
   "mcp",
@@ -133,7 +136,7 @@ suite.define(() => {
         await waitForControlUiRoute(page, { routeId: "settings", pathname: "/settings" });
         await page
           .locator(".native-embed-header")
-          .getByRole("button", { name: /offline.*retry/i })
+          .getByRole("button", { name: /reconnecting.*retry/i })
           .waitFor();
         await page.locator('.settings-embed-list a[href="/settings/appearance"]').click();
         await waitForControlUiRoute(page, { routeId: "appearance" });
@@ -219,7 +222,54 @@ suite.define(() => {
           async ({ page }) => {
             await installNativeEmbed(page, { platform: "ios", formFactor: viewport.formFactor });
             await installExistingNativeDeviceSettings(page);
-            const methodResponses = createNativeEmbedLayoutMethodResponses();
+            const methodResponses = {
+              ...createNativeEmbedLayoutMethodResponses(),
+              "channels.status": {
+                ts: 0,
+                channels: {},
+                channelAccounts: {},
+                channelOrder: [],
+                channelLabels: {},
+                channelDefaultAccountId: {},
+              } satisfies ChannelsStatusSnapshot,
+              "channels.pairing.list": {
+                accounts: [],
+                requests: [],
+                commandOwnerConfigured: false,
+                limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+              } satisfies ChannelsPairingListResult,
+              "webSearch.status": {
+                enabled: true,
+                provider: null,
+                agentId: "main",
+                model: {
+                  provider: "openai",
+                  id: "gpt-5.6-luna",
+                  runtime: "openclaw",
+                  runtimeLabel: "OpenClaw",
+                },
+                route: {
+                  kind: "managed",
+                  provider: "parallel-free",
+                  label: "Parallel Search (Free)",
+                  testable: true,
+                },
+                providers: [
+                  {
+                    id: "parallel-free",
+                    pluginId: "parallel",
+                    label: "Parallel Search (Free)",
+                    hint: "Free hosted web search",
+                    configured: true,
+                    installed: true,
+                    available: true,
+                    requiresCredential: false,
+                    credentialSource: "none",
+                    configPath: [],
+                  },
+                ],
+              } satisfies WebSearchStatusResult,
+            };
             await installMockGateway(page, {
               methodResponses,
               featureMethods: [
@@ -291,7 +341,14 @@ suite.define(() => {
                 ).toBe(true);
               } else {
                 await page.locator(".native-embed-header .page-title").waitFor();
-                await page.locator("openclaw-router-outlet > *").first().waitFor();
+                await page.locator("openclaw-router-outlet").waitFor();
+              }
+              if (route === "search") {
+                await page
+                  .getByRole("combobox", { name: "Search provider", exact: true })
+                  .waitFor();
+                await page.getByRole("button", { name: "Test search", exact: true }).waitFor();
+                expect(await page.locator('openclaw-search-page [role="alert"]').count()).toBe(0);
               }
               if (route === "devices") {
                 await page.locator(".device-entry__details summary").first().click();

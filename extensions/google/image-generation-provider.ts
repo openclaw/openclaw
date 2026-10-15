@@ -1,4 +1,3 @@
-// Google provider module implements model/runtime integration.
 import {
   generatedImageAssetFromBase64,
   resolveInlineImageJsonResponseMaxBytes,
@@ -7,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -20,32 +19,23 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeGoogleModelId, resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
 import { toStandardGoogleProviderBase64 } from "./base64.js";
 import {
   createGoogleImageGenerationProviderMetadata,
   DEFAULT_GOOGLE_IMAGE_MODEL,
   GOOGLE_MAX_IMAGE_RESULTS,
 } from "./generation-provider-metadata.js";
+import { resolveGoogleGenerativeAiHttpRequestConfig } from "./http-request.js";
+import { normalizeGoogleModelId } from "./model-id.js";
 
 const DEFAULT_IMAGE_TIMEOUT_MS = 180_000;
 const DEFAULT_OUTPUT_MIME = "image/png";
 const GOOGLE_IMAGE_MALFORMED_RESPONSE = "Google image generation response malformed";
 
-function normalizeGoogleImageModel(model: string | undefined): string {
-  const trimmed = model?.trim();
-  return normalizeGoogleModelId(trimmed || DEFAULT_GOOGLE_IMAGE_MODEL);
-}
-
 function mapSizeToImageConfig(
   size: string | undefined,
 ): { aspectRatio?: string; imageSize?: "2K" | "4K" } | undefined {
-  const trimmed = size?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
+  const normalized = normalizeLowercaseStringOrEmpty(size);
   const mapping = new Map<string, string>([
     ["1024x1024", "1:1"],
     ["1024x1536", "2:3"],
@@ -125,11 +115,9 @@ function googleInlineDataFromPart(part: unknown): Record<string, unknown> | unde
 }
 
 export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
-  const { capabilities, ...metadata } = createGoogleImageGenerationProviderMetadata();
   return {
-    ...metadata,
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "google", ...ctx }),
-    capabilities,
+    ...createGoogleImageGenerationProviderMetadata(),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "google", ...ctx }),
     async generateImage(req) {
       const auth = await resolveApiKeyForProvider({
         provider: "google",
@@ -141,7 +129,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
         throw new Error("Google API key missing");
       }
 
-      const model = normalizeGoogleImageModel(req.model);
+      const model = normalizeGoogleModelId(req.model?.trim() || DEFAULT_GOOGLE_IMAGE_MODEL);
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveGoogleGenerativeAiHttpRequestConfig({
           apiKey: auth.apiKey,
@@ -199,7 +187,6 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
             resolveGeneratedMediaMaxBytes(req.cfg, "image"),
           ),
         });
-        let imageIndex = 0;
         const images: GeneratedImageAsset[] = [];
         for (const part of googleResponseParts(payload)) {
           const inline = googleInlineDataFromPart(part);
@@ -216,7 +203,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
           }
           const image = generatedImageAssetFromBase64({
             base64: standardData,
-            index: imageIndex,
+            index: images.length,
             mimeType:
               normalizeOptionalString(inline.mimeType) ??
               normalizeOptionalString(inline.mime_type) ??
@@ -225,7 +212,6 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
           if (!image) {
             throw new Error(GOOGLE_IMAGE_MALFORMED_RESPONSE);
           }
-          imageIndex += 1;
           images.push(image);
         }
 

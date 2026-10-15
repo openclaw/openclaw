@@ -3,12 +3,30 @@ import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
+import { sha256Hex } from "./crypto-digest.js";
 import { tryReadJson } from "./json-files.js";
+import {
+  collectPackageDistContentInventory,
+  collectPackageDistInventory,
+} from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 
 // The Git updater passes the canonical checkout and its successfully built HEAD.
 export type GitRuntimeIdentity = { root: string; sha: string | null };
+
+export type GitRuntimeArtifactIdentity = { commit: string | null; distDigest: string };
+
+export async function readGitRuntimeArtifactIdentity(
+  root: string,
+): Promise<GitRuntimeArtifactIdentity> {
+  const inventory = await collectPackageDistInventory(root, { includePackageExcludedFiles: true });
+  const contents = await collectPackageDistContentInventory(root, inventory);
+  return {
+    commit: await readBuiltRuntimeCommit(root),
+    distDigest: sha256Hex(JSON.stringify(contents)),
+  };
+}
 
 export async function collectGitRuntimeErrors(params: GitRuntimeIdentity): Promise<string[]> {
   const distRoot = path.join(params.root, "dist");
@@ -69,4 +87,16 @@ export async function verifyGitUpdateRecovery(params: GitRuntimeIdentity): Promi
   return version && buildId && errors.length === 0
     ? { serviceRestartSafe: true, version, buildId }
     : { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+}
+
+export async function readGitRuntimeArtifactStatus(
+  params: GitRuntimeIdentity,
+): Promise<{ ready: true; version: string; buildId: string } | { ready: false }> {
+  const recovery = await verifyGitUpdateRecovery(params);
+  if (!recovery.serviceRestartSafe || !recovery.buildId) {
+    return { ready: false };
+  }
+  const buildInfo = await tryReadJson(path.join(params.root, "dist", "build-info.json"));
+  const version = normalizeNullableString(asNullableRecord(buildInfo)?.version) ?? recovery.version;
+  return { ready: true, version, buildId: recovery.buildId };
 }

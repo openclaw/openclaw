@@ -1,4 +1,3 @@
-// Inworld plugin module implements tts behavior.
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech-core";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/speech-provider";
@@ -20,17 +19,7 @@ const INWORLD_ERROR_BODY_READ_IDLE_TIMEOUT_MS = 10_000;
 // unrelated read failure without leaking the (possibly hostile) body.
 class InworldErrorBodyOverflow extends Error {}
 
-/**
- * Reads a bounded, whitespace-collapsed diagnostic snippet from a non-OK
- * response body. A misbehaving or hostile endpoint can stream an arbitrarily
- * large error body, so this never buffers it whole: it reuses the shared
- * `readResponseWithLimit` reader (which cancels the underlying stream on
- * overflow and enforces an idle timeout) with a small cap. On overflow it
- * returns a fixed marker instead of echoing attacker-controlled bytes into the
- * thrown error. Kept local to this extension so it depends only on the
- * already-exported `response-limit-runtime` entry and adds no shared plugin-SDK
- * surface.
- */
+// Overflow gets a fixed marker so hostile response bodies cannot enter diagnostics.
 async function readInworldErrorBodySnippet(response: Response): Promise<string> {
   let buffer: Buffer;
   try {
@@ -102,12 +91,7 @@ export async function inworldTTS(params: {
   timeoutMs?: number;
 }): Promise<Buffer> {
   const { canonicalizeBase64, MAX_AUDIO_BYTES } = await import("openclaw/plugin-sdk/media-runtime");
-  // The streaming TTS endpoint returns newline-delimited JSON whose audio is
-  // base64-encoded, so the wire body is ~4/3 larger than the decoded audio plus a
-  // JSON envelope. Cap the read at double the shared 16 MiB audio limit so a
-  // full-size legitimate clip still fits, while bounding memory against an
-  // unbounded or hijacked SSE stream that would otherwise be buffered whole by the
-  // previous `await response.text()`.
+  // Leave headroom for base64 and JSON overhead while bounding the encoded body.
   const INWORLD_TTS_BODY_MAX_BYTES = MAX_AUDIO_BYTES * 2;
   const baseUrl = normalizeInworldBaseUrl(params.baseUrl);
   const url = `${baseUrl}/tts/v1/voice:stream`;
@@ -129,10 +113,7 @@ export async function inworldTTS(params: {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        // apiKey is the Base64-encoded credential string copied from the
-        // Inworld dashboard; it is sent verbatim as the HTTP Basic
-        // credential. Do not Base64-encode it here, and do not normalize
-        // bearer-style tokens.
+        // Dashboard credentials are already Base64-encoded; send them verbatim.
         Authorization: `Basic ${params.apiKey}`,
       },
       body: requestBody,
@@ -216,9 +197,6 @@ export async function listInworldVoices(params: {
   timeoutMs?: number;
 }): Promise<SpeechVoiceOption[]> {
   const { MAX_AUDIO_BYTES } = await import("openclaw/plugin-sdk/media-runtime");
-  // The voices listing is a small JSON catalog, so the shared 16 MiB audio limit
-  // is already generous headroom while still closing the unbounded
-  // `await response.json()` read.
   const INWORLD_VOICES_BODY_MAX_BYTES = MAX_AUDIO_BYTES;
   const baseUrl = normalizeInworldBaseUrl(params.baseUrl);
   const langParam = params.language ? `?languages=${encodeURIComponent(params.language)}` : "";

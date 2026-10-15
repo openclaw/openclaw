@@ -1,11 +1,23 @@
 import path from "node:path";
 import { z } from "zod";
+import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 
 const text = z.string().min(1).max(4096);
-const processIdentitySchema = z.strictObject({
+const nativeProcessIdentityShape = {
   pid: z.number().int().positive(),
   startIdentity: text.max(128),
-});
+};
+const processIdentitySchema = z
+  .strictObject({
+    ...nativeProcessIdentityShape,
+    // Older strict readers must not mistake an argv digest for a dead process.
+    startIdentitySource: z.literal("argv-sha256").nullable().optional(),
+  })
+  .refine(({ startIdentity, startIdentitySource }) =>
+    startIdentitySource === "argv-sha256"
+      ? /^win32-argv-sha256:[a-f0-9]{64}$/.test(startIdentity)
+      : !startIdentity.startsWith("win32-argv-sha256:"),
+  );
 export const managedHandoffBootSchema = z.union([
   z.strictObject({
     platform: z.enum(["linux", "darwin"]),
@@ -32,8 +44,19 @@ const nativeLifetimeSchema = z.strictObject({
     }),
   ]),
 });
+// Direct original owners and their descendants require cancellation-aware
+// admission. Strict older readers reject this marker before running a callback.
+const cancellationProtocol = z.literal("original-cancellation-v1");
+const cancellableUpdateAction = z.strictObject({
+  kind: z.literal("update"),
+  mutationProtocol: cancellationProtocol,
+});
+const updateAction = cancellableUpdateAction.extend({
+  mutationProtocol: cancellationProtocol.optional(),
+  custody: z.enum(["reserved", "bound"]).optional(),
+});
 const actionSchema = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("update") }),
+  updateAction,
   z
     .strictObject({
       kind: z.literal("triage"),
@@ -72,10 +95,67 @@ const commonPayload = {
   helper: processIdentitySchema,
   action: actionSchema,
 };
+// Cancellation preserves the original v2 bytes for admitted-child lineage. It is
+// deliberately a distinct version: older readers and helper release receipts
+// must retain custody, never interpret this as an ordinary update lease.
+const originalUpdateSchema = z.strictObject({
+  version: z.literal(2),
+  executor: processIdentitySchema,
+  helper: processIdentitySchema,
+  action: updateAction,
+});
+const originalGenerationSchema = z.strictObject({
+  key: text,
+  owner: text,
+  payload: z.string().min(1),
+  updatedAt: z.number().int().nonnegative(),
+});
+const cancellingPayloadSchema = z
+  .strictObject({
+    version: z.literal(4),
+    executor: processIdentitySchema,
+    helper: processIdentitySchema,
+    action: updateAction,
+    cancellation: originalGenerationSchema,
+  })
+  .refine((value) => {
+    const original = safeParseJsonWithSchema(originalUpdateSchema, value.cancellation.payload);
+    return (
+      original !== null &&
+      JSON.stringify(original.helper) === JSON.stringify(value.helper) &&
+      JSON.stringify(original.executor) === JSON.stringify(value.executor) &&
+      JSON.stringify(original.action) === JSON.stringify(value.action) &&
+      (JSON.stringify(value.helper) === JSON.stringify(value.executor) ||
+        original.action.mutationProtocol === "original-cancellation-v1")
+    );
+  });
+
+// Candidate package roots retain a non-recursive reference to the original
+// generation even after their child aliases have settled. Strict old readers
+// reject the extra field; it is not independent mutation or cancellation authority.
+const currentPayloadSchema = z
+  .strictObject({
+    version: z.literal(2),
+    ...commonPayload,
+    mutationOriginal: originalGenerationSchema.optional(),
+  })
+  .refine((value) => {
+    if (!value.mutationOriginal) {
+      return true;
+    }
+    const original = safeParseJsonWithSchema(originalUpdateSchema, value.mutationOriginal.payload);
+    return (
+      original !== null &&
+      !value.mutationOriginal.key.includes("/.openclaw-update-child-") &&
+      original.action.mutationProtocol === "original-cancellation-v1"
+    );
+  });
+
 // Preserve v3 decoding solely to refuse retained custody. No current producer
 // creates or upgrades these records, and process death never reclaims them.
 const payloadSchema = z.discriminatedUnion("version", [
-  z.strictObject({ version: z.literal(2), ...commonPayload }),
+  cancellingPayloadSchema,
+  currentPayloadSchema,
   z.strictObject({
     version: z.literal(3),
     ...commonPayload,
@@ -93,22 +173,18 @@ export type ManagedHandoffLeasePayload = z.infer<typeof payloadSchema>;
 // split and native custody, so it can never carry a v3 borrower.
 const retiredPayloadSchema = z.strictObject({
   version: z.literal(1),
-  ...processIdentitySchema.shape,
+  ...nativeProcessIdentityShape,
 });
 
 export function parseManagedHandoffLeasePayload(value: string) {
-  try {
-    return payloadSchema.parse(JSON.parse(value));
-  } catch {
-    return null;
-  }
+  return safeParseJsonWithSchema(payloadSchema, value);
 }
 
 /** Distinguish an exactly decoded retired record from unreadable prospective data. */
+export function parseRetiredManagedHandoffLeasePayload(value: string) {
+  return safeParseJsonWithSchema(retiredPayloadSchema, value);
+}
+
 export function isRetiredManagedHandoffLeasePayload(value: string): boolean {
-  try {
-    return retiredPayloadSchema.safeParse(JSON.parse(value)).success;
-  } catch {
-    return false;
-  }
+  return parseRetiredManagedHandoffLeasePayload(value) !== null;
 }

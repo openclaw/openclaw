@@ -39,11 +39,8 @@ export abstract class XaiRealtimeVoiceProtocol {
   protected responseCreateInFlight = false;
   protected responseCancelInFlight = false;
   protected responseCreatePending = false;
-  protected continuingToolCallIds = new Set<string>();
   protected pendingToolCallIds = new Set<string>();
   protected latestMediaTimestamp = 0;
-  protected outputAudioGeneration = 0;
-  private interruptingPlayback = false;
   protected assistantAudioItem: XaiAssistantAudioItem | null = null;
   protected toolCallBuffers = new Map<string, { name: string; callId: string; args: string }>();
   protected deliveredToolCallKeys = new Set<string>();
@@ -86,10 +83,9 @@ export abstract class XaiRealtimeVoiceProtocol {
       },
     });
     this.pendingToolResultAcks.add(callId);
-    this.continuingToolCallIds.delete(callId);
     this.pendingToolCallIds.delete(callId);
     if (options?.suppressResponse !== true) {
-      this.flushPendingResponseCreateAfterToolResults();
+      this.requestResponseCreate();
     }
   }
 
@@ -129,57 +125,46 @@ export abstract class XaiRealtimeVoiceProtocol {
     reason: "barge-in" | "server-vad-barge-in",
     options?: RealtimeVoiceBargeInOptions,
   ): void {
-    // Wire observers can synchronously reenter before the sink clears its snapshot.
-    if (this.interruptingPlayback) {
-      return;
+    const item = this.assistantAudioItem;
+    const hasLegacyPlayback =
+      this.markQueue.length > 0 ||
+      (reason === "barge-in" && (this.responseActive || options?.audioPlaybackActive === true));
+    // Timestamp/mark-only transports retain their shipped clock contract;
+    // an empty native snapshot means all prior audio was already heard.
+    const playbackState: readonly RealtimeVoicePlaybackItem[] = this.config.getPlaybackState
+      ? this.config.getPlaybackState()
+      : item && hasLegacyPlayback
+        ? [{ itemId: item.itemId, audioEndMs: this.audioEndMs(item) }]
+        : [];
+    const playbackItems = playbackState.map(({ itemId, audioEndMs }) => ({ itemId, audioEndMs }));
+    const cancelResponse =
+      reason === "barge-in" &&
+      (this.responseActive || this.responseCreateInFlight || playbackItems.length > 0) &&
+      !this.responseCancelInFlight;
+    this.markQueue = [];
+    this.assistantAudioItem = null;
+    if (this.responseActive || this.responseCreateInFlight) {
+      this.responseCancelInFlight = true;
     }
-    this.interruptingPlayback = true;
-    try {
-      const item = this.assistantAudioItem;
-      const hasLegacyPlayback =
-        this.markQueue.length > 0 ||
-        (reason === "barge-in" && (this.responseActive || options?.audioPlaybackActive === true));
-      // Timestamp/mark-only transports retain their shipped clock contract;
-      // an empty native snapshot means all prior audio was already heard.
-      const playbackState: readonly RealtimeVoicePlaybackItem[] = this.config.getPlaybackState
-        ? this.config.getPlaybackState()
-        : item && hasLegacyPlayback
-          ? [{ itemId: item.itemId, audioEndMs: this.audioEndMs(item) }]
-          : [];
-      const playbackItems = playbackState.map(({ itemId, audioEndMs }) => ({ itemId, audioEndMs }));
-      const cancelResponse =
-        reason === "barge-in" &&
-        (this.responseActive || this.responseCreateInFlight || playbackItems.length > 0) &&
-        !this.responseCancelInFlight;
-      this.outputAudioGeneration += 1;
-      this.markQueue = [];
-      this.assistantAudioItem = null;
-      if (this.responseActive || this.responseCreateInFlight) {
-        this.responseCancelInFlight = true;
-      }
-      // xAI requires manual cancellation before truncating even completed playback.
-      // Only active generation has a later response.done; VAD owns its cancellation.
-      if (cancelResponse) {
-        this.sendEvent({ type: "response.cancel" }, `reason=${reason}`);
-      }
-      for (const playbackItem of playbackItems) {
-        this.sendEvent(
-          {
-            type: "conversation.item.truncate",
-            item_id: playbackItem.itemId,
-            content_index: 0,
-            audio_end_ms: playbackItem.audioEndMs,
-          },
-          `reason=${reason} audioEndMs=${playbackItem.audioEndMs}`,
-        );
-      }
-      // The sink can request replacement generation when cleared; trim its history first.
-      this.config.onClearAudio("barge-in");
-    } finally {
-      this.interruptingPlayback = false;
+    // xAI requires manual cancellation before truncating even completed playback.
+    // Only active generation has a later response.done; VAD owns its cancellation.
+    if (cancelResponse) {
+      this.sendEvent({ type: "response.cancel" }, `reason=${reason}`);
     }
-    // Observer requests wait until history and the sink are cleared. Server VAD
-    // owns its next response; only a host interruption drains this gate.
+    for (const playbackItem of playbackItems) {
+      this.sendEvent(
+        {
+          type: "conversation.item.truncate",
+          item_id: playbackItem.itemId,
+          content_index: 0,
+          audio_end_ms: playbackItem.audioEndMs,
+        },
+        `reason=${reason} audioEndMs=${playbackItem.audioEndMs}`,
+      );
+    }
+    // The sink can request replacement generation when cleared; trim its history first.
+    this.config.onClearAudio("barge-in");
+    // Server VAD owns its next response; only a host interruption drains this gate.
     if (reason === "barge-in") {
       this.flushPendingResponseCreate();
     }
@@ -279,24 +264,14 @@ export abstract class XaiRealtimeVoiceProtocol {
     this.submitToolResultNow(params.callId, { error: "Invalid tool arguments." });
   }
 
-  private flushPendingResponseCreateAfterToolResults(): void {
-    if (this.pendingToolCallIds.size > 0 || this.continuingToolCallIds.size > 0) {
-      this.responseCreatePending = true;
-      return;
-    }
-    this.requestResponseCreate();
-  }
-
   protected requestResponseCreate(): void {
     // xAI requires every parallel function output before one response.create, and
     // relay playback must drain before the next response starts.
     if (
-      this.interruptingPlayback ||
       this.responseActive ||
       this.responseCreateInFlight ||
       this.responseCancelInFlight ||
       this.markQueue.length > 0 ||
-      this.continuingToolCallIds.size > 0 ||
       this.pendingToolCallIds.size > 0
     ) {
       this.responseCreatePending = true;
@@ -316,7 +291,6 @@ export abstract class XaiRealtimeVoiceProtocol {
   }
 
   protected resetRealtimeSessionState(options: { preserveToolCallState?: boolean } = {}): void {
-    this.outputAudioGeneration += 1;
     this.markQueue = [];
     this.responseActive = false;
     this.responseCreateInFlight = false;
@@ -325,7 +299,6 @@ export abstract class XaiRealtimeVoiceProtocol {
     this.assistantAudioItem = null;
     this.resetInputTranscripts();
     if (!options.preserveToolCallState) {
-      this.continuingToolCallIds.clear();
       this.pendingToolCallIds.clear();
       this.toolCallBuffers.clear();
       this.deliveredToolCallKeys.clear();

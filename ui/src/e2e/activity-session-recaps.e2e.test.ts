@@ -17,6 +17,7 @@ const session = (state: "current" | "stale" | "updating" | "unavailable", text =
   label: "Repair duplicate notifications",
   agentId: "main",
   sessionId: "activity-recap-fixture",
+  archived: true,
   updatedAt: Date.now() - 60_000,
   activitySummary: { state, canEnsure: true, text, updatedAt: Date.now() - 120_000 },
 });
@@ -56,9 +57,14 @@ suite.define(() => {
             ),
           ).toBe(true);
           await page.screenshot({ path: path.join(suite.artifactDir, `02-updating-${width}.png`) });
+          const ordinaryListRequests = async () =>
+            (await gateway.getRequests("sessions.list")).filter(
+              (request) => asNullableRecord(request.params)?.includeActivitySummary !== true,
+            ).length;
+          const ordinaryListCount = await ordinaryListRequests();
 
           await gateway.setSessionsListResponse(
-            chatSessionListResponse([{ ...session("current", newText), archived: true }]),
+            chatSessionListResponse([session("current", newText)]),
           );
           await gateway.emitGatewayEvent("sessions.changed", {
             sessionKey: key,
@@ -72,6 +78,7 @@ suite.define(() => {
           await page.screenshot({
             path: path.join(suite.artifactDir, `03-completed-${width}.png`),
           });
+          expect(await ordinaryListRequests()).toBe(ordinaryListCount);
 
           await gateway.setSessionsListResponse(
             chatSessionListResponse([session("unavailable", newText)]),

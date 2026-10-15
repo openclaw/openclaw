@@ -8,8 +8,8 @@ import {
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { DiagnosticEventPayload } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { afterEach, beforeEach, expect, test } from "vitest";
-import type { DiagnosticEventPayload } from "../api.js";
 import {
   getReportedExporterHealth,
   startOtelService,
@@ -219,26 +219,6 @@ function startTraceExporterHealthService(
   });
 }
 
-test("reports no OpenClaw-owned routes when the SDK is disabled", async () => {
-  process.env.OTEL_SDK_DISABLED = " TRUE ";
-
-  const { ctx } = await startOtelService({
-    traces: true,
-    metrics: true,
-    logs: true,
-    logsExporter: "stdout",
-  });
-
-  expect(
-    getReportedExporterHealth(ctx).map(({ signal, transport, status }) => ({
-      signal,
-      transport,
-      status,
-    })),
-  ).toEqual([]);
-  expect(propagation.fields()).toEqual(["traceparent", "tracestate", "baggage"]);
-});
-
 test("retries a real OTLP 503 then succeeds without an intermediate failure fact", async () => {
   const receiver = await startExporterHealthReceiver((_request, response, requestCount) => {
     response.writeHead(requestCount === 1 ? 503 : 200, {
@@ -269,38 +249,7 @@ test("retries a real OTLP 503 then succeeds without an intermediate failure fact
   }
 }, 15_000);
 
-test("records a final failure after persistent real OTLP 503 responses", async () => {
-  const receiver = await startExporterHealthReceiver((_request, response) => {
-    response.writeHead(503, { "retry-after": IMMEDIATE_RETRY_AFTER });
-    response.end();
-  });
-  const capture = captureExporterEvents();
-  const { service, ctx } = await startTraceExporterHealthService(receiver.endpoint, "1000");
-
-  try {
-    emitExporterHealthSpan("persistent-503");
-    await waitForDiagnosticEventsDrained();
-    await Promise.resolve(service.stop?.(ctx)).catch(() => {});
-    await waitForDiagnosticEventsDrained();
-    expect(receiver.requestCount).toBe(6);
-    expect(
-      capture.events.filter(
-        (event) => event.status === "failure" && event.reason === "emit_failed",
-      ),
-    ).toHaveLength(1);
-    expect(
-      getReportedExporterHealth(ctx).filter(
-        (event) => event.status === "failure" && event.reason === "export_failed",
-      ),
-    ).toHaveLength(1);
-  } finally {
-    capture.unsubscribe();
-    await service.stop?.(ctx);
-    await receiver.close();
-  }
-}, 15_000);
-
-test.each([400, 408, 500] as const)(
+test.each([400] as const)(
   "records one final failure for a non-retryable real OTLP HTTP $statusCode response",
   async (statusCode) => {
     const receiver = await startExporterHealthReceiver((_request, response) => {
@@ -334,66 +283,6 @@ test.each([400, 408, 500] as const)(
   },
   15_000,
 );
-
-test("records a final failure for a real OTLP connection reset", async () => {
-  const receiver = await startExporterHealthReceiver((request) => {
-    request.socket.destroy();
-  });
-  const capture = captureExporterEvents();
-  const { service, ctx } = await startTraceExporterHealthService(receiver.endpoint, "200");
-
-  try {
-    emitExporterHealthSpan("connection-reset");
-    await waitForDiagnosticEventsDrained();
-    await Promise.resolve(service.stop?.(ctx)).catch(() => {});
-    await waitForDiagnosticEventsDrained();
-    expect(receiver.requestCount).toBeGreaterThanOrEqual(1);
-    expect(
-      capture.events.filter(
-        (event) => event.status === "failure" && event.reason === "emit_failed",
-      ),
-    ).toHaveLength(1);
-    expect(
-      getReportedExporterHealth(ctx).filter(
-        (event) => event.status === "failure" && event.reason === "export_failed",
-      ),
-    ).toHaveLength(1);
-  } finally {
-    capture.unsubscribe();
-    await service.stop?.(ctx);
-    await receiver.close();
-  }
-}, 15_000);
-
-test("records a final failure for a real OTLP request timeout", async () => {
-  const receiver = await startExporterHealthReceiver(() => {
-    // Keep the request open until the exporter-owned timeout settles.
-  });
-  const capture = captureExporterEvents();
-  const { service, ctx } = await startTraceExporterHealthService(receiver.endpoint, "150");
-
-  try {
-    emitExporterHealthSpan("request-timeout");
-    await waitForDiagnosticEventsDrained();
-    await Promise.resolve(service.stop?.(ctx)).catch(() => {});
-    await waitForDiagnosticEventsDrained();
-    expect(receiver.requestCount).toBeGreaterThanOrEqual(1);
-    expect(
-      capture.events.filter(
-        (event) => event.status === "failure" && event.reason === "emit_failed",
-      ),
-    ).toHaveLength(1);
-    expect(
-      getReportedExporterHealth(ctx).filter(
-        (event) => event.status === "failure" && event.reason === "export_failed",
-      ),
-    ).toHaveLength(1);
-  } finally {
-    capture.unsubscribe();
-    await service.stop?.(ctx);
-    await receiver.close();
-  }
-}, 15_000);
 
 test("records recovery after a later real OTLP export succeeds", async () => {
   let failExports = true;

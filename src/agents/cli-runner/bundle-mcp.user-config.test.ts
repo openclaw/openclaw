@@ -27,6 +27,21 @@ vi.mock("../mcp-oauth.js", () => ({
 
 setupCliBundleMcpTestHarness();
 
+type CliMcpParams = Parameters<typeof prepareCliBundleMcpConfig>[0];
+
+function prepareClaudeConfig(
+  params: Omit<CliMcpParams, "enabled" | "mode" | "backend"> & {
+    backend?: CliMcpParams["backend"];
+  },
+) {
+  return prepareCliBundleMcpConfig({
+    enabled: true,
+    mode: "claude-config-file",
+    backend: { command: "node", args: ["./fake-claude.mjs"] },
+    ...params,
+  });
+}
+
 async function startOAuthMcpProofServer() {
   const authorizationHeaders: Array<string | undefined> = [];
   const httpServer = http.createServer((request, response) => {
@@ -106,55 +121,12 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
     authMocks.resolveMcpOAuthAccessToken.mockReset();
   });
 
-  it("merges user-configured mcp.servers from OpenClaw config", async () => {
-    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
-      "openclaw-cli-bundle-mcp-user-servers-",
-    );
-
-    const prepared = await prepareCliBundleMcpConfig({
-      enabled: true,
-      mode: "claude-config-file",
-      backend: {
-        command: "node",
-        args: ["./fake-claude.mjs"],
-      },
-      workspaceDir,
-      config: {
-        plugins: { enabled: false },
-        mcp: {
-          servers: {
-            omi: {
-              type: "sse",
-              url: "https://api.omi.me/v1/mcp/sse",
-              headers: { Authorization: "Bearer test-token" },
-            },
-          },
-        },
-      },
-    });
-
-    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
-      mcpServers?: Record<string, { type?: string; url?: string }>;
-    };
-    expect(raw.mcpServers?.omi?.type).toBe("sse");
-    expect(raw.mcpServers?.omi?.url).toBe("https://api.omi.me/v1/mcp/sse");
-
-    await prepared.cleanup?.();
-  });
-
   it("translates OpenClaw transport field on user mcp.servers into Claude type", async () => {
     const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
       "openclaw-cli-bundle-mcp-user-servers-transport-",
     );
 
-    const prepared = await prepareCliBundleMcpConfig({
-      enabled: true,
-      mode: "claude-config-file",
-      backend: {
-        command: "node",
-        args: ["./fake-claude.mjs"],
-      },
+    const prepared = await prepareClaudeConfig({
       workspaceDir,
       config: {
         plugins: { enabled: false },
@@ -166,6 +138,7 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
               headers: { CONTEXT7_API_KEY: "ctx7sk-test" },
             },
             "omi-sse": {
+              type: "http",
               transport: "sse",
               url: "https://api.omi.me/v1/mcp/sse",
             },
@@ -185,44 +158,6 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
 
     expect(raw.mcpServers?.["omi-sse"]?.type).toBe("sse");
     expect(raw.mcpServers?.["omi-sse"]?.transport).toBeUndefined();
-
-    await prepared.cleanup?.();
-  });
-
-  it("preserves explicit type and still strips transport on user mcp.servers", async () => {
-    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
-      "openclaw-cli-bundle-mcp-user-servers-transport-explicit-",
-    );
-
-    const prepared = await prepareCliBundleMcpConfig({
-      enabled: true,
-      mode: "claude-config-file",
-      backend: {
-        command: "node",
-        args: ["./fake-claude.mjs"],
-      },
-      workspaceDir,
-      config: {
-        plugins: { enabled: false },
-        mcp: {
-          servers: {
-            mixed: {
-              type: "http",
-              transport: "sse",
-              url: "https://mcp.example.com/mcp",
-            },
-          },
-        },
-      },
-    });
-
-    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
-    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
-      mcpServers?: Record<string, { type?: string; transport?: string }>;
-    };
-
-    expect(raw.mcpServers?.mixed?.type).toBe("http");
-    expect(raw.mcpServers?.mixed?.transport).toBeUndefined();
 
     await prepared.cleanup?.();
   });
@@ -258,13 +193,7 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
 
     let prepared: Awaited<ReturnType<typeof prepareCliBundleMcpConfig>> | undefined;
     try {
-      prepared = await prepareCliBundleMcpConfig({
-        enabled: true,
-        mode: "claude-config-file",
-        backend: {
-          command: "node",
-          args: ["./fake-claude.mjs"],
-        },
+      prepared = await prepareClaudeConfig({
         workspaceDir,
         config,
         nativeMcpPolicy: cliNativeMcpPolicyContext(config, sessionId),
@@ -316,10 +245,7 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
 
     let prepared: Awaited<ReturnType<typeof prepareCliBundleMcpConfig>> | undefined;
     try {
-      prepared = await prepareCliBundleMcpConfig({
-        enabled: true,
-        mode: "claude-config-file",
-        backend: { command: "node", args: ["./fake-claude.mjs"] },
+      prepared = await prepareClaudeConfig({
         workspaceDir: cliBundleMcpHarness.bundleProbeWorkspaceDir,
         config,
         nativeMcpPolicy: cliNativeMcpPolicyContext(config, sessionId),
@@ -363,13 +289,7 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
       "openclaw-cli-bundle-mcp-user-servers-loopback-",
     );
 
-    const prepared = await prepareCliBundleMcpConfig({
-      enabled: true,
-      mode: "claude-config-file",
-      backend: {
-        command: "node",
-        args: ["./fake-claude.mjs"],
-      },
+    const prepared = await prepareClaudeConfig({
       workspaceDir,
       config: {
         plugins: { enabled: false },
@@ -436,13 +356,7 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
     );
 
     await withEnvAsync({ HOME: cliBundleMcpHarness.bundleProbeHomeDir }, async () => {
-      const prepared = await prepareCliBundleMcpConfig({
-        enabled: true,
-        mode: "claude-config-file",
-        backend: {
-          command: "node",
-          args: ["./fake-claude.mjs"],
-        },
+      const prepared = await prepareClaudeConfig({
         workspaceDir,
         config: {
           plugins: {

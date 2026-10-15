@@ -1,19 +1,20 @@
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
 import { resolveThinkingCommandArgOptionsForSession } from "../../../lib/chat/thinking.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
-import type { HumanMentionMenu } from "./chat-composer-mention-menu.ts";
+import type { ComposerEmojiMenu } from "./chat-composer-emoji.tsx";
+import type { HumanMentionMenu } from "./chat-composer-mention-menu.tsx";
 import {
   getActiveSkillMenuOptionId,
   getActiveSkillMenuOptionLabel,
   isSkillMenuVisible,
   type SkillMenuState,
-} from "./chat-composer-skill-menu.ts";
+} from "./chat-composer-skill-menu.tsx";
 import {
   getActiveSlashMenuOptionId,
   getActiveSlashMenuOptionLabel,
   isSlashMenuVisible,
   type SlashMenuState,
-} from "./chat-composer-slash-menu.ts";
+} from "./chat-composer-slash-menu.tsx";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 export function resolveChatSlashCommandArgOptions(
@@ -40,31 +41,35 @@ export function resolveComposerMenus(
   skill: SkillMenuState,
   slash: SlashMenuState,
   mention: HumanMentionMenu,
+  emoji: ComposerEmojiMenu,
 ) {
   const skillMenuVisible = commandsVisible && isSkillMenuVisible(skill);
   const slashMenuVisible = commandsVisible && isSlashMenuVisible(slash);
+  const inlineMenu = emoji.open ? emoji : mention.open ? mention : null;
   return {
     skillMenuVisible,
     slashMenuVisible,
     mentionMenuVisible: mention.open,
-    menuVisible: skillMenuVisible || slashMenuVisible || mention.open,
-    activeMenuOptionId: mention.open
-      ? mention.activeId(paneId)
+    menuVisible: skillMenuVisible || slashMenuVisible || mention.open || emoji.open,
+    activeMenuOptionId: inlineMenu
+      ? inlineMenu.activeId(paneId)
       : skillMenuVisible
         ? getActiveSkillMenuOptionId(skill, paneId)
         : getActiveSlashMenuOptionId(slash, paneId),
-    activeMenuOptionLabel: mention.open
-      ? mention.activeLabel()
+    activeMenuOptionLabel: inlineMenu
+      ? inlineMenu.activeLabel()
       : skillMenuVisible
         ? getActiveSkillMenuOptionLabel(skill)
         : getActiveSlashMenuOptionLabel(slash),
     menuListboxId: paneDomId(
       paneId,
-      mention.open
-        ? "mention-menu-listbox"
-        : skillMenuVisible
-          ? "skill-menu-listbox"
-          : "slash-menu-listbox",
+      emoji.open
+        ? "emoji-menu-listbox"
+        : mention.open
+          ? "mention-menu-listbox"
+          : skillMenuVisible
+            ? "skill-menu-listbox"
+            : "slash-menu-listbox",
     ),
   };
 }

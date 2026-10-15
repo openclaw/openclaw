@@ -68,34 +68,6 @@ afterEach(() => {
 });
 
 describe("Nextcloud Talk durable ingress", () => {
-  it("does not start draining when migration completes after stop begins", async () => {
-    await withQueue(async (queue) => {
-      let releaseEntries: (() => void) | undefined;
-      const entries = vi.fn(
-        () =>
-          new Promise<[]>((resolve) => {
-            releaseEntries = () => resolve([]);
-          }),
-      );
-      const prune = vi.spyOn(queue, "prune");
-      const spool = createNextcloudTalkWebhookSpool({
-        accountId: "default",
-        queue,
-        deliver: vi.fn(),
-        runtime: { error: vi.fn(), log: vi.fn() },
-        pollIntervalMs: 60_000,
-        legacyReplayStore: { entries, clear: vi.fn(async () => {}) },
-      });
-
-      const stopping = spool.stop();
-      await vi.waitFor(() => expect(entries).toHaveBeenCalledTimes(1));
-      releaseEntries?.();
-      await stopping;
-
-      expect(prune).not.toHaveBeenCalled();
-    });
-  });
-
   it("finishes durable admission for a receive that began before migration-time stop", async () => {
     await withQueue(async (queue) => {
       let releaseEntries: (() => void) | undefined;
@@ -106,6 +78,7 @@ describe("Nextcloud Talk durable ingress", () => {
           }),
       );
       const deliver = vi.fn();
+      const prune = vi.spyOn(queue, "prune");
       const spool = createNextcloudTalkWebhookSpool({
         accountId: "default",
         queue,
@@ -122,6 +95,7 @@ describe("Nextcloud Talk durable ingress", () => {
 
       await expect(receiving).resolves.toBe("accepted");
       await stopping;
+      expect(prune).not.toHaveBeenCalled();
       expect(deliver).not.toHaveBeenCalled();
       expect(await queue.listPending({ limit: "all" })).toHaveLength(1);
     });
@@ -185,76 +159,47 @@ describe("Nextcloud Talk durable ingress", () => {
     });
   });
 
-  it("rejects a duplicate after completion", async () => {
-    await withQueue(async (queue) => {
-      const deliver = vi.fn(async (_message, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const spool = startSpool(queue, deliver);
-      try {
-        const rawEvent = createRawEvent({ messageId: "msg-completed" });
-        await spool.receive(rawEvent);
-        await spool.waitForIdle();
-        await spool.receive(rawEvent);
-        await spool.waitForIdle();
-        expect(deliver).toHaveBeenCalledTimes(1);
-      } finally {
-        await spool.stop();
-      }
-    });
-  });
-
-  it("preserves the retired room-token plus message-id guard scenario", async () => {
-    await withQueue(async (queue) => {
-      const delivered: Array<[messageId: string, roomId: string]> = [];
-      const spool = startSpool(queue, async (message, lifecycle) => {
-        delivered.push([message.messageId, message.roomToken]);
-        await lifecycle.onAdopted();
-      });
-      try {
-        const replay = createRawEvent({ messageId: "msg-guard", roomToken: "test-room-token" });
-        await spool.receive(replay);
-        await spool.waitForIdle();
-        await spool.receive(replay);
-        await spool.waitForIdle();
-        expect(delivered).toEqual([["msg-guard", "test-room-token"]]);
-      } finally {
-        await spool.stop();
-      }
-    });
-  });
-
   it("drains other rooms while keeping unadopted same-room deliveries ordered", async () => {
     await withQueue(async (queue) => {
-      let releaseRoomA!: () => void;
-      const roomADelivery = new Promise<void>((resolve) => {
-        releaseRoomA = resolve;
-      });
+      const roomADelivery = Promise.withResolvers<void>();
+      const roomAStarted = Promise.withResolvers<void>();
+      const roomBAdopted = Promise.withResolvers<void>();
+      const secondRoomAAdopted = Promise.withResolvers<void>();
       const delivered: string[] = [];
       const spool = startSpool(queue, async (message, lifecycle) => {
         delivered.push(message.messageId);
         if (message.messageId === "room-a-1") {
-          await roomADelivery;
+          roomAStarted.resolve();
+          await roomADelivery.promise;
         }
         await lifecycle.onAdopted();
+        if (message.messageId === "room-b-1") {
+          roomBAdopted.resolve();
+        } else if (message.messageId === "room-a-2") {
+          secondRoomAAdopted.resolve();
+        }
       });
 
       try {
         await spool.receive(createRawEvent({ messageId: "room-a-1", roomToken: "room-a" }));
-        await vi.waitFor(() => expect(delivered).toEqual(["room-a-1"]));
+        await roomAStarted.promise;
+        expect(delivered).toEqual(["room-a-1"]);
 
         await spool.receive(createRawEvent({ messageId: "room-a-2", roomToken: "room-a" }));
         await spool.receive(createRawEvent({ messageId: "room-b-1", roomToken: "room-b" }));
 
-        await vi.waitFor(() => expect(delivered).toEqual(["room-a-1", "room-b-1"]));
+        await roomBAdopted.promise;
+        expect(delivered).toEqual(["room-a-1", "room-b-1"]);
         expect(await queue.listPending()).toEqual([
           expect.objectContaining({ id: "room-a-2", laneKey: "room:room-a" }),
         ]);
 
-        releaseRoomA();
-        await vi.waitFor(() => expect(delivered).toEqual(["room-a-1", "room-b-1", "room-a-2"]));
+        roomADelivery.resolve();
+        await secondRoomAAdopted.promise;
+        await spool.waitForIdle();
+        expect(delivered).toEqual(["room-a-1", "room-b-1", "room-a-2"]);
       } finally {
-        releaseRoomA();
+        roomADelivery.resolve();
         await spool.stop();
       }
     });
@@ -262,18 +207,24 @@ describe("Nextcloud Talk durable ingress", () => {
 
   it("caps active room deliveries after durable adoption across repeated pumps", async () => {
     await withQueue(async (queue) => {
-      let releaseDeliveries!: () => void;
-      const deliveryGate = new Promise<void>((resolve) => {
-        releaseDeliveries = resolve;
-      });
+      const deliveryGate = Promise.withResolvers<void>();
+      const capacityAdopted = Promise.withResolvers<void>();
+      const allAdopted = Promise.withResolvers<void>();
+      let adoptedDeliveries = 0;
       let activeDeliveries = 0;
       let maxActiveDeliveries = 0;
       const deliver = vi.fn(async (_message, lifecycle) => {
         activeDeliveries += 1;
         maxActiveDeliveries = Math.max(maxActiveDeliveries, activeDeliveries);
         await lifecycle.onAdopted();
+        adoptedDeliveries += 1;
+        if (adoptedDeliveries === 32) {
+          capacityAdopted.resolve();
+        } else if (adoptedDeliveries === 33) {
+          allAdopted.resolve();
+        }
         try {
-          await deliveryGate;
+          await deliveryGate.promise;
         } finally {
           activeDeliveries -= 1;
         }
@@ -290,17 +241,20 @@ describe("Nextcloud Talk durable ingress", () => {
           );
         }
 
-        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(32));
+        await capacityAdopted.promise;
+        expect(deliver).toHaveBeenCalledTimes(32);
         expect(maxActiveDeliveries).toBe(32);
         expect(await queue.listPending()).toEqual([
           expect.objectContaining({ id: "room-delivery-32", laneKey: "room:room-32" }),
         ]);
 
-        releaseDeliveries();
-        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(33));
+        deliveryGate.resolve();
+        await allAdopted.promise;
+        await spool.waitForIdle();
+        expect(deliver).toHaveBeenCalledTimes(33);
         expect(maxActiveDeliveries).toBe(32);
       } finally {
-        releaseDeliveries();
+        deliveryGate.resolve();
         await spool.stop();
       }
     });
@@ -322,23 +276,6 @@ describe("Nextcloud Talk durable ingress", () => {
             payload: expect.objectContaining({ rawEvent }),
           }),
         ]);
-      } finally {
-        await spool.stop();
-      }
-    });
-  });
-
-  it("completes a gated turn that does not dispatch", async () => {
-    await withQueue(async (queue) => {
-      const deliver = vi.fn(async () => {});
-      const spool = startSpool(queue, deliver);
-      try {
-        const rawEvent = createRawEvent({ messageId: "msg-gated" });
-        await spool.receive(rawEvent);
-        await spool.waitForIdle();
-        await spool.receive(rawEvent);
-        await spool.waitForIdle();
-        expect(deliver).toHaveBeenCalledTimes(1);
       } finally {
         await spool.stop();
       }

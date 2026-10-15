@@ -57,11 +57,12 @@ describe("guild asset uploads enforce the sender-scoped media policy", () => {
     const { rest, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "e1" });
     await uploadEmojiDiscord(
-      { guildId: "g1", name: "allowed_blob", mediaUrl: allowedFile },
+      { guildId: "g1", name: "allowed_blob", mediaUrl: allowedFile, roleIds: ["r1"] },
       { cfg, rest, token: "tok", mediaLocalRoots: [senderRoot] },
     );
     const body = requestBody(postMock as unknown as MockCallSource);
     expect(body.image).toBe(`data:image/png;base64,${PNG_BYTES.toString("base64")}`);
+    expect(body.roles).toEqual(["r1"]);
   });
 
   it("rejects a sticker source outside the sender roots without issuing a request", async () => {

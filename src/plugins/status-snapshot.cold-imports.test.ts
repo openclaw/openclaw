@@ -1,5 +1,6 @@
 // Plugin snapshot cold-import tests keep metadata inventory off the mutable runtime registry.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 
 describe("status-snapshot cold imports", () => {
   afterEach(() => {

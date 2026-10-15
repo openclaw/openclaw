@@ -1,4 +1,6 @@
 import { expect, it } from "vitest";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
+import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -17,7 +19,9 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const newSessionButton = page.locator("openclaw-app-sidebar .sidebar-brand__new-thread");
+      const newSessionButton = page.locator(
+        "openclaw-app-sidebar .sidebar-rail .sidebar-new-session",
+      );
       await newSessionButton.waitFor({ state: "visible", timeout: 10_000 });
       await newSessionButton.click();
 
@@ -36,7 +40,18 @@ suite.define(() => {
       agentModel: "openai/startup-model",
       defaultAgentId: "ops",
       deferredMethods: ["chat.startup"],
+      featureMethods: [...defaultControlUiFeatureMethods, "progressCard.get"],
       historyMessages: [],
+      methodResponses: {
+        "progressCard.get": {
+          card: {
+            sessionKey: "agent:ops:global",
+            revision: 1,
+            updatedAt: 1,
+            markdown: "Global progress after startup",
+          },
+        },
+      },
       models: [
         {
           available: true,
@@ -63,6 +78,7 @@ suite.define(() => {
       await composer.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => sendButton.count()).toBe(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      expect(await gateway.getRequests("progressCard.get")).toHaveLength(0);
 
       await gateway.resolveDeferred("chat.startup", {
         messages: [],
@@ -88,6 +104,15 @@ suite.define(() => {
         sessionId: "session:global",
         thinkingLevel: null,
       });
+
+      const progressRequest = await gateway.waitForRequest("progressCard.get");
+      expect(progressRequest.params).toEqual({ sessionKey: "global", agentId: "ops" });
+      const progress = page.getByText("Global progress after startup", { exact: true });
+      await progress.waitFor({ state: "attached" });
+      expect(await progress.isVisible()).toBe(false);
+      const details = await openChatDetails(page);
+      await details.getByText("Global progress after startup", { exact: true }).waitFor();
+      await closeChatDetails(page);
 
       const prompt = "send after configured inference loads";
       await composer.fill(prompt);
@@ -202,14 +227,11 @@ suite.define(() => {
       });
       await expect
         .poll(() =>
-          page.locator("openclaw-chat-pane").evaluate((pane) => {
-            const state = (
-              pane as HTMLElement & { state?: { chatModelCatalog?: Array<{ id?: string }> } }
-            ).state;
-            return state?.chatModelCatalog?.map((model) => model.id);
-          }),
+          page
+            .locator("[data-chat-model-select] .chat-controls__inline-select-label")
+            .textContent(),
         )
-        .toEqual(["hydrated-model"]);
+        .toContain("Hydrated Model");
       expect(await gateway.getRequests("agents.list")).toHaveLength(1);
     } finally {
       await suite.closeBrowserContext(context);

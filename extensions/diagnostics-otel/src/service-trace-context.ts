@@ -3,12 +3,12 @@ import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
   DiagnosticTraceContext,
-} from "../api.js";
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   isValidDiagnosticSpanId,
   isValidDiagnosticTraceFlags,
   isValidDiagnosticTraceId,
-} from "../api.js";
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 
 export function normalizeTraceContext(value: unknown): DiagnosticTraceContext | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -41,25 +41,15 @@ function traceFlagsToOtel(traceFlags: string | undefined): TraceFlags {
 }
 
 export function contextForTraceContext(traceContext: DiagnosticTraceContext | undefined) {
-  const normalized = normalizeTraceContext(traceContext);
-  if (!normalized?.spanId) {
+  if (!traceContext?.spanId) {
     return undefined;
   }
   return trace.setSpanContext(otelContextApi.active(), {
-    traceId: normalized.traceId,
-    spanId: normalized.spanId,
-    traceFlags: traceFlagsToOtel(normalized.traceFlags),
+    traceId: traceContext.traceId,
+    spanId: traceContext.spanId,
+    traceFlags: traceFlagsToOtel(traceContext.traceFlags),
     isRemote: true,
   });
-}
-
-export function contextForTrustedTraceContext(
-  evt: DiagnosticEventPayload,
-  metadata: DiagnosticEventMetadata,
-) {
-  return metadata.trusted || metadata.trustedTraceContext === true
-    ? contextForTraceContext(evt.trace)
-    : undefined;
 }
 
 export function normalizedTrustedTraceContext(
@@ -69,24 +59,4 @@ export function normalizedTrustedTraceContext(
   return metadata.trusted || metadata.trustedTraceContext === true
     ? normalizeTraceContext(evt.trace)
     : undefined;
-}
-
-export function addTraceAttributes(
-  attributes: Record<string, string | number | boolean>,
-  traceContext: DiagnosticTraceContext | undefined,
-): void {
-  const normalized = normalizeTraceContext(traceContext);
-  if (!normalized) {
-    return;
-  }
-  attributes["openclaw.traceId"] = normalized.traceId;
-  if (normalized.spanId) {
-    attributes["openclaw.spanId"] = normalized.spanId;
-  }
-  if (normalized.parentSpanId) {
-    attributes["openclaw.parentSpanId"] = normalized.parentSpanId;
-  }
-  if (normalized.traceFlags) {
-    attributes["openclaw.traceFlags"] = normalized.traceFlags;
-  }
 }

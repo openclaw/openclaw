@@ -59,13 +59,18 @@ export function registerTeamReportsGatewayMethods(
   register("get", "operator.read", async (params) => {
     const { period, key, format } = getSchema.parse(params);
     describePeriod(period, key);
-    const stored = await access.store().getPeriod(period, key);
+    if (format === "markdown") {
+      const stored = await access.store().getPeriod(period, key);
+      if (!stored) {
+        throw new Error("Report not found; generate the requested UTC day first");
+      }
+      return { markdown: stored.markdown };
+    }
+    const stored = await access.store().getPeriodDocument(period, key);
     if (!stored) {
       throw new Error("Report not found; generate the requested UTC day first");
     }
-    return format === "markdown"
-      ? { markdown: stored.markdown }
-      : { report: stored.report, summary: stored.summary };
+    return stored;
   });
   register("generate", "operator.admin", async (params) => ({
     runId: await access.scheduler().generate(generateSchema.parse(params)),

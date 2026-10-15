@@ -9,11 +9,10 @@ import type {
   SessionTranscriptReadTarget,
 } from "./session-accessor.types.js";
 
-/** Resolve a prepared store directly; only unbound callers need runtime configuration. */
-export function resolveSessionTranscriptReadTargetCore(
+export function prepareSessionTranscriptReadTargetCore(
   scope: SessionTranscriptReadScope,
   resolveDefaultStorePath?: (scope: SessionTranscriptReadScope & { agentId: string }) => string,
-): SessionTranscriptReadTarget {
+) {
   const sessionKey = scope.sessionKey?.trim();
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
   if (!agentId) {
@@ -30,20 +29,25 @@ export function resolveSessionTranscriptReadTargetCore(
   if (!storePath) {
     throw new Error("Transcript reads require a concrete session store path");
   }
-  const hasMatchingSessionEntry = scope.sessionEntry?.sessionId === scope.sessionId;
-  const resolved =
-    sessionKey && !hasMatchingSessionEntry
-      ? resolveSessionEntry(
-          {
-            agentId,
-            ...(scope.env ? { env: scope.env } : {}),
-            sessionKey,
-            storePath,
-          },
-          { readOnly: true },
-        )
+  // Entry validation remains a reader-time operation; preparation carries only its scope.
+  const entryValidationScope =
+    sessionKey && scope.sessionEntry?.sessionId !== scope.sessionId
+      ? { agentId, ...(scope.env ? { env: scope.env } : {}), sessionKey, storePath }
       : undefined;
-  const resolvedSessionKey = hasMatchingSessionEntry ? sessionKey : resolved?.normalizedKey;
+  return { agentId, sessionKey, storePath, entryValidationScope };
+}
+
+/** Resolve a prepared store directly; only unbound callers need runtime configuration. */
+export function resolveSessionTranscriptReadTargetCore(
+  scope: SessionTranscriptReadScope,
+  resolveDefaultStorePath?: (scope: SessionTranscriptReadScope & { agentId: string }) => string,
+): SessionTranscriptReadTarget {
+  const { agentId, sessionKey, storePath, entryValidationScope } =
+    prepareSessionTranscriptReadTargetCore(scope, resolveDefaultStorePath);
+  const resolved = entryValidationScope
+    ? resolveSessionEntry(entryValidationScope, { readOnly: true })
+    : undefined;
+  const resolvedSessionKey = resolved?.normalizedKey ?? sessionKey;
   return {
     agentId,
     sessionId: scope.sessionId,

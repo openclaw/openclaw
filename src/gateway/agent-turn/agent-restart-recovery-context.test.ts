@@ -33,8 +33,16 @@ const matchingUiParams = {
   sessionEntry: { ...matchingParams.sessionEntry, restartRecoverySourceIngress: "control-ui" },
 } as const;
 
+const matchingTargetlessParams = {
+  ...matchingParams,
+  sessionEntry: {
+    ...matchingParams.sessionEntry,
+    restartRecoveryDeliveryContext: { channel: "discord" },
+  },
+} as const;
+
 describe("resolveAgentRestartRecoveryContext", () => {
-  it.each([matchingParams, matchingUiParams])("rejects mismatched recovery ownership", (params) => {
+  it.each([matchingParams])("rejects mismatched recovery ownership", (params) => {
     for (const override of [
       { canUseInternalRuntimeHandoff: false },
       { expectedExistingSessionId: undefined },
@@ -46,15 +54,19 @@ describe("resolveAgentRestartRecoveryContext", () => {
       { sessionEntry: { ...params.sessionEntry, restartRecoveryDeliverySourceRunId: " " } },
       { sessionEntry: { ...params.sessionEntry, restartRecoverySourceIngress: undefined } },
       {
-        sessionEntry: { ...params.sessionEntry, restartRecoverySourceIngress: "internal" as const },
+        sessionEntry: {
+          ...params.sessionEntry,
+          restartRecoverySourceIngress: "internal" as const,
+        },
       },
     ]) {
       expect(resolveAgentRestartRecoveryContext({ ...params, ...override })).toBeUndefined();
     }
   });
 
-  it("restores only pinned authoring for an admitted Control UI recovery", () => {
+  it("preserves WebChat policy context and pinned authoring for an admitted Control UI recovery", () => {
     expect(resolveAgentRestartRecoveryContext(matchingUiParams)).toEqual({
+      messageChannel: "webchat",
       pinnedWidgetAuthoring: true,
     });
     expect(
@@ -65,12 +77,13 @@ describe("resolveAgentRestartRecoveryContext", () => {
     ).toBeUndefined();
   });
 
-  it.each([true, false])(
+  it.each([true])(
     "restores correlated channel delivery facts (resume=%s)",
     (isRestartRecoveryResumeRun) => {
       expect(
         resolveAgentRestartRecoveryContext({ ...matchingParams, isRestartRecoveryResumeRun }),
       ).toEqual({
+        messageChannel: "discord",
         channel: {
           channel: "discord",
           currentChannelId: "discord:dm:123",
@@ -90,6 +103,21 @@ describe("resolveAgentRestartRecoveryContext", () => {
           },
         }),
       ).toBeUndefined();
+    },
+  );
+
+  it.each(["   "])(
+    "preserves the source provider without granting channel delivery authority when target is %j",
+    (to) => {
+      expect(
+        resolveAgentRestartRecoveryContext({
+          ...matchingTargetlessParams,
+          sessionEntry: {
+            ...matchingTargetlessParams.sessionEntry,
+            restartRecoveryDeliveryContext: { channel: " Discord ", to },
+          },
+        }),
+      ).toEqual({ messageChannel: "discord" });
     },
   );
 });

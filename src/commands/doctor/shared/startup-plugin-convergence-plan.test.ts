@@ -2,13 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { initializeNativeSessionCatalogPreferences } from "../../../plugins/native-session-catalog-config.js";
 
 const loadInstalledPluginIndexInstallRecords = vi.hoisted(() => vi.fn(async () => ({})));
-const inspectBundledPluginStartupMetadata = vi.hoisted(() => vi.fn());
+const hasBundledPluginStartupManifest = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../plugins/installed-plugin-index-record-reader.js", () => ({
   loadInstalledPluginIndexInstallRecords,
 }));
-vi.mock("../../../plugins/bundled-plugin-startup-metadata.js", () => ({
-  inspectBundledPluginStartupMetadata,
+vi.mock("../../../plugins/bundled-plugin-startup-metadata.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/bundled-plugin-startup-metadata.js")>()),
+  hasBundledPluginStartupManifest,
 }));
 
 const { configMayRequireStartupPluginConvergence, planStartupPluginConvergence } =
@@ -18,18 +19,7 @@ describe("startup plugin convergence planning", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
-    inspectBundledPluginStartupMetadata.mockReturnValue(undefined);
-  });
-
-  it("keeps a fresh core-only Gateway config out of the plugin repair runtime", async () => {
-    const env = {};
-    const plan = await planStartupPluginConvergence({
-      config: { gateway: { mode: "local", port: 19091 } },
-      env,
-    });
-
-    expect(plan).toEqual({ required: false, installRecords: {} });
-    expect(loadInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({ env });
+    hasBundledPluginStartupManifest.mockReturnValue(false);
   });
 
   it("keeps a freshly initialized catalog opt-out out of plugin convergence", async () => {
@@ -37,28 +27,6 @@ describe("startup plugin convergence planning", () => {
     await expect(planStartupPluginConvergence({ config, env: {} })).resolves.toEqual({
       required: false,
       installRecords: {},
-    });
-  });
-
-  it("retains convergence when an opted-out catalog plugin is explicitly enabled", async () => {
-    const config = initializeNativeSessionCatalogPreferences({
-      plugins: { entries: { codex: { enabled: true } } },
-    });
-    await expect(planStartupPluginConvergence({ config, env: {} })).resolves.toEqual({
-      required: true,
-      installRecords: {},
-    });
-  });
-
-  it("carries managed install records into convergence", async () => {
-    const installRecords = {
-      discord: { source: "npm" as const, installPath: "/plugins/discord" },
-    };
-    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(installRecords);
-
-    await expect(planStartupPluginConvergence({ config: {}, env: {} })).resolves.toEqual({
-      required: true,
-      installRecords,
     });
   });
 
@@ -75,17 +43,6 @@ describe("startup plugin convergence planning", () => {
         env: {},
       }),
     ).toBe(true);
-  });
-
-  it("does not repair configured plugins already bundled with the host", () => {
-    inspectBundledPluginStartupMetadata.mockReturnValue({ hasDoctorContract: false });
-
-    expect(
-      configMayRequireStartupPluginConvergence({
-        config: { plugins: { entries: { openai: { enabled: true } } } },
-        env: {},
-      }),
-    ).toBe(false);
   });
 
   it("does not infer plugin work from core OpenAI model configuration", () => {

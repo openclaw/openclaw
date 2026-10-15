@@ -1,5 +1,5 @@
-// Mattermost plugin module implements setup surface behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   applySetupAccountConfigPatch,
   baseUrlTextInput,
@@ -10,13 +10,9 @@ import {
   setSetupChannelEnabled,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
-import {
-  applyMattermostSetupConfigPatch,
-  isMattermostConfigured,
-  resolveMattermostAccountWithSecrets,
-} from "./setup-core.js";
-import { normalizeMattermostBaseUrl } from "./setup.client.runtime.js";
-import { hasConfiguredSecretInput } from "./setup.secret-input.runtime.js";
+import { inspectMattermostAccount } from "./mattermost/accounts.js";
+import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
+import { applyMattermostSetupConfigPatch, isMattermostConfigured } from "./setup-core.js";
 
 const t = createSetupTranslator();
 
@@ -35,7 +31,7 @@ export const mattermostSetupWizard: ChannelSetupWizard = {
     unconfiguredScore: 1,
     resolveConfigured: ({ cfg, accountId }) =>
       isMattermostConfigured(
-        resolveMattermostAccountWithSecrets(cfg, accountId ?? DEFAULT_ACCOUNT_ID),
+        inspectMattermostAccount({ cfg, accountId: accountId ?? DEFAULT_ACCOUNT_ID }),
       ),
   }),
   introNote: {
@@ -48,7 +44,7 @@ export const mattermostSetupWizard: ChannelSetupWizard = {
       t("wizard.channels.docs", { link: formatDocsLink("/mattermost", "mattermost") }),
     ],
     shouldShow: ({ cfg, accountId }) =>
-      !isMattermostConfigured(resolveMattermostAccountWithSecrets(cfg, accountId)),
+      !isMattermostConfigured(inspectMattermostAccount({ cfg, accountId })),
   },
   envShortcut: {
     prompt: t("wizard.mattermost.envPrompt"),
@@ -57,7 +53,7 @@ export const mattermostSetupWizard: ChannelSetupWizard = {
       if (accountId !== DEFAULT_ACCOUNT_ID) {
         return false;
       }
-      const resolvedAccount = resolveMattermostAccountWithSecrets(cfg, accountId);
+      const resolvedAccount = inspectMattermostAccount({ cfg, accountId });
       const hasConfigValues =
         hasConfiguredSecretInput(resolvedAccount.config.botToken) ||
         Boolean(resolvedAccount.config.baseUrl?.trim());
@@ -85,14 +81,9 @@ export const mattermostSetupWizard: ChannelSetupWizard = {
       envPrompt: t("wizard.mattermost.envPrompt"),
       keepPrompt: t("wizard.mattermost.botTokenKeep"),
       inputPrompt: t("wizard.mattermost.botTokenInput"),
-      resolveAccount: ({ cfg, accountId }) => resolveMattermostAccountWithSecrets(cfg, accountId),
+      resolveAccount: inspectMattermostAccount,
       accountConfigured: isMattermostConfigured,
-      patchAccount: ({ cfg, accountId, patch }) =>
-        applyMattermostSetupConfigPatch({
-          cfg,
-          accountId,
-          patch,
-        }),
+      patchAccount: applyMattermostSetupConfigPatch,
       set: {},
     }),
   ],
@@ -102,11 +93,11 @@ export const mattermostSetupWizard: ChannelSetupWizard = {
       configKey: "baseUrl",
       message: t("wizard.mattermost.baseUrlPrompt"),
       confirmCurrentValue: false,
-      resolveAccount: ({ cfg, accountId }) => resolveMattermostAccountWithSecrets(cfg, accountId),
+      resolveAccount: inspectMattermostAccount,
       currentValue: (account) => account.baseUrl ?? process.env.MATTERMOST_URL?.trim(),
       includeInitialValue: true,
       shouldPrompt: ({ cfg, accountId, credentialValues, currentValue }) => {
-        const resolvedAccount = resolveMattermostAccountWithSecrets(cfg, accountId);
+        const resolvedAccount = inspectMattermostAccount({ cfg, accountId });
         const tokenConfigured =
           Boolean(resolvedAccount.botToken?.trim()) ||
           hasConfiguredSecretInput(resolvedAccount.config.botToken);
@@ -117,12 +108,7 @@ export const mattermostSetupWizard: ChannelSetupWizard = {
           ? undefined
           : "Mattermost base URL must include a valid base URL.",
       normalize: (value) => normalizeMattermostBaseUrl(value) ?? value.trim(),
-      patchAccount: ({ cfg, accountId, patch }) =>
-        applyMattermostSetupConfigPatch({
-          cfg,
-          accountId,
-          patch,
-        }),
+      patchAccount: applyMattermostSetupConfigPatch,
     }),
   ],
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),

@@ -4,16 +4,15 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { resolveNonEnvSecretRefApiKeyMarker } from "../secrets/provider-credential-values.js";
-import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveEnvApiKey, type EnvApiKeyLookupOptions } from "./model-auth-env.js";
 import {
   isNonSecretApiKeyMarker,
   resolveEnvSecretRefHeaderValueMarker,
-  resolveNonEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
 import { resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
 
@@ -60,6 +59,7 @@ export type ProviderAuthResolver = (
   source: "env" | "profile" | "none";
   profileId?: string;
   preparationFailed?: boolean;
+  authFlow?: string;
 };
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
@@ -92,11 +92,6 @@ export function resolveEnvApiKeyVarName(
   }
   const match = /^(?:env: |shell env: )([A-Z0-9_]+)$/.exec(resolved.source);
   return match ? match[1] : undefined;
-}
-
-/** Resolves the AWS SDK API key env var used by Bedrock-style auth. */
-function resolveAwsSdkApiKeyVarName(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return resolveAwsSdkEnvVarName(env);
 }
 
 function resolveEnvAuthEvidenceApiKeyMarker(
@@ -133,14 +128,17 @@ export function normalizeHeaderValues(params: {
       source && sourceValue !== undefined
         ? {
             config: source.config,
-            path: `models.providers.${source.providerKey}.headers.${headerName}`,
+            path: appendConfigPathSegment(
+              `${appendConfigPathSegment("models.providers", source.providerKey)}.headers`,
+              headerName,
+            ),
             value: sourceValue,
             defaults: source.config.secrets?.defaults,
           }
         : undefined;
     const resolvedRef = input
       ? resolveConfigSecretRef(input)
-      : coerceSecretRef(headerValue, params.secretDefaults);
+      : parseSecretRef(headerValue, params.secretDefaults);
     if (!resolvedRef || !resolvedRef.id.trim()) {
       nextHeaders[headerName] = headerValue;
       continue;
@@ -150,7 +148,7 @@ export function normalizeHeaderValues(params: {
     nextHeaders[headerName] =
       resolvedRef.source === "env"
         ? resolveEnvSecretRefHeaderValueMarker(resolvedRef.id)
-        : resolveNonEnvSecretRefHeaderValueMarker(resolvedRef.source);
+        : resolveNonEnvSecretRefApiKeyMarker(resolvedRef.source);
   }
   if (!mutated) {
     return { headers, mutated: false };
@@ -163,59 +161,28 @@ export function resolveApiKeyFromCredential(
   cred: AuthProfileStore["profiles"][string] | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): ProfileApiKeyResolution | undefined {
-  if (!cred) {
+  if (!cred || (cred.type !== "api_key" && cred.type !== "token")) {
     return undefined;
   }
-  if (cred.type === "api_key") {
-    const keyRef = coerceSecretRef(cred.keyRef);
-    if (keyRef && keyRef.id.trim()) {
-      if (keyRef.source === "env") {
-        const envVar = keyRef.id.trim();
-        return {
-          apiKey: envVar,
-          source: "env-ref",
-          discoveryApiKey: toDiscoveryApiKey(env[envVar]),
-        };
-      }
+  const ref = parseSecretRef(cred.type === "api_key" ? cred.keyRef : cred.tokenRef);
+  if (ref && ref.id.trim()) {
+    if (ref.source === "env") {
+      const envVar = ref.id.trim();
       return {
-        apiKey: resolveNonEnvSecretRefApiKeyMarker(keyRef.source),
-        source: "non-env-ref",
+        apiKey: envVar,
+        source: "env-ref",
+        discoveryApiKey: toDiscoveryApiKey(env[envVar]),
       };
     }
-    if (cred.key?.trim()) {
-      return {
-        apiKey: cred.key,
-        source: "plaintext",
-        discoveryApiKey: toDiscoveryApiKey(cred.key),
-      };
-    }
-    return undefined;
+    return {
+      apiKey: resolveNonEnvSecretRefApiKeyMarker(ref.source),
+      source: "non-env-ref",
+    };
   }
-  if (cred.type === "token") {
-    const tokenRef = coerceSecretRef(cred.tokenRef);
-    if (tokenRef && tokenRef.id.trim()) {
-      if (tokenRef.source === "env") {
-        const envVar = tokenRef.id.trim();
-        return {
-          apiKey: envVar,
-          source: "env-ref",
-          discoveryApiKey: toDiscoveryApiKey(env[envVar]),
-        };
-      }
-      return {
-        apiKey: resolveNonEnvSecretRefApiKeyMarker(tokenRef.source),
-        source: "non-env-ref",
-      };
-    }
-    if (cred.token?.trim()) {
-      return {
-        apiKey: cred.token,
-        source: "plaintext",
-        discoveryApiKey: toDiscoveryApiKey(cred.token),
-      };
-    }
-  }
-  return undefined;
+  const value = cred.type === "api_key" ? cred.key : cred.token;
+  return value?.trim()
+    ? { apiKey: value, source: "plaintext", discoveryApiKey: toDiscoveryApiKey(value) }
+    : undefined;
 }
 
 /** Resolves the first usable API key from matching auth profiles. */
@@ -247,52 +214,31 @@ export function normalizeConfiguredProviderApiKey(params: {
   provider: ProviderConfig;
   sourceInput?: Parameters<typeof resolveConfigSecretRef>[0];
   secretDefaults: SecretDefaults | undefined;
-  profileApiKey: ProfileApiKeyResolution | undefined;
   secretRefManagedProviders?: Set<string>;
 }): ProviderConfig {
   const configuredApiKey = params.sourceInput?.value ?? params.provider.apiKey;
   const configuredApiKeyRef = params.sourceInput
     ? resolveConfigSecretRef(params.sourceInput)
-    : coerceSecretRef(configuredApiKey, params.secretDefaults);
+    : parseSecretRef(configuredApiKey, params.secretDefaults);
 
+  let apiKey: string;
   if (configuredApiKeyRef && configuredApiKeyRef.id.trim()) {
     // Non-env secret refs intentionally become markers; loaders can route without exposing values.
-    const marker =
+    apiKey =
       configuredApiKeyRef.source === "env"
         ? configuredApiKeyRef.id.trim()
         : resolveNonEnvSecretRefApiKeyMarker(configuredApiKeyRef.source);
     params.secretRefManagedProviders?.add(params.providerKey);
-    if (params.provider.apiKey === marker) {
+  } else {
+    if (typeof configuredApiKey !== "string") {
       return params.provider;
     }
-    return {
-      ...params.provider,
-      apiKey: marker,
-    };
+    apiKey = configuredApiKey.trim();
+    if (isNonSecretApiKeyMarker(apiKey)) {
+      params.secretRefManagedProviders?.add(params.providerKey);
+    }
   }
-
-  if (typeof configuredApiKey !== "string") {
-    return params.provider;
-  }
-
-  const normalizedConfiguredApiKey = configuredApiKey.trim();
-  if (isNonSecretApiKeyMarker(normalizedConfiguredApiKey)) {
-    params.secretRefManagedProviders?.add(params.providerKey);
-  }
-  if (
-    params.profileApiKey &&
-    params.profileApiKey.source !== "plaintext" &&
-    normalizedConfiguredApiKey === params.profileApiKey.apiKey
-  ) {
-    params.secretRefManagedProviders?.add(params.providerKey);
-  }
-  if (normalizedConfiguredApiKey === params.provider.apiKey) {
-    return params.provider;
-  }
-  return {
-    ...params.provider,
-    apiKey: normalizedConfiguredApiKey,
-  };
+  return apiKey === params.provider.apiKey ? params.provider : { ...params.provider, apiKey };
 }
 
 /** Rewrites literal env-derived keys back to env variable names when provenance is clear. */
@@ -332,9 +278,7 @@ export function resolveMissingProviderApiKey(params: {
   providerApiKeyResolver?: (env: NodeJS.ProcessEnv) => string | undefined;
 }): ProviderConfig {
   const hasModels = Array.isArray(params.provider.models) && params.provider.models.length > 0;
-  const normalizedApiKey = normalizeOptionalSecretInput(params.provider.apiKey);
-  const hasConfiguredApiKey = Boolean(normalizedApiKey || params.provider.apiKey);
-  if (!hasModels || hasConfiguredApiKey) {
+  if (!hasModels || params.provider.apiKey) {
     return params.provider;
   }
 
@@ -349,7 +293,7 @@ export function resolveMissingProviderApiKey(params: {
     }
   }
   if (authMode === "aws-sdk") {
-    const awsEnvVar = resolveAwsSdkApiKeyVarName(params.env);
+    const awsEnvVar = resolveAwsSdkEnvVarName(params.env);
     if (!awsEnvVar) {
       return params.provider;
     }

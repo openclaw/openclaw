@@ -1,9 +1,11 @@
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
+  pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -14,6 +16,18 @@ const suspensionError = {
   retryable: true,
   details: { reason: "gateway-suspending", phase: "draining", method: "sessions.catalog.list" },
 };
+
+async function reactivatePage(page: Page): Promise<void> {
+  await pauseVirtualClock(page);
+  await page.evaluate(() => {
+    for (const value of ["hidden", "visible"]) {
+      Object.defineProperty(document, "visibilityState", { configurable: true, value });
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+  });
+  await page.clock.fastForward(5_001);
+  await page.clock.resume();
+}
 
 function catalog(name: string) {
   return {
@@ -54,41 +68,37 @@ suite.define(() => {
     const context = await suite.browser.newContext({ viewport: { width: 1440, height: 900 } });
     const page = await context.newPage();
     try {
+      await page.clock.install();
       const gateway = await installMockGateway(page, {
         featureMethods: [...defaultControlUiFeatureMethods, "sessions.catalog.list"],
         methodResponses: { "sessions.catalog.list": catalog("Retained sample session") },
       });
       await page.goto(`${suite.server.baseUrl}new`);
       const sidebar = page.locator("openclaw-app-sidebar");
+      const identity = sidebar.locator(".sidebar-identity-card");
       await sidebar.getByText("Retained sample session", { exact: true }).waitFor();
       await gateway.setMethodResponse("sessions.catalog.list", { __mockError: suspensionError });
+      const beforeSuspension = await gateway.deferNext("sessions.catalog.list");
       await gateway.emitGatewayEvent("gateway.suspension", { phase: "draining" });
-      await gateway.emitGatewayEvent("presence", {
-        presence: [{ instanceId: "synthetic-host", mode: "node" }],
-      });
-      await expect
-        .poll(async () => {
-          const app = await sidebar.evaluate(
-            (element) =>
-              (
-                element as HTMLElement & {
-                  sessionData: { sessionCatalogRefreshStatus: { awaitingGateway: boolean } };
-                }
-              ).sessionData.sessionCatalogRefreshStatus.awaitingGateway,
-          );
-          return app;
-        })
-        .toBe(true);
+      await reactivatePage(page);
+      await gateway.waitForRequest("sessions.catalog.list", { after: beforeSuspension });
+      await gateway.rejectDeferred("sessions.catalog.list", suspensionError);
       expect(await sidebar.getByRole("alert").count()).toBe(0);
-      await sidebar.getByText("Suspending…", { exact: true }).waitFor();
+      await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("suspending");
+      expect(await identity.getAttribute("aria-label")).toContain("Suspending…");
+      expect(await identity.getAttribute("title")).toBe(await identity.getAttribute("aria-label"));
       expect(await sidebar.getByText("Retained sample session", { exact: true }).isVisible()).toBe(
         true,
       );
       await page.screenshot({ path: path.join(artifactDir, "suspending.png") });
       const before = (await gateway.getRequests("sessions.catalog.list")).length;
       await gateway.setMethodResponse("sessions.catalog.list", catalog("Recovered sample session"));
+      await pauseVirtualClock(page);
       await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
+      await page.clock.fastForward(5_001);
+      await page.clock.resume();
       await sidebar.getByText("Recovered sample session", { exact: true }).waitFor();
+      await expect.poll(() => identity.getAttribute("data-connection-status")).toBeNull();
       expect((await gateway.getRequests("sessions.catalog.list")).length).toBe(before + 1);
       expect(await gateway.getSocketCount()).toBe(1);
       expect(await sidebar.getByRole("alert").count()).toBe(0);
@@ -97,9 +107,7 @@ suite.define(() => {
       await gateway.setMethodResponse("sessions.catalog.list", {
         __mockError: { code: "UNAVAILABLE", message: "Catalog service failed" },
       });
-      await gateway.emitGatewayEvent("presence", {
-        presence: [{ instanceId: "synthetic-host", mode: "node", reason: "disconnect" }],
-      });
+      await reactivatePage(page);
       const alert = sidebar.getByRole("alert");
       await alert.waitFor();
       expect(await alert.textContent()).toContain("Catalog service failed");
@@ -109,16 +117,16 @@ suite.define(() => {
 
       await gateway.setMethodResponse("sessions.catalog.list", { __mockError: suspensionError });
       await gateway.emitGatewayEvent("gateway.suspension", { phase: "draining" });
-      await gateway.emitGatewayEvent("presence", {
-        presence: [{ instanceId: "synthetic-host", mode: "node" }],
-      });
+      await reactivatePage(page);
       await expect.poll(() => sidebar.getByRole("alert").count()).toBe(0);
       await gateway.setMethodResponse("connect", { __mockError: suspensionError });
       await gateway.closeLatest();
       await expect
         .poll(async () => (await gateway.getRequests("connect")).length)
         .toBeGreaterThan(1);
-      await sidebar.getByText("Suspending…", { exact: true }).waitFor();
+      await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("suspending");
+      expect(await identity.getAttribute("aria-label")).toContain("Suspending…");
+      expect(await identity.getAttribute("title")).toBe(await identity.getAttribute("aria-label"));
       expect(await sidebar.getByRole("alert").count()).toBe(0);
       await page.screenshot({ path: path.join(artifactDir, "after-sidebar.png") });
     } finally {

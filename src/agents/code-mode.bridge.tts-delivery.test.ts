@@ -57,41 +57,41 @@ async function finishReply(harness: ReturnType<typeof createTtsHarness>, text = 
 }
 
 describe("Code Mode nested TTS delivery", () => {
-  afterEach(() => {
-    resetCodeModeTestState();
+  afterEach(async () => {
+    await resetCodeModeTestState();
     vi.restoreAllMocks();
   });
 
-  it.each([
-    ["private", "Private final text must not be sent."],
-    ["empty", ""],
-  ])("delivers accepted speech with a %s final", async (name, finalText) => {
-    const synthesize = vi.spyOn(ttsRuntime, "textToSpeech").mockResolvedValue(speechResult);
-    const harness = createTtsHarness(name);
-    try {
-      const result = await runUntilCompleted({
-        execTool: expectDefined(harness.tools[0], "Code Mode exec tool"),
-        waitTool: expectDefined(harness.tools[1], "Code Mode wait tool"),
-        code: 'return await tts({ text: "Synthetic speech" });',
-      });
-      expect(result.status).toBe("completed");
-      expect(synthesize).toHaveBeenCalledOnce();
-      await finishReply(harness, finalText);
+  it.each([["private", "Private final text must not be sent."]])(
+    "delivers accepted speech with a %s final",
+    async (name, finalText) => {
+      const synthesize = vi.spyOn(ttsRuntime, "textToSpeech").mockResolvedValue(speechResult);
+      const harness = createTtsHarness(name);
+      try {
+        const result = await runUntilCompleted({
+          execTool: expectDefined(harness.tools[0], "Code Mode exec tool"),
+          waitTool: expectDefined(harness.tools[1], "Code Mode wait tool"),
+          code: 'return await tts({ text: "Synthetic speech" });',
+        });
+        expect(result.status).toBe("completed");
+        expect(synthesize).toHaveBeenCalledOnce();
+        await finishReply(harness, finalText);
 
-      expect(harness.delivered).toEqual([
-        expect.objectContaining({ mediaUrl: audioPath, mediaUrls: [audioPath] }),
-      ]);
-      expect(harness.delivered[0]?.text).toBeUndefined();
-      expect(
-        shouldDeliverDespiteSourceReplySuppression(
-          expectDefined(harness.delivered[0], "delivered speech"),
-          { ...suppressionState, sendPolicyDenied: true },
-        ),
-      ).toBe(false);
-    } finally {
-      harness.dispose();
-    }
-  });
+        expect(harness.delivered).toEqual([
+          expect.objectContaining({ mediaUrl: audioPath, mediaUrls: [audioPath] }),
+        ]);
+        expect(harness.delivered[0]?.text).toBeUndefined();
+        expect(
+          shouldDeliverDespiteSourceReplySuppression(
+            expectDefined(harness.delivered[0], "delivered speech"),
+            { ...suppressionState, sendPolicyDenied: true },
+          ),
+        ).toBe(false);
+      } finally {
+        harness.dispose();
+      }
+    },
+  );
 
   it("does not authorize same-shaped unmarked media", async () => {
     const target = createTtsTool({ config: {} });

@@ -8,9 +8,6 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-/**
- * Result of a JPEG compression attempt after quality and scale reductions.
- */
 internal data class JpegSizeLimiterResult(
   val bytes: ByteArray,
   val width: Int,
@@ -18,10 +15,11 @@ internal data class JpegSizeLimiterResult(
   val quality: Int,
 )
 
-/**
- * Utility that searches quality/scale combinations until a JPEG fits a byte budget.
- */
 internal object JpegSizeLimiter {
+  private const val MAX_SCALE_ATTEMPTS = 6
+  private const val MAX_QUALITY_ATTEMPTS = 6
+  private const val SCALE_STEP = 0.85
+
   fun readOrientation(open: () -> InputStream?): Int =
     try {
       open()?.use { stream ->
@@ -85,9 +83,6 @@ internal object JpegSizeLimiter {
     maxBytes: Int,
     minQuality: Int = 20,
     minSize: Int = 256,
-    scaleStep: Double = 0.85,
-    maxScaleAttempts: Int = 6,
-    maxQualityAttempts: Int = 6,
     encode: (width: Int, height: Int, quality: Int) -> ByteArray,
   ): JpegSizeLimiterResult {
     require(initialWidth > 0 && initialHeight > 0) { "Invalid image size" }
@@ -96,22 +91,21 @@ internal object JpegSizeLimiter {
     val clampedStartQuality = startQuality.coerceIn(minQuality, 100)
     var width = initialWidth
     var height = initialHeight
-    var best: JpegSizeLimiterResult? = null
+    var lastSize = 0
 
-    repeat(maxScaleAttempts + 1) { scaleAttempt ->
+    repeat(MAX_SCALE_ATTEMPTS + 1) { scaleAttempt ->
       var quality = clampedStartQuality
-      repeat(maxQualityAttempts) {
+      repeat(MAX_QUALITY_ATTEMPTS) {
         val bytes = encode(width, height, quality)
-        val attempt = JpegSizeLimiterResult(bytes = bytes, width = width, height = height, quality = quality)
-        best = attempt
-        if (bytes.size <= maxBytes) return best
+        lastSize = bytes.size
+        if (bytes.size <= maxBytes) return JpegSizeLimiterResult(bytes = bytes, width = width, height = height, quality = quality)
         if (quality <= minQuality) return@repeat
         quality = max(minQuality, (quality * 0.75).roundToInt())
       }
 
-      if (scaleAttempt == maxScaleAttempts) return@repeat
+      if (scaleAttempt == MAX_SCALE_ATTEMPTS) return@repeat
       val minScale = (minSize.toDouble() / min(width, height).toDouble()).coerceAtMost(1.0)
-      val nextScale = max(scaleStep, minScale)
+      val nextScale = max(SCALE_STEP, minScale)
       val nextWidth = max(minSize, (width * nextScale).roundToInt())
       val nextHeight = max(minSize, (height * nextScale).roundToInt())
       if (nextWidth == width && nextHeight == height) return@repeat
@@ -119,11 +113,6 @@ internal object JpegSizeLimiter {
       height = min(nextHeight, height)
     }
 
-    val failed = checkNotNull(best)
-    if (failed.bytes.size > maxBytes) {
-      throw IllegalStateException("CAMERA_TOO_LARGE: ${failed.bytes.size} bytes > $maxBytes bytes")
-    }
-
-    return failed
+    throw IllegalStateException("CAMERA_TOO_LARGE: $lastSize bytes > $maxBytes bytes")
   }
 }

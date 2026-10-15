@@ -3,44 +3,32 @@ import { describe, expect, it, vi } from "vitest";
 import { createMessageCliHelpers } from "./helpers.js";
 import { registerMessageDiscordAdminCommands } from "./register.discord-admin.js";
 
-type AdminCase = {
-  command: string;
-  action: string;
-  required: Record<string, string>;
-  optional?: Record<string, string>;
-};
+type AdminCase = [
+  command: string,
+  action: string,
+  required: Record<string, string>,
+  optional?: Record<string, string>,
+];
 
 const cases: AdminCase[] = [
-  { command: "role info", action: "role-info", required: { guildId: "guild-1" } },
-  {
-    command: "role add",
-    action: "role-add",
-    required: { guildId: "guild-1", userId: "user-1", roleId: "role-1" },
-  },
-  {
-    command: "role remove",
-    action: "role-remove",
-    required: { guildId: "guild-1", userId: "user-1", roleId: "role-1" },
-  },
-  { command: "channel info", action: "channel-info", required: { target: "channel:123" } },
-  { command: "channel list", action: "channel-list", required: { guildId: "guild-1" } },
-  {
-    command: "member info",
-    action: "member-info",
-    required: { userId: "user-1" },
-    optional: { guildId: "guild-1" },
-  },
-  {
-    command: "voice status",
-    action: "voice-status",
-    required: { guildId: "guild-1", userId: "user-1" },
-  },
-  { command: "event list", action: "event-list", required: { guildId: "guild-1" } },
-  {
-    command: "event create",
-    action: "event-create",
-    required: { guildId: "guild-1", eventName: "QA event", startTime: "2026-09-11T12:00:00Z" },
-    optional: {
+  ["role info", "role-info", { guildId: "guild-1" }],
+  ["role add", "role-add", { guildId: "guild-1", userId: "user-1", roleId: "role-1" }],
+  ["role remove", "role-remove", { guildId: "guild-1", userId: "user-1", roleId: "role-1" }],
+  ["channel info", "channel-info", { target: "channel:123" }],
+  ["channel list", "channel-list", { guildId: "guild-1" }],
+  [
+    "member info",
+    "member-info",
+    { userId: "user-1" },
+    { guildId: "guild-1", channelId: "channel-1" },
+  ],
+  ["voice status", "voice-status", { guildId: "guild-1", userId: "user-1" }],
+  ["event list", "event-list", { guildId: "guild-1" }],
+  [
+    "event create",
+    "event-create",
+    { guildId: "guild-1", eventName: "QA event", startTime: "2026-09-11T12:00:00Z" },
+    {
       endTime: "2026-09-11T13:00:00Z",
       desc: "Event description",
       channelId: "channel-1",
@@ -48,25 +36,20 @@ const cases: AdminCase[] = [
       eventType: "external",
       image: "https://example.com/event.png",
     },
-  },
-  {
-    command: "timeout",
-    action: "timeout",
-    required: { guildId: "guild-1", userId: "user-1" },
-    optional: { durationMin: "0", until: "2026-09-11T13:00:00Z", reason: "QA reason" },
-  },
-  {
-    command: "kick",
-    action: "kick",
-    required: { guildId: "guild-1", userId: "user-1" },
-    optional: { reason: "QA reason" },
-  },
-  {
-    command: "ban",
-    action: "ban",
-    required: { guildId: "guild-1", userId: "user-1" },
-    optional: { reason: "QA reason", deleteDays: "0" },
-  },
+  ],
+  [
+    "timeout",
+    "timeout",
+    { guildId: "guild-1", userId: "user-1" },
+    { durationMin: "0", until: "2026-09-11T13:00:00Z", reason: "QA reason" },
+  ],
+  ["kick", "kick", { guildId: "guild-1", userId: "user-1" }, { reason: "QA reason" }],
+  [
+    "ban",
+    "ban",
+    { guildId: "guild-1", userId: "user-1" },
+    { reason: "QA reason", deleteDays: "0" },
+  ],
 ];
 
 function flag(key: string) {
@@ -84,53 +67,31 @@ function setup() {
     .configureOutput({ writeErr() {}, writeOut() {} });
   const runMessageAction = vi.fn(async () => {});
   registerMessageDiscordAdminCommands(command, {
-    ...createMessageCliHelpers("discord"),
+    ...createMessageCliHelpers("discord|matrix|msteams|slack"),
     runMessageAction,
   });
   return { command, runMessageAction };
 }
 
-function leaf(command: Command, path: string) {
-  let current = command;
-  for (const name of path.split(" ")) {
-    const next = current.commands.find((candidate) => candidate.name() === name);
-    if (!next) {
-      throw new Error("Missing command " + path);
-    }
-    current = next;
-  }
-  return current;
-}
-
 describe("Discord-admin message registration", () => {
   it.each(cases)(
-    "$command forwards the exact action, defaults and options",
-    async ({ command: path, action, required, optional = {} }) => {
+    "%s forwards the exact action, defaults and options",
+    async (path, action, required, optional = {}) => {
       const { command, runMessageAction } = setup();
-      await command.parseAsync(
-        [
-          ...path.split(" "),
-          ...argumentsFor(required),
-          ...argumentsFor(optional),
-          "--channel",
-          "discord",
-        ],
-        { from: "user" },
-      );
+      const options = { ...required, ...optional, channel: "discord" };
+      await command.parseAsync([...path.split(" "), ...argumentsFor(options)], { from: "user" });
       expect(runMessageAction).toHaveBeenCalledExactlyOnceWith(action, {
         json: false,
         dryRun: false,
         verbose: false,
-        ...required,
-        ...optional,
-        channel: "discord",
+        ...options,
       });
     },
   );
 
   it.each(cases)(
-    "$command rejects every missing mandatory identifier before dispatch",
-    async ({ command: path, required }) => {
+    "%s rejects every missing mandatory identifier before dispatch",
+    async (path, _action, required) => {
       for (const missing of Object.keys(required)) {
         const { command, runMessageAction } = setup();
         const remaining = Object.fromEntries(
@@ -144,23 +105,7 @@ describe("Discord-admin message registration", () => {
     },
   );
 
-  it.each(cases)(
-    "$command keeps required, shared and leaf-only flags in help order",
-    ({ command: path, required, optional = {} }) => {
-      const { command } = setup();
-      expect(leaf(command, path).options.map((option) => option.long)).toEqual([
-        ...Object.keys(required).map(flag),
-        "--channel",
-        "--account",
-        "--json",
-        "--dry-run",
-        "--verbose",
-        ...Object.keys(optional).map(flag),
-      ]);
-    },
-  );
-
-  it("keeps guild optional for member info", async () => {
+  it("keeps guild and conversation optional for member info", async () => {
     const { command, runMessageAction } = setup();
     await command.parseAsync(["member", "info", "--user-id", "user-1"], { from: "user" });
     expect(runMessageAction).toHaveBeenCalledExactlyOnceWith("member-info", {

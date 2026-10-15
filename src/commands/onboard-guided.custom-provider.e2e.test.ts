@@ -26,7 +26,6 @@ type Scenario = {
   outcome?: "fail" | "cancel" | "prompt-cancel";
   surface?: "cli" | "gateway";
   isLocalGateway?: boolean;
-  deferredActivation?: "normal" | "abort" | "replacement";
   revokeDuringPreparation?: boolean;
 };
 
@@ -168,12 +167,14 @@ async function runCustomSetup(scenario: Scenario) {
     },
   };
   const configModule = await import("../config/config.js");
-  configModule.clearConfigCache();
+  configModule.clearRuntimeConfigSnapshot();
+  cleanupTasks.push(async () => {
+    configModule.clearRuntimeConfigSnapshot();
+  });
+  await configModule.captureRuntimeConfigAsyncReader()();
   const { activateSetupInference } = await import("../system-agent/setup-inference.js");
   const { runManualStage } = await import("./onboard-guided-manual.js");
   const activationResults: unknown[] = [];
-  let deferredActivation: (() => Promise<void>) | undefined;
-  let deferredActivationError: unknown;
   const replaceSelectedCredential = async () => {
     const { upsertAuthProfileWithLock } = await import("../agents/auth-profiles.js");
     const { getRuntimeAuthProfileStoreCredentialsRevision } =
@@ -272,13 +273,6 @@ async function runCustomSetup(scenario: Scenario) {
         surface: scenario.surface ?? "cli",
         ...(scenario.isLocalGateway ? { isRemoteProviderAuth: false } : {}),
         signal: controller.signal,
-        ...(scenario.deferredActivation
-          ? {
-              onCredentialActivation: (activate: () => Promise<void>) => {
-                deferredActivation = activate;
-              },
-            }
-          : {}),
       });
       activationResults.push(result);
       return result;
@@ -288,27 +282,12 @@ async function runCustomSetup(scenario: Scenario) {
     scenario.outcome === "prompt-cancel"
       ? await resultPromise.catch((error: unknown) => error)
       : await resultPromise;
-  if (scenario.deferredActivation) {
-    expect(deferredActivation).toBeTypeOf("function");
-    if (scenario.deferredActivation === "abort") {
-      controller.abort();
-    }
-    if (scenario.deferredActivation === "replacement") {
-      await replaceSelectedCredential();
-    }
-    try {
-      await deferredActivation?.();
-    } catch (error) {
-      deferredActivationError = error;
-    }
-  }
   expect(serverErrors).toEqual([]);
   const authProfiles = Object.values(
     loadAuthProfileStoreWithoutExternalProfiles(resolveAgentDir(initialConfig, "main")).profiles,
   ).filter((profile) => profile.provider === "fixture-custom");
   return {
     authProfiles,
-    deferredActivationError,
     result,
     credential,
     cancelled: result instanceof WizardCancelledError,
@@ -326,32 +305,6 @@ async function runCustomSetup(scenario: Scenario) {
 }
 
 describe("guided custom provider activation", () => {
-  it.each(["normal", "abort", "replacement"] as const)(
-    "settles a deferred SecretRef activation with %s authority",
-    { timeout: 300_000 },
-    async (deferredActivation) => {
-      const setup = await runCustomSetup({
-        protocol: "openai-responses",
-        secretRef: true,
-        surface: "gateway",
-        isLocalGateway: true,
-        deferredActivation,
-      });
-      expect(setup.requests).toEqual([expect.objectContaining({ stream: true, authorized: true })]);
-      expect(setup.authProfiles).toHaveLength(1);
-      expect(setup.config.models?.providers?.["fixture-custom"]?.apiKey).toBeUndefined();
-      expect(JSON.stringify(setup.config)).not.toContain(setup.credential);
-      if (deferredActivation === "normal") {
-        expect(setup.deferredActivationError).toBeUndefined();
-        expect(setup.authProfiles[0]?.setup).toBeUndefined();
-      } else {
-        expect(setup.deferredActivationError).toBeDefined();
-        expect(setup.authProfiles[0]?.setup).toBeDefined();
-      }
-      expect(setup.output).not.toContain(setup.credential);
-    },
-  );
-
   it(
     "refuses a SecretRef source whose generation changes before preparation",
     { timeout: 300_000 },

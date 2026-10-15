@@ -17,6 +17,34 @@ import {
 } from "./sidebar-layout.ts";
 
 describe("sidebar session layout settings", () => {
+  it("drops retired task panels and selections while preserving other panels", () => {
+    const saved = normalizeSidebarSessionLayouts({
+      main: {
+        columns: [
+          {
+            id: "side",
+            side: "right",
+            activePanelId: "tasks",
+            width: 600,
+            panels: [
+              { id: "tasks", slot: "tasks", taskId: "retired" },
+              { id: "old-review", slot: "detail", taskId: "retired" },
+              { id: "files", slot: "workspace", taskId: "ignored" },
+              { id: "review", slot: "detail" },
+            ],
+          },
+        ],
+      },
+    }).main!;
+    expect(saved.columns[0]!.panels).toEqual([
+      { id: "files", slot: "workspace" },
+      { id: "review", slot: "detail" },
+    ]);
+    expect(saved.columns[0]!.activePanelId).toBe("files");
+    expect(saved.columns[0]!.width).toBe(600);
+    expect(normalizeSidebarSessionLayouts({ main: saved }).main).toEqual(saved);
+  });
+
   it.each(["split", "expanded", null, undefined] as const)(
     "preserves the stored override %s during unrelated layout writes",
     (override) => {

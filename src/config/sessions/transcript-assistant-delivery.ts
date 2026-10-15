@@ -1,10 +1,15 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AssistantDeliveryTtsFacts, AssistantMessage } from "../../llm/types.js";
-import { extractTtsDirectiveFacts } from "../../tts/directive-facts.js";
+import { readAssistantTextBlocksForPhase } from "../../shared/chat-message-content.js";
+import { createTextPartCodeRegionResolver } from "../../shared/text/code-regions.js";
+import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
+import { extractTtsDirectiveParts } from "../../tts/directive-facts.js";
 import {
-  parseInlineDirectives,
-  stripInlineDirectiveTagsForDelivery,
+  parseInlineDirectiveParts,
+  stripInlineDirectivePartsForDelivery,
 } from "../../utils/directive-tags.js";
+export { projectAssistantTranscriptText } from "./transcript-assistant-delivery-read.js";
 
 type AssistantDirectiveMessage = {
   content?: unknown;
@@ -12,12 +17,7 @@ type AssistantDirectiveMessage = {
   role?: unknown;
 };
 
-type AssistantDeliveryFacts = {
-  audioAsVoice?: true;
-  replyToCurrent?: true;
-  replyToId?: string;
-  tts?: AssistantDeliveryTtsFacts;
-};
+type AssistantDeliveryFacts = NonNullable<AssistantMessage["openclawDelivery"]>;
 
 /** Turn-owned display preparation; source text precedes transcript-only hook rewrites. */
 export type PrepareAssistantTranscriptMessage = (
@@ -67,31 +67,36 @@ export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMes
   if (message.role !== "assistant" || !Array.isArray(message.content)) {
     return message;
   }
+  const finalBlocks = readAssistantTextBlocksForPhase(message, "final_answer");
+  const blocks = finalBlocks.length ? finalBlocks : readAssistantTextBlocksForPhase(message);
+  const original = blocks.map((block) => block.text);
+  const parsed = parseInlineDirectiveParts(original);
+  const stripped = stripInlineDirectivePartsForDelivery(parsed.map((part) => part.text));
+  const tts = extractTtsDirectiveParts(stripped.map((part) => part.text));
+  const codeRegions =
+    blocks.length > 1
+      ? createTextPartCodeRegionResolver(tts.map((part) => part.cleanedText))
+      : undefined;
   let facts: AssistantDeliveryFacts | undefined;
-  for (const block of message.content) {
-    if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") {
+  for (const [index, block] of blocks.entries()) {
+    const reply = expectDefined(parsed[index], "parsed assistant part");
+    const speech = expectDefined(tts[index], "prepared assistant speech part");
+    const hasDeliveryFacts = reply.hasAudioTag || reply.hasReplyTag || Boolean(speech.facts);
+    if (speech.cleanedText === original[index] && !hasDeliveryFacts) {
       continue;
     }
-    if (!block.text.includes("[[")) {
-      continue;
-    }
-    const parsed = parseInlineDirectives(block.text);
-    const stripped = stripInlineDirectiveTagsForDelivery(parsed.text);
-    const tts = extractTtsDirectiveFacts(stripped.text);
-    const hasDeliveryFacts = parsed.hasAudioTag || parsed.hasReplyTag || Boolean(tts.facts);
-    if (!stripped.changed && !hasDeliveryFacts) {
-      continue;
-    }
-    block.text = tts.facts ? tts.cleanedText.trim() : tts.cleanedText;
+    block.text = speech.facts
+      ? trimTextPreservingCode(speech.cleanedText, "both", codeRegions?.(index))
+      : speech.cleanedText;
     if (!hasDeliveryFacts) {
       continue;
     }
     facts ??= {};
     Object.assign(facts, {
-      ...(parsed.audioAsVoice ? { audioAsVoice: true as const } : {}),
-      ...(parsed.replyToCurrent ? { replyToCurrent: true as const } : {}),
-      ...(parsed.replyToExplicitId ? { replyToId: parsed.replyToExplicitId } : {}),
-      ...(tts.facts ? { tts: mergeTtsFacts(facts.tts, tts.facts) } : {}),
+      ...(reply.audioAsVoice ? { audioAsVoice: true as const } : {}),
+      ...(reply.replyToCurrent ? { replyToCurrent: true as const } : {}),
+      ...(reply.replyToExplicitId ? { replyToId: reply.replyToExplicitId } : {}),
+      ...(speech.facts ? { tts: mergeTtsFacts(facts.tts, speech.facts) } : {}),
     });
   }
   if (facts) {

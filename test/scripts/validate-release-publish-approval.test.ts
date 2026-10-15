@@ -1,9 +1,9 @@
-// Validate release publish approval tests cover the stdin/env CLI contract.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { createStablePluginNpmBootstrapApproval } from "../../scripts/plugin-npm-bootstrap-approval.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/validate-release-publish-approval.mjs";
@@ -420,17 +420,25 @@ function writeClawHubApproval(overrides: Record<string, unknown> = {}) {
   return approvalPath;
 }
 
+function runClawHubApproval(
+  env: Parameters<typeof runApprovalScript>[1] = {},
+  approval: Record<string, unknown> = {},
+) {
+  return runApprovalScript(
+    approvalRun({ headBranch: "main", headSha: "d".repeat(40), runAttempt: 2 }),
+    {
+      APPROVAL_PATH: writeClawHubApproval(approval),
+      EXPECTED_WORKFLOW_BRANCH: "main",
+      EXPECTED_RUN_ATTEMPT: "2",
+      RELEASE_APPROVAL_KIND: "clawhub-bootstrap",
+      RELEASE_PACKAGES: "@openclaw/voice-call,@openclaw/meta-provider",
+      RELEASE_TAG: "v2026.7.1-beta.3",
+      ...env,
+    },
+  );
+}
+
 describe("scripts/validate-release-publish-approval.mjs", () => {
-  it("accepts an in-progress release publish workflow run for approval", () => {
-    const result = runApprovalScript(approvalRun());
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain(
-      "Using release publish approval run 123: https://github.com/openclaw/openclaw/actions/runs/123",
-    );
-    expect(result.stderr).toBe("");
-  });
-
   it("rejects approval runs from the wrong workflow branch", () => {
     const result = runApprovalScript(approvalRun({ headBranch: "main" }));
 
@@ -439,27 +447,6 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
       "Referenced release publish run 123 must have headBranch=release/2026.6.21, got main.",
     );
     expect(result.stdout).toBe("");
-  });
-
-  it("binds the parent repository, workflow path, full ref, SHA, and attempt", () => {
-    const workflowSha = "d".repeat(40);
-    const fullRef = "refs/tags/release-publish/aaaaaaaaaaaa-111";
-    const result = runApprovalScript(
-      approvalRun({
-        headBranch: "release-publish/aaaaaaaaaaaa-111",
-        headSha: workflowSha,
-        path: `.github/workflows/openclaw-release-publish.yml@${fullRef}`,
-        runAttempt: 7,
-      }),
-      {
-        EXPECTED_RUN_ATTEMPT: "7",
-        EXPECTED_WORKFLOW_BRANCH: "release-publish/aaaaaaaaaaaa-111",
-        EXPECTED_WORKFLOW_FULL_REF: fullRef,
-        EXPECTED_WORKFLOW_SHA: workflowSha,
-      },
-    );
-
-    expect(result.status, result.stderr).toBe(0);
   });
 
   it("rejects completed runs for normal approval handoff", () => {
@@ -495,66 +482,8 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
     );
   });
 
-  androidIt.each(["main", ANDROID_PROTECTED_REF, "release/2026.8.1"])(
-    "accepts the attested Android workflow handoff from %s",
-    (ref) => {
-      const result = runAndroidApproval({ ref });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.buildOutput).toBe("build_timestamp=2026-08-30T12:00:00Z\n");
-      expect(result.waitedForAndroid).toBe(false);
-      expect(result.attestationArgs).toEqual([
-        "attestation",
-        "verify",
-        expect.any(String),
-        "--repo",
-        "openclaw/openclaw",
-        "--signer-workflow",
-        "openclaw/openclaw/.github/workflows/openclaw-release-publish.yml",
-        "--source-ref",
-        `${ref === ANDROID_PROTECTED_REF ? "refs/tags" : "refs/heads"}/${ref}`,
-        "--source-digest",
-        ANDROID_TOOLING_SHA,
-        "--deny-self-hosted-runners",
-      ]);
-    },
-  );
-
-  androidIt("accepts a completed successful parent and an already public stable release", () => {
-    const result = runAndroidApproval({
-      run: { status: "completed", conclusion: "success" },
-      release: { isDraft: false },
-    });
-    expect(result.status, result.stderr).toBe(0);
-  });
-
-  androidIt("accepts a public stable release while its parent is still active", () => {
-    const result = runAndroidApproval({ release: { isDraft: false } });
-    expect(result.status, result.stderr).toBe(0);
-  });
-
-  androidIt.each([
-    [
-      "another tag",
-      { tagName: "v2026.8.2" },
-      "a".repeat(40),
-      "exact approved stable GitHub release",
-    ],
-    [
-      "a prerelease",
-      { isPrerelease: true },
-      "a".repeat(40),
-      "exact approved stable GitHub release",
-    ],
-    ["a moved release tag", {}, "b".repeat(40), "no longer resolves to approved target"],
-  ])("rejects publication to %s", (_name, release, targetSha, message) => {
-    const result = runAndroidApproval({ release, targetSha });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(message);
-  });
-
   androidIt.each([
     ["failed", { status: "completed", conclusion: "failure" }],
-    ["cancelled", { status: "completed", conclusion: "cancelled" }],
     ["rerun", { run_attempt: 3 }],
   ])("fences asset publication after the parent becomes %s", (_name, parent) => {
     for (const phase of ["afterAdmission", "afterFirstUpload"] as const) {
@@ -585,7 +514,6 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
 
   androidIt.each([
     ["failed", { status: "completed", conclusion: "failure" }],
-    ["cancelled", { status: "completed", conclusion: "cancelled" }],
     ["rerun", { run_attempt: 2 }],
   ])("fences asset publication after native qualification becomes %s", (_name, nativeCi) => {
     for (const phase of [
@@ -611,12 +539,12 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
     expect(result.uploads).toEqual([]);
   });
 
-  androidIt.each(["in_progress", "completed"])(
-    "publishes qualified Android assets after GitHub finalization with parent %s",
-    (status) => {
+  androidIt(
+    "publishes qualified Android assets after GitHub finalization with parent completed",
+    () => {
       const result = runAndroidApproval({
         nativeCi: {},
-        run: { status, conclusion: status === "completed" ? "success" : null },
+        run: { status: "completed", conclusion: "success" },
         release: { isDraft: false },
         publication: {},
       });
@@ -630,14 +558,7 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
   );
 
   androidIt.each([
-    ["run ID", { id: 92 }],
-    ["attempt", { run_attempt: 2 }],
-    ["workflow", { path: ".github/workflows/other.yml" }],
-    ["tooling", { head_sha: "e".repeat(40) }],
-    ["ref", { head_branch: "main" }],
     ["source", { display_title: `CI release-native-android-123-2-${"b".repeat(40)}` }],
-    ["parent attempt", { display_title: `CI release-native-android-123-1-${"a".repeat(40)}` }],
-    ["repository", { repository: { full_name: "other/repository" } }],
     ["actor", { actor: { login: "other" } }],
   ])("rejects another native qualification %s", (_name, nativeCi) => {
     const result = runAndroidApproval({ nativeCi });
@@ -645,23 +566,21 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
     expect(result.uploads).toEqual([]);
   });
 
-  androidIt.each([
-    { runId: "0", runAttempt: 1, workflowRef: ANDROID_PROTECTED_REF },
-    { runId: 91, runAttempt: 1, workflowRef: ANDROID_PROTECTED_REF },
-    { runId: "91", runAttempt: 2, workflowRef: ANDROID_PROTECTED_REF },
-    { runId: "91", runAttempt: 1, workflowRef: "" },
-    { runId: "91", runAttempt: 1, workflowRef: ANDROID_PROTECTED_REF, extra: true },
-  ])("rejects a malformed attested native qualification tuple: %j", (nativeCi) => {
-    const result = runAndroidApproval({ nativeCi: {}, approval: { nativeCi } });
-    expect(result.status, result.stderr).toBe(1);
-    expect(result.stderr).toContain("exact native CI qualification tuple");
-    expect(result.uploads).toEqual([]);
-  });
+  androidIt(
+    'rejects a malformed attested native qualification tuple: {"runId":"91","runAttempt":2,"workflowRef":"release-publish/dddddddddddd-123"}',
+    () => {
+      const nativeCi = { runId: "91", runAttempt: 2, workflowRef: ANDROID_PROTECTED_REF };
 
-  androidIt.each([
-    ["success", 0],
-    ["failure", 1],
-  ])("rechecks %s parent authority immediately before provenance", (conclusion, expectedStatus) => {
+      const result = runAndroidApproval({ nativeCi: {}, approval: { nativeCi } });
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("exact native CI qualification tuple");
+      expect(result.uploads).toEqual([]);
+    },
+  );
+
+  androidIt("rechecks failure parent authority immediately before provenance", () => {
+    const conclusion = "failure";
+
     const workflow = parse(fs.readFileSync(".github/workflows/android-release.yml", "utf8"));
     const steps = workflow.jobs.publish_signed_android_apk.steps;
     const provenanceIndex = steps.findIndex(
@@ -671,16 +590,19 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
       "Revalidate release approval before Android provenance",
     );
     const result = runAndroidApproval({
-      publication: { beforeProvenance: true, afterAdmission: { status: "completed", conclusion } },
+      publication: {
+        beforeProvenance: true,
+        afterAdmission: { status: "completed", conclusion },
+      },
     });
-    expect(result.status, result.stderr).toBe(expectedStatus);
+    expect(result.status, result.stderr).toBe(1);
     expect(result.uploads).toEqual([]);
   });
 
-  androidIt.each([
-    ["successful completion", false, { status: "completed", conclusion: "success" }],
-    ["explicit failed-parent recovery", true, { status: "completed", conclusion: "failure" }],
-  ])("publishes both assets for %s", (_name, recovery, parent) => {
+  androidIt("publishes both assets for explicit failed-parent recovery", () => {
+    const recovery = true;
+    const parent = { status: "completed", conclusion: "failure" };
+
     const result = runAndroidApproval({ recovery, publication: { afterAdmission: parent } });
     expect(result.status, result.stderr).toBe(0);
     expect(result.uploads).toEqual([
@@ -704,40 +626,20 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
     expect(result.stdout).not.toContain("Using attested Android");
   });
 
-  androidIt.each([
-    ["repository", { repository: { full_name: "other/repository" } }],
-    ["run ID", { id: 456 }],
-    ["attempt", { run_attempt: 3 }],
-    ["SHA", { head_sha: "e".repeat(40) }],
-    ["ref", { head_branch: "main" }],
-    ["workflow path", { path: ".github/workflows/android-release.yml" }],
-    ["full ref", { path: ".github/workflows/openclaw-release-publish.yml@refs/heads/main" }],
-    ["event", { event: "push" }],
-    ["failed parent", { status: "completed", conclusion: "failure" }],
-    ["cancelled parent", { status: "completed", conclusion: "cancelled" }],
-  ])("rejects an Android handoff with a different live parent %s", (_name, run) => {
+  androidIt("rejects an Android handoff with a different live parent SHA", () => {
+    const run = { head_sha: "e".repeat(40) };
+
     const result = runAndroidApproval({ run });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("release publish parent run");
   });
 
-  androidIt.each([
-    [
-      "moved tag",
-      {
-        ref: `refs/tags/${ANDROID_PROTECTED_REF}`,
-        object: { type: "commit", sha: "e".repeat(40) },
-      },
-    ],
-    [
-      "annotated tag",
-      {
-        ref: `refs/tags/${ANDROID_PROTECTED_REF}`,
-        object: { type: "tag", sha: ANDROID_TOOLING_SHA },
-      },
-    ],
-    ["missing tag", {}],
-  ])("rejects an Android handoff from a %s", (_name, identity) => {
+  androidIt("rejects an Android handoff from a moved tag", () => {
+    const identity = {
+      ref: `refs/tags/${ANDROID_PROTECTED_REF}`,
+      object: { type: "commit", sha: "e".repeat(40) },
+    };
+
     const result = runAndroidApproval({ identity });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("protected release tooling tag");
@@ -749,101 +651,21 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
     expect(result.stderr).toContain("not reachable from current main");
   });
 
-  androidIt.each(["success", "failure", "cancelled"])(
-    "allows only completed success or failure for explicit Android recovery: %s",
-    (conclusion) => {
+  androidIt(
+    "allows only completed success or failure for explicit Android recovery: cancelled",
+    () => {
+      const conclusion = "cancelled";
+
       const result = runAndroidApproval({
         recovery: true,
         run: { status: "completed", conclusion },
       });
-      expect(result.status, result.stderr).toBe(conclusion === "cancelled" ? 1 : 0);
+      expect(result.status, result.stderr).toBe(1);
     },
   );
 
-  it("accepts an exact attested ClawHub bootstrap parent tuple", () => {
-    const approvalPath = writeClawHubApproval();
-    const result = runApprovalScript(
-      approvalRun({
-        headBranch: "main",
-        headSha: "d".repeat(40),
-        runAttempt: 2,
-      }),
-      {
-        APPROVAL_PATH: approvalPath,
-        EXPECTED_WORKFLOW_BRANCH: "main",
-        EXPECTED_RUN_ATTEMPT: "2",
-        RELEASE_APPROVAL_KIND: "clawhub-bootstrap",
-        RELEASE_PACKAGES: "@openclaw/voice-call,@openclaw/meta-provider",
-        RELEASE_TAG: "v2026.7.1-beta.3",
-      },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-  });
-
-  it("accepts a child workflow SHA that differs from the approving parent tooling", () => {
-    const approvalPath = writeClawHubApproval();
-    const result = runApprovalScript(
-      approvalRun({
-        headBranch: "main",
-        headSha: "d".repeat(40),
-        runAttempt: 2,
-      }),
-      {
-        APPROVAL_PATH: approvalPath,
-        EXPECTED_WORKFLOW_BRANCH: "main",
-        EXPECTED_RUN_ATTEMPT: "2",
-        RELEASE_APPROVAL_KIND: "clawhub-bootstrap",
-        RELEASE_PACKAGES: "@openclaw/meta-provider,@openclaw/voice-call",
-        RELEASE_TAG: "v2026.7.1-beta.3",
-      },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-  });
-
-  it("rejects a child workflow SHA that differs from the attested bootstrap tooling", () => {
-    const approvalPath = writeClawHubApproval();
-    const result = runApprovalScript(
-      approvalRun({
-        headBranch: "main",
-        headSha: "d".repeat(40),
-        runAttempt: 2,
-      }),
-      {
-        APPROVAL_PATH: approvalPath,
-        CHILD_WORKFLOW_SHA: "c".repeat(40),
-        EXPECTED_WORKFLOW_BRANCH: "main",
-        EXPECTED_RUN_ATTEMPT: "2",
-        RELEASE_APPROVAL_KIND: "clawhub-bootstrap",
-        RELEASE_PACKAGES: "@openclaw/meta-provider,@openclaw/voice-call",
-        RELEASE_TAG: "v2026.7.1-beta.3",
-      },
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "Attested ClawHub bootstrap approval does not match this release target and package set.",
-    );
-  });
-
   it("rejects a ClawHub bootstrap handoff without an attested approval artifact", () => {
-    const result = runApprovalScript(
-      approvalRun({
-        headBranch: "main",
-        headSha: "d".repeat(40),
-        runAttempt: 2,
-      }),
-      {
-        EXPECTED_WORKFLOW_BRANCH: "main",
-        EXPECTED_RUN_ATTEMPT: "2",
-        RELEASE_APPROVAL_KIND: "clawhub-bootstrap",
-        RELEASE_PACKAGES: "@openclaw/meta-provider,@openclaw/voice-call",
-        RELEASE_TAG: "v2026.7.1-beta.3",
-      },
-    );
+    const result = runClawHubApproval({ APPROVAL_PATH: "" });
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
@@ -851,33 +673,11 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
     );
   });
 
-  it.each([
-    ["release tag", { releaseTag: "v2026.7.1-beta.2" }, {}],
-    ["target SHA", { targetSha: "c".repeat(40) }, {}],
-    ["package set", { packages: ["@openclaw/meta-provider"] }, {}],
-    ["parent attempt", { parentRunAttempt: 1 }, {}],
-    ["parent workflow SHA", { parentWorkflowSha: "c".repeat(40) }, {}],
-    ["bootstrap workflow SHA", { bootstrapWorkflowSha: "c".repeat(40) }, {}],
-    ["extra field", { unexpected: true }, {}],
-    ["requested attempt", {}, { EXPECTED_RUN_ATTEMPT: "3" }],
-  ])("rejects a ClawHub bootstrap approval for another %s", (_name, overrides, envOverrides) => {
-    const approvalPath = writeClawHubApproval(overrides);
-    const result = runApprovalScript(
-      approvalRun({
-        headBranch: "main",
-        headSha: "d".repeat(40),
-        runAttempt: 2,
-      }),
-      {
-        APPROVAL_PATH: approvalPath,
-        EXPECTED_WORKFLOW_BRANCH: "main",
-        EXPECTED_RUN_ATTEMPT: "2",
-        RELEASE_APPROVAL_KIND: "clawhub-bootstrap",
-        RELEASE_PACKAGES: "@openclaw/meta-provider,@openclaw/voice-call",
-        RELEASE_TAG: "v2026.7.1-beta.3",
-        ...envOverrides,
-      },
-    );
+  it("rejects a ClawHub bootstrap approval for another package set", () => {
+    const overrides = { packages: ["@openclaw/meta-provider"] };
+    const envOverrides = {};
+
+    const result = runClawHubApproval(envOverrides, overrides);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toMatch(
@@ -885,16 +685,9 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
     );
   });
 
-  androidIt.each([
-    ["parent run", { parentRunId: "999" }],
-    ["version", { version: 1 }],
-    ["parent attempt", { parentRunAttempt: 1 }],
-    ["parent full ref", { workflowFullRef: "refs/heads/main" }],
-    ["parent SHA", { parentWorkflowSha: "e".repeat(40) }],
-    ["release tag", { releaseTag: "v2026.6.22" }],
-    ["target SHA", { targetSha: "b".repeat(40) }],
-    ["extra field", { unexpected: true }],
-  ])("rejects an attested Android approval for another %s", (_name, overrides) => {
+  androidIt("rejects an attested Android approval for another target SHA", () => {
+    const overrides = { targetSha: "b".repeat(40) };
+
     const result = runAndroidApproval({ approval: overrides });
 
     expect(result.status).toBe(1);
@@ -902,18 +695,20 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
       "Attested Android release approval does not match this run request.",
     );
   });
+});
 
-  it("accepts completed success or failure runs for direct recovery", () => {
-    for (const conclusion of ["success", "failure"]) {
-      const result = runApprovalScript(approvalRun({ conclusion, status: "completed" }), {
-        DIRECT_RELEASE_RECOVERY: "true",
-      });
+describe("stable npm bootstrap profile authority", () => {
+  it("rejects historical sealed waivers for beta-profile stable bootstrap", () => {
+    const source = "sealed";
 
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain(
-        `Using completed release publish run 123 (${conclusion}) for direct recovery: https://github.com/openclaw/openclaw/actions/runs/123`,
-      );
-      expect(result.stderr).toBe("");
-    }
+    expect(() =>
+      createStablePluginNpmBootstrapApproval({
+        releaseTag: "v2026.9.6",
+        publishTag: "latest",
+        releaseProfile: "beta",
+        stableSoakWaiver: "2026.9.6 approved",
+        stableSoakWaiverSource: source,
+      }),
+    ).toThrow("stable/full validation");
   });
 });

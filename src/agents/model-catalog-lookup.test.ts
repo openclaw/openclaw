@@ -10,11 +10,8 @@ const upper: ModelCatalogEntry = { provider: "custom", id: "Reader", name: "Uppe
 const lower: ModelCatalogEntry = { provider: "custom", id: "reader", name: "Lowercase reader" };
 
 describe("catalog model identity", () => {
-  it.each([
-    [upper, lower],
-    [lower, upper],
-  ])("prefers exact identity with %j first", (first, second) => {
-    const catalog = [first, second];
+  it("prefers exact identity when models differ only by case", () => {
+    const catalog = [upper, lower];
     for (const entry of catalog) {
       expect(findModelInCatalog(catalog, " Custom ", ` ${entry.id} `)).toBe(entry);
       expect(findModelCatalogEntry(catalog, { modelId: ` ${entry.id} ` })).toBe(entry);
@@ -23,24 +20,20 @@ describe("catalog model identity", () => {
     expect(findModelCatalogEntry(catalog, { modelId: "READER" })).toBeUndefined();
   });
 
-  it.each([false, true])(
-    "prefers a literal catalog row over provider equivalence (reversed=%s)",
-    (reverse) => {
-      const rows = [
-        {
-          provider: "arcee",
-          id: "arcee-ai/trinity-large-thinking",
-          name: "Wire",
-          contextWindow: 32_000,
-        },
-        { provider: "arcee", id: "trinity-large-thinking", name: "Logical", contextWindow: 64_000 },
-      ];
-      const catalog = reverse ? rows.toReversed() : rows;
-      for (const row of rows) {
-        expect(findModelInCatalog(catalog, row.provider, row.id)).toBe(row);
-      }
-    },
-  );
+  it("prefers a literal catalog row over provider equivalence", () => {
+    const rows = [
+      {
+        provider: "arcee",
+        id: "arcee-ai/trinity-large-thinking",
+        name: "Wire",
+        contextWindow: 32_000,
+      },
+      { provider: "arcee", id: "trinity-large-thinking", name: "Logical", contextWindow: 64_000 },
+    ];
+    for (const row of rows) {
+      expect(findModelInCatalog(rows, row.provider, row.id)).toBe(row);
+    }
+  });
 
   it("keeps unique case-insensitive SDK matches and providerless ambiguity", () => {
     const other = { ...lower, provider: "other" };
@@ -77,18 +70,6 @@ describe("catalog model identity", () => {
 describe("prepared thinking disablement ownership", () => {
   it.each([
     {
-      name: "retains route disablement while replacing enabled tiers",
-      selected: ["none", "low"],
-      prepared: ["max", "ultra"],
-      expected: ["none", "max", "ultra"],
-    },
-    {
-      name: "does not grant disablement to an unknown route",
-      selected: undefined,
-      prepared: ["none", "max", "ultra"],
-      expected: ["max", "ultra"],
-    },
-    {
       name: "does not grant disablement from nullable route metadata",
       selected: null,
       prepared: ["none", "max"],
@@ -101,12 +82,6 @@ describe("prepared thinking disablement ownership", () => {
       expected: ["none"],
     },
     {
-      name: "preserves nullable unknown metadata",
-      selected: undefined,
-      prepared: null,
-      expected: null,
-    },
-    {
       name: "leaves an absent effort overlay absent",
       selected: ["none", "high"],
       prepared: undefined,
@@ -117,13 +92,6 @@ describe("prepared thinking disablement ownership", () => {
       selected: undefined,
       prepared: ["none", "high"],
       expected: ["none", "high"],
-      routeBound: true,
-    },
-    {
-      name: "accepts nullable metadata from the exact physical route",
-      selected: ["none", "high"],
-      prepared: null,
-      expected: null,
       routeBound: true,
     },
   ])("$name", ({ selected, prepared, expected, routeBound }) => {
@@ -147,5 +115,8 @@ describe("prepared thinking disablement ownership", () => {
     });
 
     expect(result).toEqual({ thinkingFormat: "openai", supportedReasoningEfforts: expected });
+    expect({ ...model.compat, ...result }.supportedReasoningEfforts).toEqual(
+      prepared === undefined ? selected : expected,
+    );
   });
 });

@@ -57,7 +57,6 @@ describe("Gateway node exec approvals", () => {
       gatewayOwners.push(gatewayOwner);
       const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
-        useRepoCli: true,
         transportBaseUrl: "http://127.0.0.1",
         controlUiEnabled: false,
         runtimeEnvPatch: {
@@ -171,15 +170,16 @@ describe("Gateway node exec approvals", () => {
           { nodeId: identity.deviceId },
           { timeoutMs: REQUEST_TIMEOUT_MS },
         );
+        const invalidGetRejected = expect(invalidGetPromise).rejects.toThrow(
+          "node returned invalid exec approvals payload",
+        );
         const invalidGetFrame = await replacementInbox.next();
         await respondToInvoke(replacementNode, invalidGetFrame, {
           enabled: true,
           hash: "sha256:invalid",
           rules: [],
         });
-        await expect(invalidGetPromise).rejects.toThrow(
-          "node returned invalid exec approvals payload",
-        );
+        await invalidGetRejected;
       } finally {
         await Promise.allSettled([
           ...(replacementNode ? [replacementNode.stopAndWait({ timeoutMs: 1_000 })] : []),

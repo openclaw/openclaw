@@ -1,15 +1,16 @@
 /** Invokes current-context plugin tool factories and reports one assembly's timings. */
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { isInvalidConfigError } from "../config/io.invalid-config.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithTrackedCancellation } from "../shared/async-work-scope.js";
+import { prepareMemoryAudienceRead } from "./memory-audience.js";
+import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
-import {
-  withPluginRuntimePluginScope,
-  withPluginRuntimeRegistryScope,
-} from "./runtime/gateway-request-scope.js";
+import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
 import { copyPluginToolMeta } from "./tool-metadata.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
@@ -44,14 +45,13 @@ function runWithPluginToolScope<T>(
   registry: PluginRegistry,
   run: () => T,
 ): T {
-  return withPluginRuntimeRegistryScope(registry, () =>
-    withPluginRuntimePluginScope(
-      {
-        pluginId: entry.pluginId,
-        pluginSource: entry.source,
-      },
-      run,
-    ),
+  return withPluginRuntimePluginScope(
+    {
+      pluginId: entry.pluginId,
+      pluginSource: entry.source,
+    },
+    run,
+    registry,
   );
 }
 
@@ -60,6 +60,8 @@ export function bindPluginToolCallbacks(
   entry: PluginToolRegistration,
   registry: PluginRegistry,
   tool: AnyAgentTool,
+  assertInvocationCurrent?: () => void,
+  memoryAudience?: OpenClawPluginToolContext["memoryAudience"],
 ): AnyAgentTool {
   const record = registry.plugins.find((candidate) => candidate.id === entry.pluginId);
   const authority = capturePluginLifecycleAuthority(registry, record, { scopedRuntime: true });
@@ -67,17 +69,36 @@ export function bindPluginToolCallbacks(
     if (!authority?.()) {
       throw new Error(`Plugin "${entry.pluginId}" tool runtime is no longer active.`);
     }
-    return runWithPluginToolScope(entry, registry, run);
+    assertInvocationCurrent?.();
+    const result = runWithPluginToolScope(entry, registry, run);
+    if (assertInvocationCurrent && isPromiseLike(result)) {
+      return Promise.resolve(result).then((value) => {
+        assertInvocationCurrent();
+        return value;
+      }) as T; // SAFETY: Only promise-like callback results enter this branch; the resolved value is unchanged.
+    }
+    assertInvocationCurrent?.();
+    return result;
   };
   const prepare = tool.prepareArguments;
   const callbacks = {
-    execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
-      invoke(() => {
-        const [toolCallId, params, signal, onUpdate] = args;
+    execute: async (...args: Parameters<AnyAgentTool["execute"]>) => {
+      const [toolCallId, params, signal, onUpdate] = args;
+      const pending =
+        memoryAudience &&
+        resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.pluginId ===
+          entry.pluginId
+          ? prepareMemoryAudienceRead(memoryAudience)
+          : undefined;
+      if (pending) {
+        await racePromiseWithAbortSignal(pending, signal);
+      }
+      return invoke(() => {
         const execute = (executionSignal?: AbortSignal) =>
           tool.execute(toolCallId, params, executionSignal, onUpdate);
         return signal ? runWithTrackedCancellation(signal, execute) : execute();
-      }),
+      });
+    },
     ...(prepare
       ? { prepareArguments: (args: unknown) => invoke(() => prepare.call(tool, args)) }
       : {}),

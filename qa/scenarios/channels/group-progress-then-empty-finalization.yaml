@@ -1,0 +1,135 @@
+title: Group progress then empty final answer
+
+scenario:
+  id: group-progress-then-empty-finalization
+  surface: channel
+  coverage:
+    primary: [agent-runtime.failure-recovery-empty-response-recovery]
+    secondary: [channels.outbound-group-reply]
+  objective: Verify a message-tool group turn that sends progress as its last action and then ends empty posts that progress once, while a turn that sent nothing still gets its settled-tool finalization.
+  gatewayConfigPatch:
+    messages:
+      groupChat:
+        visibleReplies: message_tool
+  successCriteria:
+    - The progress-then-empty turn posts exactly one group message and makes no finalization request.
+    - The write-then-empty turn still runs finalization and posts the recovered marker once.
+  docsRefs:
+    - docs/channels/groups.md
+  codeRefs:
+    - src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
+    - src/agents/embedded-agent-runner/run/settled-turn-finalization.ts
+  execution:
+    kind: flow
+    summary: Send a progress-then-empty group turn and a write-then-empty group turn; count group posts and finalization requests.
+    config:
+      progressConversationId: qa-progress-empty-room
+      progressSnippet: qa group progress then empty check
+      progressPrompt: "@openclaw qa group progress then empty check. exact marker: `QA-GROUP-PROGRESS-OK`"
+      progressMarker: QA-GROUP-PROGRESS-OK
+      writeConversationId: qa-write-empty-room
+      writeSnippet: Empty response after write recovery QA check
+      writePrompt: "@openclaw Empty response after write recovery QA check: write qa-empty-response-side-effect.txt with the text side effect completed once, then reply with exact marker: `QA-GROUP-WRITE-FINALIZED-OK`."
+      writeMarker: QA-GROUP-WRITE-FINALIZED-OK
+      finalizationNeedle: did not produce a user-visible answer
+
+flow:
+  steps:
+    - name: progress as the last action is the reply
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: delivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `group:${config.progressConversationId}` })"
+        - set: sessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'group', id: delivery.replyTo }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+        - set: requestCursorBefore
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.progressConversationId
+              kind: group
+              title: QA Progress Room
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: config.progressPrompt
+        - call: waitForOutboundMessage
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === config.progressConversationId && candidate.text.includes(config.progressMarker)"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => result.sessions?.find((session) => session.key === sessionKey && session.hasActiveRun === false))"
+            - expr: liveTurnTimeoutMs(env, 180000)
+            - 100
+        - call: sleep
+          args:
+            - 1500
+        - set: progressRequests
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.progressSnippet)) : []"
+        - set: progressPosts
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.progressConversationId)"
+        - assert:
+            expr: "progressPosts.length === 1"
+            message:
+              expr: "`expected one group post after progress then empty, saw ${JSON.stringify(progressPosts.map((message) => message.text))}`"
+        - assert:
+            expr: "!env.mock || !progressRequests.some((request) => String(request.allInputText ?? '').includes(config.finalizationNeedle))"
+            message: progress-then-empty turn ran settled-turn finalization
+      detailsExpr: "JSON.stringify({ posts: progressPosts.map((message) => message.text), modelRequests: progressRequests.length })"
+    - name: a turn that sent nothing still gets its finalization
+      actions:
+        - set: requestCursorBefore
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.writeConversationId
+              kind: group
+              title: QA Write Room
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: config.writePrompt
+        - call: waitForOutboundMessage
+          saveAs: writeReply
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === config.writeConversationId && candidate.text.includes(config.writeMarker)"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - set: writeRequests
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.writeSnippet)) : []"
+        - assert:
+            expr: "!env.mock || writeRequests.some((request) => String(request.allInputText ?? '').includes(config.finalizationNeedle))"
+            message: write-then-empty turn did not run settled-turn finalization
+        - set: writePosts
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.writeConversationId)"
+        - assert:
+            expr: "writePosts.length === 1"
+            message:
+              expr: "`expected one group post after write then empty, saw ${JSON.stringify(writePosts.map((message) => message.text))}`"
+      detailsExpr: "JSON.stringify({ posts: writePosts.map((message) => message.text), modelRequests: writeRequests.length })"

@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { JsonTestResults } from "vitest/node";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import { createPreparedVitestCliFixture } from "./run-vitest-bounded-fixture.test-support.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const target = "test/scripts/empty-policy.synthetic.test.ts";
@@ -13,6 +14,13 @@ const sibling = "test/scripts/empty-policy-sibling.synthetic.test.ts";
 const source = "test/scripts/empty-policy.synthetic.ts";
 const isolated = "test/scripts/control-ui-i18n.test.ts";
 const config = "test/vitest/vitest.tooling.config.ts";
+const preparedCli = createPreparedVitestCliFixture(
+  repoRoot,
+  ["run-vitest.mts", "test-projects.mts"],
+  { prepareWorkerArtifacts: true },
+);
+beforeAll(() => preparedCli.prepare());
+afterAll(() => preparedCli.cleanup());
 
 describe("project runner native empty-file policy", () => {
   it.for([
@@ -84,7 +92,8 @@ describe("project runner native empty-file policy", () => {
     { name: "delegated separated true", code: 0, flags: ["--passWithNoTests", "true"] },
     {
       name: "direct invalid scalar is not repaired",
-      code: 1,
+      // Direct CLI parse errors fail before tests run, so they are infrastructure failures.
+      code: 2,
       flags: ["--config", config, "--no-passWithNoTests", "--passWithNoTests=true"],
       invalid: true,
     },
@@ -146,7 +155,7 @@ describe("project runner native empty-file policy", () => {
           recursive: true,
         });
       }
-      for (const name of ["scripts", "src", "packages", "node_modules"]) {
+      for (const name of ["scripts", "src", "packages", "ui", "node_modules"]) {
         fs.symlinkSync(path.join(repoRoot, name), path.join(root, name), "junction");
       }
       for (const name of ["package.json", "tsconfig.json"]) {
@@ -176,7 +185,7 @@ describe("project runner native empty-file policy", () => {
         XDG_CONFIG_HOME: path.join(root, "config"),
         TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json"),
         TSX_DISABLE_CACHE: "1",
-        NODE_DISABLE_COMPILE_CACHE: "1",
+        NODE_COMPILE_CACHE: path.join(preparedCli.root, "node-compile-cache"),
         COREPACK_ENABLE_NETWORK: "0",
         GIT_OPTIONAL_LOCKS: "0",
         CI: "1",
@@ -185,7 +194,6 @@ describe("project runner native empty-file policy", () => {
         OPENCLAW_TEST_PROJECTS_TIMINGS: "0",
         OPENCLAW_VITEST_MAX_WORKERS: "1",
         OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "module-cache"),
-        OPENCLAW_VITEST_NO_OUTPUT_RETRY: "0",
         ...(scenario.parallel ? { OPENCLAW_TEST_PROJECTS_PARALLEL: "2" } : {}),
       };
       for (const name of ["home", "state", "tmp", "cache", "config"]) {
@@ -198,7 +206,7 @@ describe("project runner native empty-file policy", () => {
             bin,
             args: commandArgs,
             cwd: root,
-            env,
+            env: preparedCli.env(env),
             signal,
             stdio: ["ignore", "pipe", "pipe"],
             timeoutMs: 45_000,
@@ -227,8 +235,12 @@ it${scenario.skipped ? ".skip" : ""}("records execution", () => fs.appendFileSyn
       const output = path.join(root, "native.json");
       const args = [
         ...(scenario.entry === "projects"
-          ? ["--import", "tsx", path.join(repoRoot, "scripts/test-projects.mts")]
-          : [path.join(repoRoot, "scripts/run-vitest.mjs")]),
+          ? [
+              "--import",
+              path.join(preparedCli.root, "scripts/tsx.mjs"),
+              path.join(preparedCli.root, "scripts/test-projects.mts"),
+            ]
+          : [path.join(preparedCli.root, "scripts/run-vitest.mjs")]),
         ...(scenario.selectors ?? [target]),
         ...(scenario.emptyInvocations
           ? ["--reporter=verbose"]

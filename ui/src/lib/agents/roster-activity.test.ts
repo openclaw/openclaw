@@ -3,6 +3,52 @@ import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
 import { agentRosterCards } from "./roster-activity.ts";
 
 describe("agent roster activity", () => {
+  it("preserves row ownership, recency ties, and canonical main precedence", () => {
+    const identities: string[] = [];
+    const rows: GatewaySessionRow[] = [
+      { key: "agent:alpha:alias", kind: "direct", isMain: true, lastMessagePreview: "Alias" },
+      { key: "agent::ALPHA:task", agentId: "beta", kind: "direct", updatedAt: 9, unread: true },
+      {
+        key: "foreign-key",
+        agentId: "beta",
+        kind: "direct",
+        updatedAt: 7,
+        lastMessagePreview: "First beta",
+      },
+      { key: "agent:beta:second", kind: "direct", updatedAt: 7, lastMessagePreview: "Tied beta" },
+      { key: "agent:alpha:main", kind: "direct", updatedAt: 1, lastMessagePreview: "Canonical" },
+      { key: "unscoped", kind: "direct", updatedAt: 10, hasActiveRun: true },
+      { key: "agent:system:main", kind: "direct", updatedAt: 99, hasActiveRun: true },
+    ];
+    const before = structuredClone(rows);
+    const cards = agentRosterCards(
+      {
+        defaultId: "alpha",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [
+          { id: "beta" },
+          { id: "system", kind: "system" },
+          { id: "alpha" },
+          { id: "empty" },
+        ],
+      },
+      rows,
+      (id) => {
+        identities.push(id);
+        return null;
+      },
+    );
+
+    expect(cards).toMatchObject([
+      { id: "beta", lastActiveAt: 7, preview: "First beta", activeNow: false, unreadCount: 0 },
+      { id: "alpha", lastActiveAt: 10, preview: "Canonical", activeNow: true, unreadCount: 1 },
+      { id: "empty", lastActiveAt: 0, preview: undefined, activeNow: false, unreadCount: 0 },
+    ]);
+    expect(identities).toEqual(["beta", "alpha", "empty"]);
+    expect(rows).toEqual(before);
+  });
+
   it("uses the canonical global main stream rather than a synthesized agent key", () => {
     const cards = agentRosterCards(
       { defaultId: "main", mainKey: "main", scope: "global", agents: [{ id: "main" }] },

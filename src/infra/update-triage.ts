@@ -9,7 +9,7 @@ import {
   stripGatewayServiceMarkerEnv,
   withOwnedManagedUpdateEnv,
 } from "../cli/update-cli/update-command-service-env.js";
-import { writeTriageUpdateFailure, type TriageUpdateFailure } from "../commands/triage-update.js";
+import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
@@ -20,6 +20,7 @@ import { resolveOsHomeDir } from "./home-dir.js";
 import { installationTargetEnv, resolveInstallationTarget } from "./installation-target-context.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
+import { writeTriageUpdateFailure } from "./update-failure-report-artifact.js";
 
 export type UpdateTriageTarget = {
   root?: string;
@@ -126,7 +127,7 @@ async function runPreparedUpdateFailureTriage(
   log(
     prepared.mode === "interactive"
       ? "Update failed. Entering triage..."
-      : "Update failed. Preparing triage diagnostics...",
+      : "Preparing triage diagnostics...",
   );
   let contextPath: string | undefined;
   try {
@@ -177,6 +178,14 @@ async function runPreparedUpdateFailureTriage(
       if (!isCurrent()) {
         return { status: "cancelled" };
       }
+      log(`Saved failure diagnostics: ${contextPath}`);
+      log(
+        `To start a repair agent, run ${formatInstallationTargetCommand(
+          ["openclaw", "triage", "--run", "--update-result", contextPath],
+          installationTarget,
+          { env: targetEnv },
+        )}`,
+      );
       const root = params.target.root ?? (await params.resolveRoot?.());
       const entryPath = await resolveGatewayInstallEntrypoint(root);
       if (!isCurrent()) {
@@ -232,6 +241,9 @@ async function runPreparedUpdateFailureTriage(
         const reason = scrubDoctorErrorMessage(redactSupportString(report.bundleError, redaction));
         hint += `\nDiagnostics export unavailable: ${reason}`;
       }
+    }
+    if (prepared.mode !== "interactive") {
+      log("Triage diagnostics saved; no repair agent was started.");
     }
     return { status: "completed", hint };
   } catch (error) {

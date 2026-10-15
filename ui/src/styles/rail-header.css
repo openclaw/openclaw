@@ -13,24 +13,12 @@
   background: var(--rail-header-background);
 }
 
-.rail-header__copy {
-  display: flex;
-  min-width: 0;
-  flex: 1 1 auto;
-  flex-direction: column;
-  justify-content: center;
-  gap: var(--rail-header-copy-gap);
-}
-
-.rail-header__eyebrow {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: var(--rail-header-eyebrow-size);
-  letter-spacing: var(--rail-header-eyebrow-letter-spacing);
-  line-height: 1;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
+/* Keep the side-panel variant after the base rule across lazy stylesheet loads. */
+.side-panel__header {
+  --rail-header-action-glyph-size: 15px;
+  margin-bottom: 0;
+  padding-left: 0;
+  border-bottom: 0;
 }
 
 .rail-header__title {

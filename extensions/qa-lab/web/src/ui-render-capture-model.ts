@@ -1,4 +1,8 @@
-import { captureEventKey, findPairedCaptureEvent } from "./ui-render-capture-events.js";
+import {
+  captureEventKey,
+  findPairedCaptureEvent,
+  groupCaptureEvents,
+} from "./ui-render-capture-events.js";
 import { renderCapturePayload } from "./ui-render-capture-format.js";
 import {
   isSensitiveCaptureField,
@@ -7,6 +11,12 @@ import {
 import { buildCaptureTimelineModel } from "./ui-render-capture-timeline-model.js";
 import { esc, formatDuration, formatTime, parseJsonObject } from "./ui-render-utils.js";
 import type { CaptureEventView, UiState } from "./ui-types.js";
+
+function captureRange(start: number | null, end: number | null) {
+  return start != null && end != null
+    ? ([Math.min(start, end), Math.max(start, end)] as const)
+    : ([null, null] as const);
+}
 
 export function buildCaptureViewModel(state: UiState) {
   const sessionIds =
@@ -18,31 +28,26 @@ export function buildCaptureViewModel(state: UiState) {
   const sessions = state.captureSessions;
   const rows = state.captureQueryRows;
   const events = state.captureEvents;
-  const availableKinds = [
-    ...new Set(
-      events.map((event) => event.kind).filter((value): value is string => Boolean(value)),
-    ),
-  ].toSorted();
-  const availableProviders = [
-    ...new Set(
-      events.map((event) => event.provider).filter((value): value is string => Boolean(value)),
-    ),
-  ].toSorted();
-  const availableHosts = [
-    ...new Set(
-      events.map((event) => event.host).filter((value): value is string => Boolean(value)),
-    ),
-  ].toSorted();
+  const availableValues = (field: "kind" | "provider" | "host") =>
+    [
+      ...new Set(
+        events.map((event) => event[field]).filter((value): value is string => Boolean(value)),
+      ),
+    ].toSorted();
+  const availableKinds = availableValues("kind");
+  const availableProviders = availableValues("provider");
+  const availableHosts = availableValues("host");
   const normalizedSearch = state.captureSearchText.trim().toLowerCase();
+  const dimensionFilters = [
+    ["kind", state.captureKindFilter],
+    ["provider", state.captureProviderFilter],
+    ["host", state.captureHostFilter],
+  ] as const;
   const activeFilters: string[] = [];
-  if (state.captureKindFilter.length > 0) {
-    activeFilters.push(`kind: ${state.captureKindFilter.join(", ")}`);
-  }
-  if (state.captureProviderFilter.length > 0) {
-    activeFilters.push(`provider: ${state.captureProviderFilter.join(", ")}`);
-  }
-  if (state.captureHostFilter.length > 0) {
-    activeFilters.push(`host: ${state.captureHostFilter.join(", ")}`);
+  for (const [dimension, values] of dimensionFilters) {
+    if (values.length > 0) {
+      activeFilters.push(`${dimension}: ${values.join(", ")}`);
+    }
   }
   if (normalizedSearch) {
     activeFilters.push(`search: ${state.captureSearchText.trim()}`);
@@ -80,16 +85,11 @@ export function buildCaptureViewModel(state: UiState) {
     activeFilters.push("errors only");
   }
   const baseFilteredEvents = events.filter((event) => {
-    if (state.captureKindFilter.length > 0 && !state.captureKindFilter.includes(event.kind)) {
-      return false;
-    }
     if (
-      state.captureProviderFilter.length > 0 &&
-      !state.captureProviderFilter.includes(event.provider || "")
+      dimensionFilters.some(
+        ([dimension, values]) => values.length > 0 && !values.includes(event[dimension] || ""),
+      )
     ) {
-      return false;
-    }
-    if (state.captureHostFilter.length > 0 && !state.captureHostFilter.includes(event.host || "")) {
       return false;
     }
     if (state.captureErrorsOnly && !event.errorText && (event.status ?? 0) < 400) {
@@ -126,22 +126,14 @@ export function buildCaptureViewModel(state: UiState) {
   const maxTs =
     baseFilteredEvents.length > 0 ? Math.max(...baseFilteredEvents.map((event) => event.ts)) : 0;
   const totalSpanMs = Math.max(1, maxTs - minTs);
-  const activeWindowStartPct =
-    state.captureTimelineWindowStartPct != null && state.captureTimelineWindowEndPct != null
-      ? Math.min(state.captureTimelineWindowStartPct, state.captureTimelineWindowEndPct)
-      : null;
-  const activeWindowEndPct =
-    state.captureTimelineWindowStartPct != null && state.captureTimelineWindowEndPct != null
-      ? Math.max(state.captureTimelineWindowStartPct, state.captureTimelineWindowEndPct)
-      : null;
-  const draftWindowStartPct =
-    state.captureTimelineBrushAnchorPct != null && state.captureTimelineBrushCurrentPct != null
-      ? Math.min(state.captureTimelineBrushAnchorPct, state.captureTimelineBrushCurrentPct)
-      : null;
-  const draftWindowEndPct =
-    state.captureTimelineBrushAnchorPct != null && state.captureTimelineBrushCurrentPct != null
-      ? Math.max(state.captureTimelineBrushAnchorPct, state.captureTimelineBrushCurrentPct)
-      : null;
+  const [activeWindowStartPct, activeWindowEndPct] = captureRange(
+    state.captureTimelineWindowStartPct,
+    state.captureTimelineWindowEndPct,
+  );
+  const [draftWindowStartPct, draftWindowEndPct] = captureRange(
+    state.captureTimelineBrushAnchorPct,
+    state.captureTimelineBrushCurrentPct,
+  );
   const activeWindowStartTs =
     activeWindowStartPct == null ? null : minTs + totalSpanMs * (activeWindowStartPct / 100);
   const activeWindowEndTs =
@@ -200,9 +192,7 @@ export function buildCaptureViewModel(state: UiState) {
   const selectedFlowIndex =
     selectedEvent == null
       ? -1
-      : selectedFlowEvents.findIndex(
-          (event) => captureEventKey(event) === captureEventKey(selectedEvent),
-        );
+      : selectedFlowEvents.findIndex((event) => captureEventKey(event) === selectedEventKey);
   const previousFlowEvent =
     selectedFlowIndex > 0 ? selectedFlowEvents[selectedFlowIndex - 1] : null;
   const nextFlowEvent =
@@ -212,17 +202,14 @@ export function buildCaptureViewModel(state: UiState) {
   const selectedPairing = findPairedCaptureEvent(selectedEvent, events);
   const pairedEvent = selectedPairing.counterpart;
   const pairedEventKey = pairedEvent ? captureEventKey(pairedEvent) : null;
-  const pairedEventVisible =
-    pairedEventKey != null &&
-    filteredEvents.some((event) => captureEventKey(event) === pairedEventKey);
+  const isEventVisible = (event: CaptureEventView | null | undefined) =>
+    event != null &&
+    filteredEvents.some((candidate) => captureEventKey(candidate) === captureEventKey(event));
+  const pairedEventVisible = isEventVisible(pairedEvent);
   const pairingLatencyMs =
     selectedEvent && pairedEvent ? Math.max(0, Math.abs(pairedEvent.ts - selectedEvent.ts)) : null;
-  const previousFlowEventVisible =
-    previousFlowEvent != null &&
-    filteredEvents.some((event) => captureEventKey(event) === captureEventKey(previousFlowEvent));
-  const nextFlowEventVisible =
-    nextFlowEvent != null &&
-    filteredEvents.some((event) => captureEventKey(event) === captureEventKey(nextFlowEvent));
+  const previousFlowEventVisible = isEventVisible(previousFlowEvent);
+  const nextFlowEventVisible = isEventVisible(nextFlowEvent);
   const timeline = buildCaptureTimelineModel({
     state,
     filteredEvents,
@@ -259,42 +246,27 @@ export function buildCaptureViewModel(state: UiState) {
   const groupedEvents =
     state.captureGroupMode === "none" || state.captureGroupMode === "burst"
       ? [{ id: "__all__", label: "All Events", meta: "", events: filteredEvents }]
-      : Array.from(
-          filteredEvents.reduce((groups, event) => {
-            const key =
-              state.captureGroupMode === "flow"
-                ? event.flowId || "(no flow)"
-                : [event.host || "(no host)", event.path || "/"].join(" ");
-            const label =
-              state.captureGroupMode === "flow"
-                ? event.flowId || "(no flow id)"
-                : [event.host || "(no host)", event.path || "/"].join(" ");
-            const existing = groups.get(key);
-            if (existing) {
-              existing.events.push(event);
-              return groups;
-            }
-            groups.set(key, {
-              id: key,
-              label,
-              meta:
-                state.captureGroupMode === "flow"
-                  ? [event.host, event.path].filter(Boolean).join(" ")
-                  : event.flowId || "",
-              events: [event],
-            });
-            return groups;
-          }, new Map()),
-        ).map(([, group]) => group);
+      : groupCaptureEvents(filteredEvents, (event) =>
+          state.captureGroupMode === "flow"
+            ? {
+                id: event.flowId || "(no flow)",
+                label: event.flowId || "(no flow id)",
+                meta: [event.host, event.path].filter(Boolean).join(" "),
+              }
+            : {
+                id: [event.host || "(no host)", event.path || "/"].join(" "),
+                label: [event.host || "(no host)", event.path || "/"].join(" "),
+                meta: event.flowId || "",
+              },
+        );
   const clusterEventBursts = (eventsForGroup: CaptureEventView[]) => {
-    const sorted = [...eventsForGroup].toSorted(
+    const sorted = eventsForGroup.toSorted(
       (left, right) =>
         left.ts - right.ts || captureEventKey(left).localeCompare(captureEventKey(right)),
     );
     const clusters: Array<{
       key: string;
       representative: CaptureEventView;
-      events: CaptureEventView[];
       count: number;
       startTs: number;
       endTs: number;
@@ -315,14 +287,12 @@ export function buildCaptureViewModel(state: UiState) {
         clusters.push({
           key: captureEventKey(event),
           representative: event,
-          events: [event],
           count: 1,
           startTs: event.ts,
           endTs: event.ts,
         });
         continue;
       }
-      previous.events.push(event);
       previous.count += 1;
       previous.endTs = event.ts;
       previous.representative = event;
@@ -393,15 +363,12 @@ export function buildCaptureViewModel(state: UiState) {
       overviewView.recommended = true;
     }
   }
-  const preferredDetailView = state.capturePreferredDetailView;
   const effectiveDetailView = availableDetailViews.some(
-    (view) => view.value === preferredDetailView && view.available,
+    (view) => view.value === state.captureDetailView && view.available,
   )
-    ? (preferredDetailView ?? "overview")
-    : availableDetailViews.some((view) => view.value === state.captureDetailView && view.available)
-      ? state.captureDetailView
-      : (availableDetailViews.find((view) => view.recommended && view.available)?.value ??
-        "overview");
+    ? state.captureDetailView
+    : (availableDetailViews.find((view) => view.recommended && view.available)?.value ??
+      "overview");
   const effectiveFlowLayout =
     state.captureFlowDetailLayout ??
     ((selectedEvent?.kind === "request" || selectedEvent?.kind === "response") && pairedEvent
@@ -419,19 +386,13 @@ export function buildCaptureViewModel(state: UiState) {
     availableKinds,
     availableProviders,
     availableHosts,
-    normalizedSearch,
     activeFilters,
-    baseFilteredEvents,
     minTs,
-    maxTs,
     totalSpanMs,
     activeWindowStartPct,
     activeWindowEndPct,
     draftWindowStartPct,
     draftWindowEndPct,
-    activeWindowStartTs,
-    activeWindowEndTs,
-    activeWindowLabel,
     filteredEvents,
     analysisEnabled,
     selectedSessions,
@@ -439,11 +400,9 @@ export function buildCaptureViewModel(state: UiState) {
     selectedSessionEventCount,
     selectedEvent,
     selectedEventKey,
-    kindCounts,
     topKinds,
     topProviders,
     topModels,
-    selectedFlowId,
     selectedFlowEvents,
     selectedFlowIndex,
     previousFlowEvent,
@@ -467,7 +426,6 @@ export function buildCaptureViewModel(state: UiState) {
     selectedMetaRows,
     rawPayloadBody,
     availableDetailViews,
-    preferredDetailView,
     effectiveDetailView,
     effectiveFlowLayout,
     effectivePayloadLayout,

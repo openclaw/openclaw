@@ -1,7 +1,25 @@
-import {
-  KEYBOARD_SHORTCUT_COMBOS,
-  matchesShortcutCombo,
-} from "../lib/keyboard-shortcut-contract.ts";
+import { COMMAND_PALETTE_SHORTCUTS } from "../../../src/shared/keyboard-shortcuts.ts";
+import { matchesShortcutCombo } from "../lib/keyboard-shortcut-contract.ts";
+
+export const COMMAND_PALETTE_DIALOG_STYLE =
+  "--openclaw-modal-width: min(740px, calc(100vw - 32px));";
+
+export type CommandPaletteInputSnapshot = Pick<
+  HTMLTextAreaElement,
+  "value" | "selectionStart" | "selectionEnd" | "selectionDirection"
+>;
+
+export type CommandPaletteOpenInput = CommandPaletteInputSnapshot & {
+  returnFocus?: HTMLElement | null;
+  submitRequested?: true;
+  /** Position of an explicitly typed @ retained only during the cold-input handoff. */
+  mentionTrigger?: number;
+  /** Clipboard Files remain in memory until the canonical draft admits and reads them. */
+  imageFiles?: readonly File[];
+};
+
+/** Read the live cold input when replacement focus is accepted; undefined means retired. */
+export type CommandPaletteInputHandoff = () => CommandPaletteOpenInput | undefined;
 
 export const COMMAND_PALETTE_TARGET_EVENT = "openclaw-command-palette-target";
 export const COMMAND_PALETTE_OPEN_EVENT = "openclaw:command-palette-open";
@@ -19,7 +37,7 @@ export function shellNavDrawerTriggerFromEvent(event: Event): HTMLElement | unde
 }
 
 export function isCommandPaletteShortcut(event: KeyboardEvent): boolean {
-  return matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette, event);
+  return COMMAND_PALETTE_SHORTCUTS.some((combo) => matchesShortcutCombo(combo, event));
 }
 
 export type CommandPaletteTargetDetail = {
@@ -38,35 +56,29 @@ function isCommandPaletteTargetDetail(value: unknown): value is CommandPaletteTa
   );
 }
 
-function commandPaletteTargetFromEvent(
-  current: CommandPaletteTargetDetail | undefined,
-  event: Event,
-): CommandPaletteTargetDetail | null | undefined {
-  const detail: unknown = event instanceof CustomEvent ? event.detail : undefined;
-  if (!isCommandPaletteTargetDetail(detail)) {
-    return null;
-  }
-  return detail.onSlashCommand ? detail : current?.owner === detail.owner ? undefined : current;
-}
-
 export function applyCommandPaletteTargetEvent(
-  host: HTMLElement & {
+  host: {
     commandPaletteTarget: CommandPaletteTargetDetail | undefined;
     requestUpdate(): void;
   },
   event: Event,
 ): void {
-  const target = commandPaletteTargetFromEvent(host.commandPaletteTarget, event);
-  if (target !== null) {
-    host.commandPaletteTarget = target;
-    host.requestUpdate();
+  const detail: unknown = event instanceof CustomEvent ? event.detail : undefined;
+  if (!isCommandPaletteTargetDetail(detail)) {
+    return;
   }
+  host.commandPaletteTarget = detail.onSlashCommand
+    ? detail
+    : host.commandPaletteTarget?.owner === detail.owner
+      ? undefined
+      : host.commandPaletteTarget;
+  host.requestUpdate();
 }
 
 export type CommandPaletteElement = HTMLElement & {
   custodianAvailable: boolean;
   desktopAvailable: boolean;
   isOpen: boolean;
-  openPalette: () => void;
+  openPalette: (input?: CommandPaletteOpenInput | CommandPaletteInputHandoff) => void;
   togglePalette: () => void;
 };

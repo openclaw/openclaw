@@ -19,10 +19,7 @@ function requestAt(index: number) {
 
 function reply(payload: unknown, status = 200) {
   guardedFetch.mockResolvedValueOnce({
-    response: new Response(JSON.stringify(payload), {
-      status,
-      headers: { "Content-Type": "application/json" },
-    }),
+    response: Response.json(payload, { status }),
     release,
   });
 }
@@ -49,6 +46,9 @@ function token(overrides: Record<string, unknown> = {}) {
 
 function context(overrides: Partial<ProviderAuthContext> = {}) {
   const progress = { update: vi.fn(), stop: vi.fn() };
+  const unexpectedPrompt = async () => {
+    throw new Error("Unexpected prompt");
+  };
   const ctx: ProviderAuthContext = {
     config: {},
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -56,18 +56,10 @@ function context(overrides: Partial<ProviderAuthContext> = {}) {
       intro: vi.fn(async () => {}),
       outro: vi.fn(async () => {}),
       note: vi.fn(async () => {}),
-      select: async () => {
-        throw new Error("Unexpected selection");
-      },
-      multiselect: async () => {
-        throw new Error("Unexpected selection");
-      },
-      text: async () => {
-        throw new Error("Unexpected prompt");
-      },
-      confirm: async () => {
-        throw new Error("Unexpected confirmation");
-      },
+      select: unexpectedPrompt,
+      multiselect: unexpectedPrompt,
+      text: unexpectedPrompt,
+      confirm: unexpectedPrompt,
       progress: vi.fn(() => progress),
     },
     isRemote: false,

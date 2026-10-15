@@ -5,7 +5,10 @@ import { isDeepStrictEqual } from "node:util";
 import { hashConfigIncludeRaw } from "../config/includes.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { containsConfigIncludeDirective } from "../config/io.read-helpers.js";
-import type { ReadConfigFileSnapshotForWriteResult } from "../config/io.types.js";
+import type {
+  ConfigIoFactoryOptions,
+  ReadConfigFileSnapshotForWriteResult,
+} from "../config/io.types.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { openLocalFileSafely } from "./fs-safe.js";
 
@@ -13,8 +16,8 @@ type CapturedConfigFile = {
   sourcePath: string;
   canonicalPath: string;
   hash: string;
-  dev: number;
-  ino: number;
+  dev: bigint;
+  ino: bigint;
 };
 
 export type BackupConfigCapture = {
@@ -23,17 +26,23 @@ export type BackupConfigCapture = {
   assertRootAlias?: () => Promise<void>;
 };
 
+export class BackupConfigCaptureError extends Error {
+  override name = "BackupConfigCaptureError";
+}
+
 function captureError(sourcePath: string, detail: string, cause?: unknown): Error {
-  return new Error(
+  return new BackupConfigCaptureError(
     `Cannot capture required config file ${sourcePath}: ${detail}. Fix the include graph or stop concurrent edits, then retry backup.`,
     { cause },
   );
 }
 
-export async function resolveBackupConfigCapture({
-  snapshot,
-  writeOptions,
-}: ReadConfigFileSnapshotForWriteResult): Promise<BackupConfigCapture> {
+export async function resolveBackupConfigCapture(
+  { snapshot, writeOptions }: ReadConfigFileSnapshotForWriteResult,
+  options: Pick<ConfigIoFactoryOptions, "env" | "pluginValidation"> & {
+    allowIncludeAliases?: boolean;
+  } = {},
+): Promise<BackupConfigCapture> {
   const hasIncludes =
     containsConfigIncludeDirective(snapshot.parsed) || Boolean(snapshot.includedPaths?.length);
   // The reader attaches provenance only after resolving the whole include graph,
@@ -61,14 +70,17 @@ export async function resolveBackupConfigCapture({
   for (const [sourcePath, hash] of files) {
     try {
       const canonicalPath = await fs.realpath(sourcePath);
-      const linkStat = await fs.lstat(sourcePath);
+      const linkStat = await fs.lstat(sourcePath, { bigint: true });
       const rootAlias = sourcePath === snapshot.path && linkStat.isSymbolicLink();
-      const stat = rootAlias ? await fs.stat(sourcePath) : linkStat;
+      const includeAliasesAllowed =
+        sourcePath !== snapshot.path && options.allowIncludeAliases === true;
+      const stat =
+        rootAlias || includeAliasesAllowed ? await fs.stat(sourcePath, { bigint: true }) : linkStat;
       if (rootAlias) {
         // Existing root links keep the archive's ordinary link
         // handling. Pin their payload and refuse a changed alias at publication.
         assertRootAlias = async () => {
-          const current = await fs.lstat(sourcePath);
+          const current = await fs.lstat(sourcePath, { bigint: true });
           if (
             current.dev !== linkStat.dev ||
             current.ino !== linkStat.ino ||
@@ -80,14 +92,17 @@ export async function resolveBackupConfigCapture({
         };
       }
       // A common canonical parent (e.g. macOS /var -> /private/var) is portable.
-      // Nested aliases need link projection; do not silently archive only their targets.
+      // Archives need link projection; update rollback retains lexical path proofs instead.
       const projectedPath = path.resolve(
         canonicalConfigDir,
         path.relative(path.dirname(snapshot.path), sourcePath),
       );
       if (
         !stat.isFile() ||
-        (!rootAlias && canonicalPath !== sourcePath && canonicalPath !== projectedPath)
+        (!rootAlias &&
+          !includeAliasesAllowed &&
+          canonicalPath !== sourcePath &&
+          canonicalPath !== projectedPath)
       ) {
         throw captureError(sourcePath, "include alias cannot be represented in this archive");
       }
@@ -119,11 +134,15 @@ export async function resolveBackupConfigCapture({
     assertRootAlias,
     revalidate: async () => {
       await assertRootAlias?.();
-      const current = await withOpenClawStateDatabaseReadSnapshot(() =>
-        createConfigIO({
-          configPath: snapshot.path,
-          observe: false,
-        }).readConfigFileSnapshotForWrite(),
+      const current = await withOpenClawStateDatabaseReadSnapshot(
+        () =>
+          createConfigIO({
+            configPath: snapshot.path,
+            env: options.env,
+            pluginValidation: options.pluginValidation,
+            observe: false,
+          }).readConfigFileSnapshotForWrite(),
+        { env: options.env },
       );
       // A file can be reached repeatedly during discovery. Comparing the resolved
       // source as well as the last hashes prevents accepting mixed observations.
@@ -143,14 +162,17 @@ export async function resolveBackupConfigCapture({
   };
 }
 
-async function readCapturedConfig(file: CapturedConfigFile): Promise<Buffer> {
+export async function readBackupConfigCaptureFile(file: CapturedConfigFile): Promise<Buffer> {
   try {
-    const opened = await openLocalFileSafely({ filePath: file.sourcePath });
-    const { handle, stat } = opened;
+    if ((await fs.realpath(file.sourcePath)) !== file.canonicalPath) {
+      throw new Error("file identity changed");
+    }
+    const opened = await openLocalFileSafely({ filePath: file.canonicalPath });
+    const { handle, exactIdentity } = opened;
     try {
       if (
-        stat.dev !== file.dev ||
-        stat.ino !== file.ino ||
+        exactIdentity.dev !== file.dev ||
+        exactIdentity.ino !== file.ino ||
         opened.realPath !== file.canonicalPath
       ) {
         throw new Error("file identity changed");
@@ -160,7 +182,7 @@ async function readCapturedConfig(file: CapturedConfigFile): Promise<Buffer> {
       if (!bytes.equals(Buffer.from(raw)) || hashConfigIncludeRaw(raw) !== file.hash) {
         throw new Error("file contents changed");
       }
-      const current = await fs.lstat(file.sourcePath);
+      const current = await fs.lstat(file.canonicalPath, { bigint: true });
       if (
         !current.isFile() ||
         current.dev !== file.dev ||
@@ -184,7 +206,7 @@ export async function stageBackupConfigCapture(
 ): Promise<Map<string, string>> {
   const remaps = new Map<string, string>();
   for (const [index, file] of (capture?.files ?? []).entries()) {
-    const bytes = await readCapturedConfig(file);
+    const bytes = await readBackupConfigCaptureFile(file);
     const stagedPath = path.join(tempDir, `config-${index}`);
     await fs.writeFile(stagedPath, bytes, { flag: "wx", mode: 0o600 });
     remaps.set(stagedPath, file.canonicalPath);
@@ -193,7 +215,7 @@ export async function stageBackupConfigCapture(
   // Seal only after every dependency has been copied. Matching all authored
   // bytes also pins the include edges; no second resolver or mixed retry.
   for (const file of capture?.files ?? []) {
-    await readCapturedConfig(file);
+    await readBackupConfigCaptureFile(file);
   }
   return remaps;
 }

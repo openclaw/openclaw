@@ -52,6 +52,18 @@ class WindowChromeFixture:
     def state(self, window):
         return self.command("xprop", "-id", window, "_NET_WM_STATE", "WM_STATE")
 
+    def close_window(self, window):
+        self.command("wmctrl", "-ic", window)
+        # wmctrl -lp can dereference a destroyed client before the WM removes it.
+        self.until(
+            lambda: int(window, 16) not in {
+                int(value, 16) for value in re.findall(
+                    r"0x[0-9a-fA-F]+", self.command("xprop", "-root", "_NET_CLIENT_LIST"),
+                )
+            },
+            "window manager to acknowledge closing " + window,
+        )
+
     def record(self, name, result):
         self.checks.append({"name": name, "result": result})
         print(f"Observed native window {name}: {result}", flush=True)

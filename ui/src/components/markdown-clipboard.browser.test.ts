@@ -1,16 +1,15 @@
-import { html, nothing, render } from "lit";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { nothing, render } from "lit";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { renderMessageImages } from "../pages/chat/components/chat-message-images.ts";
 import { renderMessageMarkdown } from "../pages/chat/components/chat-message-text.ts";
 import { exportWidget } from "../pages/chat/components/widget-export.ts";
-import "../pages/chat/components/browser-tab-card.ts";
-import { renderCopyButton } from "./copy-button.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import "../pages/chat/components/browser-tab-card.tsx";
+import { renderCopyAsMarkdownButton } from "./copy-button.ts";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
-import "./markdown-mermaid.ts";
+import "./markdown-mermaid.tsx";
 import { handleMarkdownTableInteraction, releaseMarkdownTables } from "./markdown-tables.ts";
-import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 const owners: HTMLElement[] = [];
 const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
@@ -57,8 +56,8 @@ afterAll(() => {
 
 async function waitForDiagram(diagram: HTMLElement) {
   const { page } = await import("vitest/browser");
-  await expect.element(page.elementLocator(diagram).getByRole("img")).toBeVisible();
-  await diagram.shadowRoot!.querySelector("img")!.decode();
+  await expect.element(page.getByRole("img", { name: "Mermaid diagram" })).toBeVisible();
+  await diagram.querySelector("img")!.decode();
 }
 
 async function mountCopy(surface: "code" | "table" | "mermaid" | "message") {
@@ -80,7 +79,12 @@ async function mountCopy(surface: "code" | "table" | "mermaid" | "message") {
     button = owner.querySelector(".code-block-copy");
   } else if (surface === "table") {
     render(
-      html`${unsafeHTML(toSanitizedMarkdownHtml("| Name |\n| --- |\n| Alpha |", { tableInteractions: "enabled" }))}`,
+      renderMessageMarkdown(
+        "| Name |\n| --- |\n| Alpha",
+        "stream",
+        { role: "assistant", isStreaming: true },
+        { tableInteractions: "enabled" },
+      ),
       owner,
     );
     owner.addEventListener("click", handleMarkdownTableInteraction);
@@ -91,9 +95,9 @@ async function mountCopy(surface: "code" | "table" | "mermaid" | "message") {
     owner.append(diagram);
     await diagram.updateComplete;
     await waitForDiagram(diagram);
-    button = diagram.shadowRoot?.querySelector(".copy-button") ?? null;
+    button = diagram.querySelector(".copy-button");
   } else {
-    render(renderCopyButton("Current message"), owner);
+    render(renderCopyAsMarkdownButton("Current message"), owner);
     button = owner.querySelector("button");
   }
   if (!button) {
@@ -122,10 +126,13 @@ async function mountBrowserCard() {
   await card.updateComplete;
   return {
     card,
-    copy: () =>
-      card.shadowRoot
-        ?.querySelector("wa-dropdown")
-        ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "copy-url" } } })),
+    copy: async () => {
+      card.querySelector<HTMLButtonElement>(".more")!.click();
+      const menu = card.querySelector<HTMLElement>(".oc-menu")!;
+      await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
+      card.querySelector<HTMLButtonElement>('[data-value="copy-url"]')!.click();
+      await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(false));
+    },
   };
 }
 
@@ -159,7 +166,7 @@ describe("Markdown clipboard operation lifetime", () => {
         configurable: true,
         value: { writeText, ...(available ? { write } : {}) },
       });
-      let copy: () => void;
+      let copy: () => void | Promise<void>;
       let widgetResult: Promise<unknown> | undefined;
       if (surface === "managed image") {
         vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
@@ -181,22 +188,38 @@ describe("Markdown clipboard operation lifetime", () => {
           ]),
           owner,
         );
-        await vi.waitFor(() =>
-          expect(owner.querySelector('[aria-label="Copy image"]')).not.toBeNull(),
-        );
-        copy = () => owner.querySelector<HTMLButtonElement>('[aria-label="Copy image"]')!.click();
+        await waitForSolid(() => expect(owner.querySelector(".chat-image-action")).not.toBeNull());
+        owner.querySelector<HTMLButtonElement>(".chat-image-action")!.click();
+        const menu = owner.querySelector<HTMLElement>(".chat-image-actions .oc-menu")!;
+        await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
+        copy = async () => {
+          owner
+            .querySelector<HTMLButtonElement>('.chat-image-actions [data-value="copy"]')!
+            .click();
+          await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(false));
+        };
       } else {
         const frame = document.body.appendChild(document.createElement("iframe"));
         owners.push(frame);
+        vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation((request) => {
+          void snapshot.promise.then((dataUrl) => {
+            window.dispatchEvent(
+              new MessageEvent("message", {
+                source: frame.contentWindow,
+                data: { type: "openclaw:widget-snapshot", id: request.id, dataUrl },
+              }),
+            );
+          });
+        });
         copy = () => {
-          widgetResult = exportWidget("copy", frame, "Synthetic widget", {
-            requestSnapshot: () => snapshot.promise,
-          }).catch((error: unknown) => error);
+          widgetResult = exportWidget("copy", frame, "Synthetic widget").catch(
+            (error: unknown) => error,
+          );
         };
       }
       const code = await mountCopy("code");
       code.button.click();
-      copy();
+      await copy();
       // Binary ClipboardItem promises must be submitted during the click, before bytes arrive.
       expect(write).toHaveBeenCalledTimes(available ? 1 : 0);
       pendingText.reject(new Error("Synthetic clipboard rejection"));
@@ -214,7 +237,7 @@ describe("Markdown clipboard operation lifetime", () => {
   it("copies browser-card URLs when the Clipboard API is absent on plain HTTP", async () => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
     const browser = await mountBrowserCard();
-    browser.copy();
+    await browser.copy();
     await flushCopy();
     expect(clipboard).toBe("https://example.com/document");
     expect(fallbackCopies).toEqual(["https://example.com/document"]);
@@ -225,7 +248,7 @@ describe("Markdown clipboard operation lifetime", () => {
     const code = await mountCopy("code");
     const browser = await mountBrowserCard();
     code.button.click();
-    browser.copy();
+    await browser.copy();
     await flushCopy();
     expect(clipboard).toBe("https://example.com/document");
     pending.reject(new Error("Synthetic clipboard rejection"));
@@ -239,7 +262,7 @@ describe("Markdown clipboard operation lifetime", () => {
     async (change) => {
       const pending = delayFirstWrite();
       const browser = await mountBrowserCard();
-      browser.copy();
+      await browser.copy();
       if (change === "removed") {
         browser.card.remove();
       } else {
@@ -282,25 +305,46 @@ describe("Markdown clipboard operation lifetime", () => {
     expect(clipboard).toBe("Current message");
   });
 
-  it("retires code replaced by the next streaming update", async () => {
-    const pending = delayFirstWrite();
-    const { owner, button } = await mountCopy("code");
-    button.click();
-    render(
-      renderMessageMarkdown(
-        "```ts\nconst answer = 42;\nconst next = 43;",
-        "stream",
-        { role: "assistant", isStreaming: true },
-        {},
-      ),
-      owner,
-    );
-    expect(button.isConnected).toBe(false);
-    expect(owner.querySelector("code")?.textContent).toContain("const next = 43;");
-    pending.reject(new Error("Synthetic clipboard rejection"));
-    await flushCopy();
-    expect(fallbackCopies).toEqual([]);
-  });
+  it.each(
+    (["code", "table"] as const).flatMap((surface) =>
+      (["resolve", "reject"] as const).map((settlement) => ({ surface, settlement })),
+    ),
+  )(
+    "retires stale $surface copying after pending write settlement: $settlement",
+    async ({ surface, settlement }) => {
+      const pending = delayFirstWrite();
+      const { owner, button } = await mountCopy(surface);
+      const idleLabel = button.getAttribute("aria-label");
+      button.click();
+      render(
+        renderMessageMarkdown(
+          surface === "code"
+            ? "```ts\nconst answer = 42;\nconst next = 43;"
+            : "| Name |\n| --- |\n| Alpha continued |",
+          "stream",
+          { role: "assistant", isStreaming: true },
+          { tableInteractions: "enabled" },
+        ),
+        owner,
+      );
+      expect(
+        owner.querySelector(surface === "code" ? ".code-block-copy" : ".markdown-table__copy"),
+      ).toBe(button);
+      expect(button.isConnected).toBe(true);
+      expect(owner.textContent).toContain(
+        surface === "code" ? "const next = 43;" : "Alpha continued",
+      );
+      if (settlement === "reject") {
+        pending.reject(new Error("Synthetic clipboard rejection"));
+      } else {
+        pending.resolve();
+      }
+      await flushCopy();
+      expect(fallbackCopies).toEqual([]);
+      expect(clipboard).toBe("original clipboard");
+      expect(button.getAttribute("aria-label")).toBe(idleLabel);
+    },
+  );
 
   it("retires an older fallback when the newer code-copy payload is empty", async () => {
     const pending = delayFirstWrite();

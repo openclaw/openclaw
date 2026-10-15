@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
@@ -212,9 +212,7 @@ suite.define(() => {
                 },
                 expanded: element.querySelector("button")?.getAttribute("aria-expanded"),
                 query: element.querySelector<HTMLInputElement>(".picker-select__search")?.value,
-                placement: element
-                  .querySelector("wa-popup")
-                  ?.getAttribute("data-current-placement"),
+                placement: rect.bottom <= triggerBounds.top ? "top" : "bottom",
                 menu: {
                   x: rect.x,
                   y: rect.y,
@@ -241,17 +239,19 @@ suite.define(() => {
                   label: active?.getAttribute("aria-label"),
                   activeDescendant: active?.getAttribute("aria-activedescendant"),
                 },
-                rows: [...element.querySelectorAll<HTMLElement>("[role=option]")].map((row) => {
-                  const labelElement = row.querySelector<HTMLElement>(".picker-select__label")!;
-                  return {
-                    value: row.dataset.value,
-                    label: labelElement.textContent ?? "",
-                    labelWidth: labelElement.clientWidth,
-                    labelScrollWidth: labelElement.scrollWidth,
-                    disabled: row.getAttribute("aria-disabled"),
-                    selected: row.getAttribute("aria-selected"),
-                  };
-                }),
+                rows: [...element.querySelectorAll<HTMLElement>("[role=option]:not([hidden])")].map(
+                  (row) => {
+                    const labelElement = row.querySelector<HTMLElement>(".picker-select__label")!;
+                    return {
+                      value: row.dataset.value,
+                      label: labelElement.textContent ?? "",
+                      labelWidth: labelElement.clientWidth,
+                      labelScrollWidth: labelElement.scrollWidth,
+                      disabled: row.getAttribute("aria-disabled"),
+                      selected: row.getAttribute("aria-selected"),
+                    };
+                  },
+                ),
               };
             });
             observations.push({
@@ -270,7 +270,7 @@ suite.define(() => {
           await page.locator('[data-test-id="cron-new-task"]').click();
           const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
           const trigger = picker.locator(".picker-select__trigger");
-          await expect.poll(() => picker.locator('[data-value="anchor"]').count()).toBe(1);
+          await expect.poll(() => picker.locator('[data-value="fixture/anchor"]').count()).toBe(1);
           await trigger.click();
           await picker.getByRole("listbox").waitFor({ state: "visible" });
           const compact = await capture("compact-desktop", picker);
@@ -280,15 +280,17 @@ suite.define(() => {
           }
           await press("ArrowDown");
           await press("Enter");
-          expect(await pickerValue(picker)).toBe("anchor");
+          expect(await pickerValue(picker)).toBe("fixture/anchor");
           await trigger.click();
           await picker.locator('[data-value=""]').click();
           expect(await pickerValue(picker)).toBe("");
 
           await publish(models);
-          await expect.poll(() => picker.locator('[data-value="aurora-large"]').count()).toBe(1);
+          await expect
+            .poll(() => picker.locator('[data-value="fixture/aurora-large"]').count())
+            .toBe(1);
           const inventory = await picker
-            .locator("[role=option]")
+            .locator("[role=option]:not([hidden])")
             .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-value")));
           expect(inventory.length).toBeGreaterThan(8);
           await page.locator("#cron-name").fill("Keep this draft");
@@ -299,7 +301,10 @@ suite.define(() => {
           const search = picker.locator(".picker-select__search");
           await search.fill("RoRA");
           const filtered = await capture("draft-reference-search", picker);
-          expect(filtered.rows.map((row) => row.value)).toEqual(["aurora-large", "aurora-small"]);
+          expect(filtered.rows.map((row) => row.value)).toEqual([
+            "fixture/aurora-large",
+            "fixture/aurora-small",
+          ]);
           await press("ArrowDown");
           await press("ArrowUp");
           await capture("draft-highlight", picker);
@@ -307,12 +312,12 @@ suite.define(() => {
           await search.fill("");
           expect(
             await picker
-              .locator("[role=option]")
+              .locator("[role=option]:not([hidden])")
               .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-value"))),
           ).toEqual(inventory);
           await search.fill("aurora-large");
           await press("Enter");
-          expect(await pickerValue(picker)).toBe("aurora-large");
+          expect(await pickerValue(picker)).toBe("fixture/aurora-large");
           await capture("draft-selected", picker);
           await trigger.click();
           await picker.locator('[data-value="__openclaw_custom_model__"]').click();
@@ -322,10 +327,10 @@ suite.define(() => {
 
           await trigger.click();
           await search.fill("granite");
-          expect(await picker.locator('[data-value="granite"]').count()).toBe(1);
+          expect(await picker.locator('[data-value="fixture/granite"]').count()).toBe(1);
           await capture("before-catalog-removal", picker);
           await publish(models.filter((model) => model.id !== "granite"));
-          await expect.poll(() => picker.locator('[data-value="granite"]').count()).toBe(0);
+          await expect.poll(() => picker.locator('[data-value="fixture/granite"]').count()).toBe(0);
           expect(await search.inputValue()).toBe("granite");
           await press("Enter");
           expect(await trigger.getAttribute("aria-label")).toBe("Model: fixture/not-in-catalog");
@@ -343,9 +348,18 @@ suite.define(() => {
           await page.mouse.wheel(0, topAnchor.y - 530);
           await expect.poll(async () => (await trigger.boundingBox())?.y).toBeGreaterThan(500);
           await press("ArrowDown");
+          await picker.locator(".picker-select__menu").waitFor({ state: "visible" });
           await expect
-            .poll(() => picker.locator("wa-popup").getAttribute("data-current-placement"))
-            .toMatch(/^top-/u);
+            .poll(() =>
+              picker.evaluate((element) => {
+                const menu = element.querySelector(".picker-select__menu")!.getBoundingClientRect();
+                const pickerTriggerBounds = element
+                  .querySelector(".picker-select__trigger")!
+                  .getBoundingClientRect();
+                return menu.bottom <= pickerTriggerBounds.top;
+              }),
+            )
+            .toBe(true);
           await capture("draft-top-opening", picker);
           await press("Escape");
           await page.setViewportSize({ width: 390, height: 844 });

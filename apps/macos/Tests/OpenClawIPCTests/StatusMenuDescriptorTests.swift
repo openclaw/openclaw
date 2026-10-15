@@ -124,13 +124,26 @@ struct StatusMenuDescriptorTests {
             now: Self.referenceDate))
 
         #expect(Self.entries(in: "sessions", descriptor: descriptor).map(\.id) == [
-            "approval.orphan",
-            "approval.global",
-            "approval.first",
+            "approval.b3JwaGFu",
+            "approval.Z2xvYmFs",
+            "approval.Zmlyc3Q=",
             "session.main",
-            "approval.second",
+            "approval.c2Vjb25k",
             "session.other",
         ])
+    }
+
+    @Test func `Unicode-equivalent approval IDs keep distinct menu identities`() {
+        let descriptor = StatusMenuDescriptor.build(from: .init(approvals: [
+            Self.approval("\u{E9}", sessionKey: nil),
+            Self.approval("e\u{301}", sessionKey: nil),
+        ]))
+        let entries = Self.entries(in: "sessions", descriptor: descriptor).filter {
+            if case .approval = $0.kind { return true }
+            return false
+        }
+        #expect(entries.count == 2)
+        #expect(Set(entries.map(\.id)).count == 2)
     }
 
     @Test func `disconnected approvals remain actionable above the gateway explanation`() {
@@ -139,7 +152,7 @@ struct StatusMenuDescriptorTests {
             approvals: [Self.approval("pending", sessionKey: "main")]))
 
         #expect(Self.entries(in: "sessions", descriptor: descriptor).map(\.id) == [
-            "approval.pending",
+            "approval.cGVuZGluZw==",
             "placeholder",
         ])
     }
@@ -171,7 +184,7 @@ struct StatusMenuDescriptorTests {
             now: Self.referenceDate))
 
         #expect(Self.entries(in: "sessions", descriptor: descriptor).map(\.id) == [
-            "approval.hidden",
+            "approval.aGlkZGVu",
             "session.session-1",
             "session.session-2",
             "session.session-3",
@@ -254,10 +267,16 @@ struct StatusMenuDescriptorTests {
     }
 
     private static func approval(_ id: String, sessionKey: String?) -> ExecApprovalQueueItem {
-        ExecApprovalQueueItem(
-            id: id,
-            request: ExecApprovalPromptRequest(command: "echo ready", sessionKey: sessionKey),
-            createdAtMs: 1,
-            expiresAtMs: 2)
+        let payload: [String: Any] = [
+            "id": id,
+            "request": [
+                "command": "echo ready",
+                "sessionKey": sessionKey.map { $0 as Any } ?? NSNull(),
+            ] as [String: Any],
+            "createdAtMs": 1,
+            "expiresAtMs": 2,
+        ]
+        return try! JSONDecoder().decode(
+            ExecApprovalQueueItem.self, from: JSONSerialization.data(withJSONObject: payload))
     }
 }

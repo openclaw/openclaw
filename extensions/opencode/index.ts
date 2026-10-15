@@ -1,4 +1,3 @@
-// Opencode plugin entrypoint registers its OpenClaw integration.
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { resolveFirstProviderCatalogAuth } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
@@ -6,7 +5,6 @@ import {
   buildProviderReplayFamilyHooks,
   matchesExactOrPrefix,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { createOpenAICompatibleCompletionsThinkingOffWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { opencodeMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyOpencodeZenProviderConfig, OPENCODE_ZEN_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -149,21 +147,16 @@ export default defineSingleProviderPluginEntry({
     ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
     isModernModelRef: ({ modelId }) => isModernOpencodeModel(modelId),
     resolveThinkingProfile: resolveOpencodeThinkingProfile,
-    wrapStreamFn: (ctx) => {
-      if (!ctx.streamFn) {
-        return undefined;
-      }
-      const baseStreamFn = ctx.streamFn;
-      const thinkingOff = createOpenAICompatibleCompletionsThinkingOffWrapper(
-        baseStreamFn,
-        ctx.thinkingLevel,
-      );
-      const thinkingStreamFn: typeof baseStreamFn = (model, context, options) =>
-        model.provider === PROVIDER_ID && model.id === "kimi-k3"
-          ? thinkingOff(model, context, options)
-          : baseStreamFn(model, context, options);
-      return wrapOpencodeProviderStream({ ...ctx, streamFn: thinkingStreamFn });
-    },
+    classifyFailoverReason: ({ status, errorType, code, errorMessage }) =>
+      status === 403 &&
+      (errorType === "FreeTierError" ||
+        code === "FreeTierError" ||
+        /\bFreeTierError\b|OpenCode's free tier can only be used from within OpenCode/.test(
+          errorMessage,
+        ))
+        ? "model_not_found"
+        : undefined,
+    wrapStreamFn: wrapOpencodeProviderStream,
   },
   register(api) {
     api.registerMediaUnderstandingProvider(opencodeMediaUnderstandingProvider);

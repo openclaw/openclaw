@@ -50,6 +50,21 @@ export default defineSingleProviderPluginEntry({
         },
         run: async (ctx) => {
           const credentials = await (await loadOAuth()).loginRadiusOAuth(ctx);
+          const notes = [
+            "Radius access is scoped to the organization selected in your browser. Tokens refresh automatically.",
+          ];
+          if (ctx.credentialOnly) {
+            ctx.assertCurrent?.();
+            return {
+              profiles: [
+                {
+                  profileId: "radius:default",
+                  credential: { type: "oauth", provider: "radius", ...credentials },
+                },
+              ],
+              notes,
+            };
+          }
           const catalog = await (
             await loadCatalog()
           ).fetchRadiusCatalog(credentials.access, ctx.signal);
@@ -60,9 +75,7 @@ export default defineSingleProviderPluginEntry({
             access: credentials.access,
             refresh: credentials.refresh,
             expires: credentials.expires,
-            notes: [
-              "Radius access is scoped to the organization selected in your browser. Tokens refresh automatically.",
-            ],
+            notes,
           });
         },
       },

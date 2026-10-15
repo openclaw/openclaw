@@ -11,9 +11,10 @@ import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
 
 export async function measureUpdateStateFiles(
   files: Iterable<string>,
-): Promise<{ bytes: number; largest: number }> {
+): Promise<{ bytes: number; largest: number; families: Array<{ path: string; bytes: number }> }> {
   let bytes = 0;
   let largest = 0;
+  const families: Array<{ path: string; bytes: number }> = [];
   for (const file of files) {
     let family = 0;
     for (const suffix of ["", "-wal", "-shm", "-journal"]) {
@@ -27,8 +28,9 @@ export async function measureUpdateStateFiles(
     }
     bytes += family;
     largest = Math.max(largest, family);
+    families.push({ path: file, bytes: family });
   }
-  return { bytes, largest };
+  return { bytes, largest, families };
 }
 
 // Core-only code survives package replacement; native filesystem requests stay in this child.
@@ -78,8 +80,10 @@ export async function withUpdateCandidateIoBudget<T>(
     operation?: "snapshot" | "inspection";
     nodeRunner?: string;
     env?: NodeJS.ProcessEnv;
+    /** Completed I/O reports avoid scans while advancing; quiet intervals still probe. */
+    progress?: "reported";
   },
-  run: (signal: AbortSignal) => Promise<T>,
+  run: (signal: AbortSignal, reportProgress: () => void) => Promise<T>,
 ): Promise<T> {
   params.signal?.throwIfAborted();
   // Each period without observable progress receives the shared SQLite IO allowance.
@@ -106,11 +110,39 @@ export async function withUpdateCandidateIoBudget<T>(
         `Update state ${params.operation ?? "inspection"} made no progress for ${budget / 1000} seconds (${formatDiskSpaceBytes(knownBytes)} of SQLite state). Check storage performance before retrying.`,
       ),
     );
-  let cancelDeadline = scheduleAbsoluteDeadline(deadline, expire);
+  const checkDeadline = () => {
+    // Completed entries can advance the deadline thousands of times per second.
+    // Re-arm only when this timer wakes, instead of allocating a timer per entry.
+    if (Date.now() < deadline) {
+      cancelDeadline = scheduleAbsoluteDeadline(deadline, checkDeadline);
+    } else {
+      expire();
+    }
+  };
+  let cancelDeadline = scheduleAbsoluteDeadline(deadline, checkDeadline);
+  let reportedProgress = 0;
+  const reportProgress = () => {
+    signal.throwIfAborted();
+    const now = Date.now();
+    if (now >= deadline) {
+      expire();
+      signal.throwIfAborted();
+    }
+    deadline = now + budget;
+    reportedProgress++;
+  };
   let probeFailure: Error | undefined;
   const monitor = (async () => {
+    let observedProgress = 0;
     try {
       while (!monitorSignal.aborted) {
+        if (params.progress === "reported") {
+          await sleep(1_000, monitorSignal);
+          if (reportedProgress !== observedProgress) {
+            observedProgress = reportedProgress;
+            continue;
+          }
+        }
         const probe = await runUtf8CommandWithTimeout(
           [
             params.nodeRunner ?? process.execPath,
@@ -130,13 +162,13 @@ export async function withUpdateCandidateIoBudget<T>(
           },
         );
         if (probe.cleanup === "uncertain") {
-          throw Object.assign(new Error("Update progress probe cleanup could not be confirmed"), {
+          throw Object.assign(new Error("Update progress check cleanup could not be confirmed"), {
             cleanup: probe.cleanup,
           });
         }
         monitorSignal.throwIfAborted();
         if (probe.code !== 0) {
-          throw new Error(`Update progress probe failed (${probe.termination}): ${probe.stderr}`);
+          throw new Error(`Update progress check failed (${probe.termination}): ${probe.stderr}`);
         }
         const current = copyProgressSchema.parse(JSON.parse(probe.stdout));
         if (Date.now() >= deadline) {
@@ -148,18 +180,18 @@ export async function withUpdateCandidateIoBudget<T>(
           knownBytes = Math.max(knownBytes, current.bytes);
           budget = budgetFor(knownBytes);
           deadline = Date.now() + budget;
-          cancelDeadline();
-          cancelDeadline = scheduleAbsoluteDeadline(deadline, expire);
         }
         previous = current.facts;
-        await sleep(1_000, monitorSignal);
+        if (params.progress !== "reported") {
+          await sleep(1_000, monitorSignal);
+        }
       }
     } catch (error) {
       if (isRecord(error) && error.cleanup === "uncertain") {
         probeFailure =
           error instanceof Error
             ? error
-            : new Error("Update progress probe cleanup failed", { cause: error });
+            : new Error("Update progress check cleanup failed", { cause: error });
       }
       if (!monitorSignal.aborted) {
         stalled.abort(error);
@@ -168,7 +200,7 @@ export async function withUpdateCandidateIoBudget<T>(
   })();
   let outcome: { value: T } | { error: unknown };
   try {
-    outcome = { value: await run(signal) };
+    outcome = { value: await run(signal, reportProgress) };
   } catch (error) {
     outcome = { error };
   }

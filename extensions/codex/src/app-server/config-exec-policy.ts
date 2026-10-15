@@ -1,18 +1,17 @@
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-registration";
 import type {
   CodexAppServerApprovalPolicy,
-  CodexAppServerApprovalsReviewer,
   CodexAppServerDefaultPolicy,
   CodexAppServerPolicyMode,
-  CodexAppServerSandboxMode,
   OpenClawExecMode,
   OpenClawExecPolicyForCodexAppServer,
 } from "./config-contracts.js";
+import type { CodexApprovalsReviewer, CodexSandboxMode } from "./protocol.js";
 
 export function selectForcedPromptingSandbox(params: {
-  configuredSandbox?: CodexAppServerSandboxMode;
-  defaultSandbox?: CodexAppServerSandboxMode;
-}): CodexAppServerSandboxMode {
+  configuredSandbox?: CodexSandboxMode;
+  defaultSandbox?: CodexSandboxMode;
+}): CodexSandboxMode {
   if (params.configuredSandbox === "read-only" || params.defaultSandbox === "read-only") {
     return "read-only";
   }
@@ -20,10 +19,10 @@ export function selectForcedPromptingSandbox(params: {
 }
 
 export function selectForcedDangerFullAccessSandbox(params: {
-  configuredSandbox?: CodexAppServerSandboxMode;
+  configuredSandbox?: CodexSandboxMode;
   defaultPolicy: CodexAppServerDefaultPolicy | undefined;
   openClawSandboxActive: boolean;
-}): CodexAppServerSandboxMode {
+}): CodexSandboxMode {
   if (params.configuredSandbox === "read-only") {
     return "read-only";
   }
@@ -39,18 +38,13 @@ export function selectForcedDangerFullAccessSandbox(params: {
 }
 
 export function selectGuardianSandbox(
-  allowedSandboxModes: Set<CodexAppServerSandboxMode> | undefined,
-): CodexAppServerSandboxMode {
-  if (allowedSandboxModes === undefined || allowedSandboxModes.has("workspace-write")) {
-    return "workspace-write";
-  }
-  if (allowedSandboxModes.has("read-only")) {
-    return "read-only";
-  }
-  if (allowedSandboxModes.has("danger-full-access")) {
-    return "danger-full-access";
-  }
-  return "workspace-write";
+  allowedSandboxModes: Set<CodexSandboxMode> | undefined,
+): CodexSandboxMode {
+  return (
+    (["workspace-write", "read-only", "danger-full-access"] as const).find((mode) =>
+      allowedSandboxModes?.has(mode),
+    ) ?? "workspace-write"
+  );
 }
 
 export function resolveApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | undefined {
@@ -65,15 +59,13 @@ export function resolveApprovalPolicy(value: unknown): CodexAppServerApprovalPol
   return value === "on-request" || value === "never" ? value : undefined;
 }
 
-export function resolveSandbox(value: unknown): CodexAppServerSandboxMode | undefined {
+export function resolveSandbox(value: unknown): CodexSandboxMode | undefined {
   return value === "read-only" || value === "workspace-write" || value === "danger-full-access"
     ? value
     : undefined;
 }
 
-export function resolveApprovalsReviewer(
-  value: unknown,
-): CodexAppServerApprovalsReviewer | undefined {
+export function resolveApprovalsReviewer(value: unknown): CodexApprovalsReviewer | undefined {
   return value === "auto_review" || value === "guardian_subagent" || value === "user"
     ? value
     : undefined;

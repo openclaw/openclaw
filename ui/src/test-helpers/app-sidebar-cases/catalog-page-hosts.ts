@@ -1,16 +1,10 @@
 import { expect, it, vi } from "vitest";
-import type {
-  SessionCatalogHost,
-  SessionsCatalogHostEvent,
-  SessionsCatalogListResult,
-} from "../../../../packages/gateway-protocol/src/index.ts";
-import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import type { SessionCatalogHost } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { catalogPage, createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
+import { catalogPage, mountSessionCatalogSidebar } from "../app-sidebar.ts";
 
 export function registerCatalogPageHostTests() {
-  it("pages only cursor hosts and preserves exhausted hosts through the next poll refresh", async () => {
+  it("pages only cursor hosts and preserves exhausted hosts through a catalog change", async () => {
     vi.useFakeTimers();
     try {
       const exhaustedHost: SessionCatalogHost = {
@@ -41,20 +35,9 @@ export function registerCatalogPageHostTests() {
           catalogPage([{ threadId: "thread-2", name: "Current title" }], "page-3"),
         )
         .mockResolvedValueOnce(catalogPage([{ threadId: "thread-3", name: "Oldest" }]));
-      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      gateway.publish({
-        hello: {
-          features: { methods: ["sessions.catalog.list"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      const { sidebar } = await mountSidebar(
-        gateway.gateway,
-        createSessions("main", ["agent:main:main"]),
-      );
-      sidebar.connected = true;
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
+      const { gateway, sidebar } = await mountSessionCatalogSidebar({
+        request,
+      } as unknown as GatewayBrowserClient);
 
       const catalogRows = () =>
         sidebar.querySelectorAll('[data-session-section="catalog:codex"] [data-session-key]');
@@ -68,6 +51,7 @@ export function registerCatalogPageHostTests() {
         agentId: "main",
         limitPerHost: 40,
         progressId: expect.any(String),
+        allowPartialResults: true,
       });
       expect(catalogRows()).toHaveLength(2);
       loadMore()?.click();
@@ -85,12 +69,14 @@ export function registerCatalogPageHostTests() {
       expect(sidebar.textContent).toContain("Retained remote session");
       expect(retainedHost()).toEqual(exhaustedHost);
 
-      await vi.advanceTimersByTimeAsync(30_000);
+      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+      await vi.advanceTimersByTimeAsync(5_000);
       await sidebar.updateComplete;
       expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
         agentId: "main",
         limitPerHost: 40,
         progressId: expect.any(String),
+        allowPartialResults: true,
       });
       expect(request).toHaveBeenNthCalledWith(4, "sessions.catalog.list", {
         agentId: "main",
@@ -117,82 +103,6 @@ export function registerCatalogPageHostTests() {
       expect(sidebar.textContent).toContain("Oldest");
       expect(retainedHost()).toEqual(exhaustedHost);
       expect(loadMore()).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps a progressive host update that arrives during expanded-page refetch", async () => {
-    vi.useFakeTimers();
-    try {
-      const pageOne = catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2");
-      const pageTwo = catalogPage([{ threadId: "thread-2", name: "Older" }]);
-      const pendingRefetch = deferred<SessionsCatalogListResult>();
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce(pageOne)
-        .mockResolvedValueOnce(pageTwo)
-        .mockResolvedValueOnce(pageOne)
-        .mockReturnValueOnce(pendingRefetch.promise)
-        .mockResolvedValue(pageOne);
-      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      gateway.publish({
-        hello: {
-          features: { methods: ["sessions.catalog.list"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      const { sidebar } = await mountSidebar(
-        gateway.gateway,
-        createSessions("main", ["agent:main:main"]),
-      );
-      sidebar.connected = true;
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
-
-      sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(request).toHaveBeenCalledTimes(4);
-
-      const progressId = (request.mock.calls[2]?.[1] as { progressId?: string })?.progressId;
-      const catalog = pageOne.catalogs[0];
-      const host = catalog?.hosts[0];
-      if (!progressId || !catalog || !host) {
-        throw new Error("expanded progressive fixture is incomplete");
-      }
-      const progressiveHost = { ...host, hostId: "gateway:progressive" };
-      gateway.publishEvent("sessions.catalog.host", {
-        progressId,
-        agentId: "main",
-        catalog: {
-          ...catalog,
-          hosts: [progressiveHost],
-        },
-      } satisfies SessionsCatalogHostEvent);
-      await sidebar.updateComplete;
-      expect(
-        sidebar.querySelector('[data-session-catalog-host="gateway:progressive"]'),
-      ).not.toBeNull();
-
-      pendingRefetch.resolve(pageTwo);
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
-
-      expect(
-        sidebar.querySelector('[data-session-catalog-host="gateway:progressive"]'),
-      ).not.toBeNull();
-      expect(request).toHaveBeenCalledTimes(4);
-      expect(request).toHaveBeenNthCalledWith(4, "sessions.catalog.list", {
-        agentId: "main",
-        catalogId: "codex",
-        hostIds: ["gateway:local"],
-        cursors: { "gateway:local": "page-2" },
-      });
-      expect(
-        sidebar.sessionData.sessionCatalogs[0]?.hosts.find(
-          (candidate) => candidate.hostId === progressiveHost.hostId,
-        ),
-      ).toEqual(progressiveHost);
     } finally {
       vi.useRealTimers();
     }

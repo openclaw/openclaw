@@ -3,24 +3,34 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/index.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
 import { sanitizePendingFinalDeliveryText } from "../../auto-reply/reply/pending-final-delivery-state.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import {
-  buildRestartRecoveryClaimCleanupPatch,
-  hasRestartRecoveryTerminalRun,
-  resolveRestartRecoveryChannelAuthority,
-} from "../../config/sessions/restart-recovery-state.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import type { SessionEntryCurrentFacts } from "../../config/sessions/session-entry-current.types.js";
+import { withSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { preparePhysicalSessionStorePath } from "../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isTrustedMessageActionTurnIngress } from "../../gateway/message-action-turn-capability.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import type { AgentRunRequest } from "../../gateway/server-methods/agent-request-types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CommandLane } from "../../process/lanes.js";
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
+import { getOwedHarnessCompletionTask } from "../agent-harness-completion-recovery.js";
+import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
+import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../restart-recovery-prompt.js";
+import { listSubagentRunsForRequester } from "../subagents/registry/subagent-registry-read.js";
+import {
+  buildSubagentRestartRecoveryRoster,
+  SUBAGENT_RESTART_RECOVERY_INSTRUCTION,
+} from "../subagents/subagent-restart-recovery-prompt.js";
 import { TOOL_FAILURE_INSTRUCTION } from "../tool-outcome-instructions.js";
-import { buildMainSessionRecoveryClearPatch } from "./main-session-recovery-clear.js";
+import {
+  runWithMainSessionRecoveryAdmission,
+  type MainSessionRecoveryAdmission,
+} from "./main-session-recovery-admission.js";
 import {
   repairMainSessionRecoveryMutation,
   retryMainSessionRecoveryMutation,
@@ -36,22 +46,29 @@ import {
   commitMainSessionRecovery,
   type MainSessionRecoveryStoreTarget,
 } from "./main-session-recovery-store.js";
-import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-dispatch-start.js";
+import { settleAcceptedRestartRecovery } from "./main-session-restart-dispatch-settlement.js";
+import {
+  dispatchRestartRecoveryUntilStarted,
+  normalizeRestartRecoveryTerminalStatus,
+  probeRestartRecoveryTerminalStatus,
+} from "./main-session-restart-dispatch-start.js";
 import {
   announceRestartRecoveryResumption,
-  isRestartRecoveryDeliveryCurrent,
+  hasRestartRecoveryMessageActionAuthority,
+  requiresRestartRecoveryMessageActionAuthority,
+  prepareRestartRecoveryDeliveryCurrent,
   resolveRestartRecoveryDeliveryContext,
 } from "./main-session-restart-recovery-delivery.js";
-import { normalizeFiniteTimestamp } from "./main-session-restart-recovery-shared.js";
+import {
+  mainSessionRecoveryLog as log,
+  readInterruptedRunId,
+} from "./main-session-restart-recovery-shared.js";
 
-const log = createSubsystemLogger("main-session-restart-recovery");
 const RESTART_RECOVERY_RESUME_MESSAGE = formatSystemTurnPrompt(
-  "Your previous turn was interrupted by a gateway restart while " +
-    "OpenClaw was waiting on tool/model work. The restart did not cancel the user's task. " +
+  `${RESTART_RECOVERY_INTERRUPTION_NOTE} The restart did not cancel the user's task. ` +
     "Continue from the existing transcript: check the current state, recover interrupted work, " +
-    "and finish the task without asking the user to repeat the request. Treat a tool result " +
-    "marked interrupted or missing as having an unknown outcome; verify what happened before " +
-    `repeating an action. ${TOOL_FAILURE_INSTRUCTION}`,
+    "and finish the task without asking the user to repeat the request. " +
+    `${SUBAGENT_RESTART_RECOVERY_INSTRUCTION} ${TOOL_FAILURE_INSTRUCTION}`,
 );
 
 const RESTART_SAFE_TOOLS_NOTICE =
@@ -59,200 +76,19 @@ const RESTART_SAFE_TOOLS_NOTICE =
   "recovery precaution. Use the tools that are available to report status or continue " +
   "read-only work; the full tool surface restores on the next user turn.";
 
-type RestartRecoveryTerminalStatus = "error" | "ok" | "timeout";
-
-export function hasRestartRecoveryMessageActionAuthority(entry: SessionEntry): boolean {
-  const authority = resolveRestartRecoveryChannelAuthority(entry);
-  // Keep the pre-dispatch gate identical to recovered capability minting.
-  return (
-    authority !== undefined && isTrustedMessageActionTurnIngress(authority.deliveryContext.channel)
-  );
-}
-
-/** Internal continuations never inherit channel authority; every other message-tool recovery must. */
-export function requiresRestartRecoveryMessageActionAuthority(entry: SessionEntry): boolean {
-  return (
-    entry.restartRecoverySourceReplyDeliveryMode === "message_tool_only" &&
-    entry.restartRecoverySourceIngress !== "internal"
-  );
-}
-
 function buildResumeMessage(
-  pendingFinalDeliveryText?: string | null,
+  pendingFinalDeliveryText: string,
   forceRestartSafeTools?: boolean,
+  childRecoveryRoster?: string,
 ): string {
-  const sanitizedPendingText =
-    typeof pendingFinalDeliveryText === "string"
-      ? sanitizePendingFinalDeliveryText(pendingFinalDeliveryText)
-      : "";
-  const base = forceRestartSafeTools
+  const sanitizedPendingText = sanitizePendingFinalDeliveryText(pendingFinalDeliveryText);
+  const instructions = forceRestartSafeTools
     ? `${RESTART_RECOVERY_RESUME_MESSAGE}\n\n${RESTART_SAFE_TOOLS_NOTICE}`
     : RESTART_RECOVERY_RESUME_MESSAGE;
-  if (sanitizedPendingText) {
-    return `${base}\n\nNote: The interrupted final reply was captured: "${sanitizedPendingText}"`;
-  }
-  return base;
-}
-
-function normalizeRestartRecoveryTerminalStatus(
-  value: unknown,
-): RestartRecoveryTerminalStatus | undefined {
-  return value === "error" || value === "ok" || value === "timeout" ? value : undefined;
-}
-
-async function probeRestartRecoveryTerminalStatus(
-  runId: string,
-  gatewayRuntime: GatewayRecoveryRuntime,
-): Promise<RestartRecoveryTerminalStatus | undefined> {
-  try {
-    const result = await gatewayRuntime.waitForAgent<{ endedAt?: unknown; status?: unknown }>(
-      { runId, timeoutMs: 0 },
-      2_000,
-    );
-    const status = normalizeRestartRecoveryTerminalStatus(result.status);
-    // A zero-time wait also reports timeout for active or unknown work.
-    return status === "timeout" && typeof result.endedAt !== "number" ? undefined : status;
-  } catch {
-    return undefined;
-  }
-}
-
-async function settleRestartRecoveryDispatch(params: {
-  agentId?: string;
-  expectedRecoveryRunId: string;
-  expectedRecoverySourceRunId?: string;
-  expectedSessionId: string;
-  sessionKeys: readonly string[];
-  shouldContinue?: () => boolean;
-  storePath: string;
-  terminalStatus?: RestartRecoveryTerminalStatus;
-}): Promise<void> {
-  await applySessionEntryReplacements({
-    agentId: params.agentId,
-    sessionKeys: params.sessionKeys,
-    storePath: params.storePath,
-    update: (entries) => {
-      if (params.shouldContinue?.() === false) {
-        return { result: undefined };
-      }
-      const current = entries
-        .filter(
-          ({ entry }) =>
-            entry.sessionId === params.expectedSessionId &&
-            normalizeOptionalString(entry.restartRecoveryDeliveryRunId) ===
-              params.expectedRecoveryRunId &&
-            normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ===
-              params.expectedRecoverySourceRunId,
-        )
-        .toSorted((a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0))[0];
-      if (!current) {
-        return { result: undefined };
-      }
-      const entry = current.entry;
-      const now = Date.now();
-      if (params.terminalStatus) {
-        entry.abortedLastRun = params.terminalStatus !== "ok";
-        entry.status =
-          params.terminalStatus === "ok"
-            ? "done"
-            : params.terminalStatus === "timeout"
-              ? "timeout"
-              : "failed";
-        entry.endedAt = now;
-        const startedAt = normalizeFiniteTimestamp(entry.startedAt);
-        if (startedAt !== undefined) {
-          entry.runtimeMs = Math.max(0, now - startedAt);
-        }
-        entry.restartRecoveryForceSafeTools = undefined;
-        Object.assign(
-          entry,
-          buildRestartRecoveryClaimCleanupPatch({
-            entry,
-            recordTerminalSource: true,
-            terminalRunId: params.expectedRecoveryRunId,
-            terminalSourceRunId: params.expectedRecoverySourceRunId,
-          }),
-          buildMainSessionRecoveryClearPatch(entry),
-        );
-      } else {
-        entry.abortedLastRun = false;
-      }
-      entry.updatedAt = now;
-      return {
-        result: undefined,
-        replacements: [{ sessionKey: current.sessionKey, entry }],
-      };
-    },
-  });
-}
-
-function isExactRestartRecoveryDispatchAdmission(params: {
-  admission: Awaited<ReturnType<typeof commitMainSessionRecovery>>;
-  lifecycleGeneration: string;
-  recoveryRunId: string;
-  sessionId: string;
-  terminalStatus?: RestartRecoveryTerminalStatus;
-}): boolean {
-  const entry = params.admission.entry;
-  return (
-    entry?.sessionId === params.sessionId &&
-    ((entry.abortedLastRun === false &&
-      normalizeOptionalString(entry.restartRecoveryDeliveryRunId) === params.recoveryRunId &&
-      entry.restartRecoveryRuns?.some(
-        (run) =>
-          run.runId === params.recoveryRunId &&
-          run.lifecycleGeneration === params.lifecycleGeneration,
-      ) === true) ||
-      (hasRestartRecoveryTerminalRun(entry, params.recoveryRunId) &&
-        ((params.terminalStatus === "ok" && entry.status === "done") ||
-          (params.terminalStatus === "error" && entry.status === "failed") ||
-          (params.terminalStatus === "timeout" && entry.status === "timeout"))))
-  );
-}
-
-async function settleAcceptedRestartRecovery(
-  params: Parameters<typeof settleRestartRecoveryDispatch>[0] & {
-    lifecycleGeneration: string;
-    reservation?: MainSessionRecoveryReservation;
-    sessionKey: string;
-  },
-): Promise<boolean> {
-  const admission = await commitMainSessionRecovery({
-    command: {
-      kind: "admit_recovery",
-      lifecycleGeneration: params.lifecycleGeneration,
-      now: Date.now(),
-      runId: params.expectedRecoveryRunId,
-      sessionId: params.expectedSessionId,
-    },
-    shouldContinue: params.shouldContinue,
-    target: params,
-  });
-  if (
-    admission.transition.kind !== "admitted_recovery" &&
-    !isExactRestartRecoveryDispatchAdmission({
-      admission,
-      lifecycleGeneration: params.lifecycleGeneration,
-      recoveryRunId: params.expectedRecoveryRunId,
-      sessionId: params.expectedSessionId,
-      terminalStatus: params.terminalStatus,
-    })
-  ) {
-    return false;
-  }
-  if (params.shouldContinue?.() === false) {
-    return true;
-  }
-  if (params.reservation) {
-    await commitMainSessionRecovery({
-      command: { kind: "abandon_reservation", reservation: params.reservation },
-      target: params,
-    });
-  }
-  if (params.shouldContinue?.() !== false) {
-    await settleRestartRecoveryDispatch(params);
-  }
-  return true;
+  const base = childRecoveryRoster ? `${instructions}\n\n${childRecoveryRoster}` : instructions;
+  return sanitizedPendingText
+    ? `${base}\n\nNote: The interrupted final reply was captured: "${sanitizedPendingText}"`
+    : base;
 }
 
 type MainSessionResumeResult = "started" | "settled" | "skipped" | "failed";
@@ -301,24 +137,93 @@ function scheduleRestartRecoveryReservationRollback(
   });
 }
 
-export async function resumeMainSession(params: {
+type ResumeMainSessionParams = {
   agentId: string;
   canonicalSessionKey?: string;
   cfg?: OpenClawConfig;
   entry: SessionEntry;
   observation: MainSessionRecoveryObservation;
+  completionSource?: SessionSourceAssertion;
   recoveryAttempt: number;
   storePath: string;
   sessionKey: string;
   pendingFinalDeliveryText?: string | null;
   forceRestartSafeTools?: boolean;
   forceCodeModeTools?: boolean;
-  sessionWorkAdmissionHandoffId?: string;
+  recoveryAdmission?: MainSessionRecoveryAdmission;
+  signal?: AbortSignal;
   lifecycleGeneration?: string;
   shouldContinue?: () => boolean;
   gatewayRuntime: GatewayRecoveryRuntime;
-}): Promise<MainSessionResumeResult> {
+};
+
+export async function resumeMainSession(
+  params: ResumeMainSessionParams,
+): Promise<MainSessionResumeResult> {
+  const source = captureSessionEntryMetadataRead(params, () => {});
+  const matchesRequester = (current: SessionEntryCurrentFacts | undefined) =>
+    current?.sessionId === params.entry.sessionId &&
+    current.lifecycleRevision === params.entry.lifecycleRevision;
+  let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
+  using _ = { [Symbol.dispose]: () => retained?.release() };
+  if (!source) {
+    let databaseIdentity: string | undefined;
+    await withSessionEntriesFromStoreInWorker(
+      { ...params, sessionKeys: [params.sessionKey], projection: "list" },
+      async (read) => {
+        const entry = read.result.entries.find(
+          ({ sessionKey }) => sessionKey === params.sessionKey,
+        )?.entry;
+        if (databaseIdentity && entry?.sessionId === params.entry.sessionId) {
+          retained = retainPreparedSessionEntryPredicate({
+            databaseIdentity,
+            sessionKey: params.sessionKey,
+            entry,
+            matches: (_before, current) => matchesRequester(current),
+          });
+        }
+      },
+      false,
+      (_database, identity) => {
+        databaseIdentity = identity.key;
+      },
+    );
+  }
+  const isCurrent = () => {
+    return source ? matchesRequester(source.readCurrent()) : retained?.isCurrent() === true;
+  };
+  const result = await runWithMainSessionRecoveryAdmission({
+    ...params,
+    sessionId: params.entry.sessionId,
+    admission: params.recoveryAdmission,
+    isCurrent,
+    run: (recoveryAdmission) =>
+      resumeMainSessionWithinAdmission({
+        ...params,
+        recoveryAdmission,
+        shouldContinue: recoveryAdmission.shouldContinue,
+      }),
+  });
+  return result ?? "skipped";
+}
+
+async function resumeMainSessionWithinAdmission(
+  params: ResumeMainSessionParams & { recoveryAdmission: MainSessionRecoveryAdmission },
+): Promise<MainSessionResumeResult> {
   if (params.shouldContinue?.() === false) {
+    return "skipped";
+  }
+  const harnessCompletion = params.entry.restartRecoveryHarnessCompletion;
+  const source = captureSessionEntryMetadataRead(params, () => {});
+  const taskRemainsOwed = () => {
+    params.completionSource?.();
+    if (!harnessCompletion) {
+      return true;
+    }
+    const entry = source ? source.readCurrent() : params.entry;
+    return Boolean(entry && getOwedHarnessCompletionTask(harnessCompletion, entry));
+  };
+  if (!taskRemainsOwed()) {
     return "skipped";
   }
   const lifecycleGeneration = params.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
@@ -333,7 +238,12 @@ export async function resumeMainSession(params: {
     sessionKey: params.sessionKey,
   });
   const claimedRunId = normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId);
-  const sourceRunId = normalizeOptionalString(params.entry.restartRecoveryDeliverySourceRunId);
+  const claimedSourceRunId = normalizeOptionalString(
+    params.entry.restartRecoveryDeliverySourceRunId,
+  );
+  // Preserve the interrupted turn's identity so its completion observer can
+  // join this successor. Run correlation does not create channel authority.
+  const sourceRunId = claimedSourceRunId ?? readInterruptedRunId(params.entry);
   if (
     requiresRestartRecoveryMessageActionAuthority(params.entry) &&
     !hasRestartRecoveryMessageActionAuthority(params.entry)
@@ -352,11 +262,23 @@ export async function resumeMainSession(params: {
       : randomUUID();
   const reusingRecoveryRunId = recoveryRunId === claimedRunId;
   const dispatchSessionKey = params.canonicalSessionKey ?? params.sessionKey;
-  const recoverySessionKeys = Array.from(new Set([dispatchSessionKey, params.sessionKey]));
   const target = {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
+  };
+  let deliveryCurrent:
+    | Awaited<ReturnType<typeof prepareRestartRecoveryDeliveryCurrent>>
+    | undefined;
+  let retainDeliveryCurrent = false;
+  const settlementTarget = {
+    ...target,
+    expectedRecoveryRunId: recoveryRunId,
+    expectedRecoverySourceRunId: sourceRunId,
+    expectedSessionId: params.entry.sessionId,
+    lifecycleGeneration,
+    sessionKeys: Array.from(new Set([dispatchSessionKey, params.sessionKey])),
+    shouldContinue: params.shouldContinue,
   };
   let reservation: MainSessionRecoveryReservation | undefined;
   let dispatchStarted = false;
@@ -368,14 +290,13 @@ export async function resumeMainSession(params: {
     if (!reservation) {
       return undefined;
     }
-    const current = reservation;
     const result = await rollbackRestartRecoveryReservation({
       ...target,
       kind,
-      reservation: current,
+      reservation,
     });
     reservation = undefined;
-    return { current, result };
+    return result;
   };
   const restoreAcceptedRecovery = async () => {
     if (params.shouldContinue?.() === false) {
@@ -384,6 +305,8 @@ export async function resumeMainSession(params: {
     const restored = await commitMainSessionRecovery({
       command: {
         kind: "mark_admitted_recovery_interrupted",
+        cycleId: params.observation.cycleId,
+        attempt: params.recoveryAttempt,
         lifecycleGeneration,
         now: Date.now(),
         runId: recoveryRunId,
@@ -394,7 +317,7 @@ export async function resumeMainSession(params: {
       target,
     });
     return params.shouldContinue?.() !== false &&
-      restored.transition.kind === "applied" &&
+      (restored.transition.kind === "applied" || restored.transition.kind === "no_change") &&
       restored.entry &&
       restored.sessionKey
       ? {
@@ -441,18 +364,17 @@ export async function resumeMainSession(params: {
       return "skipped";
     }
     reservation = reserved.transition.reservation;
-    if (params.shouldContinue?.() === false) {
+    if (params.shouldContinue?.() === false || !taskRemainsOwed()) {
       await rollbackReservation("cancel_reservation");
       return "skipped";
     }
-    // Persist one stable RPC id before dispatch. A transport rejection is
-    // ambiguous; retries must reuse this id so accepted work cannot duplicate.
+    // Reuse one RPC id on retries: transport rejection does not prove the dispatch was rejected.
     const recoveryStatePrepared = await applySessionEntryReplacements({
       agentId: target.agentId,
       sessionKeys: [params.sessionKey],
       storePath: params.storePath,
       update: (entries) => {
-        if (params.shouldContinue?.() === false) {
+        if (params.shouldContinue?.() === false || !taskRemainsOwed()) {
           return { result: false };
         }
         const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
@@ -460,10 +382,14 @@ export async function resumeMainSession(params: {
         if (
           !entry ||
           entry.sessionId !== params.entry.sessionId ||
-          entry.status !== "running" ||
+          (harnessCompletion &&
+            (entry.lifecycleRevision !== harnessCompletion.lifecycleRevision ||
+              entry.restartRecoveryHarnessCompletion?.taskId !== harnessCompletion.taskId)) ||
           entry.abortedLastRun !== true ||
           normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== claimedRunId ||
-          normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !== sourceRunId
+          normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) !==
+            claimedSourceRunId ||
+          (!claimedSourceRunId && readInterruptedRunId(entry) !== sourceRunId)
         ) {
           return { result: false };
         }
@@ -472,6 +398,7 @@ export async function resumeMainSession(params: {
           entry.restartRecoveryDeliveryContext = deliveryContext;
         }
         entry.restartRecoveryDeliveryRunId = recoveryRunId;
+        entry.restartRecoveryDeliverySourceRunId = sourceRunId;
         entry.restartRecoveryForceSafeTools = params.forceRestartSafeTools ? true : undefined;
         entry.updatedAt = Date.now();
         return {
@@ -485,23 +412,36 @@ export async function resumeMainSession(params: {
       if (params.shouldContinue?.() === false) {
         return "skipped";
       }
-      const current = rollback?.result.entry;
+      const current = rollback?.entry;
       return current?.sessionId === params.entry.sessionId &&
-        current.status === "running" &&
         current.abortedLastRun === true &&
         !current.mainRestartRecovery?.reservation &&
         !current.mainRestartRecovery?.tombstone
         ? "failed"
         : "skipped";
     }
+    const requesterStorePath = await preparePhysicalSessionStorePath({
+      agentId: params.agentId,
+      sessionKey: dispatchSessionKey,
+      storePath: params.storePath,
+    });
     const agentParams: AgentRunRequest = {
       agentId: params.agentId,
-      message: buildResumeMessage(sanitizedPendingText, params.forceRestartSafeTools),
+      message: buildResumeMessage(
+        sanitizedPendingText,
+        params.forceRestartSafeTools,
+        buildSubagentRestartRecoveryRoster(
+          listSubagentRunsForRequester(dispatchSessionKey, {
+            requesterAgentId: params.agentId,
+            requesterSessionId: params.entry.sessionId,
+            requesterLifecycleRevision: params.entry.lifecycleRevision,
+            requesterStorePath,
+          }),
+        ),
+      ),
       sessionKey: dispatchSessionKey,
       expectedExistingSessionId: params.entry.sessionId,
-      ...(params.sessionWorkAdmissionHandoffId
-        ? { internalRuntimeHandoffId: params.sessionWorkAdmissionHandoffId }
-        : {}),
+      internalRuntimeHandoffId: params.recoveryAdmission.handoffId,
       ...(isExecutionIdentityCollectionEnabled(params.cfg)
         ? { internalExecutionIdentityRetry: params.recoveryAttempt > 1 }
         : {}),
@@ -510,7 +450,7 @@ export async function resumeMainSession(params: {
       deliver:
         Boolean(deliveryContext) &&
         params.entry.restartRecoverySourceReplyDeliveryMode !== "message_tool_only",
-      lane: CommandLane.Main,
+      lane: CommandLane.Background,
       ...(params.entry.restartRecoverySourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: params.entry.restartRecoverySourceReplyDeliveryMode }
         : {}),
@@ -533,12 +473,16 @@ export async function resumeMainSession(params: {
         agentParams.threadId = String(deliveryContext.threadId);
       }
     }
-    if (params.shouldContinue?.() === false) {
+    if (params.shouldContinue?.() === false || !taskRemainsOwed()) {
       await rollbackReservation("cancel_reservation");
       return "skipped";
     }
     if (params.forceRestartSafeTools) {
       log.info(`dispatching restart-safe recovery for ${params.sessionKey}`);
+    }
+    if (!params.recoveryAdmission.beginDispatch()) {
+      await rollbackReservation("cancel_reservation");
+      return "skipped";
     }
     dispatchStarted = true;
     let dispatchSettled = false;
@@ -546,9 +490,30 @@ export async function resumeMainSession(params: {
     const dispatchOutcome = await dispatchRestartRecoveryUntilStarted({
       agentParams,
       gatewayRuntime: params.gatewayRuntime,
+      ...(sourceRunId && params.entry.restartRecoveryOperatorSource
+        ? {
+            restartRecoveryOperatorTarget: {
+              ...target,
+              sessionId: params.entry.sessionId,
+              sourceRunId,
+              recoveryRunId,
+            },
+          }
+        : {}),
+      assertAdmissionCurrent: () => {
+        if (params.shouldContinue?.() === false || !taskRemainsOwed()) {
+          throw new Error("Restart recovery admission is no longer current.");
+        }
+      },
+      prepareDispatchCurrent: () =>
+        runWithAgentToolSourceExecutionScope(params.completionSource, async () => {
+          params.completionSource?.();
+        }),
       onSettled: () => {
         dispatchSettled = true;
         stopTyping?.();
+        deliveryCurrent?.release();
+        retainDeliveryCurrent = false;
       },
     });
     ({ dispatchAccepted, executionStarted, preStartAbortAttempted, preStartAbortConfirmed } =
@@ -565,9 +530,7 @@ export async function resumeMainSession(params: {
       // owner settle or transfer that durable claim into a new lifecycle.
       return "skipped";
     }
-    // Real Gateway admission consumes the reservation before returning accepted.
-    // Recovery-runtime fakes may return directly, so keep this idempotent fallback
-    // to make the durable acceptance boundary explicit in focused tests too.
+    // Reconcile accepted and terminal outcomes idempotently with durable admission.
     let terminalStatus = normalizeRestartRecoveryTerminalStatus(dispatchResult.status);
     if (
       !executionStarted &&
@@ -590,13 +553,7 @@ export async function resumeMainSession(params: {
     }
     if (
       !(await settleAcceptedRestartRecovery({
-        ...target,
-        expectedRecoveryRunId: recoveryRunId,
-        expectedRecoverySourceRunId: sourceRunId,
-        expectedSessionId: params.entry.sessionId,
-        lifecycleGeneration,
-        sessionKeys: recoverySessionKeys,
-        shouldContinue: params.shouldContinue,
+        ...settlementTarget,
         terminalStatus,
       }))
     ) {
@@ -606,37 +563,48 @@ export async function resumeMainSession(params: {
       return "skipped";
     }
     const resumeResult = terminalStatus ? "settled" : "started";
-    if (resumeResult === "started" && agentParams.deliver && deliveryContext) {
-      if (!dispatchSettled) {
-        stopTyping = params.gatewayRuntime.startRecoveryTyping?.({
-          ...deliveryContext,
-          agentId: params.agentId,
-          runId: recoveryRunId,
-          isCurrent: (cfg) =>
-            !dispatchSettled &&
-            isRestartRecoveryDeliveryCurrent({
-              ...target,
-              sessionKey: dispatchSessionKey,
-              sessionId: params.entry.sessionId,
-              recoveryRunId,
-              lifecycleGeneration,
-              deliveryContext,
-              cfg,
-              shouldContinue: params.shouldContinue,
-            }),
-        });
-      }
-      await announceRestartRecoveryResumption({
+    if (resumeResult === "started" && agentParams.deliver && deliveryContext && taskRemainsOwed()) {
+      deliveryCurrent = await prepareRestartRecoveryDeliveryCurrent({
         ...target,
+        storePath: requesterStorePath,
         sessionKey: dispatchSessionKey,
         sessionId: params.entry.sessionId,
         recoveryRunId,
         lifecycleGeneration,
         deliveryContext,
         cfg: params.cfg,
-        shouldContinue: () => !dispatchSettled && params.shouldContinue?.() !== false,
-        gatewayRuntime: params.gatewayRuntime,
+        shouldContinue: params.shouldContinue,
+      }).catch((error: unknown) => {
+        log.warn(
+          `failed to prepare restart recovery notice ${params.sessionKey}: ${String(error)}`,
+        );
+        return undefined;
       });
+      if (deliveryCurrent) {
+        const isDeliveryCurrent = deliveryCurrent.isCurrent;
+        if (!dispatchSettled) {
+          stopTyping = params.gatewayRuntime.startRecoveryTyping?.({
+            ...deliveryContext,
+            agentId: params.agentId,
+            runId: recoveryRunId,
+            isCurrent: (cfg) => !dispatchSettled && taskRemainsOwed() && isDeliveryCurrent(cfg),
+          });
+          retainDeliveryCurrent = stopTyping !== undefined;
+        }
+        await announceRestartRecoveryResumption({
+          ...target,
+          isCurrent: (cfg) => !dispatchSettled && taskRemainsOwed() && isDeliveryCurrent(cfg),
+          sessionKey: dispatchSessionKey,
+          sessionId: params.entry.sessionId,
+          recoveryRunId,
+          lifecycleGeneration,
+          deliveryContext,
+          cfg: params.cfg,
+          shouldContinue: () =>
+            !dispatchSettled && taskRemainsOwed() && params.shouldContinue?.() !== false,
+          gatewayRuntime: params.gatewayRuntime,
+        });
+      }
     }
     log.info(
       `${resumeResult} interrupted main session: ${params.sessionKey}${
@@ -646,11 +614,10 @@ export async function resumeMainSession(params: {
     return resumeResult;
   } catch (error) {
     const explicitlyRejected = error instanceof GatewayClientRequestError && !dispatchAccepted;
-    const canRestoreAcceptedFailure = !preStartAbortAttempted || preStartAbortConfirmed;
     if (
       dispatchAccepted &&
       !executionStarted &&
-      canRestoreAcceptedFailure &&
+      (!preStartAbortAttempted || preStartAbortConfirmed) &&
       params.shouldContinue?.() !== false
     ) {
       await repairAcceptedRecovery();
@@ -673,14 +640,8 @@ export async function resumeMainSession(params: {
         );
         if (terminalStatus && params.shouldContinue?.() !== false) {
           const settled = await settleAcceptedRestartRecovery({
-            ...target,
-            expectedRecoveryRunId: recoveryRunId,
-            expectedRecoverySourceRunId: sourceRunId,
-            expectedSessionId: params.entry.sessionId,
-            lifecycleGeneration,
+            ...settlementTarget,
             reservation,
-            sessionKeys: recoverySessionKeys,
-            shouldContinue: params.shouldContinue,
             terminalStatus,
           });
           if (!settled) {
@@ -720,5 +681,9 @@ export async function resumeMainSession(params: {
       `failed to resume interrupted main session ${params.sessionKey}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
     );
     return "failed";
+  } finally {
+    if (!retainDeliveryCurrent) {
+      deliveryCurrent?.release();
+    }
   }
 }

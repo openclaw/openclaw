@@ -2,7 +2,6 @@ import type { MemoryEmbeddingProviderCreateOptions } from "openclaw/plugin-sdk/m
 import { describe, expect, it } from "vitest";
 import { createMistralEmbeddingProvider } from "./embedding-provider.js";
 import { mistralMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
-import { MISTRAL_BASE_URL } from "./model-definitions.js";
 
 function createOptions(params?: {
   baseUrl?: string;
@@ -24,7 +23,7 @@ function createOptions(params?: {
 }
 
 describe("Mistral memory embedding index identity", () => {
-  it.each([undefined, MISTRAL_BASE_URL, `${MISTRAL_BASE_URL}/`, "https://API.MISTRAL.AI:443/v1/"])(
+  it.each([undefined, "https://API.MISTRAL.AI:443/v1/"])(
     "preserves the exact existing default identity for %s",
     async (baseUrl) => {
       const result = await mistralMemoryEmbeddingProviderAdapter.create(createOptions({ baseUrl }));

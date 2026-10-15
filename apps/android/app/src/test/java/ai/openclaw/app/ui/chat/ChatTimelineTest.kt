@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatAgentActivity
 import ai.openclaw.app.chat.ChatDiffStat
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
@@ -7,7 +8,6 @@ import ai.openclaw.app.chat.ChatMessageProvenance
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.chat.ChatSubagentActivity
 import ai.openclaw.app.chat.ChatToolActivity
 import ai.openclaw.app.chat.ChatTranscriptMarker
 import ai.openclaw.app.chat.OUTBOX_OWNER_CHANGED_ERROR
@@ -18,6 +18,42 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatTimelineTest {
+  @Test
+  fun preparedQuietHistoryKeepsRawDetailsAndUnknownOutcomes() {
+    val quiet = ChatToolActivity("wait", "process", "action: poll", "raw result", false)
+    val unknown = ChatAgentActivity("tool:unknown", "tool", "end", "Outcome unknown", toolCallId = "unknown")
+    val messages =
+      listOf(
+        ChatMessage("call", "assistant", listOf(ChatMessageContent(type = "toolCall", toolActivity = quiet.copy(result = null))), 0, activity = listOf(unknown.copy(itemId = "tool:wait", toolCallId = "wait", phase = "start", title = "Process", status = "running"))),
+        ChatMessage("quiet", "assistant", listOf(ChatMessageContent(type = "toolResult", toolActivity = quiet)), 1, activity = emptyList()),
+        ChatMessage("unknown", "assistant", listOf(ChatMessageContent(type = "toolResult", toolActivity = quiet.copy(toolCallId = "unknown"))), 2, activity = listOf(unknown)),
+      )
+    val group =
+      prepareChatHistory(messages, "agent:main:main", mainSessionKey = "agent:main:main")
+        .buildTimeline(0, emptyList(), null)
+        .items
+        .filterIsInstance<ChatTimelineItem.ToolActivity>()
+        .single()
+    assertTrue(group.tools.all { it.activityPrepared })
+    assertEquals(listOf("raw result", "raw result"), group.tools.map { it.result })
+    assertEquals("Outcome unknown", completedToolGroupSummary(group.tools))
+    assertEquals(null, group.tools.first().activity)
+    val legacyResult = messages.map { if (it.id == "quiet") it.copy(activity = null) else it }
+    val legacyGroup =
+      prepareChatHistory(legacyResult, "agent:main:main", mainSessionKey = "agent:main:main")
+        .buildTimeline(0, emptyList(), null)
+        .items
+        .filterIsInstance<ChatTimelineItem.ToolActivity>()
+        .single()
+    assertEquals(
+      "Process",
+      legacyGroup.tools
+        .first()
+        .activity
+        ?.title,
+    )
+  }
+
   @Test
   fun groupsContiguousToolOnlyMessagesWithoutSwallowingAssistantText() {
     val call = ChatToolActivity("call-1", "read", "path: README.md", null, false)
@@ -30,13 +66,13 @@ class ChatTimelineTest {
         textMessage(id = "assistant-after", role = "assistant", text = "Done."),
       )
 
-    val timeline = prepareChatHistory(messages, "agent:main:main").buildTimeline(0, emptyList(), null)
+    val timeline = prepareChatHistory(messages, "agent:main:telegram:direct:projection", mainSessionKey = "agent:main:main").buildTimeline(0, emptyList(), null)
 
     assertEquals(
-      listOf("message:assistant-after", "completed-tools:call", "message:assistant-before"),
+      listOf("message:assistant-after", "tools:root", "message:assistant-before"),
       timeline.items.map(::chatTimelineItemKey),
     )
-    val group = timeline.items.filterIsInstance<ChatTimelineItem.CompletedTools>().single()
+    val group = timeline.items.filterIsInstance<ChatTimelineItem.ToolActivity>().single()
     assertEquals(listOf(ChatToolActivity("call-1", "read", "path: README.md", "contents", false)), group.tools)
   }
 
@@ -56,9 +92,9 @@ class ChatTimelineTest {
         truncated = true,
       )
 
-    val timeline = prepareChatHistory(listOf(mixed), "agent:main:main").buildTimeline(0, emptyList(), null)
+    val timeline = prepareChatHistory(listOf(mixed), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(0, emptyList(), null)
 
-    assertEquals(listOf("completed-tools:mixed", "message:mixed"), timeline.items.map(::chatTimelineItemKey))
+    assertEquals(listOf("tools:root", "message:mixed"), timeline.items.map(::chatTimelineItemKey))
     assertTrue((timeline.items[1] as ChatTimelineItem.Message).message.matchesFullRead(mixed))
     assertEquals(
       "Checking now.",
@@ -84,6 +120,7 @@ class ChatTimelineTest {
             ),
           ),
         sessionKey = "agent:main:main",
+        mainSessionKey = "agent:main:main",
       ).buildTimeline(
         pendingRunCount = 0,
         pendingToolCalls = emptyList(),
@@ -105,7 +142,7 @@ class ChatTimelineTest {
         1,
       )
 
-    fun timeline(history: List<ChatMessage>) = prepareChatHistory(history, "agent:main:main").buildTimeline(0, emptyList(), null)
+    fun timeline(history: List<ChatMessage>) = prepareChatHistory(history, "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(0, emptyList(), null)
     val originalVersion = timeline(listOf(toolMessage(original))).latestContentVersion
     val final = textMessage(id = "final", role = "assistant", text = "Done.")
     val historyVersion = timeline(listOf(toolMessage(original), final)).latestContentVersion
@@ -122,8 +159,8 @@ class ChatTimelineTest {
   @Test
   fun hiddenTurnBoundaryChangesTheLiveEdgeVersion() {
     val message = textMessage(id = "reply", role = "assistant", text = "Completed")
-    val original = prepareChatHistory(listOf(message), "agent:main:main").buildTimeline(0, emptyList(), null)
-    val changed = prepareChatHistory(listOf(message.copy(turnBoundary = true)), "agent:main:main").buildTimeline(0, emptyList(), null)
+    val original = prepareChatHistory(listOf(message), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(0, emptyList(), null)
+    val changed = prepareChatHistory(listOf(message.copy(turnBoundary = true)), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(0, emptyList(), null)
     assertTrue(original.latestContentVersion != changed.latestContentVersion)
   }
 
@@ -131,8 +168,8 @@ class ChatTimelineTest {
   fun canonicalReplacementPreservesAnIdempotencyBackedUserAnchor() {
     val optimistic = textMessage(id = "optimistic", role = "user", text = "Send this").copy(idempotencyKey = "input:user")
     val canonical = optimistic.copy(id = "canonical", content = listOf(ChatMessageContent(text = "Canonical text")), timestampMs = 2)
-    val first = prepareChatHistory(listOf(optimistic), "agent:main:main").buildTimeline(0, emptyList(), null)
-    val second = prepareChatHistory(listOf(canonical), "agent:main:main").buildTimeline(0, emptyList(), null)
+    val first = prepareChatHistory(listOf(optimistic), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(0, emptyList(), null)
+    val second = prepareChatHistory(listOf(canonical), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(0, emptyList(), null)
     assertEquals(first.latestUserMessageVersion, second.latestUserMessageVersion)
     assertTrue(second.containsUserMessageVersion(requireNotNull(first.latestUserMessageVersion)))
     assertTrue(first.latestContentVersion != second.latestContentVersion)
@@ -143,7 +180,7 @@ class ChatTimelineTest {
     val user = textMessage(id = "user-1", role = "user", text = "hello")
 
     val timeline =
-      prepareChatHistory(listOf(user), "agent:main:main").buildTimeline(
+      prepareChatHistory(listOf(user), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
         pendingRunCount = 1,
         pendingToolCalls = emptyList(),
         streamingAssistantText = null,
@@ -167,14 +204,14 @@ class ChatTimelineTest {
       )
 
     val timeline =
-      prepareChatHistory(listOf(olderAssistant, user), "agent:main:main").buildTimeline(
+      prepareChatHistory(listOf(olderAssistant, user), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
         pendingRunCount = 1,
         pendingToolCalls = listOf(tool),
         streamingAssistantText = "streaming",
       )
 
     assertEquals(
-      listOf("stream", "tools", "thinking", "message:user-1", "message:assistant-1"),
+      listOf("stream", "tools:user-1", "thinking", "message:user-1", "message:assistant-1"),
       timeline.items.map(::chatTimelineItemKey),
     )
     assertEquals(3, timeline.readAnchorIndex)
@@ -188,7 +225,7 @@ class ChatTimelineTest {
     val assistant = textMessage(id = "assistant-1", role = "assistant", text = "done")
 
     val timeline =
-      prepareChatHistory(listOf(user, assistant), "agent:main:main").buildTimeline(
+      prepareChatHistory(listOf(user, assistant), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
         pendingRunCount = 0,
         pendingToolCalls = emptyList(),
         streamingAssistantText = null,
@@ -229,7 +266,7 @@ class ChatTimelineTest {
       )
 
     val timeline =
-      prepareChatHistory(messages, "agent:main:main").buildTimeline(
+      prepareChatHistory(messages, "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
         pendingRunCount = 0,
         pendingToolCalls = emptyList(),
         streamingAssistantText = null,
@@ -293,6 +330,7 @@ class ChatTimelineTest {
             textMessage(id = "assistant-1", role = "assistant", text = "after"),
           ),
         sessionKey = "agent:main:main",
+        mainSessionKey = "agent:main:main",
       ).buildTimeline(
         pendingRunCount = 0,
         pendingToolCalls = emptyList(),
@@ -329,7 +367,7 @@ class ChatTimelineTest {
     assertEquals(SystemDividerKind.Compaction, dividers[1].kind)
 
     val rebuilt =
-      prepareChatHistory(listOf(compaction, reset), "agent:main:main").buildTimeline(
+      prepareChatHistory(listOf(compaction, reset), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
         pendingRunCount = 0,
         pendingToolCalls = emptyList(),
         streamingAssistantText = null,
@@ -355,6 +393,7 @@ class ChatTimelineTest {
             textMessage(id = "marker-$index", role = "system", text = "Compaction").copy(transcriptMarker = marker)
           },
         sessionKey = "agent:main:main",
+        mainSessionKey = "agent:main:main",
       ).buildTimeline(
         pendingRunCount = 0,
         pendingToolCalls = emptyList(),
@@ -375,7 +414,7 @@ class ChatTimelineTest {
     val user = textMessage(id = "user-1", role = "user", text = "hello")
     val assistant = textMessage(id = "assistant-1", role = "assistant", text = "done")
     val timeline =
-      prepareChatHistory(listOf(user, assistant), "agent:main:main").buildTimeline(
+      prepareChatHistory(listOf(user, assistant), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
         pendingRunCount = 0,
         pendingToolCalls = emptyList(),
         streamingAssistantText = null,
@@ -395,7 +434,7 @@ class ChatTimelineTest {
   @Test
   fun emptyTimelineHasNoScrollTarget() {
     val timeline =
-      prepareChatHistory(emptyList(), "agent:main:main").buildTimeline(
+      prepareChatHistory(emptyList(), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
         pendingRunCount = 0,
         pendingToolCalls = emptyList(),
         streamingAssistantText = null,
@@ -489,7 +528,7 @@ class ChatTimelineTest {
     assertEquals(listOf(ownerless), outboxItemsForRecovery(listOf(ownerless)))
 
     val timeline =
-      prepareChatHistory(emptyList(), "agent:main:main").buildTimeline(
+      prepareChatHistory(emptyList(), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
         pendingRunCount = 0,
         pendingToolCalls = emptyList(),
         streamingAssistantText = null,
@@ -583,63 +622,16 @@ class ChatTimelineTest {
   }
 
   @Test
-  fun subagentRowsStayKeyedByTaskAndParticipateInLiveContentVersion() {
-    val activity = subagentActivity(id = "task-1", snippet = "Reading files", added = 2)
-    val first =
-      prepareChatHistory(emptyList(), "agent:main:main").buildTimeline(
-        pendingRunCount = 0,
-        pendingToolCalls = emptyList(),
-        streamingAssistantText = null,
-        subagentActivities = mapOf(activity.id to activity),
-      )
-    val updated = activity.copy(snippet = "Editing files", diffStat = ChatDiffStat(added = 8, removed = 3, files = 2))
-    val second =
-      prepareChatHistory(emptyList(), "agent:main:main").buildTimeline(
-        pendingRunCount = 0,
-        pendingToolCalls = emptyList(),
-        streamingAssistantText = null,
-        subagentActivities = mapOf(updated.id to updated),
-      )
-
-    assertEquals(listOf("subagent-activity"), first.items.map(::chatTimelineItemKey))
-    assertEquals(first.items.map(::chatTimelineItemKey), second.items.map(::chatTimelineItemKey))
-    assertTrue(first.latestContentVersion != second.latestContentVersion)
-  }
-
-  @Test
-  fun subagentRowsCapAtFiveAndOverflowCountsOnlyHiddenWorkingRows() {
-    val working = (1..6).map { index -> subagentActivity(id = "task-$index", startedAtMs = index.toLong()) }
-    val queued = subagentActivity(id = "task-queued", status = "queued", startedAtMs = 100)
-    val finished = subagentActivity(id = "task-finished", status = "completed", startedAtMs = 0, endedAtMs = 20)
-
-    val timeline =
-      prepareChatHistory(emptyList(), "agent:main:main").buildTimeline(
-        pendingRunCount = 0,
-        pendingToolCalls = listOf(ChatPendingToolCall(toolCallId = "tool-1", name = "edit", startedAtMs = 1)),
-        streamingAssistantText = null,
-        subagentActivities = (working + queued + finished).associateBy(ChatSubagentActivity::id),
-      )
-
-    assertEquals(
-      listOf("tools", "subagent-activity"),
-      timeline.items.map(::chatTimelineItemKey),
-    )
-    val row = timeline.items.filterIsInstance<ChatTimelineItem.SubagentActivity>().single()
-    assertEquals(listOf("task-1", "task-2", "task-3", "task-4", "task-5"), row.activities.map { it.id })
-    assertEquals(1, row.moreWorkingCount)
-  }
-
-  @Test
   fun liveToolDiffChangesTimelineContentVersion() {
     val pending = ChatPendingToolCall(toolCallId = "tool-1", name = "edit", startedAtMs = 1)
     val initial =
-      prepareChatHistory(emptyList(), "agent:main:main").buildTimeline(
+      prepareChatHistory(emptyList(), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
         pendingRunCount = 0,
         pendingToolCalls = listOf(pending),
         streamingAssistantText = null,
       )
     val updated =
-      prepareChatHistory(emptyList(), "agent:main:main").buildTimeline(
+      prepareChatHistory(emptyList(), "agent:main:main", mainSessionKey = "agent:main:main").buildTimeline(
         pendingRunCount = 0,
         pendingToolCalls = listOf(pending.copy(liveDiff = ChatDiffStat(added = 4, removed = 1))),
         streamingAssistantText = null,
@@ -648,26 +640,6 @@ class ChatTimelineTest {
     assertEquals(initial.items.map(::chatTimelineItemKey), updated.items.map(::chatTimelineItemKey))
     assertTrue(initial.latestContentVersion != updated.latestContentVersion)
   }
-
-  private fun subagentActivity(
-    id: String,
-    status: String = "running",
-    snippet: String? = null,
-    added: Int = 0,
-    startedAtMs: Long = 1,
-    endedAtMs: Long? = null,
-  ): ChatSubagentActivity =
-    ChatSubagentActivity(
-      id = id,
-      status = status,
-      snippet = snippet,
-      diffStat = ChatDiffStat(added = added, removed = 0, files = 1),
-      terminalSummary = null,
-      error = null,
-      startedAtMs = startedAtMs,
-      endedAtMs = endedAtMs,
-      childSessionKey = "agent:worker:subagent:$id",
-    )
 
   private fun textMessage(
     id: String,

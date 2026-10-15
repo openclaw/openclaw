@@ -1,7 +1,4 @@
-import type {
-  classifyPrForSweep,
-  classifyRunForRevive,
-} from "../../scripts/github/pr-ci-sweeper.mjs";
+import type { classifyPrForSweep } from "../../scripts/github/pr-ci-sweeper.mjs";
 
 export const NOW = Date.parse("2026-07-18T12:00:00Z");
 export const MINUTES = 60 * 1000;
@@ -19,9 +16,15 @@ export function pr(overrides: Partial<Parameters<typeof classifyPrForSweep>[0]["
 }
 
 type FakeCall = { method: string; args: Record<string, unknown> };
-type FakeWorkflowRun = Parameters<typeof classifyRunForRevive>[0]["run"] & {
+type FakeWorkflowRun = {
   id: number;
-  workflow_id: number | null;
+  workflow_id: number;
+  conclusion: string;
+  event: string;
+  run_attempt: number;
+  created_at: string;
+  head_branch: string;
+  head_repository: { full_name: string };
 };
 type FakeCheckRun = {
   id: number;
@@ -38,16 +41,14 @@ export function fakeGithub(options: {
     string,
     Array<{ conclusion: string | null; event?: string; id?: number; status?: string }>
   >;
-  checksByRef?: Record<string, FakeCheckRun[] | FakeCheckRun[][]>;
+  checksByRef?: Record<string, FakeCheckRun[]>;
   workflowRunsById?: Record<number, FakeWorkflowRun>;
-  workflowRunErrorsById?: Record<number, Error>;
   pullsGetByNumber?: Record<number, Record<string, unknown> | Array<Record<string, unknown>>>;
   events?: Array<Record<string, unknown>>;
   pageSize?: number;
 }) {
   const calls: FakeCall[] = [];
   const pullsGetCallCounts = new Map<number, number>();
-  const checksListCallCounts = new Map<string, number>();
   const record = (method: string, args: Record<string, unknown>) => {
     calls.push({ method, args });
   };
@@ -94,13 +95,7 @@ export function fakeGithub(options: {
       if (endpoint.endpointName === "checks.listForRef") {
         const ref = args.ref as string;
         const configured = options.checksByRef?.[ref] ?? [];
-        if (Array.isArray(configured[0])) {
-          const snapshots = configured as FakeCheckRun[][];
-          const callIndex = checksListCallCounts.get(ref) ?? 0;
-          checksListCallCounts.set(ref, callIndex + 1);
-          return Promise.resolve(snapshots[Math.min(callIndex, snapshots.length - 1)] ?? []);
-        }
-        return Promise.resolve(configured as FakeCheckRun[]);
+        return Promise.resolve(configured);
       }
       if (endpoint.endpointName === "issues.listEvents") {
         return Promise.resolve(options.events ?? []);
@@ -131,10 +126,6 @@ export function fakeGithub(options: {
         getWorkflowRun: (args: Record<string, unknown>) => {
           record("actions.getWorkflowRun", args);
           const runId = args.run_id as number;
-          const error = options.workflowRunErrorsById?.[runId];
-          if (error) {
-            return Promise.reject(error);
-          }
           return Promise.resolve({ data: options.workflowRunsById?.[runId] });
         },
         reRunWorkflow: (args: Record<string, unknown>) => {
@@ -156,16 +147,19 @@ export function fakeGithub(options: {
 }
 
 export const context = { repo: { owner: "openclaw", repo: "openclaw" } };
-export const core = { info: () => {}, setFailed: () => {} };
+export const core = { info: () => {}, warning: () => {}, setFailed: () => {} };
 
 export function recordingCore() {
   const logs: string[] = [];
+  const warnings: string[] = [];
   return {
     core: {
       info: (message: string) => logs.push(message),
+      warning: (message: string) => warnings.push(message),
       setFailed: () => {},
     },
     logs,
+    warnings,
   };
 }
 

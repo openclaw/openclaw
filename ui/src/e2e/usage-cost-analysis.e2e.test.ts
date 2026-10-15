@@ -2,8 +2,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI usage cost analysis mocked Gateway E2E",
@@ -91,9 +91,9 @@ function emptyUsageResponses() {
         byAgent: [],
         byChannel: [],
         daily: [],
+        costDaily: [],
       },
     },
-    "usage.cost": { updatedAt, days: 1, daily: [], totals: emptyTotals },
   };
 }
 
@@ -172,31 +172,30 @@ suite.define(() => {
                           },
                         },
                       ],
-                      aggregates: { ...empty["sessions.usage"].aggregates, messages },
+                      aggregates: {
+                        ...empty["sessions.usage"].aggregates,
+                        messages,
+                        costDaily: [{ date, ...usageTotals }],
+                      },
                     },
                   },
                   { match: {}, response: empty["sessions.usage"] },
-                ],
-              },
-              "usage.cost": {
-                cases: [
-                  {
-                    match,
-                    response: {
-                      updatedAt,
-                      days: 1,
-                      daily: [{ date, ...usageTotals }],
-                      totals: usageTotals,
-                    },
-                  },
-                  { match: {}, response: empty["usage.cost"] },
                 ],
               },
               "usage.status": { updatedAt, providers: [] },
             },
           });
           await page.goto(`${suite.server.baseUrl}usage`);
-          await page.locator(".usage-select").selectOption(timeZone);
+          await page
+            .getByRole("combobox", { name: "Time zone", exact: true })
+            .selectOption(timeZone);
+          await expect
+            .poll(() =>
+              page
+                .locator("main.content")
+                .evaluate((content) => getComputedStyle(content).paddingTop),
+            )
+            .toBe("0px");
           const dateInputs = await page.locator(".usage-date-input").all();
           expect(dateInputs).toHaveLength(2);
           for (const input of dateInputs) {
@@ -209,7 +208,7 @@ suite.define(() => {
           const hours = page.locator(".usage-error-list--hours");
           const cells = page.locator(".usage-hour-cell");
           const refresh = page
-            .locator(".usage-controls")
+            .locator("openclaw-usage-page")
             .getByRole("button", { name: "Refresh", exact: true });
           for (const [stage, now] of [
             ["control", "2026-03-07T17:00:00Z"],
@@ -495,6 +494,7 @@ suite.define(() => {
                 byProvider: [],
                 byAgent: [{ agentId: "main", totals }],
                 byChannel: [],
+                costDaily: [{ ...totals, date: selectedDay }],
                 daily: [
                   {
                     date: selectedDay,
@@ -508,12 +508,6 @@ suite.define(() => {
               },
               cacheStatus: { status: "refreshing", cachedFiles: 1, pendingFiles: 1, staleFiles: 0 },
             },
-            "usage.cost": {
-              updatedAt,
-              days: 1,
-              daily: [{ ...totals, date: selectedDay }],
-              totals,
-            },
             "usage.status": { updatedAt, providers: [] },
           },
         });
@@ -523,7 +517,7 @@ suite.define(() => {
         const cachedRow = page.locator(".session-bar-row").filter({ hasText: "Cached session" });
         await expect.poll(() => pendingRow.count(), { timeout: 10_000 }).toBe(1);
 
-        await page.locator(".usage-select").selectOption("utc");
+        await page.getByRole("combobox", { name: "Time zone", exact: true }).selectOption("utc");
         await expect
           .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
           .toMatchObject({ mode: "utc" });
@@ -577,11 +571,14 @@ suite.define(() => {
       async ({ page }) => {
         await installMockGateway(page, {
           methodResponses: {
-            "sessions.usage": { ...empty["sessions.usage"], sessions, totals },
-            "usage.cost": {
-              ...empty["usage.cost"],
-              daily: [dailyEntry(0, totals.totalCost, totals.totalTokens)],
+            "sessions.usage": {
+              ...empty["sessions.usage"],
+              sessions,
               totals,
+              aggregates: {
+                ...empty["sessions.usage"].aggregates,
+                costDaily: [dailyEntry(0, totals.totalCost, totals.totalTokens)],
+              },
             },
             "usage.status": { updatedAt, providers: [] },
           },
@@ -597,7 +594,7 @@ suite.define(() => {
           has: page.locator(".usage-filter-trigger", { hasText: "Provider" }),
         });
         await providerFilter.locator(".usage-filter-trigger").click();
-        await providerFilter.locator('wa-dropdown-item[value="command:select-all"]').click();
+        await providerFilter.locator('[data-value="command:select-all"]').click();
         await expect.poll(() => providerFilter.locator(".settings-count").textContent()).toBe("2");
         await expect
           .poll(async () => (await sessionLabels.allTextContents()).toSorted())
@@ -608,8 +605,8 @@ suite.define(() => {
               path.join(suite.artifactDir, "usage-filter-repair"),
               "01-provider-alternatives.png",
             ),
-            await takeControlUiViewportScreenshot(page, providerFilter.locator('[part="menu"]'), [
-              providerFilter.locator('wa-dropdown-item[value="option:openai"]'),
+            await takeControlUiViewportScreenshot(page, providerFilter.locator('[role="menu"]'), [
+              providerFilter.locator('[data-value="option:openai"]'),
             ]),
           );
         }
@@ -623,7 +620,7 @@ suite.define(() => {
             .poll(async () => (await sessionLabels.allTextContents()).toSorted())
             .toEqual(["Research Review", "Team Planning"]);
           await providerFilter.locator(".usage-filter-trigger").click();
-          const openai = providerFilter.locator('wa-dropdown-item[value="option:openai"]');
+          const openai = providerFilter.locator('[data-value="option:openai"]');
           await expect.poll(() => openai.getAttribute("aria-checked")).toBe("true");
           await openai.click();
           await expect.poll(() => sessionLabels.allTextContents()).toEqual(["Research Review"]);
@@ -656,6 +653,8 @@ suite.define(() => {
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
+            "sessions.usage.timeseries": { points: [] },
+            "sessions.usage.logs": { logs: [] },
             "agents.list": {
               agents: [
                 { id: "main", name: "Main" },
@@ -741,6 +740,7 @@ suite.define(() => {
                 ],
                 byAgent: [{ agentId: "main", totals }],
                 byChannel: [],
+                costDaily: daily,
                 daily: daily.map((entry) => ({
                   date: entry.date,
                   tokens: entry.totalTokens,
@@ -750,12 +750,6 @@ suite.define(() => {
                   errors: 0,
                 })),
               },
-            },
-            "usage.cost": {
-              updatedAt: Date.now(),
-              days: 90,
-              daily,
-              totals,
             },
             "usage.status": {
               updatedAt: Date.now(),
@@ -883,17 +877,17 @@ suite.define(() => {
         const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
         await agentScope.locator(".agent-select__trigger").click();
         await agentScope
-          .locator("wa-dropdown-item[data-agent-option]")
+          .locator(".agent-select__option[data-agent-option]")
           .filter({ hasText: "All agents" })
           .click();
         await expect
-          .poll(async () => (await gateway.getRequests("usage.cost")).at(-1)?.params)
+          .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
           .toMatchObject({ agentScope: "all" });
-        const costRequestsBeforeRangeChange = (await gateway.getRequests("usage.cost")).length;
+        const requestsBeforeRangeChange = (await gateway.getRequests("sessions.usage")).length;
         await page.getByRole("button", { name: "90d", exact: true }).click();
         await expect
-          .poll(async () => (await gateway.getRequests("usage.cost")).length)
-          .toBeGreaterThan(costRequestsBeforeRangeChange);
+          .poll(async () => (await gateway.getRequests("sessions.usage")).length)
+          .toBeGreaterThan(requestsBeforeRangeChange);
         await page.getByRole("button", { name: "Cost", exact: true }).click();
 
         const windowCards = page.locator(".cost-window-card");
@@ -919,30 +913,46 @@ suite.define(() => {
           .toContain("openai");
         const messagesHint = page.locator("#usage-summary-hint-messages");
         const messagesTooltipHost = messagesHint.locator("xpath=..");
-        const messagesTooltip = messagesTooltipHost.locator("wa-tooltip");
+        const messagesTooltip = messagesTooltipHost.locator(".tooltip-surface[popover]");
         await messagesHint.hover();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(true);
         await page.mouse.move(1, 1);
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(false);
 
         await page.keyboard.press("Tab");
         await messagesHint.focus();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(true);
         await page.getByRole("button", { name: "Cost", exact: true }).focus();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(false);
 
         await messagesHint.click();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(true);
         await expect
           .poll(() => messagesTooltipHost.locator('[slot="content"]').textContent())
           .toContain("Total user and assistant messages in range.");
         await page.getByRole("button", { name: "Cost", exact: true }).click();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(false);
         await page.keyboard.press("Tab");
         await messagesHint.focus();
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBe("");
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(true);
         await messagesHint.press("Escape");
-        await expect.poll(() => messagesTooltip.getAttribute("open")).toBeNull();
+        await expect
+          .poll(() => messagesTooltip.evaluate((surface) => surface.matches(":popover-open")))
+          .toBe(false);
         const providerCards = page.locator(".provider-usage-card");
         await expect.poll(() => providerCards.count()).toBe(3);
         await expect

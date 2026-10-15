@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings, saveSettings } from "../../app/settings.ts";
+import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   attachChatRealtimeActions,
@@ -9,9 +11,9 @@ import {
   stopChatRealtimeTalk,
   type ChatRealtimeState,
 } from "./chat-realtime.ts";
-import { RealtimeTalkSelectedMicrophoneError } from "./realtime-talk-input.ts";
-import type { RealtimeTalkCallbacks } from "./realtime-talk-shared.ts";
-import { RealtimeTalkSession } from "./realtime-talk.ts";
+import { RealtimeTalkSelectedMicrophoneError } from "./talk/input.ts";
+import { RealtimeTalkSession } from "./talk/session.ts";
+import type { RealtimeTalkCallbacks } from "./talk/shared.ts";
 
 type InspectableRealtimeTalkSession = {
   callbacks: RealtimeTalkCallbacks;
@@ -29,7 +31,10 @@ function inspectSession(state: ChatRealtimeState): InspectableRealtimeTalkSessio
 
 function createState(): ChatRealtimeState {
   const state = {
-    client: {},
+    client: {
+      request: vi.fn(async () => ({ config: {} })),
+      addEventListener: vi.fn(() => () => undefined),
+    },
     connected: true,
     settings: loadSettings(),
     sessionKey: "main",
@@ -49,8 +54,11 @@ describe("chat realtime actions", () => {
 
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
+    vi.spyOn(GatewaySpeechPlayback.prototype, "prepare").mockImplementation(() =>
+      document.createElement("audio"),
+    );
     startSpy = vi.spyOn(RealtimeTalkSession.prototype, "start").mockResolvedValue(undefined);
-    vi.spyOn(RealtimeTalkSession.prototype, "stop").mockImplementation(() => undefined);
+    vi.spyOn(RealtimeTalkSession.prototype, "stop").mockResolvedValue(undefined);
     vi.spyOn(RealtimeTalkSession.prototype, "switchCamera").mockResolvedValue(undefined);
   });
 
@@ -60,6 +68,128 @@ describe("chat realtime actions", () => {
     localStorage.clear();
     vi.unstubAllGlobals();
   });
+
+  it.each([false, true])(
+    "changes only audio while retaining captions and effective microphone (default recovery: %s)",
+    async (useSystemDefault) => {
+      saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: "usb-mic" });
+      const state = createState();
+      const listeners = new Set<(event: GatewayEventFrame) => void>();
+      const request = vi.fn(async () => ({ ok: true }));
+      state.client = {
+        request,
+        addEventListener: (listener: (event: GatewayEventFrame) => void) => {
+          listeners.add(listener);
+          return () => {
+            listeners.delete(listener);
+          };
+        },
+      } as unknown as ChatRealtimeState["client"];
+      let creates = 0;
+      const ids = new WeakMap<RealtimeTalkSession, string>();
+      startSpy.mockImplementation(async function (this: RealtimeTalkSession) {
+        ids.set(this, `voice-${++creates}`);
+      });
+      vi.spyOn(RealtimeTalkSession.prototype, "getVoiceSessionId").mockImplementation(function (
+        this: RealtimeTalkSession,
+      ) {
+        return ids.get(this);
+      });
+      vi.spyOn(RealtimeTalkSession.prototype, "getTransport").mockReturnValue("webrtc");
+      if (useSystemDefault) {
+        startSpy.mockRejectedValueOnce(new RealtimeTalkSelectedMicrophoneError());
+      }
+      await state.toggleRealtimeTalk();
+      if (useSystemDefault) {
+        await state.realtimeTalkUseSystemDefault!();
+      }
+      const oldSession = state.realtimeTalkSession!;
+      const old = inspectSession(state);
+      old.callbacks.onTranscript?.({
+        role: "user",
+        text: "Old speech",
+        final: true,
+        itemId: "same",
+        order: 0,
+      });
+      old.callbacks.onTranscript?.({ role: "assistant", text: "Still speaking", final: false });
+      state.realtimeTalkVideoStream = {} as MediaStream;
+      state.realtimeTalkCameraDevices = [{ deviceId: "old-camera", label: "Old camera" }];
+      for (const listener of listeners) {
+        listener({
+          type: "event",
+          event: "talk.voice.change",
+          payload: {
+            sessionKey: "main",
+            voiceSessionId: "voice-1",
+            voice: "spruce",
+            changeId: "change-1",
+            phase: "requested",
+          },
+        });
+      }
+      await vi.waitFor(() => expect(creates).toBe(2));
+      expect(state.sessionKey).toBe("main");
+      expect(state.realtimeTalkSession).not.toBe(oldSession);
+      expect(state.realtimeTalkVideoStream).toBeNull();
+      expect(state.realtimeTalkCameraDevices).toEqual([]);
+      expect(inspectSession(state).options).toMatchObject({
+        voice: "spruce",
+        voiceChangeId: "change-1",
+        transport: "webrtc",
+      });
+      const replacement = inspectSession(state);
+      expect(replacement.localOptions.inputDeviceId).toBe(useSystemDefault ? undefined : "usb-mic");
+      replacement.callbacks.onTranscript?.({
+        role: "user",
+        text: "New speech",
+        final: true,
+        itemId: "same",
+        order: 0,
+      });
+      replacement.callbacks.onTranscriptOrder?.([{ itemId: "same", order: 0 }]);
+      old.callbacks.onTranscript?.({
+        role: "user",
+        text: "Late old speech",
+        final: true,
+        itemId: "same",
+        order: 0,
+      });
+      expect(state.realtimeTalkConversationState.entries.map(({ text }) => text)).toEqual([
+        "Old speech",
+        "Still speaking",
+        "New speech",
+      ]);
+      expect(new Set(state.realtimeTalkConversationState.entries.map(({ id }) => id)).size).toBe(3);
+      expect(
+        state.realtimeTalkConversationState.entries.every(({ isStreaming }) => !isStreaming),
+      ).toBe(true);
+      expect(request.mock.calls).toEqual(
+        Array.from({ length: useSystemDefault ? 2 : 1 }, () => ["talk.config", {}]),
+      );
+      replacement.callbacks.onTalkEvent?.({
+        id: "ready",
+        type: "session.ready",
+        sessionId: "voice-2",
+        seq: 1,
+        timestamp: new Date().toISOString(),
+        mode: "realtime",
+        transport: "webrtc",
+        brain: "agent-consult",
+        payload: undefined,
+      });
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith(
+          "talk.voice.complete",
+          { changeId: "change-1", voiceSessionId: "voice-2", outcome: "ready" },
+          { timeoutMs: 70_000 },
+        ),
+      );
+      await state.toggleRealtimeTalk();
+      expect(state.realtimeTalkConversationState.entries).toEqual([]);
+      expect(listeners.size).toBe(0);
+    },
+  );
 
   it("launches with the microphone persisted from the Settings page", async () => {
     saveSettings({
@@ -140,6 +270,7 @@ describe("chat realtime actions", () => {
           }),
       );
       const retry = state.realtimeTalkUseSystemDefault!();
+      await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
       expect(inspectSession(state).localOptions.inputDeviceId).toBeUndefined();
       saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: "newer-mic" });
       if (outcome === "cancelled") {
@@ -348,6 +479,19 @@ describe("chat realtime actions", () => {
     expect(state.realtimeTalkCameraError).toBe(true);
   });
 
+  it("shows microphone input-loss guidance without leaving listening", async () => {
+    const state = createState();
+    await state.toggleRealtimeTalk();
+    const session = inspectSession(state);
+    session.callbacks.onStatus?.("listening");
+
+    session.callbacks.onInputNotice?.("Microphone input recovered; repeat the last part");
+
+    expect(state.realtimeTalkStatus).toBe("listening");
+    expect(state.realtimeTalkActive).toBe(true);
+    expect(state.realtimeTalkInputNotice).toBe("Microphone input recovered; repeat the last part");
+  });
+
   it("cycles live cameras in enumeration order and persists the successful switch", async () => {
     const state = createState();
     const switchCamera = vi
@@ -526,7 +670,7 @@ describe("chat realtime actions", () => {
     callbacks.onTranscript?.({ role: "assistant", text: "Checking", final: false });
     callbacks.onTranscript?.({ role: "user", text: "Can you check?", final: true });
 
-    expect(state.realtimeTalkConversation).toMatchObject([
+    expect(state.realtimeTalkConversationState.entries).toMatchObject([
       { role: "user", text: "Can you check?", isStreaming: false },
       { role: "assistant", text: "Checking", isStreaming: true },
     ]);
@@ -541,7 +685,7 @@ describe("chat realtime actions", () => {
     callbacks.onTranscript?.({ role: "assistant", text: "Checking", final: false });
     callbacks.onTranscript?.({ role: "user", text: "Second request", final: true });
 
-    expect(state.realtimeTalkConversation).toMatchObject([
+    expect(state.realtimeTalkConversationState.entries).toMatchObject([
       { role: "user", text: "First request", isStreaming: false },
       { role: "assistant", text: "Checking", isStreaming: false },
       { role: "user", text: "Second request", isStreaming: false },
@@ -578,7 +722,7 @@ describe("chat realtime actions", () => {
     expect(state.realtimeTalkStatus).toBe("error");
     expect(state.realtimeTalkDetail).toBe("startup failed");
     expect(state.realtimeTalkInputLevel.value).toBe(0);
-    expect(state.realtimeTalkConversation).toEqual([]);
+    expect(state.realtimeTalkConversationState.entries).toEqual([]);
     expect(state.realtimeTalkVideoStream).toBeNull();
     expect(state.realtimeTalkCameraDevices).toEqual([]);
     expect(state.realtimeTalkVideoCapable).toBe(false);
@@ -618,7 +762,7 @@ describe("chat realtime actions", () => {
     expect(state.realtimeTalkStatus).toBe("listening");
     expect(state.realtimeTalkDetail).toBeNull();
     expect(state.realtimeTalkInputLevel.value).toBe(0);
-    expect(state.realtimeTalkConversation).toEqual([]);
+    expect(state.realtimeTalkConversationState.entries).toEqual([]);
     expect(state.realtimeTalkVideoStream).toBeNull();
     expect(state.realtimeTalkVideoCapable).toBe(false);
     expect(state.realtimeTalkCameraError).toBe(false);
@@ -630,7 +774,7 @@ describe("chat realtime actions", () => {
     const firstSession = inspectSession(state);
     const stop = vi
       .spyOn(RealtimeTalkSession.prototype, "stop")
-      .mockImplementationOnce(() => firstSession.callbacks.onStatus?.("error", "late stop"));
+      .mockImplementationOnce(async () => firstSession.callbacks.onStatus?.("error", "late stop"));
 
     await state.toggleRealtimeTalk();
 

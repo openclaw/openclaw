@@ -12,6 +12,7 @@ import {
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -28,6 +29,7 @@ describe("cleanOldMedia managed-subtree retention", () => {
   });
 
   afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await tempHome.restore();
   });
@@ -42,7 +44,7 @@ describe("cleanOldMedia managed-subtree retention", () => {
       MANAGED_OUTGOING_ORIGINALS_SUBDIR,
     );
     const attachmentId = "11111111-1111-4111-8111-111111111111";
-    insertManagedImageRecord(
+    await insertManagedImageRecord(
       {
         attachmentId,
         sessionKey: "agent:main:main",
@@ -86,7 +88,7 @@ describe("cleanOldMedia managed-subtree retention", () => {
     await expect(fs.stat(historyOriginal.path)).resolves.toMatchObject({
       size: historyOriginal.size,
     });
-    expect(readManagedImageRecord(attachmentId, stateDir)).not.toBeNull();
+    expect(await readManagedImageRecord(attachmentId, stateDir)).not.toBeNull();
     await expect(fs.stat(legacyRecordPath)).resolves.toMatchObject({ size: 2 });
 
     const cleanup = await cleanupManagedOutgoingMediaRecords({

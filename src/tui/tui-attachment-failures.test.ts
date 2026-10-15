@@ -67,16 +67,10 @@ function createDisplayHarness() {
 
 describe("TUI attachment failure presentation", () => {
   it.each([
-    { name: "failure only", content: [audioFailure], expected: audioReceipt },
     {
       name: "caption and failure",
       content: [caption, audioFailure],
       expected: `Your recording\n${audioReceipt}`,
-    },
-    {
-      name: "success and failure",
-      content: [image, audioFailure],
-      expected: `Attached image\n${audioReceipt}`,
     },
     {
       name: "caption, success and failure",

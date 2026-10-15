@@ -40,6 +40,10 @@ class FakeGatewayClient {
     this.instanceId = opts.instanceId ?? "";
   }
 
+  get gatewayUrl() {
+    return this.opts.url;
+  }
+
   start() {
     this.started += 1;
   }
@@ -61,6 +65,7 @@ export function createGatewayStoreTestStore(
   params: {
     settings?: ReturnType<typeof loadSettings>;
     persistDefaultConnectionSettings?: boolean;
+    ownsWarmBoot?: boolean;
     resourceBasePath?: string;
     clientOptions?: Pick<
       GatewayBrowserClientOptions,
@@ -80,6 +85,7 @@ export function createGatewayStoreTestStore(
     },
     {
       persistDefaultConnectionSettings: params.persistDefaultConnectionSettings,
+      ownsWarmBoot: params.ownsWarmBoot,
       resourceBasePath: params.resourceBasePath,
       clientOptions: params.clientOptions,
     },

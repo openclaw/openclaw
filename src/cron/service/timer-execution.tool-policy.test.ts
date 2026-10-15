@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { createNoopLogger } from "../service.test-harness.js";
 import type { CronStoredJob } from "../types.js";
@@ -31,6 +32,7 @@ describe("scheduled exec target recovery", () => {
       const runScriptJob = vi.fn(async () => ({ status: "ok" as const }));
       const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
       const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
         storePath: `/tmp/cron-exec-target-recovery-${kind}.json`,
         cronEnabled: true,
         log: createNoopLogger(),
@@ -56,6 +58,7 @@ describe("scheduled exec target recovery", () => {
   it("keeps legacy unmarked exec grants on baseline policy", async () => {
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath: "/tmp/cron-exec-target-legacy.json",
       cronEnabled: true,
       log: createNoopLogger(),
@@ -70,4 +73,71 @@ describe("scheduled exec target recovery", () => {
     await expect(executeJobCore(state, job)).resolves.toMatchObject({ status: "ok" });
     expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
   });
+});
+
+describe("scheduled agent admission", () => {
+  it.each<{
+    name: string;
+    overrides: Partial<CronStoredJob>;
+    admissionSource: "operator-schedule" | "requester-schedule";
+  }>([
+    { name: "operator", overrides: {}, admissionSource: "operator-schedule" },
+    {
+      name: "account requester",
+      overrides: {
+        owner: { agentId: "main", accountId: "work" },
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:discord:group:work",
+          ownerAccountId: "work",
+        },
+      },
+      admissionSource: "requester-schedule",
+    },
+    {
+      name: "channel requester",
+      overrides: {
+        toolsAllowProvenance: {
+          version: 1,
+          source: "authenticated-requester",
+          channelRequester: {
+            version: 1,
+            channel: "discord",
+            accountId: "work",
+            senderId: "requester",
+          },
+        },
+      },
+      admissionSource: "requester-schedule",
+    },
+    {
+      name: "external content",
+      overrides: {
+        payload: { kind: "agentTurn", message: "run", externalContentSource: "webhook" },
+      },
+      admissionSource: "requester-schedule",
+    },
+  ])(
+    "records $name admission without an audit identity",
+    async ({ overrides, admissionSource }) => {
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+      const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
+        storePath: "/tmp/cron-admission-source.json",
+        cronEnabled: true,
+        log: createNoopLogger(),
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob,
+      });
+      const job: CronStoredJob = { ...makeCronJob({}), ...overrides };
+
+      await expect(executeJobCore(state, job)).resolves.toMatchObject({ status: "ok" });
+
+      expect(runIsolatedAgentJob).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ job, admissionSource, executionIdentity: undefined }),
+      );
+    },
+  );
 });

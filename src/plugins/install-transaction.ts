@@ -131,12 +131,10 @@ export async function withPluginInstallTransactions<
   } catch (error) {
     if (!request && !refusal) {
       try {
-        await settlePluginInstallTransactions(transactions, "rollback");
+        await settlePluginInstallTransactions(transactions, "rollback", { error });
       } catch (rollbackError) {
         if (!refusal) {
-          throw new AggregateError([error, rollbackError], "Plugin install recovery failed", {
-            cause: rollbackError,
-          });
+          throw rollbackError;
         }
       }
     }

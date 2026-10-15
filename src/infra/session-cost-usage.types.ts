@@ -1,15 +1,29 @@
-// Shared session cost and usage accounting type contracts.
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { Usage } from "../llm/types.js";
-import type {
-  SessionUsageTimePoint as SharedSessionUsageTimePoint,
-  SessionUsageTimeSeries as SharedSessionUsageTimeSeries,
+export type {
+  SessionUsageTimePoint,
+  SessionUsageTimeSeries,
 } from "../shared/session-usage-timeseries-types.js";
 
 export type CostBreakdown = Partial<Usage["cost"]>;
 
+export type UsageCostTranscriptFile = {
+  filePath: string;
+  /** Durable identity when filePath is a transient archive materialization. */
+  sourcePath: string;
+  kind: "jsonl" | "sqlite";
+  size: number;
+  mtimeMs: number;
+  sessionId?: string;
+  device?: number;
+  inode?: number;
+  eventCount?: number;
+  maxSeq?: number;
+  generation?: string | null;
+  cold?: boolean;
+};
+
 export type ParsedTranscriptEntry = {
-  message: Record<string, unknown>;
   role?: "user" | "assistant";
   timestamp?: Date;
   durationMs?: number;
@@ -24,6 +38,8 @@ export type ParsedTranscriptEntry = {
 };
 
 export type CostUsageTotals = {
+  /** Unavailable means numeric fields are known subtotals, not complete usage. */
+  usageReport?: Usage["usageReport"];
   input: number;
   output: number;
   cacheRead: number;
@@ -80,6 +96,7 @@ export type SessionUtcQuarterHourMessageCounts = SessionMessageCounts & {
 };
 
 export type SessionUtcQuarterHourTokenUsage = {
+  usageReport?: Usage["usageReport"];
   date: string; // YYYY-MM-DD (UTC)
   quarterIndex: number; // 0-95, UTC quarter-hour bucket (index = floor((utcH * 60 + utcM) / 15))
   input: number;
@@ -105,6 +122,7 @@ export type SessionDailyLatency = SessionLatencyStats & {
 };
 
 export type SessionDailyModelUsage = {
+  usageReport?: Usage["usageReport"];
   date: string; // YYYY-MM-DD
   provider?: string;
   model?: string;
@@ -136,6 +154,9 @@ export type SessionModelUsage = {
 };
 
 export type SessionCostSummary = CostUsageTotals & {
+  computedAt?: number;
+  staleSince?: number;
+  refreshing?: boolean;
   sessionId?: string;
   sessionFile?: string;
   firstActivity?: number;
@@ -158,11 +179,8 @@ export type DiscoveredSession = {
   sessionId: string;
   sessionFile: string;
   mtime: number;
+  transcriptFile?: UsageCostTranscriptFile;
 };
-
-export type SessionUsageTimePoint = SharedSessionUsageTimePoint;
-
-export type SessionUsageTimeSeries = SharedSessionUsageTimeSeries;
 
 export type SessionLogEntry = {
   timestamp: number;

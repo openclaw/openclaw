@@ -20,7 +20,7 @@ describe.skipIf(!hasBrowserLayout)("Memory page browser layout", () => {
     host = document.createElement("div");
     host.className = "shell shell--settings";
     host.innerHTML = `
-      <main class="content" style="box-sizing: border-box; width: 1152px">
+      <main class="content content--memory-page content--settings-page" style="box-sizing: border-box; width: 1152px">
         <section class="memory-page">
           <section
             class="content-header content-header--page hub-page-header"
@@ -55,6 +55,9 @@ describe.skipIf(!hasBrowserLayout)("Memory page browser layout", () => {
     };
 
     expectDefined(host.querySelector<HTMLElement>(".settings-page"), "settings page").remove();
+    expectDefined(host.querySelector<HTMLElement>(".content"), "content").classList.remove(
+      "content--settings-page",
+    );
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => resolve());
     });
@@ -75,7 +78,7 @@ describe.skipIf(!hasBrowserLayout)("Memory page browser layout", () => {
     host = document.createElement("div");
     host.className = "shell shell--settings";
     host.innerHTML = `
-      <main class="content" style="box-sizing: border-box; width: 1152px; height: 600px; overflow-y: auto">
+      <main class="content content--memory-page" style="box-sizing: border-box; width: 1152px; height: 600px; overflow-y: auto">
         <section class="memory-page">
           <section class="content-header content-header--page hub-page-header">
             <div class="hub-page-header__title">Memory</div>

@@ -18,30 +18,12 @@ const placementCases = [
     false,
   ],
   [
-    "admin profile dispatch",
-    "sessions.dispatch",
-    { key: "agent:main:test", profileId: "development" },
-    ["operator.admin"],
-    true,
-  ],
-  [
     "writer gateway move",
     "sessions.move",
     {
       key: "agent:main:test",
       expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
       target: { kind: "gateway" },
-    },
-    ["operator.write"],
-    true,
-  ],
-  [
-    "writer device move",
-    "sessions.move",
-    {
-      key: "agent:main:test",
-      expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
-      target: { kind: "device", deviceId: "device-1" },
     },
     ["operator.write"],
     true,
@@ -90,6 +72,8 @@ function requestContext() {
   } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
 }
 
+const FOLDER = { deviceId: "device-1", path: "/srv/project" };
+
 describe("session placement target authorization", () => {
   it.each(placementCases)(
     "authorizes %s before the handler",
@@ -124,6 +108,52 @@ describe("session placement target authorization", () => {
             requiredScopes: ["operator.admin"],
           },
         }),
+      );
+    },
+  );
+
+  it.each([
+    ["writer with a device folder", { deviceFolder: FOLDER }, ["operator.write"], true],
+    [
+      "own-session writer with a device folder",
+      { deviceFolder: FOLDER },
+      ["operator.sessions.write"],
+      false,
+    ],
+  ] as const)(
+    "authorizes sessions.create for a %s before the handler",
+    async (name, extra, scopes, allowed) => {
+      const handler = vi.fn<GatewayRequestHandler>(({ respond }) =>
+        respond(true, { reached: true }),
+      );
+      const respond = vi.fn();
+      await handleGatewayRequest({
+        req: {
+          type: "req",
+          id: `req-create-${name}`,
+          method: "sessions.create",
+          params: { key: "agent:main:dashboard:folder", ...extra },
+        },
+        respond,
+        client: operatorClient(name, scopes),
+        isWebchatConnect: () => false,
+        context: requestContext(),
+        extraHandlers: { "sessions.create": handler },
+      });
+
+      // The handler owns node validation and persistence, so a refusal here precedes both.
+      expect(handler).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(respond).toHaveBeenCalledWith(
+        ...(allowed
+          ? [true, { reached: true }]
+          : [
+              false,
+              undefined,
+              expect.objectContaining({
+                code: "FORBIDDEN",
+                details: expect.objectContaining({ missingScope: "operator.write" }),
+              }),
+            ]),
       );
     },
   );

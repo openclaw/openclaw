@@ -16,7 +16,7 @@ import {
   type ApplicationContextProvider,
 } from "../../test-helpers/application-context.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
-import "./custodian-page.ts";
+import "./custodian-page.tsx";
 
 type TestCustodianPage = HTMLElement & {
   onboarding: boolean;
@@ -28,6 +28,7 @@ type ContextHarness = {
   context: ApplicationContext;
   setGatewaySnapshot: (patch: Partial<ApplicationGatewaySnapshot>) => void;
   setGatewayToken: (token: string) => void;
+  setPathname: (pathname: string) => void;
   setChannelsConnected: (connected: boolean) => void;
   setChannelsSnapshot: (snapshot: ChannelsStatusSnapshot | null) => void;
   setChannelsError: (error: string | null) => void;
@@ -117,8 +118,21 @@ export function createContext(
     }
     return new Promise<void>(() => {});
   });
+  const routeListeners = new Set<() => void>();
   const context = {
     gateway,
+    runtimeConfig: {
+      state: { configSnapshot: null, configLoading: false, lastError: null },
+      ensureLoaded: vi.fn(async () => undefined),
+      subscribe: () => () => undefined,
+    },
+    router: {
+      getState: () => ({ location: { pathname: window.location.pathname } }),
+      subscribe: (listener: () => void) => {
+        routeListeners.add(listener);
+        return () => routeListeners.delete(listener);
+      },
+    },
     agents: {
       state: {
         agentsList: options.agentsList ?? {
@@ -149,6 +163,12 @@ export function createContext(
   } as unknown as ApplicationContext;
   return {
     context,
+    setPathname: (pathname) => {
+      window.history.replaceState({}, "", pathname);
+      for (const listener of routeListeners) {
+        listener();
+      }
+    },
     setGatewaySnapshot: (patch) => {
       snapshot = { ...snapshot, ...patch };
       for (const listener of listeners) {

@@ -46,29 +46,35 @@ export function resolvePluginRuntimeRecord(
     params.pluginId ??
     getPluginRegistryState()?.registrationContext?.pluginId ??
     getPluginRuntimeGatewayRequestScope()?.pluginId;
+  const records = getPluginRegistryForContext()?.plugins ?? [];
+  const matchesSource = (record: PluginRecord) =>
+    record.rootDir &&
+    (root
+      ? getPluginCacheRoot(record.rootDir).rootDir === root
+      : isSourceInsideRecordRoot(record, record.rootDir, source!, roots) ||
+        getPluginInstance(record)?.hasModuleSource(source!) === true);
+  // Exact identity selects the first matching source owner, even for duplicate ids.
+  // Keep membership live; an unmatched identity still needs the root ambiguity check.
+  if (pluginId !== undefined) {
+    const owner = records.find((record) => record.id === pluginId && matchesSource(record));
+    if (owner) {
+      return owner;
+    }
+  }
   let first: PluginRecord | undefined;
-  let owner: PluginRecord | undefined;
   let count = 0;
-  for (const record of getPluginRegistryForContext()?.plugins ?? []) {
-    if (
-      !record.rootDir ||
-      !(root
-        ? getPluginCacheRoot(record.rootDir).rootDir === root
-        : isSourceInsideRecordRoot(record, record.rootDir, source!, roots) ||
-          getPluginInstance(record)?.hasModuleSource(source!) === true)
-    ) {
+  for (const record of records) {
+    // The completed synchronous identity pass already rejected every same-id source.
+    if ((pluginId !== undefined && record.id === pluginId) || !matchesSource(record)) {
       continue;
     }
     first ??= record;
-    if (record.id === pluginId) {
-      owner ??= record;
-    }
     count++;
   }
-  if (!owner && (count > 1 || (params.pluginId && count))) {
+  if (count > 1 || (params.pluginId && count)) {
     throw new Error(
       `Plugin public surface ${root ?? source} has ambiguous runtime ownership; specify its plugin id.`,
     );
   }
-  return owner ?? first;
+  return first;
 }

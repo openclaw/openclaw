@@ -29,6 +29,15 @@ The two side-question contracts are deliberately separate. BTW is a one-shot que
 
 The main run, if one is active, is left untouched.
 
+Images attached to the `/btw` message are sent with the side question on
+direct-provider runtimes and on the Codex harness. This includes a photo with a
+`/btw` caption, or media from the replied-to message when the channel supplies
+it as reply context. Other harnesses receive the images as an optional input
+and may ignore them. CLI runtimes receive a text note with the number of
+omitted images instead. An image that media understanding already described is
+not attached, because its description lives in the main conversation prompt,
+not in the side question.
+
 When their runtime supplies usage, completed direct-provider and harness side
 questions report it through the configured [diagnostics pipeline](/gateway/opentelemetry).
 This does not add the exchange to session history or session-derived `/usage cost` totals.
@@ -41,6 +50,11 @@ tool surface. The forked thread gets a boundary prompt telling the model that
 everything before it is inherited reference context, not active instructions,
 and that only messages after the boundary are live. `/btw` requires an
 existing Codex thread; send a normal message first.
+
+Eligible Codex side questions can use the same OpenClaw Gateway shell tools as
+the main thread. Canceling a side question or reaching its timeout stops native
+background terminals owned by the side thread before releasing it. Main-thread
+terminals and OpenClaw-managed background jobs keep their existing lifetime.
 
 For CLI runtime aliases, BTW invokes the owning CLI backend in one-shot
 side-question mode: it seeds sanitized conversation context into a fresh CLI

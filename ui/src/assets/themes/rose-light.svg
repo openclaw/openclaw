@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" fill="none">
+  <defs>
+    <linearGradient id="ink" x1="0" y1="1000" x2="1600" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#286983"/>
+      <stop offset="0.7" stop-color="#9c4f66"/>
+      <stop offset="1" stop-color="#286983"/>
+    </linearGradient>
+    <radialGradient id="quiet">
+      <stop offset="0.15" stop-color="white" stop-opacity="0"/>
+      <stop offset="0.8" stop-color="white" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="white"/>
+    </radialGradient>
+    <mask id="edges"><path fill="url(#quiet)" d="M0 0h1600v1000H0z"/></mask>
+  </defs>
+  <g stroke="url(#ink)" stroke-width="2" opacity="0.035" mask="url(#edges)">
+    <path d="M1570-80C1190-20 1050 280 1430 380 1650 90 1310-40 1120 80M1610-30C1250 10 1130 290 1470 400 1700 170 1420 10 1200 90M1650 20C1310 40 1210 300 1510 420 1750 250 1530 60 1280 100"/><path d="M1490 250C1110 420 1070 720 1650 850M1520 290C1180 460 1160 710 1680 810M1550 330C1250 500 1250 700 1710 770M-90 890C180 590 450 740 480 1090-60 1060-30 740 160 630M-70 930C200 670 420 810 450 1120 30 1060 35 815 195 720"/>
+    <path d="M640-70C570 50 650 160 830 145 910 30 820-70 710-20M680-65C625 40 690 130 835 115 890 30 825-45 740-10M720-60C685 25 730 100 840 85 875 25 830-20 770 0"/>
+  </g>
+</svg>

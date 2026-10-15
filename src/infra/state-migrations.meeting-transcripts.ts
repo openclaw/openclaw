@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 // Doctor-only repair of transcript projections and the retired JSON/JSONL store.
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -16,6 +17,7 @@ import {
 } from "../transcripts/store-artifacts.js";
 import { sessionFromRow } from "../transcripts/store-sqlite.js";
 import { TranscriptsStore } from "../transcripts/store.js";
+import { formatErrorMessage } from "./errors.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "./kysely-sync.js";
 import { migrationDb } from "./state-migrations.meeting-transcripts-database.js";
@@ -25,8 +27,8 @@ import {
 } from "./state-migrations.meeting-transcripts-detection.js";
 import {
   archiveLegacyMeetingTranscriptSnapshots,
-  archiveDivergentMeetingTranscriptExport,
   archivePartialMeetingTranscriptArtifacts,
+  disposeLegacyMeetingTranscriptStage,
   isRecordedCanonicalTranscriptExport,
   LegacyMeetingTranscriptArchiveMovedError,
   listLegacyMeetingTranscriptArtifactDirs,
@@ -266,104 +268,95 @@ async function resumePendingImports(params: {
   const changes: string[] = [];
   const warnings: string[] = [];
   for (const run of runs) {
-    if (fsSync.existsSync(run.archiveRoot)) {
-      try {
-        const archived = await snapshotPendingImportRun({
-          run,
-          snapshotRoot: run.archiveRoot,
-          sourceRoot: params.sourceRoot,
-          stageDatabase: params.stageDatabase,
-        });
-        if (!archived.hashesMatch) {
+    const archived = fsSync.existsSync(run.archiveRoot);
+    try {
+      if (!archived && !fsSync.existsSync(params.sourceRoot)) {
+        warnings.push(
+          `Pending meeting transcript migration ${run.runId} has neither source tree nor archive`,
+        );
+        continue;
+      }
+      const canonicalRelativeDirs = archived
+        ? run.canonicalRelativeDirs
+        : [
+            ...new Set([
+              ...run.canonicalRelativeDirs,
+              ...(await listCanonicalMeetingTranscriptExportDirs({
+                rootDir: params.sourceRoot,
+                env: { ...params.env, OPENCLAW_STATE_DIR: params.stateDir },
+              })),
+            ]),
+          ];
+      const expectedRelativeDirs = archived
+        ? []
+        : [
+            ...new Set([
+              ...run.sources.map(
+                (source) => path.relative(params.sourceRoot, source.sourcePath) || ".",
+              ),
+              ...canonicalRelativeDirs,
+            ]),
+          ].toSorted((a, b) => a.localeCompare(b));
+      const pending = await snapshotPendingImportRun({
+        run,
+        snapshotRoot: archived ? run.archiveRoot : params.sourceRoot,
+        sourceRoot: params.sourceRoot,
+        stageDatabase: params.stageDatabase,
+      });
+      if (!pending.hashesMatch) {
+        if (archived) {
           throw new Error("archived source hashes do not match migration receipts");
         }
-        const database = openOpenClawStateDatabase({
-          env: { ...params.env, OPENCLAW_STATE_DIR: params.stateDir },
-        });
-        await verifyImportedMeetingTranscriptSnapshots({
-          store: params.store,
-          snapshots: archived.snapshots,
-          stageDatabase: params.stageDatabase,
-          database: database.db,
-        });
+        warnings.push(
+          `Pending meeting transcript migration ${run.runId} source tree changed; left its imported rows and files for manual recovery`,
+        );
+        continue;
+      }
+      const database = openOpenClawStateDatabase({
+        env: { ...params.env, OPENCLAW_STATE_DIR: params.stateDir },
+      });
+      await verifyImportedMeetingTranscriptSnapshots({
+        store: params.store,
+        snapshots: pending.snapshots,
+        stageDatabase: params.stageDatabase,
+        database: database.db,
+      });
+      if (archived) {
         await restoreCanonicalMeetingTranscriptExports({
           sourceRoot: params.sourceRoot,
           archiveRoot: run.archiveRoot,
           migratedSourcePaths: run.sources.map((source) => source.sourcePath),
-          canonicalRelativeDirs: run.canonicalRelativeDirs,
+          canonicalRelativeDirs,
         });
-        finishPendingMigration({
-          runId: run.runId,
+      } else {
+        await archiveLegacyMeetingTranscriptSnapshots({
+          sourceRoot: params.sourceRoot,
+          snapshots: pending.snapshots,
+          expectedRelativeDirs,
+          canonicalRelativeDirs,
           archiveRoot: run.archiveRoot,
-          now: Date.now(),
-          env: params.env,
-          stateDir: params.stateDir,
         });
-        changes.push(`Finalized interrupted meeting transcript archive → ${run.archiveRoot}`);
-      } catch (error) {
-        warnings.push(
-          `Pending meeting transcript migration ${run.runId} archive could not be verified or restored; left its rows and files for recovery: ${String(error)}`,
-        );
       }
-      continue;
-    }
-    if (!fsSync.existsSync(params.sourceRoot)) {
-      warnings.push(
-        `Pending meeting transcript migration ${run.runId} has neither source tree nor archive`,
+      finishPendingMigration({
+        runId: run.runId,
+        archiveRoot: run.archiveRoot,
+        now: Date.now(),
+        env: params.env,
+        stateDir: params.stateDir,
+      });
+      changes.push(
+        archived
+          ? `Finalized interrupted meeting transcript archive → ${run.archiveRoot}`
+          : `Resumed and archived meeting transcript migration → ${run.archiveRoot}`,
       );
-      continue;
-    }
-    const canonicalRelativeDirs = [
-      ...new Set([
-        ...run.canonicalRelativeDirs,
-        ...(await listCanonicalMeetingTranscriptExportDirs({
-          rootDir: params.sourceRoot,
-          env: { ...params.env, OPENCLAW_STATE_DIR: params.stateDir },
-        })),
-      ]),
-    ];
-    const expectedRelativeDirs = [
-      ...new Set([
-        ...run.sources.map((source) => path.relative(params.sourceRoot, source.sourcePath) || "."),
-        ...canonicalRelativeDirs,
-      ]),
-    ].toSorted((a, b) => a.localeCompare(b));
-    const pending = await snapshotPendingImportRun({
-      run,
-      snapshotRoot: params.sourceRoot,
-      sourceRoot: params.sourceRoot,
-      stageDatabase: params.stageDatabase,
-    });
-    if (!pending.hashesMatch) {
+    } catch (error) {
+      if (!archived) {
+        throw error;
+      }
       warnings.push(
-        `Pending meeting transcript migration ${run.runId} source tree changed; left its imported rows and files for manual recovery`,
+        `Pending meeting transcript migration ${run.runId} archive could not be verified or restored; left its rows and files for recovery: ${String(error)}`,
       );
-      continue;
     }
-    const database = openOpenClawStateDatabase({
-      env: { ...params.env, OPENCLAW_STATE_DIR: params.stateDir },
-    });
-    await verifyImportedMeetingTranscriptSnapshots({
-      store: params.store,
-      snapshots: pending.snapshots,
-      stageDatabase: params.stageDatabase,
-      database: database.db,
-    });
-    await archiveLegacyMeetingTranscriptSnapshots({
-      sourceRoot: params.sourceRoot,
-      snapshots: pending.snapshots,
-      expectedRelativeDirs,
-      canonicalRelativeDirs,
-      archiveRoot: run.archiveRoot,
-    });
-    finishPendingMigration({
-      runId: run.runId,
-      archiveRoot: run.archiveRoot,
-      now: Date.now(),
-      env: params.env,
-      stateDir: params.stateDir,
-    });
-    changes.push(`Resumed and archived meeting transcript migration → ${run.archiveRoot}`);
   }
   return { changes, warnings };
 }
@@ -411,269 +404,288 @@ export async function migrateLegacyMeetingTranscripts(params: {
   let stageDatabase: DatabaseSync | undefined;
   let stagePath: string | undefined;
   const recoveryChanges: string[] = [];
+  let result: MigrationMessages;
   try {
-    fsSync.mkdirSync(params.stateDir, { recursive: true });
-    stagePath = path.join(params.stateDir, `.meeting-transcripts-migration-${randomUUID()}.sqlite`);
-    const stage = openLegacyMeetingTranscriptStage(stagePath);
-    stageDatabase = stage;
-    await validateMeetingTranscriptRoot(detected.sourceDir, { allowMissing: true });
-    const databaseOptions = { env: { ...env, OPENCLAW_STATE_DIR: params.stateDir } };
-    ensureMeetingTranscriptsSchema(databaseOptions);
-    // Repair only oversized ASCII projections before classifying exports. Keep
-    // identity/content intact; a selector conflict rolls back the entire repair.
-    const repaired = runOpenClawStateWriteTransaction(
-      ({ db: database }) => {
-        const db = migrationDb(database);
-        const rows = executeSqliteQuerySync(
-          database,
-          db
-            .selectFrom("meeting_transcript_sessions")
-            .selectAll()
-            .where(({ fn, eb }) =>
-              eb(fn<number>("length", ["session_slug"]), ">", TRANSCRIPT_PATH_SEGMENT_MAX_BYTES),
-            )
-            .orderBy("session_id"),
-        ).rows;
-        for (const row of rows) {
-          const session = sessionFromRow(row);
-          executeSqliteQuerySync(
+    result = await lock.run(async () => {
+      fsSync.mkdirSync(params.stateDir, { recursive: true });
+      stagePath = path.join(
+        params.stateDir,
+        `.meeting-transcripts-migration-${randomUUID()}.sqlite`,
+      );
+      const stage = openLegacyMeetingTranscriptStage(stagePath);
+      stageDatabase = stage;
+      await validateMeetingTranscriptRoot(detected.sourceDir, { allowMissing: true });
+      const databaseOptions = { env: { ...env, OPENCLAW_STATE_DIR: params.stateDir } };
+      ensureMeetingTranscriptsSchema(databaseOptions);
+      // Repair only oversized ASCII projections before classifying exports. Keep
+      // identity/content intact; a selector conflict rolls back the entire repair.
+      const repaired = runOpenClawStateWriteTransaction(
+        ({ db: database }) => {
+          const db = migrationDb(database);
+          const rows = executeSqliteQuerySync(
             database,
             db
-              .updateTable("meeting_transcript_sessions")
-              .set({
-                selector: transcriptSessionSelector(session),
-                session_slug: safeTranscriptPathSegment(session.sessionId),
-                export_key: transcriptSessionExportKey(session),
-              })
-              .where("session_id", "=", row.session_id)
-              .where("started_at", "=", row.started_at),
-          );
-        }
-        return rows.length;
-      },
-      databaseOptions,
-      { operationLabel: "meeting-transcripts.oversized-projections" },
-    );
-    if (repaired > 0) {
-      recoveryChanges.push(
-        `Repaired ${repaired} oversized meeting transcript export name${repaired === 1 ? "" : "s"} in SQLite`,
+              .selectFrom("meeting_transcript_sessions")
+              .selectAll()
+              .where(({ fn, eb }) =>
+                eb(fn<number>("length", ["session_slug"]), ">", TRANSCRIPT_PATH_SEGMENT_MAX_BYTES),
+              )
+              .orderBy("session_id"),
+          ).rows;
+          for (const row of rows) {
+            const session = sessionFromRow(row);
+            executeSqliteQuerySync(
+              database,
+              db
+                .updateTable("meeting_transcript_sessions")
+                .set({
+                  selector: transcriptSessionSelector(session),
+                  session_slug: safeTranscriptPathSegment(session.sessionId),
+                  export_key: transcriptSessionExportKey(session),
+                })
+                .where("session_id", "=", row.session_id)
+                .where("started_at", "=", row.started_at),
+            );
+          }
+          return rows.length;
+        },
+        databaseOptions,
+        { operationLabel: "meeting-transcripts.oversized-projections" },
       );
-    }
-    const store = new TranscriptsStore(detected.sourceDir, databaseOptions);
-    const resumed = await resumePendingImports({
-      env,
-      stateDir: params.stateDir,
-      sourceRoot: detected.sourceDir,
-      store,
-      stageDatabase: stage,
-    });
-    if (resumed) {
-      return { changes: [...recoveryChanges, ...resumed.changes], warnings: resumed.warnings };
-    }
-    const now = params.now?.() ?? Date.now();
-    const relativeDirs = await listLegacyMeetingTranscriptArtifactDirs(detected.sourceDir);
-    const sessionRelativeDirs = await listLegacyMeetingTranscriptSessionDirs(detected.sourceDir);
-    const sessionRelativeDirSet = new Set(sessionRelativeDirs);
-    const detectionState = readMeetingTranscriptMigrationDetectionState({
-      env: { ...env, OPENCLAW_STATE_DIR: params.stateDir },
-    });
-    const legacyRelativeDirs: string[] = [];
-    const partialRelativeDirs: string[] = [];
-    const divergentExportDirs: Array<{ relativeDir: string; ownerSelector: string }> = [];
-    for (const relativeDir of relativeDirs) {
-      const selector = relativeDir.split(path.sep).join("/");
-      const ownership = resolveMeetingTranscriptExportOwnership({
-        state: detectionState,
-        selector,
-        sessionDir: path.join(detected.sourceDir, relativeDir),
-        sourceRoot: detected.sourceDir,
-      });
-      if (
-        ownership &&
-        isRecordedCanonicalTranscriptExport({
-          sessionDir: path.join(detected.sourceDir, relativeDir),
-          manifest: ownership.manifest,
-          pending: ownership.pending,
-        })
-      ) {
-        continue;
-      }
-      if (ownership) {
-        divergentExportDirs.push({ relativeDir, ownerSelector: ownership.selector });
-      } else if (!sessionRelativeDirSet.has(relativeDir)) {
-        partialRelativeDirs.push(relativeDir);
-      } else {
-        legacyRelativeDirs.push(relativeDir);
-      }
-    }
-    const snapshots: LegacyMeetingTranscriptSnapshot[] = [];
-    for (const relativeDir of legacyRelativeDirs) {
-      snapshots.push(
-        await snapshotLegacyMeetingTranscriptSession({
-          rootDir: detected.sourceDir,
-          relativeDir,
-          stageDatabase: stage,
-        }),
-      );
-    }
-    for (const snapshot of snapshots) {
-      const database = openOpenClawStateDatabase(databaseOptions);
-      const existing = executeSqliteQueryTakeFirstSync(
-        database.db,
-        migrationDb(database.db)
-          .selectFrom("meeting_transcript_sessions")
-          .select("session_id")
-          .where("session_id", "=", snapshot.session.sessionId)
-          .where("started_at", "=", snapshot.session.startedAt),
-      );
-      if (existing) {
-        throw new Error(
-          `legacy transcript conflicts with canonical SQLite state: ${snapshot.relativeDir}`,
+      if (repaired > 0) {
+        recoveryChanges.push(
+          `Repaired ${repaired} oversized meeting transcript export name${repaired === 1 ? "" : "s"} in SQLite`,
         );
       }
-    }
-    if (divergentExportDirs.length > 0) {
-      const recoveryRoot = `${detected.sourceDir}.exports-recovered-${new Date(now)
-        .toISOString()
-        .replace(/[:.]/g, "-")}`;
-      for (const { relativeDir, ownerSelector } of divergentExportDirs) {
-        const session = await store.readSession(ownerSelector);
-        if (!session) {
-          throw new Error(`divergent transcript export has no SQLite owner: ${relativeDir}`);
-        }
-        await archiveDivergentMeetingTranscriptExport({
+      const store = new TranscriptsStore(detected.sourceDir, databaseOptions);
+      const resumed = await resumePendingImports({
+        env,
+        stateDir: params.stateDir,
+        sourceRoot: detected.sourceDir,
+        store,
+        stageDatabase: stage,
+      });
+      if (resumed) {
+        return { changes: [...recoveryChanges, ...resumed.changes], warnings: resumed.warnings };
+      }
+      const now = params.now?.() ?? Date.now();
+      const relativeDirs = await listLegacyMeetingTranscriptArtifactDirs(detected.sourceDir);
+      const sessionRelativeDirs = await listLegacyMeetingTranscriptSessionDirs(detected.sourceDir);
+      const sessionRelativeDirSet = new Set(sessionRelativeDirs);
+      const detectionState = readMeetingTranscriptMigrationDetectionState({
+        env: { ...env, OPENCLAW_STATE_DIR: params.stateDir },
+      });
+      const legacyRelativeDirs: string[] = [];
+      const partialRelativeDirs: string[] = [];
+      const divergentExportDirs: Array<{ relativeDir: string; ownerSelector: string }> = [];
+      for (const relativeDir of relativeDirs) {
+        const selector = relativeDir.split(path.sep).join("/");
+        const ownership = resolveMeetingTranscriptExportOwnership({
+          state: detectionState,
+          selector,
+          sessionDir: path.join(detected.sourceDir, relativeDir),
           sourceRoot: detected.sourceDir,
-          relativeDir,
+        });
+        if (
+          ownership &&
+          isRecordedCanonicalTranscriptExport({
+            sessionDir: path.join(detected.sourceDir, relativeDir),
+            manifest: ownership.manifest,
+            pending: ownership.pending,
+          })
+        ) {
+          continue;
+        }
+        if (ownership) {
+          divergentExportDirs.push({ relativeDir, ownerSelector: ownership.selector });
+        } else if (!sessionRelativeDirSet.has(relativeDir)) {
+          partialRelativeDirs.push(relativeDir);
+        } else {
+          legacyRelativeDirs.push(relativeDir);
+        }
+      }
+      const snapshots: LegacyMeetingTranscriptSnapshot[] = [];
+      for (const relativeDir of legacyRelativeDirs) {
+        snapshots.push(
+          await snapshotLegacyMeetingTranscriptSession({
+            rootDir: detected.sourceDir,
+            relativeDir,
+            stageDatabase: stage,
+          }),
+        );
+      }
+      for (const snapshot of snapshots) {
+        const database = openOpenClawStateDatabase(databaseOptions);
+        const existing = executeSqliteQueryTakeFirstSync(
+          database.db,
+          migrationDb(database.db)
+            .selectFrom("meeting_transcript_sessions")
+            .select("session_id")
+            .where("session_id", "=", snapshot.session.sessionId)
+            .where("started_at", "=", snapshot.session.startedAt),
+        );
+        if (existing) {
+          throw new Error(
+            `legacy transcript conflicts with canonical SQLite state: ${snapshot.relativeDir}`,
+          );
+        }
+      }
+      if (divergentExportDirs.length > 0) {
+        const recoveryRoot = `${detected.sourceDir}.exports-recovered-${new Date(now)
+          .toISOString()
+          .replace(/[:.]/g, "-")}`;
+        for (const { relativeDir, ownerSelector } of divergentExportDirs) {
+          const session = await store.readSession(ownerSelector);
+          if (!session) {
+            throw new Error(`divergent transcript export has no SQLite owner: ${relativeDir}`);
+          }
+          const destination = path.join(recoveryRoot, relativeDir);
+          await fs.mkdir(path.dirname(destination), { recursive: true });
+          await fs.rename(path.join(detected.sourceDir, relativeDir), destination);
+          recoveryChanges.push(
+            `Archived modified meeting transcript export ${relativeDir} → ${recoveryRoot}`,
+          );
+          await store.materializeSessionArtifacts(session, "all");
+        }
+      }
+      if (snapshots.length === 0 && partialRelativeDirs.length > 0) {
+        const recoveryRoot = `${detected.sourceDir}.partials-recovered-${new Date(now)
+          .toISOString()
+          .replace(/[:.]/g, "-")}`;
+        await archivePartialMeetingTranscriptArtifacts({
+          sourceRoot: detected.sourceDir,
+          relativeDirs: partialRelativeDirs,
           recoveryRoot,
         });
         recoveryChanges.push(
-          `Archived modified meeting transcript export ${relativeDir} → ${recoveryRoot}`,
+          `Archived ${partialRelativeDirs.length} incomplete meeting transcript director${partialRelativeDirs.length === 1 ? "y" : "ies"} → ${recoveryRoot}`,
         );
-        await store.materializeSessionArtifacts(session, "all");
       }
-    }
-    if (snapshots.length === 0 && partialRelativeDirs.length > 0) {
-      const recoveryRoot = `${detected.sourceDir}.partials-recovered-${new Date(now)
-        .toISOString()
-        .replace(/[:.]/g, "-")}`;
-      await archivePartialMeetingTranscriptArtifacts({
-        sourceRoot: detected.sourceDir,
-        relativeDirs: partialRelativeDirs,
-        recoveryRoot,
-      });
-      recoveryChanges.push(
-        `Archived ${partialRelativeDirs.length} incomplete meeting transcript director${partialRelativeDirs.length === 1 ? "y" : "ies"} → ${recoveryRoot}`,
+      const expectedArchiveRelativeDirs = await listLegacyMeetingTranscriptSessionDirs(
+        detected.sourceDir,
       );
-    }
-    const expectedArchiveRelativeDirs = await listLegacyMeetingTranscriptSessionDirs(
-      detected.sourceDir,
-    );
-    if (snapshots.length === 0) {
-      return { changes: recoveryChanges, warnings: [] };
-    }
+      if (snapshots.length === 0) {
+        return { changes: recoveryChanges, warnings: [] };
+      }
 
-    const runId = randomUUID();
-    const archiveRoot = resolveArchiveRoot(detected.sourceDir, now);
-    const canonicalRelativeDirs = await listCanonicalMeetingTranscriptExportDirs({
-      rootDir: detected.sourceDir,
-      env: { ...env, OPENCLAW_STATE_DIR: params.stateDir },
-    });
-    insertMeetingTranscriptSnapshots({
-      snapshots,
-      runId,
-      now,
-      archiveRoot,
-      canonicalRelativeDirs,
-      stageDatabase: stage,
-      env,
-      stateDir: params.stateDir,
-    });
-    try {
-      const database = openOpenClawStateDatabase(databaseOptions);
-      await verifyImportedMeetingTranscriptSnapshots({
-        store,
-        snapshots,
-        stageDatabase: stage,
-        database: database.db,
+      const runId = randomUUID();
+      const archiveRoot = resolveArchiveRoot(detected.sourceDir, now);
+      const canonicalRelativeDirs = await listCanonicalMeetingTranscriptExportDirs({
+        rootDir: detected.sourceDir,
+        env: { ...env, OPENCLAW_STATE_DIR: params.stateDir },
       });
-      if (!(await rehashLegacyMeetingTranscriptSnapshots(snapshots))) {
+      insertMeetingTranscriptSnapshots({
+        snapshots,
+        runId,
+        now,
+        archiveRoot,
+        canonicalRelativeDirs,
+        stageDatabase: stage,
+        env,
+        stateDir: params.stateDir,
+      });
+      try {
+        const database = openOpenClawStateDatabase(databaseOptions);
+        await verifyImportedMeetingTranscriptSnapshots({
+          store,
+          snapshots,
+          stageDatabase: stage,
+          database: database.db,
+        });
+        if (!(await rehashLegacyMeetingTranscriptSnapshots(snapshots))) {
+          rollbackImportedSnapshots({ snapshots, runId, env, stateDir: params.stateDir });
+          return {
+            changes: recoveryChanges,
+            warnings: [
+              "Legacy meeting transcript files changed after import; rolled back SQLite rows and left every source in place for a Doctor retry",
+            ],
+          };
+        }
+      } catch (error) {
+        rollbackImportedSnapshots({ snapshots, runId, env, stateDir: params.stateDir });
+        throw error;
+      }
+      params.testHooks?.afterImport?.();
+      try {
+        await archiveLegacyMeetingTranscriptSnapshots({
+          sourceRoot: detected.sourceDir,
+          snapshots,
+          expectedRelativeDirs: expectedArchiveRelativeDirs,
+          canonicalRelativeDirs,
+          archiveRoot,
+        });
+      } catch (error) {
+        if (error instanceof LegacyMeetingTranscriptArchiveMovedError) {
+          return {
+            changes: [
+              ...recoveryChanges,
+              `Imported ${snapshots.length} meeting transcript session${snapshots.length === 1 ? "" : "s"} into shared SQLite state`,
+            ],
+            warnings: [
+              `Meeting transcript archive needs Doctor resume after moving the source tree: ${String(error)}`,
+            ],
+          };
+        }
         rollbackImportedSnapshots({ snapshots, runId, env, stateDir: params.stateDir });
         return {
           changes: recoveryChanges,
           warnings: [
-            "Legacy meeting transcript files changed after import; rolled back SQLite rows and left every source in place for a Doctor retry",
+            `Failed archiving verified legacy meeting transcripts; rolled back SQLite rows and left every source in place for Doctor retry: ${String(error)}`,
           ],
         };
       }
-    } catch (error) {
-      rollbackImportedSnapshots({ snapshots, runId, env, stateDir: params.stateDir });
-      throw error;
-    }
-    params.testHooks?.afterImport?.();
-    let archiveRootAfterMove: string;
-    try {
-      archiveRootAfterMove = await archiveLegacyMeetingTranscriptSnapshots({
-        sourceRoot: detected.sourceDir,
-        snapshots,
-        expectedRelativeDirs: expectedArchiveRelativeDirs,
-        canonicalRelativeDirs,
+      params.testHooks?.afterArchive?.();
+      finishPendingMigration({
+        runId,
         archiveRoot,
+        now,
+        env,
+        stateDir: params.stateDir,
       });
-    } catch (error) {
-      if (error instanceof LegacyMeetingTranscriptArchiveMovedError) {
-        return {
-          changes: [
-            ...recoveryChanges,
-            `Imported ${snapshots.length} meeting transcript session${snapshots.length === 1 ? "" : "s"} into shared SQLite state`,
-          ],
-          warnings: [
-            `Meeting transcript archive needs Doctor resume after moving the source tree: ${String(error)}`,
-          ],
-        };
-      }
-      rollbackImportedSnapshots({ snapshots, runId, env, stateDir: params.stateDir });
+      const utteranceCount = snapshots.reduce(
+        (total, snapshot) => total + snapshot.utteranceCount,
+        0,
+      );
       return {
-        changes: recoveryChanges,
-        warnings: [
-          `Failed archiving verified legacy meeting transcripts; rolled back SQLite rows and left every source in place for Doctor retry: ${String(error)}`,
+        changes: [
+          ...recoveryChanges,
+          `Migrated ${snapshots.length} meeting transcript session${snapshots.length === 1 ? "" : "s"} and ${utteranceCount} utterance${utteranceCount === 1 ? "" : "s"} to shared SQLite state`,
+          `Archived legacy meeting transcript files → ${archiveRoot}`,
         ],
+        warnings: [],
       };
-    }
-    params.testHooks?.afterArchive?.();
-    finishPendingMigration({
-      runId,
-      archiveRoot: archiveRootAfterMove,
-      now,
-      env,
-      stateDir: params.stateDir,
     });
-    const utteranceCount = snapshots.reduce(
-      (total, snapshot) => total + snapshot.utteranceCount,
-      0,
-    );
-    return {
-      changes: [
-        ...recoveryChanges,
-        `Migrated ${snapshots.length} meeting transcript session${snapshots.length === 1 ? "" : "s"} and ${utteranceCount} utterance${utteranceCount === 1 ? "" : "s"} to shared SQLite state`,
-        `Archived legacy meeting transcript files → ${archiveRootAfterMove}`,
-      ],
-      warnings: [],
-    };
   } catch (error) {
-    return {
+    result = {
       changes: recoveryChanges,
       warnings: [`Failed migrating meeting transcripts: ${String(error)}`],
     };
-  } finally {
-    try {
-      stageDatabase?.close();
-      if (stagePath) {
-        fsSync.rmSync(stagePath, { force: true });
-        fsSync.rmSync(`${stagePath}-shm`, { force: true });
-        fsSync.rmSync(`${stagePath}-wal`, { force: true });
-      }
-    } finally {
-      await lock.release();
-    }
   }
+  const warnings = [
+    ...result.warnings,
+    ...disposeLegacyMeetingTranscriptStage({ database: stageDatabase, databasePath: stagePath }),
+  ];
+  let releaseError: unknown;
+  try {
+    await lock.release();
+  } catch (error) {
+    releaseError = error;
+  }
+  if (releaseError) {
+    warnings.push(
+      `Meeting transcript migration lock release failed: ${formatErrorMessage(releaseError)}`,
+    );
+  }
+  return {
+    changes: result.changes,
+    warnings,
+    // Disposing this migration's own rebuildable stage bytes is advisory: when it is
+    // the only thing that went wrong, the import and the archive above are already
+    // durable, so Doctor reports them and keeps going instead of refusing over
+    // scratch it can drop. A lock the migration could not hand back still refuses,
+    // as state-migrations.lock.ts does for the same event.
+    ...(result.warnings.length === 0 && !releaseError && warnings.length > 0
+      ? { warningDisposition: "recoverable" as const }
+      : {}),
+  };
 }

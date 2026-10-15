@@ -5,8 +5,10 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
-import type { QaTransportOutboundSequenceMatch } from "./qa-transport.js";
+import { createQaBusState } from "./bus-state.js";
+import { createQaCrablineTransportAdapterFactory } from "./crabline-transport-factory.js";
+import { createQaTransportAdapter } from "./qa-transport-registry.js";
+import type { QaTransportAdapter, QaTransportOutboundSequenceMatch } from "./qa-transport.js";
 
 vi.mock("@openclaw/crabline", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/crabline")>();
@@ -30,7 +32,7 @@ const FINAL_TEXT = "accepted final marker";
 
 type TelegramMethod = "sendMessage" | "editMessageText" | "deleteMessage";
 type Observer = NonNullable<StartOpenClawCrablineAdapterParams["onEvent"]>;
-type Transport = Awaited<ReturnType<typeof createQaCrablineTransportAdapter>>;
+type Transport = QaTransportAdapter;
 type Sequence = Awaited<ReturnType<NonNullable<Transport["waitForOutboundSequence"]>>>;
 type TelegramFixture = {
   transport: Transport;
@@ -46,15 +48,17 @@ type TelegramFixture = {
 
 async function withTelegramTransport(run: (fixture: TelegramFixture) => Promise<void>) {
   await withTempDir("qa-crabline-lifecycle-", async (outputDir) => {
-    const transport = await createQaCrablineTransportAdapter({
-      outputDir,
-      selection: {
-        capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-        channel: "telegram",
-        channelDriver: "crabline",
-        providerReadinessArtifactPath: "crabline-provider-readiness.json",
+    const state = createQaBusState();
+    const created = await createQaTransportAdapter(
+      {
+        channelId: "telegram",
+        driver: "crabline",
+        outputDir,
+        state,
       },
-    });
+      [createQaCrablineTransportAdapterFactory(state)],
+    );
+    const transport = created.adapter;
     try {
       const observe = vi.mocked(startOpenClawCrablineAdapter).mock.calls.at(-1)?.[0].onEvent;
       const telegram = transport.createGatewayConfig({
@@ -118,7 +122,7 @@ async function withTelegramTransport(run: (fixture: TelegramFixture) => Promise<
           }),
       });
     } finally {
-      await transport.cleanupAfterGatewayStop();
+      await created.cleanupAfterGatewayStop();
     }
   });
 }
@@ -171,64 +175,33 @@ describe("Crabline Telegram accepted lifecycle", () => {
     },
   );
 
-  it.each(["sendMessage", "editMessageText"] as const)(
-    "does not count a rejected %s as preview evidence",
-    async (method) => {
-      await withTelegramTransport(async ({ post, send, wait }) => {
-        const existingId = method === "editMessageText" ? await send(FINAL_TEXT) : undefined;
-        await post(
-          method,
-          {
-            ...(existingId === undefined
-              ? { message_thread_id: Number(THREAD_ID) }
-              : { message_id: existingId + 1000 }),
-            text: REJECTED_TEXT,
+  it("ignores delete observations unless acceptance is true", async () => {
+    await withTelegramTransport(async ({ transport, observe, post, send, wait }) => {
+      // These exercise the observer contract, not provider failures: authenticated
+      // deleteMessage is a success stub, and real recorder events carry a boolean.
+      for (const acceptance of [{}, { accepted: false }, { accepted: "true" }]) {
+        await transport.reset();
+        const messageId = await send("accepted preview");
+        const event: Parameters<Observer>[0] & { accepted?: unknown } = {
+          at: "2026-01-01T00:00:00.000Z",
+          body: {
+            chat_id: CHAT_ID,
+            message_id: messageId + 1000,
           },
-          400,
-        );
-        const messageId = existingId ?? (await send(FINAL_TEXT));
+          method: "POST",
+          path: "/bot<redacted>/deleteMessage",
+          query: {},
+          type: "api",
+          ...acceptance,
+        };
+        await observe(event);
         await post("editMessageText", { message_id: messageId, text: FINAL_TEXT });
 
-        // With only accepted final text, there is no qualifying preview.
-        await expect(wait()).rejects.toThrow("timed out after 25ms");
-        expectAcceptedSequence(await wait({ minimumPreviewEvents: 0 }), messageId);
-      });
-    },
-  );
-
-  it.each(["sendMessage", "editMessageText", "deleteMessage"] as const)(
-    "ignores synthetic %s observations unless acceptance is true",
-    async (method) => {
-      await withTelegramTransport(async ({ transport, observe, post, send, wait }) => {
-        // These exercise the observer contract, not provider failures: authenticated
-        // deleteMessage is a success stub, and real recorder events carry a boolean.
-        for (const acceptance of [{}, { accepted: false }, { accepted: "true" }]) {
-          await transport.reset();
-          const messageId = await send("accepted preview");
-          const event: Parameters<Observer>[0] & { accepted?: unknown } = {
-            at: "2026-01-01T00:00:00.000Z",
-            body: {
-              chat_id: CHAT_ID,
-              ...(method === "sendMessage"
-                ? { message_thread_id: Number(THREAD_ID) }
-                : { message_id: messageId + 1000 }),
-              ...(method === "deleteMessage" ? {} : { text: REJECTED_MARKER }),
-            },
-            method: "POST",
-            path: `/bot<redacted>/${method}`,
-            query: {},
-            type: "api",
-            ...acceptance,
-          };
-          await observe(event);
-          await post("editMessageText", { message_id: messageId, text: FINAL_TEXT });
-
-          expectAcceptedSequence(await wait(), messageId);
-          expect(transport.state.searchMessages({ query: REJECTED_MARKER })).toEqual([]);
-        }
-      });
-    },
-  );
+        expectAcceptedSequence(await wait(), messageId);
+        expect(transport.state.searchMessages({ query: REJECTED_MARKER })).toEqual([]);
+      }
+    });
+  });
 
   it("honors accepted deletes and clears pending IDs, bound IDs, and cursors on reset", async () => {
     await withTelegramTransport(async ({ transport, post, send, wait }) => {

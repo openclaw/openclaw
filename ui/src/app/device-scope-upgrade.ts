@@ -1,3 +1,4 @@
+import { registerListener } from "../../../src/shared/listeners.js";
 import {
   readScopeUpgradeAvailability,
   type ScopeUpgradeState,
@@ -10,18 +11,10 @@ type ScopeUpgradeControllerConstructor = new (
   onChange: () => void,
 ) => ScopeUpgradeController;
 
-export type ScopeUpgradeCapability = {
-  readonly state: ScopeUpgradeState;
-  activate(Controller: ScopeUpgradeControllerConstructor): void;
-  request(): void;
-  retry(): void;
-  cancel(): void;
-  subscribe(listener: () => void): () => void;
-  dispose(): void;
-};
+export type ScopeUpgradeCapability = ReturnType<typeof createScopeUpgradeCapability>;
 
 /** App-lifetime state shared by every Inbox presenter and settings takeover. */
-export function createScopeUpgradeCapability(gateway: ApplicationGateway): ScopeUpgradeCapability {
+export function createScopeUpgradeCapability(gateway: ApplicationGateway) {
   const listeners = new Set<() => void>();
   let snapshot = gateway.snapshot;
   let controller: ScopeUpgradeController | null = null;
@@ -52,18 +45,15 @@ export function createScopeUpgradeCapability(gateway: ApplicationGateway): Scope
     get state() {
       return state;
     },
-    activate(Controller) {
+    activate(Controller: ScopeUpgradeControllerConstructor) {
       controller ??= new Controller(snapshot, syncController);
       controller.sync(snapshot);
       publish(controller.state);
     },
-    request: () => controller?.request(),
-    retry: () => controller?.retry(),
-    cancel: () => controller?.cancel(),
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    request: (): void => controller?.request(),
+    retry: (): void => controller?.retry(),
+    cancel: (): void => controller?.cancel(),
+    subscribe: (listener: () => void) => registerListener(listeners, listener),
     dispose() {
       stopGateway();
       controller?.dispose();

@@ -3,13 +3,94 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { ensureOpenClawAgentSchema } from "../state/openclaw-agent-db-schema.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
 
-it("preserves NUL-bearing TEXT, storage classes, and source key order", async () => {
+it("restores a supported historical agent schema without migrating its data or admitting newer versions", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "git-backup-historical-agent-"));
+  const sourcePath = path.join(root, "source.sqlite");
+  const outputPath = path.join(root, "dump");
+  const targetPath = path.join(root, "restored.sqlite");
+  // Latest stable 2026.10.2 persisted schema 24; pin the shipped data contract.
+  const version = 24;
+  const expected = { value: 9_223_372_036_854_775_806n, bytes: "000102FF" };
+  try {
+    const source = new DatabaseSync(sourcePath);
+    try {
+      // Build the complete historical representation through its canonical owner,
+      // rather than relabeling a current schema with an older PRAGMA.
+      ensureOpenClawAgentSchema(source, "main", sourcePath, version);
+      // Deployed schema-24 backups used this older index order (2026.10.2).
+      source.exec(`
+        DROP INDEX idx_agent_trajectory_runtime_run;
+        CREATE INDEX idx_agent_trajectory_runtime_run
+          ON trajectory_runtime_events(session_id, run_id, seq)
+          WHERE run_id IS NOT NULL;
+      `);
+      source.exec("CREATE TABLE compatibility_probe (value INTEGER, bytes BLOB) STRICT");
+      source
+        .prepare("INSERT INTO compatibility_probe VALUES (?, ?)")
+        .run(expected.value, Buffer.from([0, 1, 2, 255]));
+    } finally {
+      source.close();
+    }
+    const manifest = await dumpGitBackupDatabase({
+      snapshotPath: sourcePath,
+      outputPath,
+      identity: { role: "agent", agentId: "main" },
+    });
+    const restored = await restoreGitBackupDirectory({
+      sourcePath: outputPath,
+      targetPath,
+      expectedIdentity: { role: "agent", agentId: "main" },
+    });
+    expect(restored.manifest.userVersion).toBe(version);
+    expect(restored.tables.every((table) => table.ok)).toBe(true);
+    const database = new DatabaseSync(targetPath, { readOnly: true });
+    try {
+      expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
+      const statement = database.prepare(
+        "SELECT value, hex(bytes) AS bytes FROM compatibility_probe",
+      );
+      statement.setReadBigInts(true);
+      expect(statement.get()).toEqual(expected);
+      expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
+    } finally {
+      database.close();
+    }
+
+    for (const invalidVersion of [
+      OPENCLAW_AGENT_SCHEMA_VERSION,
+      OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+    ]) {
+      await fs.writeFile(
+        path.join(outputPath, "manifest.json"),
+        JSON.stringify({
+          ...manifest,
+          userVersion: invalidVersion,
+        }),
+      );
+      const refusedTarget = path.join(root, `invalid-${invalidVersion}.sqlite`);
+      await expect(
+        restoreGitBackupDirectory({
+          sourcePath: outputPath,
+          targetPath: refusedTarget,
+          expectedIdentity: { role: "agent", agentId: "main" },
+        }),
+      ).rejects.toThrow(/schema version/u);
+      await expect(fs.stat(refusedTarget)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "git-backup-text-"));
   const sourcePath = path.join(root, "source.sqlite");
   const outputPath = path.join(root, "dump");
@@ -21,6 +102,21 @@ it("preserves NUL-bearing TEXT, storage classes, and source key order", async ()
   try {
     const source = openOpenClawStateDatabase({ path: sourcePath });
     source.db.exec('CREATE TABLE text_values ("key" TEXT PRIMARY KEY, value ANY) STRICT');
+    source.db.exec(`
+      CREATE TABLE quoted_ddl (
+        "double;quote" TEXT PRIMARY KEY DEFAULT 'semi;''colon',
+        [bracket;quote] TEXT /* ; not a statement boundary */ DEFAULT 'bracket',
+        \`backtick;quote\` TEXT -- ; not a statement boundary
+          DEFAULT 'backtick'
+      ) STRICT;
+      INSERT INTO quoted_ddl DEFAULT VALUES;
+      CREATE TABLE trigger_values (value INTEGER NOT NULL) STRICT;
+      CREATE TRIGGER zz_case_trigger AFTER INSERT ON trigger_values BEGIN
+        UPDATE trigger_values SET value = CASE WHEN value = 1 THEN 2 ELSE value END;
+        /* The trigger has its own END after the CASE expression. */
+      END;
+      INSERT INTO trigger_values VALUES (1);
+    `);
     const insert = source.db.prepare('INSERT INTO text_values ("key", value) VALUES (?, ?)');
     for (let index = keys.length - 1; index >= 0; index -= 1) {
       insert.run(keys[index]!, values[index]!);
@@ -53,12 +149,37 @@ it("preserves NUL-bearing TEXT, storage classes, and source key order", async ()
       expectedIdentity: { role: "global" },
     });
     expect(restored.tables.every((table) => table.ok)).toBe(true);
-    const database = new DatabaseSync(targetPath, { readOnly: true });
+    const database = new DatabaseSync(targetPath);
     try {
       expect(database.prepare(byteQuery).all()).toEqual(expectedBytes);
+      expect(database.prepare("SELECT * FROM quoted_ddl").all()).toEqual([
+        {
+          "double;quote": "semi;'colon",
+          "bracket;quote": "bracket",
+          "backtick;quote": "backtick",
+        },
+      ]);
+      database.exec("INSERT INTO trigger_values VALUES (1)");
+      expect(database.prepare("SELECT value FROM trigger_values ORDER BY rowid").all()).toEqual([
+        { value: 2 },
+        { value: 2 },
+      ]);
     } finally {
       database.close();
     }
+    const schemaPath = path.join(outputPath, "schema.sql");
+    const schema = await fs.readFile(schemaPath, "utf8");
+    const incompleteTrigger = schema.replace(
+      /CREATE TRIGGER zz_case_trigger[\s\S]*?\n\s*END;/u,
+      (trigger) => trigger.replace(/\n\s*END;$/u, ""),
+    );
+    expect(incompleteTrigger).not.toBe(schema);
+    await fs.writeFile(schemaPath, incompleteTrigger);
+    const refusedTarget = path.join(root, "incomplete-trigger.sqlite");
+    await expect(
+      restoreGitBackupDirectory({ sourcePath: outputPath, targetPath: refusedTarget }),
+    ).rejects.toThrow(/incomplete input/iu);
+    await expect(fs.stat(refusedTarget)).rejects.toMatchObject({ code: "ENOENT" });
   } finally {
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });

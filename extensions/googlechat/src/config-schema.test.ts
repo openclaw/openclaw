@@ -1,6 +1,6 @@
 // Googlechat tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
-import { GoogleChatConfigSchema } from "../runtime-api.js";
+import { GoogleChatConfigSchema } from "../config-api.js";
 
 describe("googlechat config schema", () => {
   it("accepts inline serviceAccount refs", () => {

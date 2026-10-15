@@ -1,4 +1,4 @@
-import type { Generated, Selectable } from "openclaw/plugin-sdk/sqlite-runtime";
+import type { Generated, Selectable } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   LogbookBatch,
@@ -75,7 +75,8 @@ CREATE TABLE IF NOT EXISTS batches (
   created_ms INTEGER NOT NULL,
   updated_ms INTEGER NOT NULL
 ) STRICT;
-CREATE INDEX IF NOT EXISTS idx_logbook_batches_day ON batches (day, start_ms);
+CREATE INDEX IF NOT EXISTS idx_logbook_batches_pending ON batches (start_ms, id) WHERE status = 'pending';
+DROP INDEX IF EXISTS idx_logbook_batches_day;
 CREATE TABLE IF NOT EXISTS frames (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   captured_at_ms INTEGER NOT NULL,

@@ -1,4 +1,3 @@
-// Hook metadata discovery shared by runtime loading and plugin inspection.
 import fs from "node:fs";
 import path from "node:path";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
@@ -8,7 +7,7 @@ import { parseFrontmatterBlockResult } from "../../packages/markdown-core/src/fr
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
-import { resolveHookInvocationPolicy, resolveHookManifestMetadata } from "./frontmatter.js";
+import { resolveHookManifestMetadata } from "./frontmatter.js";
 import type { Hook, HookEntry, HookSource } from "./types.js";
 
 // Hook descriptors are small metadata. Bounding the pinned descriptor read also
@@ -85,11 +84,14 @@ function loadHookFromDir(
     let handlerPath: string | undefined;
     for (const candidate of handlerCandidates) {
       const candidatePath = path.join(params.hookDir, candidate);
-      const safeCandidatePath = resolveRootFilePath({
-        absolutePath: candidatePath,
-        rootPath: params.hookDir,
-        boundaryLabel: "hook directory",
-      });
+      const safeCandidatePath = withOpenedRootFileSync(
+        {
+          absolutePath: candidatePath,
+          rootPath: params.hookDir,
+          boundaryLabel: "hook directory",
+        },
+        (opened) => opened.path,
+      );
       if (safeCandidatePath) {
         handlerPath = safeCandidatePath;
         break;
@@ -120,7 +122,6 @@ function loadHookFromDir(
       frontmatter,
       invalidMetadata: issues.length > 0,
       metadata: resolveHookManifestMetadata(frontmatter),
-      invocation: resolveHookInvocationPolicy(frontmatter),
     };
   } catch (err) {
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
@@ -237,12 +238,4 @@ function withOpenedRootFileSync<T>(
   } finally {
     fs.closeSync(opened.fd);
   }
-}
-
-function resolveRootFilePath(params: {
-  absolutePath: string;
-  rootPath: string;
-  boundaryLabel: string;
-}): string | null {
-  return withOpenedRootFileSync(params, (opened) => opened.path);
 }

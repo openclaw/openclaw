@@ -3,20 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { SidebarEmptyGroupsController } from "./sidebar-empty-groups-controller.ts";
 
-let originalStorage: PropertyDescriptor | undefined;
 let storage: Storage;
 beforeEach(() => {
-  originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
   storage = createStorageMock();
-  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
+  vi.stubGlobal("localStorage", storage);
 });
-afterEach(() => {
-  if (originalStorage) {
-    Object.defineProperty(globalThis, "localStorage", originalStorage);
-  } else {
-    Reflect.deleteProperty(globalThis, "localStorage");
-  }
-});
+afterEach(() => vi.unstubAllGlobals());
 
 function fixture() {
   const gateway = {
@@ -36,25 +28,6 @@ function fixture() {
 }
 
 describe("personal empty-group preference", () => {
-  it("isolates users and Gateways and restores each explicit choice", () => {
-    const { controller, gateway } = fixture();
-    controller.set("never");
-    gateway.snapshot.selfUser = { id: "lin" };
-    controller.reconcile();
-    expect(controller.mode).toBe("filtering");
-    controller.set("always");
-    gateway.snapshot.selfUser = { id: "ada" };
-    controller.reconcile();
-    expect(controller.mode).toBe("never");
-    gateway.connection.gatewayUrl = "wss://two.example/ws";
-    controller.reconcile();
-    expect(controller.mode).toBe("filtering");
-    gateway.connection.gatewayUrl = "wss://one.example/ws";
-    controller.reconcile();
-    expect(controller.mode).toBe("never");
-    expect(fixture().controller.mode).toBe("never");
-  });
-
   it("keeps anonymous browser choices separate from signed-in users", () => {
     const { controller, gateway } = fixture();
     controller.set("always");

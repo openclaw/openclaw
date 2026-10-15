@@ -1,4 +1,3 @@
-// Ollama plugin module implements defaults behavior.
 export const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434";
 export const OLLAMA_DEFAULT_API_KEY = "ollama-local";
 const OLLAMA_DOCKER_HOST_BASE_URL = "http://host.docker.internal:11434";
@@ -36,11 +35,6 @@ export const OLLAMA_CLOUD_DEFAULT_MODELS = [
     id: "kimi-k3",
     contextWindow: 1_048_576,
     capabilities: ["completion", "thinking", "tools", "vision"],
-  },
-  {
-    id: "glm-5.1",
-    contextWindow: 202_752,
-    capabilities: ["completion", "thinking", "tools"],
   },
   {
     id: OLLAMA_GLM52_CLOUD_MODEL_ID,

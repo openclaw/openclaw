@@ -1,5 +1,5 @@
 // Gateway Protocol schema module defines protocol validation shapes.
-import { Type, type TSchema } from "typebox";
+import { Type, type Static, type TSchema } from "typebox";
 import { closedObject } from "./closed-object.js";
 import {
   CronDateTimestampMsSchema,
@@ -9,6 +9,7 @@ import {
   cronScriptPayloadSchema,
 } from "./cron-shared.js";
 import { FailoverReasonSchema } from "./failover-reason.js";
+import { ChatHistoryActivitySchema } from "./logs-chat.js";
 import { NonEmptyString } from "./primitives.js";
 
 /**
@@ -56,12 +57,11 @@ const CronJobsScheduleKindFilterSchema = Type.Union([
   Type.Literal("cron"),
   Type.Literal("on-exit"),
   Type.Literal("stream"),
+  Type.Literal("event"),
 ]);
 const CronJobsLastRunStatusFilterSchema = Type.Union([
   Type.Literal("all"),
-  Type.Literal("ok"),
-  Type.Literal("error"),
-  Type.Literal("skipped"),
+  ...CronRunStatusSchema.anyOf,
   Type.Literal("unknown"),
 ]);
 const CronJobsTriggerFilterSchema = Type.Union([
@@ -74,17 +74,7 @@ const CronJobsSortBySchema = Type.Union([
   Type.Literal("updatedAtMs"),
   Type.Literal("name"),
 ]);
-const CronRunsStatusFilterSchema = Type.Union([
-  Type.Literal("all"),
-  Type.Literal("ok"),
-  Type.Literal("error"),
-  Type.Literal("skipped"),
-]);
-const CronRunsStatusValueSchema = Type.Union([
-  Type.Literal("ok"),
-  Type.Literal("error"),
-  Type.Literal("skipped"),
-]);
+const CronRunsStatusFilterSchema = Type.Union([Type.Literal("all"), ...CronRunStatusSchema.anyOf]);
 const CronDeliveryStatusSchema = Type.Union([
   Type.Literal("delivered"),
   Type.Literal("not-delivered"),
@@ -166,6 +156,11 @@ const CronRunLogJobIdSchema = Type.String({
 /** Schedule expression for one-time, interval, or cron-expression jobs. */
 const CronScheduleSchema = Type.Union([
   closedObject({
+    kind: Type.Literal("event"),
+    source: Type.String({ minLength: 1, pattern: "^[a-z0-9][a-z0-9._-]*$" }),
+    options: Type.Record(Type.String(), Type.Unknown()),
+  }),
+  closedObject({
     kind: Type.Literal("at"),
     at: NonEmptyString,
   }),
@@ -233,13 +228,16 @@ const CronAgentTurnPayloadSchema = cronAgentTurnPayloadSchema({
   fallbacks: Type.Array(Type.String()),
   toolsAllow: Type.Array(Type.String()),
   thinking: Type.String(),
+  timeoutSeconds: Type.Number({ minimum: 0 }),
 });
 const CronCommandPayloadSchema = cronCommandPayloadSchema({
   argv: Type.Array(NonEmptyString, { minItems: 1 }),
+  timeoutSeconds: Type.Number({ minimum: 0 }),
   toolsAllow: Type.Array(Type.String()),
 });
 const CronScriptPayloadSchema = cronScriptPayloadSchema({
   script: Type.String({ minLength: 1, maxLength: 65_536 }),
+  timeoutSeconds: Type.Number({ minimum: 1 }),
   toolsAllow: Type.Array(Type.String()),
 });
 
@@ -253,10 +251,7 @@ const CronPayloadSchema = Type.Union([
 
 /** Reported payloads include the Gateway-owned heartbeat monitor. */
 const CronReportedPayloadSchema = Type.Union([
-  CronSystemEventPayloadSchema,
-  CronAgentTurnPayloadSchema,
-  CronCommandPayloadSchema,
-  CronScriptPayloadSchema,
+  ...CronPayloadSchema.anyOf,
   closedObject({ kind: Type.Literal("heartbeat") }),
 ]);
 
@@ -274,13 +269,16 @@ const CronPayloadPatchSchema = Type.Union([
     fallbacks: Type.Union([Type.Array(Type.String()), Type.Null()]),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
     thinking: Type.Union([Type.String(), Type.Null()]),
+    timeoutSeconds: Type.Union([Type.Number({ minimum: 0 }), Type.Null()]),
   }),
   cronCommandPayloadSchema({
     argv: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),
+    timeoutSeconds: Type.Union([Type.Number({ minimum: 0 }), Type.Null()]),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
   }),
   cronScriptPayloadSchema({
     script: Type.Optional(Type.String({ minLength: 1, maxLength: 65_536 })),
+    timeoutSeconds: Type.Union([Type.Number({ minimum: 1 }), Type.Null()]),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
   }),
 ]);
@@ -307,19 +305,13 @@ const CronFailureAlertPatchSchema = closedObject({
 });
 
 /** Delivery destination used when failure alerts need a separate target. */
-const CronFailureDestinationSchema = closedObject({
-  channel: Type.Optional(CronAnnounceChannelSchema),
-  to: Type.Optional(NonBlankString),
-  accountId: Type.Optional(NonEmptyString),
-  mode: Type.Optional(Type.Union([Type.Literal("announce"), Type.Literal("webhook")])),
-});
-
-const CronFailureDestinationPatchSchema = closedObject({
-  channel: Type.Optional(Type.Union([CronAnnounceChannelSchema, Type.Null()])),
-  to: Type.Optional(Type.Union([NonBlankString, Type.Null()])),
-  accountId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  mode: Type.Optional(Type.Union([Type.Literal("announce"), Type.Literal("webhook"), Type.Null()])),
-});
+const CronFailureDestinationFields = ["channel", "to", "accountId", "mode"] as const;
+const CronFailureDestinationSchema = closedObject(
+  Type.Pick(CronFailureAlertSchema, CronFailureDestinationFields).properties,
+);
+const CronFailureDestinationPatchSchema = closedObject(
+  Type.Pick(CronFailureAlertPatchSchema, CronFailureDestinationFields).properties,
+);
 
 const CronCompletionDestinationSchema = closedObject({
   mode: Type.Literal("webhook"),
@@ -459,6 +451,9 @@ export const CronJobStateSchema = closedObject({
   lastErrorReason: Type.Optional(FailoverReasonSchema),
   lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
   consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
+  // Report-only schedule-computation error counter behind auto-disable;
+  // callers cannot patch this field.
+  scheduleErrorCount: Type.Optional(Type.Integer({ minimum: 0 })),
   // Report-only scheduler ownership fact; callers cannot patch this field.
   autoDisabled: Type.Optional(CronAutoDisabledSchema),
   consecutiveSkipped: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -471,32 +466,26 @@ export const CronJobStateSchema = closedObject({
   // reported for diagnostics but intentionally absent from the writable patch
   // schema so external callers cannot spoof source ownership.
   streamSourceIdentity: Type.Optional(Type.String()),
+  /** Store-owned event-source generation; excluded from job patches. */
+  sourceIdentity: Type.Optional(Type.String()),
   streamDroppedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
   streamCoalescedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
   streamLastStartedAtMs: Type.Optional(CronDateTimestampMsSchema),
   streamLastExitAtMs: Type.Optional(CronDateTimestampMsSchema),
 });
 
-const CronJobStatePatchSchema = closedObject({
-  nextRunAtMs: Type.Optional(CronDateTimestampMsSchema),
-  runningAtMs: Type.Optional(CronDateTimestampMsSchema),
-  lastRunAtMs: Type.Optional(CronDateTimestampMsSchema),
-  lastRunStatus: Type.Optional(CronRunStatusSchema),
-  lastStatus: Type.Optional(DeprecatedCronRunStatusSchema),
-  lastError: Type.Optional(Type.String()),
-  lastErrorReason: Type.Optional(FailoverReasonSchema),
-  lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
-  consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
-  consecutiveSkipped: Type.Optional(Type.Integer({ minimum: 0 })),
-  lastDelivered: Type.Optional(Type.Boolean()),
-  lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
-  lastDeliveryError: Type.Optional(Type.String()),
-  ...CronJobRuntimeFeedbackProperties,
-  streamDroppedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
-  streamCoalescedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
-  streamLastStartedAtMs: Type.Optional(CronDateTimestampMsSchema),
-  streamLastExitAtMs: Type.Optional(CronDateTimestampMsSchema),
-});
+const CronJobStatePatchSchema = closedObject(
+  Type.Omit(CronJobStateSchema, [
+    "scheduleActivatedAtMs",
+    "lastDiagnostics",
+    "lastDiagnosticSummary",
+    "scheduleErrorCount",
+    "autoDisabled",
+    "deliverySuppressionReason",
+    "streamSourceIdentity",
+    "sourceIdentity",
+  ]).properties,
+);
 
 /** Persisted cron job definition returned by scheduler list/get APIs. */
 export const CronJobSchema = closedObject({
@@ -585,9 +574,7 @@ export const CronScratchSetParamsSchema = cronIdOrJobIdParams({
 export const CronScratchSetResultSchema = Type.Union([
   closedObject({
     ok: Type.Literal(true),
-    scratch: Type.Union([CronScratchSchema, Type.Null()]),
-    currentRevision: Type.Integer({ minimum: 0 }),
-    maxBytes: Type.Integer({ minimum: 1 }),
+    ...CronScratchGetResultSchema.properties,
   }),
   closedObject({
     ok: Type.Literal(false),
@@ -674,6 +661,8 @@ export const CronRunParamsSchema = cronIdOrJobIdParams({
   ),
   /** Rejects the mutation if the Gateway restarted after the caller's preflight. */
   expectedProcessInstanceId: Type.Optional(NonEmptyString),
+  /** Holds the response until the queued run records its outcome or this many ms pass. */
+  waitTimeoutMs: Type.Optional(Type.Integer({ minimum: 0, maximum: 2_147_483_647 })),
 });
 
 /** Query params for cron run history. */
@@ -685,7 +674,7 @@ export const CronRunsParamsSchema = closedObject({
   runId: Type.Optional(NonEmptyString),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
-  statuses: Type.Optional(Type.Array(CronRunsStatusValueSchema, { minItems: 1, maxItems: 3 })),
+  statuses: Type.Optional(Type.Array(CronRunStatusSchema, { minItems: 1, maxItems: 3 })),
   status: Type.Optional(CronRunsStatusFilterSchema),
   deliveryStatuses: Type.Optional(
     Type.Array(CronDeliveryStatusSchema, { minItems: 1, maxItems: 4 }),
@@ -732,3 +721,20 @@ export const CronRunLogEntrySchema = closedObject({
   ),
   jobName: Type.Optional(Type.String()),
 });
+
+/** Transcript selection is bound to one recorded cron run, never a client-selected session. */
+export const CronHistoryParamsSchema = closedObject({
+  id: NonEmptyString,
+  runId: Type.Optional(NonEmptyString),
+  runAtMs: Type.Optional(CronDateTimestampMsSchema),
+  cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 8192 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+});
+
+export const CronHistoryResultSchema = closedObject({
+  messages: Type.Array(Type.Unknown()),
+  activity: Type.Optional(Type.Array(ChatHistoryActivitySchema)),
+  nextCursor: Type.Optional(Type.String({ maxLength: 8192 })),
+});
+export type CronHistoryParams = Static<typeof CronHistoryParamsSchema>;
+export type CronHistoryResult = Static<typeof CronHistoryResultSchema>;

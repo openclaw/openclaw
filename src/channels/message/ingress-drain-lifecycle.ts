@@ -1,7 +1,14 @@
+import type { ChannelIngressQueueRecord } from "./ingress-queue.types.js";
+
 /** Full pre-adoption -> adoption ownership lifecycle for one claimed event. */
 export type ChannelIngressDispatchLifecycle = {
   /** Pre-adoption only. After adopt the drain treats this signal as inert. */
   abortSignal: AbortSignal;
+  /**
+   * Same-lane rows admitted but not yet handed off, excluding this event.
+   * Lets channel buffers that span lane rows wait for input that is already durable.
+   */
+  readLaneBacklog?: () => Promise<readonly ChannelIngressQueueRecord<unknown>[]>;
   /**
    * Fires when recovery-relevant session/run state is durable.
    * Drain completes (tombstones) the claim here -- never at settle.
@@ -12,7 +19,7 @@ export type ChannelIngressDispatchLifecycle = {
    * Claim remains held until adopted or abandoned.
    */
   onDeferred: () => void;
-  /** Deferred reply-lane admission is still waiting behind an active turn. */
+  /** Pre-adoption liveness while waiting for reply-lane admission or preflight compaction. */
   onDeferredHeartbeat?: () => void;
   deferredHeartbeatIntervalMs?: number;
   /**
@@ -37,7 +44,7 @@ export type ChannelIngressDispatchLifecycle = {
 export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDispatchLifecycle): {
   turnAdoptionLifecycle: Omit<
     ChannelIngressDispatchLifecycle,
-    "onAdoptionFinalizing" | "onFailed" | "onCancelled"
+    "onAdoptionFinalizing" | "onFailed" | "onCancelled" | "readLaneBacklog"
   > & { admission: "exclusive" };
 } {
   return {

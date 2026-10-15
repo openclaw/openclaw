@@ -32,6 +32,8 @@ describe("chat.send late queued follow-up disposition", () => {
     expect(deliver).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
+        runId: "followup-run",
+        clientRunId: "original-run",
         completion: { kind: "completed" },
         payloads: [...progress.payloads, { text: "done" }],
       }),
@@ -64,6 +66,32 @@ describe("chat.send late queued follow-up disposition", () => {
       "webchat late reply disposition",
       expect.objectContaining({ outcome: "late-and-dropped", reason }),
     );
+  });
+
+  it("gives a pending source's only delivery to the retry it hands off to", async () => {
+    const deliver = vi.fn(async () => ({ kind: "delivered" as const }));
+    const source = createChatSendLateFollowupDisposition({
+      runId: "stalled-run",
+      originatingChannel: "webchat",
+      logGateway: { info: vi.fn() } as never,
+      deliver,
+    });
+    const retry = source.deliver.createSourceRetry();
+    const batch = (runId: string) => ({
+      kind: "queued-followup" as const,
+      completion: { kind: "completed" as const },
+      runId,
+      originatingChannel: "webchat",
+      payloads: [{ text: runId }],
+    });
+    // A late deferral of the original source cannot reopen its delivery.
+    source.recordQueued();
+    await source.deliver(batch("source-run"));
+    await retry(batch("recovery-run"));
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ runId: "recovery-run", clientRunId: "recovery-run" }),
+    );
+    expect(() => source.deliver.createSourceRetry()).toThrow();
   });
 
   it("claims delivery before awaiting and records a concurrent duplicate", async () => {

@@ -1,26 +1,43 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { activityPersonFromPath, activityPersonLocation } from "../../app-route-paths.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { createSessionEventRefreshCoordinator } from "../../lib/sessions/event-refresh-coordinator.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
+import { activityPulseBoundaries } from "./activity-pulse-window.ts";
 import {
   readCurrentWorkChange,
+  readCurrentWorkChanges,
+  currentWorkIdentity,
+  isOlderCurrentWorkChange,
+  CURRENT_WORK_CHANGE_LIMIT,
   reconcileCurrentWork,
   type CurrentWorkChange,
 } from "./current-work.ts";
 import {
   canonicalSessionActivityLocation,
+  reconcileSessionActivity,
+  reconcileSessionActivityRead,
   sessionActivityLocation,
   type SessionActivityFilters,
 } from "./session-activity.ts";
 
 type ActivityQuery = SessionActivityFilters | "current";
-const CURRENT_WORK_CHANGE_LIMIT = 1_000;
 export const ACTIVITY_SUMMARY_ENSURE_METHOD = "sessions.activitySummary.ensure";
 const SUMMARY_BATCH_SIZE = 20;
+
+function sameActiveSnapshot(change: CurrentWorkChange | undefined, identity: string): boolean {
+  return Boolean(
+    change?.snapshot &&
+    !change.isAncestorReference &&
+    change.reason !== "delete" &&
+    change.hasActiveRun === true &&
+    currentWorkIdentity(change) === identity,
+  );
+}
 
 function summaryRowKey(row: Pick<GatewaySessionRow, "key" | "agentId">): string {
   return JSON.stringify([row.agentId ?? parseAgentSessionKey(row.key)?.agentId, row.key]);
@@ -36,7 +53,7 @@ function summaryRevision(row: GatewaySessionRow): string {
 }
 
 /** The Activity query owns its page; selecting a person must not replace the sidebar roster. */
-export class SessionActivityController implements ReactiveController {
+export class SessionActivityController {
   result?: SessionsListResult;
   error?: string;
   incomplete = false;
@@ -51,58 +68,87 @@ export class SessionActivityController implements ReactiveController {
   }
   private client: GatewayBrowserClient | null = null;
   private queryKey?: string;
-  private pending?: AbortController;
+  private pending?: {
+    controller: AbortController;
+    completion: ReturnType<typeof createDeferredCore<void>>;
+  };
   private summaryPending?: AbortController;
   private readonly summaryAttempts = new Map<string, string>();
   private readonly summaryRetries = new Set<string>();
   private canEnsureSummaries = false;
-  private refreshPending = false;
   private filters: ActivityQuery | null = null;
-  private readonly pendingChanges: CurrentWorkChange[] = [];
+  private bucketRollover?: ReturnType<typeof setTimeout>;
+  private pendingChanges: CurrentWorkChange[] = [];
   private changesOverflowed = false;
+  private readonly historyRows = createSessionRowProvenance();
+  private historyRevision = 0;
   private normalizedLocation = "";
   private readonly observesPageLifecycle =
     typeof document !== "undefined" && typeof globalThis.addEventListener === "function";
   private pageActive = !this.observesPageLifecycle || document.visibilityState !== "hidden";
   private readonly eventRefresh = createSessionEventRefreshCoordinator({
     active: this.pageActive,
-    refresh: async () => this.load(this.client, this.filters, "refresh"),
+    refresh: () => this.load(this.client, this.filters, "refresh"),
   });
 
-  constructor(private readonly host: ReactiveControllerHost) {
-    host.addController(this);
-  }
+  constructor(private readonly notify: () => void) {}
 
-  hostConnected(): void {
+  connect(): void {
     this.updatePageLifecycleListeners(true);
     if (this.observesPageLifecycle) {
       this.handlePageLifecycle(new Event("pageshow"));
     }
   }
 
-  hostDisconnected(): void {
+  dispose(): void {
     this.updatePageLifecycleListeners(false);
     this.resetQuery();
   }
 
-  private resetQuery(): void {
-    this.eventRefresh.reset();
-    this.pending?.abort();
-    this.pending = undefined;
+  private resetSummaries(): void {
     this.summaryPending?.abort();
     this.summaryPending = undefined;
     this.summaryAttempts.clear();
     this.summaryRetries.clear();
+  }
+
+  private applySummaryBatch(
+    result: SessionsListResult,
+    rows: readonly GatewaySessionRow[],
+    summaries: ReadonlyMap<string, GatewaySessionRow["activitySummary"]> | null,
+  ): void {
+    this.result = {
+      ...result,
+      sessions: result.sessions.map((row) => {
+        if (!rows.includes(row) || (summaries && !summaries.has(summaryRowKey(row)))) {
+          return row;
+        }
+        const activitySummary = summaries
+          ? summaries.get(summaryRowKey(row))
+          : { ...row.activitySummary, state: "unavailable" as const };
+        const next = this.historyRows.inheritRow({ ...row, activitySummary }, row);
+        return next;
+      }),
+    };
+  }
+
+  private resetQuery(): void {
+    clearTimeout(this.bucketRollover);
+    this.bucketRollover = undefined;
+    this.eventRefresh.reset();
+    this.pending?.controller.abort();
+    this.pending = undefined;
+    this.resetSummaries();
     this.requestState = "idle";
     this.incomplete = false;
     this.error = undefined;
     this.client = null;
     this.queryKey = undefined;
     this.result = undefined;
-    this.refreshPending = false;
     this.filters = null;
     this.pendingChanges.length = 0;
     this.changesOverflowed = false;
+    this.historyRows.reset();
     this.normalizedLocation = "";
   }
 
@@ -135,10 +181,13 @@ export class SessionActivityController implements ReactiveController {
       !client ||
       !this.result ||
       !this.canEnsureSummaries ||
-      !this.pageActive ||
       this.filters === "current" ||
       this.summaryPending
     ) {
+      return;
+    }
+    if (!this.pageActive) {
+      this.eventRefresh.schedule();
       return;
     }
     const visible = new Set(
@@ -204,36 +253,20 @@ export class SessionActivityController implements ReactiveController {
           const summaries = new Map(
             result.sessions.map((row) => [summaryRowKey(row), row.activitySummary]),
           );
-          this.result = {
-            ...this.result,
-            sessions: this.result.sessions.map((row) =>
-              rows.includes(row) && summaries.has(summaryRowKey(row))
-                ? { ...row, activitySummary: summaries.get(summaryRowKey(row)) }
-                : row,
-            ),
-          };
+          this.applySummaryBatch(this.result, rows, summaries);
         } catch {
           if (!current() || !this.result) {
             return;
           }
-          this.result = {
-            ...this.result,
-            sessions: this.result.sessions.map((row) =>
-              rows.includes(row)
-                ? { ...row, activitySummary: { ...row.activitySummary, state: "unavailable" } }
-                : row,
-            ),
-          };
+          this.applySummaryBatch(this.result, rows, null);
         }
-        this.host.requestUpdate();
+        this.notify();
       }
     } finally {
       if (this.summaryPending === pending) {
         this.summaryPending = undefined;
-        this.host.requestUpdate();
-        if (this.summaryRetries.size > 0) {
-          void this.ensureSummaries();
-        }
+        this.notify();
+        void this.ensureSummaries();
       }
     }
   }
@@ -309,18 +342,12 @@ export class SessionActivityController implements ReactiveController {
 
   private readonly handlePageLifecycle = (event: Event): void => {
     const leaving = event.type === "pagehide";
+    const interrupted = this.pending !== undefined || this.summaryPending !== undefined;
     this.pageActive = !leaving && document.visibilityState !== "hidden";
     if (!this.pageActive) {
-      this.summaryPending?.abort();
-      this.summaryPending = undefined;
-      this.summaryAttempts.clear();
-      this.summaryRetries.clear();
+      this.resetSummaries();
     }
-    this.eventRefresh.setActive(this.pageActive, leaving || this.pending !== undefined);
-    if (!this.pageActive) {
-      // The lifecycle coordinator owns catch-up after hiding, including queued in-flight work.
-      this.refreshPending = false;
-    }
+    this.eventRefresh.setActive(this.pageActive, leaving || interrupted);
   };
 
   private updatePageLifecycleListeners(add: boolean): void {
@@ -335,16 +362,54 @@ export class SessionActivityController implements ReactiveController {
 
   invalidate(payload?: unknown): void {
     if (this.client && this.filters) {
-      if (this.filters === "current") {
-        const change = readCurrentWorkChange(payload);
-        if (change) {
-          if (this.result) {
-            const next = reconcileCurrentWork(this.result, [change]);
+      const changes =
+        this.filters === "current"
+          ? readCurrentWorkChanges(payload)
+          : [readCurrentWorkChange(payload)].filter((change) => change !== null);
+      if (changes.length) {
+        let requiresRefresh = this.filters !== "current" || !this.pending;
+        if (this.result) {
+          const next =
+            this.filters === "current"
+              ? this.reconcileCurrentWork(this.result, changes)
+              : !this.filters.personId && !this.filters.query
+                ? reconcileSessionActivity(
+                    this.result,
+                    changes,
+                    this.historyRows,
+                    ++this.historyRevision,
+                  )
+                : undefined;
+          if (next) {
             this.result = next.result;
-            this.incomplete ||= next.requiresRefresh;
-            this.host.requestUpdate();
+            requiresRefresh = next.requiresRefresh;
+            this.incomplete ||= this.filters === "current" && requiresRefresh;
+            this.notify();
           }
-          if (this.pending) {
+        }
+        if (this.pending && this.filters === "current") {
+          for (const change of changes) {
+            if (change.snapshot) {
+              const identity = currentWorkIdentity(change);
+              if (
+                this.pendingChanges.some(
+                  (previous) =>
+                    currentWorkIdentity(previous) === identity &&
+                    isOlderCurrentWorkChange(change, previous),
+                )
+              ) {
+                continue;
+              }
+              // Preserve the first receipt and all ordering barriers; only replace a run's tail.
+              if (
+                sameActiveSnapshot(change, identity) &&
+                sameActiveSnapshot(this.pendingChanges.at(-1), identity) &&
+                sameActiveSnapshot(this.pendingChanges.at(-2), identity)
+              ) {
+                this.pendingChanges[this.pendingChanges.length - 1] = change;
+                continue;
+              }
+            }
             // Overlapping completions and replacement starts must retain their arrival order.
             if (this.pendingChanges.length < CURRENT_WORK_CHANGE_LIMIT) {
               this.pendingChanges.push(change);
@@ -353,9 +418,18 @@ export class SessionActivityController implements ReactiveController {
             }
           }
         }
+        if (!requiresRefresh && !this.incomplete && !this.changesOverflowed) {
+          this.eventRefresh.scheduleFallback();
+          return;
+        }
       }
       this.eventRefresh.schedule();
     }
+  }
+
+  private reconcileCurrentWork(result: SessionsListResult, changes: Iterable<CurrentWorkChange>) {
+    // A late snapshot may briefly restore a retired row; the next refresh corrects it.
+    return reconcileCurrentWork(result, changes);
   }
 
   load(
@@ -363,38 +437,46 @@ export class SessionActivityController implements ReactiveController {
     filters: ActivityQuery | null,
     reason: "query" | "refresh" | "retry" = "query",
     canEnsureSummaries = this.canEnsureSummaries,
-  ): void {
+  ): Promise<void> {
     this.canEnsureSummaries = canEnsureSummaries;
     if (!canEnsureSummaries) {
-      this.summaryPending?.abort();
-      this.summaryPending = undefined;
-      this.summaryAttempts.clear();
-      this.summaryRetries.clear();
+      this.resetSummaries();
     }
     if (!client || !filters) {
       this.resetQuery();
-      this.host.requestUpdate();
-      return;
+      this.notify();
+      return Promise.resolve();
     }
-    const request =
-      filters === "current"
-        ? {
-            activeOnly: true,
-            archived: "all",
-            includeGlobal: true,
-            includeUnknown: true,
-            includeDerivedTitles: true,
-            limit: 100,
-          }
+    const now = new Date();
+    const boundaries =
+      filters === "current" ? undefined : activityPulseBoundaries(filters.time, now.getTime());
+    clearTimeout(this.bucketRollover);
+    this.bucketRollover = undefined;
+    if (boundaries && typeof setTimeout === "function") {
+      const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
+      const rollover = Math.min(boundaries.at(-1)!, midnight);
+      this.bucketRollover = setTimeout(
+        () => this.eventRefresh.schedule(),
+        rollover - now.getTime() + 1_000,
+      );
+    }
+    const request = {
+      source: "activity",
+      excludeDock: true,
+      rowMode: "compact",
+      archived: "all",
+      includeGlobal: true,
+      includeUnknown: true,
+      includeDerivedTitles: true,
+      limit: 100,
+      ...(filters === "current"
+        ? { activeOnly: true }
         : {
-            archived: "all",
-            includeGlobal: true,
-            includeUnknown: true,
             includePeople: true,
+            activityPulseBoundaries: boundaries,
             excludeSubagents: true,
             includeActivitySummary: true,
-            includeDerivedTitles: true,
-            limit: 100,
+            sortBy: "activity",
             ...(filters.personId ? { involvingProfileId: filters.personId } : {}),
             ...(filters.query ? { search: filters.query } : {}),
             ...(filters.time === "all"
@@ -403,20 +485,23 @@ export class SessionActivityController implements ReactiveController {
                   activeMinutes:
                     filters.time === "24h" ? 1440 : filters.time === "7d" ? 10080 : 43200,
                 }),
-          };
+          }),
+    };
     const queryKey = JSON.stringify(request);
     const sameQuery = this.client === client && this.queryKey === queryKey;
-    if (sameQuery && this.pending) {
-      this.refreshPending ||= reason === "refresh";
-      return;
+    if (sameQuery && this.pending && reason !== "retry") {
+      if (reason === "refresh") {
+        this.eventRefresh.schedule();
+      }
+      return this.pending.completion.promise;
     }
     if (reason === "query" && sameQuery) {
       void this.ensureSummaries();
-      return;
+      return Promise.resolve();
     }
-    this.pending?.abort();
+    this.pending?.controller.abort();
     this.eventRefresh.absorb();
-    const pending = new AbortController();
+    const pending = { controller: new AbortController(), completion: createDeferredCore() };
     this.pending = pending;
     this.client = client;
     this.queryKey = queryKey;
@@ -426,21 +511,19 @@ export class SessionActivityController implements ReactiveController {
     this.requestState = reason === "retry" ? "retrying" : "loading";
     this.error = undefined;
     if (!sameQuery) {
-      this.summaryPending?.abort();
-      this.summaryPending = undefined;
-      this.summaryAttempts.clear();
-      this.summaryRetries.clear();
+      this.historyRows.reset();
+      this.resetSummaries();
       this.result = undefined;
       this.incomplete = false;
     }
-    this.refreshPending = false;
-    this.host.requestUpdate();
+    const readRevision = ++this.historyRevision;
+    this.notify();
     void client
-      .request<SessionsListResult>("sessions.list", request, { signal: pending.signal })
+      .request<SessionsListResult>("sessions.list", request, { signal: pending.controller.signal })
       .then((result) => {
         if (this.pending === pending) {
           if (filters === "current") {
-            const next = reconcileCurrentWork(result, this.pendingChanges);
+            const next = this.reconcileCurrentWork(result, this.pendingChanges);
             this.incomplete = this.changesOverflowed || next.requiresRefresh;
             if (this.incomplete) {
               this.eventRefresh.schedule();
@@ -450,13 +533,22 @@ export class SessionActivityController implements ReactiveController {
               this.result = next.result;
             }
           } else {
-            this.result = result;
+            const next = reconcileSessionActivityRead(
+              result,
+              this.result,
+              this.historyRows,
+              readRevision,
+            );
+            if (next.requiresRefresh) {
+              this.eventRefresh.schedule();
+            }
+            this.result = next.result;
             void this.ensureSummaries();
           }
         }
       })
       .catch((error: unknown) => {
-        if (this.pending === pending && !pending.signal.aborted) {
+        if (this.pending === pending && !pending.controller.signal.aborted) {
           if (filters === "current") {
             this.result = undefined;
             this.incomplete = false;
@@ -469,11 +561,10 @@ export class SessionActivityController implements ReactiveController {
           this.pending = undefined;
           this.pendingChanges.length = 0;
           this.requestState = "idle";
-          this.host.requestUpdate();
-          if (this.refreshPending) {
-            this.load(client, filters, "refresh");
-          }
+          this.notify();
         }
+        pending.completion.resolve();
       });
+    return pending.completion.promise;
   }
 }

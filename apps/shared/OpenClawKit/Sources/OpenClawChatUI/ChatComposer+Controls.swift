@@ -83,9 +83,11 @@ extension OpenClawChatComposer {
         // Sections come from an O(n) recompute over the catalog; bind once per body eval.
         let sections = self.viewModel.modelPickerSections
         return Menu {
-            self.modelMenuOption(
-                self.viewModel.defaultModelLabel,
-                selectionID: OpenClawChatViewModel.defaultModelSelectionID)
+            if self.viewModel.canSelectDefaultModel {
+                self.modelMenuOption(
+                    self.viewModel.defaultModelLabel,
+                    selectionID: OpenClawChatViewModel.defaultModelSelectionID)
+            }
             if !sections.pinned.isEmpty {
                 Section {
                     self.modelOptions(sections.pinned)
@@ -128,15 +130,16 @@ extension OpenClawChatComposer {
         .disabled(self.viewModel.isUpdatingSessionSettings)
     }
 
-    private func modelOptions(_ models: [OpenClawChatModelChoice]) -> some View {
+    func modelOptions(_ models: [OpenClawChatModelChoice], showsDefaultBadge: Bool = true) -> some View {
         ForEach(models) { model in
             let unavailable = self.viewModel.modelUnavailableDescription(model)
-            let defaultBadge = self.viewModel.isDefaultModel(model) ? String(localized: "Default") : nil
+            let defaultBadge = showsDefaultBadge && self.viewModel.isDefaultModel(model)
+                ? String(localized: "Default") : nil
             self.modelMenuOption(
                 [model.displayLabel, model.capabilityDescription, unavailable, defaultBadge].compactMap(\.self)
                     .filter { !$0.isEmpty }.joined(separator: " — "),
                 selectionID: model.selectionID)
-                .disabled(self.viewModel.isModelUnavailable(model))
+                .disabled(unavailable != nil)
                 .accessibilityHint(unavailable ?? "")
         }
     }
@@ -216,7 +219,7 @@ extension OpenClawChatComposer {
                 .disabled(branch.active)
             }
             .task {
-                await self.viewModel.refreshSessionBranchesForMenuPresentation()
+                await self.viewModel.refreshSessionBranches()
             }
         } label: {
             Image(systemName: "arrow.triangle.branch")

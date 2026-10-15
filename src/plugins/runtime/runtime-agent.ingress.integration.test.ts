@@ -8,6 +8,7 @@ import {
 } from "../../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { createDefaultDeps } from "../../cli/deps.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../../gateway/local-request-context.js";
@@ -144,7 +145,12 @@ async function withIngressFixture(
               heartbeat: { every: "0m" },
             },
           },
-          tools: { allow: ["sessions", "write", "read"], codeMode: { enabled: false } },
+          tools: {
+            allow: ["sessions", "write", "read"],
+            codeMode: { enabled: false },
+            // The synthetic provider emits direct tool calls instead of catalog lookups.
+            toolSearch: false,
+          },
           models: {
             mode: "replace",
             providers: {
@@ -156,6 +162,7 @@ async function withIngressFixture(
           },
         };
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg, cfg);
         turn = withLocalGatewayRequestScope(
           { deps: createDefaultDeps(), getRuntimeConfig: () => cfg },
           () =>

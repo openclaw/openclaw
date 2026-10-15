@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { readTuiSessionUserMessage } from "../tui-session-events.js";
 import { ChatLog } from "./chat-log.js";
+import { MarkdownMessageComponent } from "./markdown-message.js";
 
 describe("ChatLog run state", () => {
   it("keeps revised snapshots scoped to their own concurrent assistant run", () => {
@@ -22,27 +23,6 @@ describe("ChatLog run state", () => {
     expect(rendered.indexOf("Preserved second reply.")).toBeLessThan(
       rendered.indexOf("Second continuation."),
     );
-  });
-
-  it("infers tool ownership from the only streaming run after another run finalizes", () => {
-    const chatLog = new ChatLog(40);
-
-    chatLog.finalizeAssistant("Completed first reply.", "run-first");
-    chatLog.updateAssistant("Streaming second reply.", "run-second");
-    chatLog.startTool("second-tool", "read_file", { path: "second.txt" });
-    chatLog.addLiveUser("Delayed second prompt.", {
-      messageId: "second-user",
-      runId: "run-second",
-    });
-
-    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
-    expect(rendered.indexOf("Completed first reply.")).toBeLessThan(
-      rendered.indexOf("Delayed second prompt."),
-    );
-    expect(rendered.indexOf("Delayed second prompt.")).toBeLessThan(
-      rendered.indexOf("Streaming second reply."),
-    );
-    expect(rendered.indexOf("Streaming second reply.")).toBeLessThan(rendered.indexOf("Read File"));
   });
 
   it("keeps a replacement final reply anchored when its previous reply is pruned", () => {
@@ -116,10 +96,11 @@ describe("ChatLog run state", () => {
 
     const rendered = normalizeTestText(chatLog.render(120).join("\n"));
     expect(rendered).toContain("Persisted prompt.");
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "UserMessageComponent",
-      "AssistantMessageComponent",
-    ]);
+    expect(
+      chatLog.children.map((component) =>
+        component instanceof MarkdownMessageComponent ? component.role : component.constructor.name,
+      ),
+    ).toEqual(["user", "assistant"]);
     expect(chatLog.countPendingUsers()).toBe(0);
   });
 
@@ -143,26 +124,11 @@ describe("ChatLog run state", () => {
     expect(chatLog.countPendingUsers()).toBe(1);
   });
 
-  it("deduplicates a replayed live prompt already loaded from authoritative history", () => {
-    const chatLog = new ChatLog(40);
-    chatLog.addUser("Loaded from history.", { messageId: "history-user" });
-
-    chatLog.addLiveUser("Loaded from history.", {
-      messageId: "history-user",
-      runId: "history-run",
-    });
-
-    expect(chatLog.children.map((component) => component.constructor.name)).toEqual([
-      "UserMessageComponent",
-    ]);
-    expect(normalizeTestText(chatLog.render(120).join("\n"))).toContain("Loaded from history.");
-  });
-
   it("re-keys a pending user in place without moving its position", () => {
     const chatLog = new ChatLog(40);
 
     chatLog.addPendingUser("local", "queued hello");
-    chatLog.startAssistant("hi there", "r-accepted");
+    chatLog.updateAssistant("hi there", "r-accepted");
 
     expect(chatLog.rekeyPendingUser("local", "r-accepted")).toBe(true);
 

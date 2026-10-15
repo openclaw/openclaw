@@ -96,26 +96,21 @@ struct ChatMathBlockView: View {
     }
 }
 
-#if os(macOS)
 @MainActor
-private struct ChatMathPlatformView: NSViewRepresentable {
+private struct ChatMathPlatformView {
     let latex: String
     let fontSize: CGFloat
     let textColor: Color
+}
 
+#if os(macOS)
+extension ChatMathPlatformView: NSViewRepresentable {
     func makeNSView(context: Context) -> MTMathUILabel {
         MTMathUILabel()
     }
 
     func updateNSView(_ view: MTMathUILabel, context: Context) {
-        view.displayErrorInline = false
-        view.labelMode = .display
-        view.textAlignment = .center
-        view.fontSize = self.fontSize
-        view.textColor = NSColor(self.textColor)
-        if view.latex != self.latex {
-            view.latex = self.latex
-        }
+        self.configure(view)
     }
 
     /// SwiftMath reports fittingSize on macOS; SwiftUI's default bridge can collapse it in split views.
@@ -124,12 +119,7 @@ private struct ChatMathPlatformView: NSViewRepresentable {
     }
 }
 #else
-@MainActor
-private struct ChatMathPlatformView: UIViewRepresentable {
-    let latex: String
-    let fontSize: CGFloat
-    let textColor: Color
-
+extension ChatMathPlatformView: UIViewRepresentable {
     func makeUIView(context: Context) -> MTMathUILabel {
         MTMathUILabel()
     }
@@ -137,19 +127,21 @@ private struct ChatMathPlatformView: UIViewRepresentable {
     func updateUIView(_ view: MTMathUILabel, context: Context) {
         self.configure(view)
     }
+}
+#endif
 
+extension ChatMathPlatformView {
     private func configure(_ view: MTMathUILabel) {
         view.displayErrorInline = false
         view.labelMode = .display
         view.textAlignment = .center
         view.fontSize = self.fontSize
-        view.textColor = UIColor(self.textColor)
+        view.textColor = MTColor(self.textColor)
         if view.latex != self.latex {
             view.latex = self.latex
         }
     }
 }
-#endif
 
 @MainActor
 struct ChatMarkdownTableView: View {
@@ -227,7 +219,8 @@ struct ChatMarkdownListView: View {
 
                     VStack(alignment: .leading, spacing: 7) {
                         if self.list.items[index].content.isEmpty {
-                            ChatMarkdownRenderer.styledText(" ", font: self.typography.proseFont)
+                            Text(verbatim: " ")
+                                .font(self.typography.proseFont)
                         } else {
                             ForEach(self.list.items[index].content.indices, id: \.self) { contentIndex in
                                 self.content(self.list.items[index].content[contentIndex])
@@ -249,7 +242,8 @@ struct ChatMarkdownListView: View {
         let marker = self.list.marker(for: item, at: index)
         HStack(spacing: 4) {
             if let text = marker.text {
-                ChatMarkdownRenderer.styledText(text, font: self.typography.proseFont)
+                Text(verbatim: text)
+                    .font(self.typography.proseFont)
                     .foregroundStyle(self.textColor)
                     .monospacedDigit()
                     .accessibilityLabel(self.markerAccessibilityLabel(at: index))

@@ -61,7 +61,9 @@ const fs = require("node:fs");
 const path = require("node:path");
 const args = process.argv.slice(2);
 fs.writeFileSync(path.join(__dirname, "arguments.json"), JSON.stringify(args));
-fs.writeFileSync(path.join(args.at(-1), "appcast.xml"), '<rss><channel><item><sparkle:shortVersionString>${version}</sparkle:shortVersionString><enclosure sparkle:edSignature="fixture-signature" /></item></channel></rss>');
+// Sparkle names the feed after the app's SUFeedURL basename unless -o pins it.
+const output = args.includes("-o") ? args[args.indexOf("-o") + 1] : path.join(args.at(-1), "appcast-arm64.xml");
+fs.writeFileSync(output, '<rss><channel><item><sparkle:shortVersionString>${version}</sparkle:shortVersionString><enclosure sparkle:edSignature="fixture-signature" /></item></channel></rss>');
 `,
         { mode: 0o755 },
       );
@@ -95,6 +97,7 @@ fs.writeFileSync(path.join(args.at(-1), "appcast.xml"), '<rss><channel><item><sp
         expect(args).not.toContain("--channel");
       }
       expect(args).not.toContain("");
+      expect(args[args.indexOf("-o") + 1]).toBe(path.join(args.at(-1) ?? "", "appcast.xml"));
       expect(readFileSync(path.join(root, "appcast.xml"), "utf8")).toContain(
         `<sparkle:shortVersionString>${version}</sparkle:shortVersionString>`,
       );

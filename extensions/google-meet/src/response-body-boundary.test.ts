@@ -33,7 +33,7 @@ describe("google-meet response body boundary", () => {
       }),
     );
 
-    const { fetchGoogleMeetSpace } = await import("./meet.js");
+    const { fetchGoogleMeetSpace } = await import("./meet-api.js");
     await expect(
       fetchGoogleMeetSpace({
         accessToken: "fake-token",

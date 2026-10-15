@@ -1,4 +1,5 @@
 use crate::gateway::{GatewayAction, GatewaySnapshot};
+use crate::gateway_windows::PromotionGuard;
 use crate::installer::InstallChannel;
 use crate::remote_gateway::RemoteGatewayRequest;
 use std::sync::{mpsc, Arc, Mutex};
@@ -9,10 +10,24 @@ pub(crate) enum GatewayOperation {
     Connect,
     ConnectExplicitLocal,
     ConnectRemote(RemoteGatewayRequest),
+    PromoteProfile {
+        request: RemoteGatewayRequest,
+        guard: PromotionGuard,
+    },
     RetryRemote,
     Install(InstallChannel),
+    #[cfg(target_os = "linux")]
+    Runtime(crate::RuntimeAction),
     Action(GatewayAction),
-    RecoverRemote { child_id: u64 },
+    RecoverRemote {
+        child_id: u64,
+    },
+}
+
+pub(crate) enum GatewayOperationError {
+    Action(String),
+    #[cfg(target_os = "linux")]
+    Runtime(String),
 }
 
 struct QueuedGatewayOperation {
@@ -30,7 +45,7 @@ impl GatewayOperationQueue {
     pub(crate) fn new<F, E>(sink: F, show_error: E) -> Self
     where
         F: Fn(GatewayOperation, u64) -> Result<GatewaySnapshot, String> + Send + Sync + 'static,
-        E: Fn(&str) + Send + Sync + 'static,
+        E: Fn(GatewayOperationError) + Send + Sync + 'static,
     {
         let (sender, receiver) = mpsc::channel::<QueuedGatewayOperation>();
         let selection = Arc::new(Mutex::new(0));
@@ -44,11 +59,18 @@ impl GatewayOperationQueue {
                     {
                         continue;
                     }
+                    #[cfg(target_os = "linux")]
+                    let runtime_action = matches!(&request.operation, GatewayOperation::Runtime(_));
                     let result = sink(request.operation, request.selection);
                     if let Some(reply) = request.reply {
                         let _ = reply.send(result);
                     } else if let Err(error) = result {
-                        show_error(&error);
+                        #[cfg(target_os = "linux")]
+                        if runtime_action {
+                            show_error(GatewayOperationError::Runtime(error));
+                            continue;
+                        }
+                        show_error(GatewayOperationError::Action(error));
                     }
                 }
             })
@@ -75,14 +97,7 @@ impl GatewayOperationQueue {
     }
 
     pub(crate) fn submit_recovery(&self, child_id: u64) {
-        // Capture the latest intent in the same critical section as explicit
-        // submission, so recovery follows it in FIFO order without replacing it.
-        let selection = self.selection.lock().expect("selection");
-        let _ = self.sender.send(QueuedGatewayOperation {
-            operation: GatewayOperation::RecoverRemote { child_id },
-            reply: None,
-            selection: *selection,
-        });
+        self.submit_detached(GatewayOperation::RecoverRemote { child_id });
     }
 
     pub(crate) fn submit_connect(&self) {
@@ -93,15 +108,24 @@ impl GatewayOperationQueue {
         self.submit_detached(GatewayOperation::Action(action));
     }
 
-    pub(crate) async fn execute(
+    #[cfg(target_os = "linux")]
+    pub(crate) fn submit_runtime(&self, action: crate::RuntimeAction) {
+        self.submit_detached(GatewayOperation::Runtime(action));
+    }
+
+    pub(crate) fn execute(
         &self,
         operation: GatewayOperation,
-    ) -> Result<GatewaySnapshot, String> {
+    ) -> impl std::future::Future<Output = Result<GatewaySnapshot, String>> {
         let (reply, receiver) = oneshot::channel();
-        self.submit(operation, Some(reply))?;
-        receiver
-            .await
-            .map_err(|_| "Gateway operation worker stopped unexpectedly.".to_string())?
+        // Admission survives replacement of the renderer awaiting this reply.
+        let admitted = self.submit(operation, Some(reply));
+        async move {
+            admitted?;
+            receiver
+                .await
+                .map_err(|_| "Gateway operation worker stopped unexpectedly.".to_string())?
+        }
     }
 
     fn submit_detached(&self, operation: GatewayOperation) {
@@ -113,10 +137,12 @@ impl GatewayOperationQueue {
         operation: GatewayOperation,
         reply: Option<oneshot::Sender<Result<GatewaySnapshot, String>>>,
     ) -> Result<(), String> {
-        // Invalidate automatic work at submission, while retaining every
-        // explicit operation in channel order.
+        // Recovery follows the latest explicit intent in FIFO order without
+        // replacing it; explicit submissions invalidate older automatic work.
         let mut selection = self.selection.lock().expect("selection");
-        *selection = selection.wrapping_add(1);
+        if !matches!(operation, GatewayOperation::RecoverRemote { .. }) {
+            *selection = selection.wrapping_add(1);
+        }
         self.sender
             .send(QueuedGatewayOperation {
                 operation,
@@ -139,6 +165,24 @@ mod tests {
     enum ObservedOperation {
         Stop,
         Connect,
+    }
+
+    #[test]
+    fn admitted_connection_survives_discarding_the_launch_pages_reply() {
+        let (sender, receiver) = mpsc::channel();
+        let queue = GatewayOperationQueue::new(
+            move |operation, _| {
+                assert!(matches!(operation, GatewayOperation::Connect));
+                sender.send(()).unwrap();
+                Ok(crate::gateway::GatewaySnapshot::remote_opening())
+            },
+            |_| {},
+        );
+        let reply = queue.execute(GatewayOperation::Connect);
+        drop(reply);
+        receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("Primary must connect after the launch page is replaced");
     }
 
     #[test]

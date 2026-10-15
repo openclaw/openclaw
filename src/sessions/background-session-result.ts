@@ -1,18 +1,18 @@
 // Commits detached background results into an existing conversation generation.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
-  loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
-  readActiveTranscriptEntryAnchor,
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
 import {
-  findTranscriptEvent,
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import type { SessionTranscriptAssistantMessage } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -53,6 +53,8 @@ export async function commitBackgroundResultToSession(params: {
   provenance: BackgroundSessionResultProvenance;
   config: OpenClawConfig;
   signal?: AbortSignal;
+  /** Revalidate the producer after preparation and inside the transcript commit. */
+  assertCurrent?: () => void;
 }): Promise<BackgroundSessionResultCommit> {
   const sessionKey = normalizeOptionalString(params.sessionKey);
   const text = normalizeOptionalString(params.text);
@@ -73,22 +75,24 @@ export async function commitBackgroundResultToSession(params: {
   );
   const identities = [sessionKey, expectedSessionId];
 
+  params.assertCurrent?.();
   while (true) {
     const attempt = await runExclusiveSessionLifecycleMutation<
       BackgroundSessionResultCommit | { waitingFor: Promise<void> }
-    >({
+    >("background-result", {
       scope: storePath,
       identities,
       signal: params.signal,
       run: async () => {
         params.signal?.throwIfAborted();
+        params.assertCurrent?.();
         const waitingFor = getSessionWorkAdmissionRelease({ scope: storePath, identities });
         if (waitingFor) {
-          // An admitted reply may need another admission before it can release.
-          // Drop the mutation fence before waiting so that work can finish.
+          // Admitted source work may need nested admission before it can finish.
+          // Release the lifecycle fence before waiting, then revalidate on retry.
           return { waitingFor };
         }
-        const current = loadSessionEntryReadOnly({
+        const current = await readSessionEntryReadOnlyInWorker({
           agentId: params.agentId,
           sessionKey,
           storePath,
@@ -102,6 +106,7 @@ export async function commitBackgroundResultToSession(params: {
         }
         const unavailable = resolveSessionWorkStartError(sessionKey, current, {
           expectedSessionId,
+          purpose: "accepted-result-settlement",
         });
         if (unavailable) {
           return { ok: false, reason: unavailable };
@@ -114,10 +119,10 @@ export async function commitBackgroundResultToSession(params: {
         };
         // A retry owns the original committed payload, including its managed-media IDs.
         // Restaging media would conflict with the transcript's exact replay contract.
-        const prior = await findTranscriptEvent(
-          scope,
-          (event) => readTranscriptEventMessage(event)?.idempotencyKey === idempotencyKey,
-        );
+        const prior = await findTranscriptEvent(scope, {
+          kind: "idempotency",
+          key: idempotencyKey,
+        });
         const priorMessage = prior && readTranscriptEventMessage(prior.event);
         const priorId = prior && readTranscriptEventId(prior.event);
         if (prior && (!priorMessage || !priorId)) {
@@ -133,20 +138,7 @@ export async function commitBackgroundResultToSession(params: {
           api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
           provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
           model: AUTOMATION_RESULT_MODEL,
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              total: 0,
-            },
-          },
+          usage: makeZeroUsageSnapshot(),
           stopReason: "stop",
           timestamp: Date.now(),
           idempotencyKey,
@@ -155,10 +147,15 @@ export async function commitBackgroundResultToSession(params: {
           idempotencyKey: string;
           openclawAutomation: BackgroundSessionResultProvenance;
         };
+        params.assertCurrent?.();
         const committed = await persistSessionTranscriptTurn(scope, {
           cwd: current.spawnedCwd,
           expectedSessionId,
           expectedLifecycleRevision: expectedLifecycleRevision ?? null,
+          assertCurrent: () => {
+            params.assertCurrent?.();
+            params.signal?.throwIfAborted();
+          },
           messages: [
             {
               message: priorMessage
@@ -169,14 +166,16 @@ export async function commitBackgroundResultToSession(params: {
                   }
                 : message,
               idempotencyLookup: "scan",
-              ...(priorId ? { eventId: priorId } : {}),
-              shouldAppendInTransaction: () => {
-                params.signal?.throwIfAborted();
-                if (priorId && !readActiveTranscriptEntryAnchor({ ...scope, entryId: priorId })) {
-                  throw new Error("background result no longer owns the active transcript");
-                }
-                return true;
-              },
+              ...(priorId
+                ? {
+                    eventId: priorId,
+                    predicate: {
+                      kind: "active-entry" as const,
+                      entryId: priorId,
+                      errorMessage: "background result no longer owns the active transcript",
+                    },
+                  }
+                : {}),
             },
           ],
           touchSessionEntry: true,

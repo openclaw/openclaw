@@ -2,7 +2,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -10,6 +9,7 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { CronJob } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -25,6 +25,7 @@ const suite = createControlUiE2eSuite({
       name: "control-ui-exact-stagger",
       config: {
         gateway: { controlUi: { enabled: true } },
+        agents: { defaults: { model: "openai/gpt-4.1" } },
         cron: {
           enabled: false,
           failureAlert: {
@@ -40,6 +41,16 @@ const suite = createControlUiE2eSuite({
     });
     instance = owner;
     try {
+      await owner.state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          "openai:cron-duration-fixture": {
+            type: "api_key",
+            provider: "openai",
+            key: "synthetic-cron-duration-inference-key",
+          },
+        },
+      });
       await owner.startGateway();
       return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
     } catch (error) {
@@ -69,6 +80,7 @@ const catalogSuite = createControlUiE2eSuite({
       env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
       config: {
         gateway: { controlUi: { enabled: true } },
+        plugins: { enabled: false },
         cron: { enabled: false },
         agents: { defaults: { model: "fixture/anchor" } },
         models: {
@@ -185,16 +197,18 @@ catalogSuite.define(() => {
           await page.locator("#cron-payload-text").fill("Do not submit this draft");
           const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
           await expect
-            .poll(() => picker.locator('[role="option"][data-value="retiring"]').count())
+            .poll(() => picker.locator('[role="option"][data-value="fixture/retiring"]').count())
             .toBe(1);
           if (captureEnabled) {
             await page.screenshot({ path: path.join(catalogSuite.artifactDir, "initial.png") });
           }
           await publish("published");
           await expect
-            .poll(() => picker.locator('[role="option"][data-value="published"]').count())
+            .poll(() => picker.locator('[role="option"][data-value="fixture/published"]').count())
             .toBe(1);
-          expect(await picker.locator('[role="option"][data-value="retiring"]').count()).toBe(0);
+          expect(
+            await picker.locator('[role="option"][data-value="fixture/retiring"]').count(),
+          ).toBe(0);
           if (captureEnabled) {
             await page.screenshot({ path: path.join(catalogSuite.artifactDir, "published.png") });
           }
@@ -205,7 +219,9 @@ catalogSuite.define(() => {
           const error = page.locator(".cron-error-banner");
           await error.waitFor({ state: "visible" });
           expect(await error.textContent()).toContain("Catalog transport unavailable");
-          expect(await picker.locator('[role="option"][data-value="published"]').count()).toBe(1);
+          expect(
+            await picker.locator('[role="option"][data-value="fixture/published"]').count(),
+          ).toBe(1);
           if (captureEnabled) {
             await page.screenshot({
               path: path.join(catalogSuite.artifactDir, "read-failure.png"),
@@ -215,7 +231,7 @@ catalogSuite.define(() => {
           rejectCatalogReplies = false;
           await publish("recovered");
           await expect
-            .poll(() => picker.locator('[role="option"][data-value="recovered"]').count())
+            .poll(() => picker.locator('[role="option"][data-value="fixture/recovered"]').count())
             .toBe(1);
           await error.waitFor({ state: "hidden" });
           expect(await page.locator("#cron-name").inputValue()).toBe("Retain this draft");
@@ -290,7 +306,7 @@ async function withGatewayCommands(artifactName: string, run: (cliJson: CliJson)
       stdout:
         args[0] === "dashboard" ? "[one-time browser handoff omitted]" : redact(result.stdout),
     });
-    expect(result.code, args.join(" ")).toBe(0);
+    expect(result.code, `${args.join(" ")}\n${redact(result.stderr)}`).toBe(0);
     expect(result.signal).toBeNull();
     return requireRecord(JSON.parse(result.stdout));
   };
@@ -470,6 +486,68 @@ async function readAlertFields(page: Page) {
 }
 
 suite.define(() => {
+  it("timeout override: clearing restores the default after save and reload", async () => {
+    await withGatewayCommands("real-timeout-clear-commands.json", async (cliJson) => {
+      const job = await cliJson([
+        "automations",
+        "add",
+        "--name",
+        "Clear timeout override",
+        "--agent",
+        "main",
+        "--session",
+        "isolated",
+        "--message",
+        "Synthetic paused timeout fixture",
+        "--disabled",
+        "--every",
+        "2h",
+        "--timeout-seconds",
+        "90",
+        "--no-deliver",
+        "--json",
+      ]);
+      const jobId = cronJobId(job);
+      await withCronJobPage(cliJson, jobId, async (evidence) => {
+        const { page, servedDocumentSha256, servedAssets } = evidence;
+        await page.getByRole("button", { name: "Dismiss and don't show again" }).click();
+        await page.locator("details.cron-advanced > summary").click();
+        const timeout = page.locator("#cron-timeout-seconds");
+        expect(await timeout.inputValue()).toBe("90");
+        await timeout.fill("");
+        const cleared = await submitCronForm(evidence, cliJson, "cron.update");
+        await page.reload();
+        await waitForControlUiGatewayReady(page);
+        await page.locator("details.cron-advanced > summary").click();
+        await timeout.scrollIntoViewIfNeeded();
+        await capture(page, "real-timeout-clear-reloaded", {
+          ...cleared,
+          reloadedTimeout: await timeout.inputValue(),
+          servedDocumentSha256,
+          servedAssets: await Promise.all(servedAssets),
+        });
+        if (captureEnabled) {
+          const formBounds = await page.locator(".cron-page").boundingBox();
+          if (!formBounds) {
+            throw new Error("Automation form has no visible bounds");
+          }
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "real-timeout-form-reloaded.png"),
+            clip: { x: formBounds.x, y: 0, width: formBounds.width, height: 900 },
+          });
+        }
+        expect(cleared.stored.payload).not.toHaveProperty("timeoutSeconds");
+        expect(await timeout.inputValue()).toBe("");
+        for (const value of ["0", "0.25"]) {
+          await timeout.fill(value);
+          const saved = await submitCronForm(evidence, cliJson, "cron.update");
+          expect(saved.stored.payload).toMatchObject({ timeoutSeconds: Number(value) });
+          expect(await timeout.inputValue()).toBe(value);
+        }
+      });
+    });
+  });
+
   it("configured duration precision: saves stagger through the real Gateway and CLI readback", async () => {
     await withGatewayCommands("real-gateway-commands.json", async (cliJson) => {
       const job = await cliJson([
@@ -558,9 +636,9 @@ suite.define(() => {
         const saved = await submitCronForm(evidence, cliJson, "cron.update");
         const savedFields = await readAlertFields(page);
         await capture(page, "real-alert-saved", { ...saved, savedFields });
-        const menu = page.locator(".cron-detail-actions wa-dropdown");
-        await menu.locator('button[slot="trigger"]').click();
-        await menu.locator('wa-dropdown-item[value="clone"]').click();
+        const menu = page.locator(".cron-detail-actions .cron-job-menu");
+        await menu.locator(".cron-job-menu__trigger").click();
+        await menu.locator('[data-value="clone"]').click();
         await page.locator("#cron-name").fill("Cloned partial failure policy");
         const cloned = await submitCronForm(evidence, cliJson, "cron.add");
         const cloneId = cronJobId(cloned.stored);
@@ -722,9 +800,9 @@ suite.define(() => {
             original,
             servedDocumentSha256,
           });
-          const menu = page.locator(".cron-detail-actions wa-dropdown");
-          await menu.locator('button[slot="trigger"]').click();
-          await menu.locator('wa-dropdown-item[value="clone"]').click();
+          const menu = page.locator(".cron-detail-actions .cron-job-menu");
+          await menu.locator(".cron-job-menu__trigger").click();
+          await menu.locator('[data-value="clone"]').click();
           await page.locator('.cron-page[data-panel-mode="create"]').waitFor();
           await expect
             .poll(() => page.locator("#cron-name").inputValue())

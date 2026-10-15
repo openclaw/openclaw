@@ -78,6 +78,7 @@ export async function withModelsAccountsGateway<T>(
   const client = new GatewayClient({
     url: bootstrap.url,
     deviceAuthScope: bootstrap.deviceAuthScope,
+    ...(bootstrap.sshTunnel ? { sshTunnel: bootstrap.sshTunnel } : {}),
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
     edgeAuthHeaders,

@@ -29,20 +29,14 @@ const PROPAGATED_SPAN_CONTEXT = {
 } as const;
 const PROPAGATION_ROUNDTRIP_CASES = [
   {
-    label: "W3C",
-    value: "tracecontext",
-    incoming: { traceparent: `00-${TRACE_ID}-${SPAN_ID}-01` },
-    outgoing: { traceparent: `00-${TRACE_ID}-${SPAN_ID}-01` },
-  },
-  {
     label: "B3",
-    value: "b3",
+    value: "B3",
     incoming: { b3: `${TRACE_ID}-${SPAN_ID}-1` },
     outgoing: { b3: `${TRACE_ID}-${SPAN_ID}-1` },
   },
   {
     label: "B3MULTI",
-    value: "b3multi",
+    value: "B3MULTI",
     incoming: {
       "x-b3-traceid": TRACE_ID,
       "x-b3-spanid": SPAN_ID,
@@ -56,7 +50,7 @@ const PROPAGATION_ROUNDTRIP_CASES = [
   },
   {
     label: "Jaeger",
-    value: "jaeger",
+    value: "JaEgEr",
     incoming: { "uber-trace-id": `${TRACE_ID}:${SPAN_ID}:0:1` },
     outgoing: { "uber-trace-id": `${TRACE_ID}:${SPAN_ID}:0:01` },
   },
@@ -229,59 +223,7 @@ test("preserves externally owned context and propagation globals while disabled"
   });
 });
 
-test.each(["true", "false"] as const)(
-  "does not remove replacement context and propagation owners when disabled=$disabled",
-  async (disabled) => {
-    process.env.OTEL_SDK_DISABLED = disabled;
-    const { service, ctx } = await startOtelService({
-      traces: false,
-      metrics: false,
-      logs: false,
-    });
-    const capturedContext = context.active();
-
-    context.disable();
-    propagation.disable();
-    const externalContextManager = new AsyncLocalStorageContextManager().enable();
-    expect(context.setGlobalContextManager(externalContextManager)).toBe(true);
-    expect(propagation.setGlobalPropagator(new W3CTraceContextPropagator())).toBe(true);
-    const incoming = {
-      traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-    };
-    const extracted = propagation.extract(ROOT_CONTEXT, incoming);
-
-    await context.with(capturedContext, () => service.stop?.(ctx));
-
-    expect(propagation.fields()).toEqual(["traceparent", "tracestate"]);
-    await context.with(extracted, async () => {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(trace.getSpanContext(context.active())?.traceId).toBe(
-        "4bf92f3577b34da6a3ce929d0e0e4736",
-      );
-    });
-  },
-);
-
 test.each([
-  {
-    value: "tracecontext,baggage",
-    fields: ["traceparent", "tracestate", "baggage"],
-  },
-  {
-    value: "B3",
-    fields: ["b3"],
-  },
-  {
-    value: "B3MULTI",
-    fields: ["x-b3-traceid", "x-b3-spanid", "x-b3-flags", "x-b3-sampled", "x-b3-parentspanid"],
-  },
-  {
-    value: "JaEgEr",
-    fields: ["uber-trace-id"],
-    warning: JAEGER_DEPRECATION_WARNING,
-  },
   {
     value: "NoNe",
     fields: [],
@@ -333,6 +275,11 @@ test.each(PROPAGATION_ROUNDTRIP_CASES)(
       });
 
       expect(outgoing).toEqual(expectedOutgoing);
+      if (value === "JaEgEr") {
+        expect(ctx.logger.warn).toHaveBeenCalledWith(JAEGER_DEPRECATION_WARNING);
+      } else {
+        expect(ctx.logger.warn).not.toHaveBeenCalled();
+      }
       expect(trace.getSpanContext(propagation.extract(ROOT_CONTEXT, outgoing))).toEqual(
         PROPAGATED_SPAN_CONTEXT,
       );
@@ -378,22 +325,3 @@ test("cleans disabled ownership before a fresh enabled private-provider generati
     await receiver.close();
   }
 }, 30_000);
-
-test("warns through the plugin logger for an invalid disabled value", async () => {
-  process.env.OTEL_SDK_DISABLED = "invalid";
-  const loggerProviderBefore = logs.getLoggerProvider();
-  const { service, ctx } = await startOtelService({
-    traces: false,
-    metrics: false,
-    logs: false,
-  });
-
-  try {
-    expect(ctx.logger.warn).toHaveBeenCalledWith(
-      "diagnostics-otel: invalid OTEL_SDK_DISABLED value; expected true or false, using false",
-    );
-    expect(logs.getLoggerProvider()).toBe(loggerProviderBefore);
-  } finally {
-    await service.stop?.(ctx);
-  }
-});

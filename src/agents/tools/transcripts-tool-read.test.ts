@@ -1,13 +1,21 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { activeSessions } from "../../transcripts/capture.js";
-import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { createTranscriptCaptureAppends } from "../../transcripts/capture-appends.js";
+import { activeSessions } from "../../transcripts/capture-startup.js";
+import type {
+  TranscriptSessionDescriptor,
+  TranscriptSourceProvider,
+} from "../../transcripts/provider-types.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import {
@@ -33,6 +41,19 @@ const session = {
   source: { providerId: "voice", guildId: "team" },
   metadata: { agentId: "capture-agent" },
 };
+function registerActiveCapture(descriptor: TranscriptSessionDescriptor = session) {
+  activeSessions.set(descriptor.sessionId, {
+    appends: createTranscriptCaptureAppends(() => {}),
+    session: descriptor,
+    providerId: descriptor.source.providerId,
+    stopProvider: async () => {
+      throw new Error("Reading notes must not stop capture");
+    },
+    releaseProvider: async () => {},
+    phase: "active",
+  });
+}
+
 function tool(channel = false) {
   return createTranscriptsTool({
     stateDir,
@@ -62,77 +83,101 @@ beforeEach(async () => {
   getProvider.mockReset();
   await store.writeSession(session);
 });
-afterEach(() => {
+afterEach(async () => {
   activeSessions.clear();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
 describe("transcripts read actions", () => {
-  it.each(["active", "stopped"] as const)(
-    "rejects notes rewritten while %s source authorization is pending",
-    async (state) => {
-      const descriptor = {
-        ...session,
-        ...(state === "stopped" ? { stoppedAt: "2026-08-02T15:00:00.000Z" } : {}),
-      };
-      await store.writeSession(descriptor);
-      await store.writeSummary(
-        summarizeTranscripts({ session: descriptor, utterances: [{ text: "Authorized notes" }] }),
-        descriptor,
-      );
-      if (state === "active") {
-        activeSessions.set(session.sessionId, {
-          session: descriptor,
-          providerId: "voice",
-          provider: {},
-          phase: "active",
-        });
-      }
-      const entered = createDeferred();
-      const release = createDeferred();
-      const authorize = vi.fn<NonNullable<TranscriptSourceProvider["accessControl"]>["authorize"]>(
-        async ({ source }) => {
-          if (source.guildId !== "team") {
-            return { ok: false, error: "denied" };
-          }
-          entered.resolve();
-          await release.promise;
-          return { ok: true, value: undefined };
-        },
-      );
-      getProvider.mockReturnValue({
-        id: "voice",
-        accessControl: { channelId: "discord", authorize },
+  it("retains write-time chronology when a skill changes the warm worker timezone", async () => {
+    const early = { ...session, sessionId: "early", startedAt: "2026-08-20T06:00:00Z" };
+    const late = { ...session, sessionId: "late", startedAt: "2026-08-20T09:00:00Z" };
+    const expected = [{ sessionId: "late" }, { sessionId: "early" }];
+    let releaseSkill = () => {};
+    try {
+      await store.writeSession(early);
+      await store.writeSession(late);
+      expect((await run({ action: "list", limit: 2 })).details).toMatchObject({
+        sessions: expected,
       });
-      const params = { action: "show", selector: transcriptSessionSelector(descriptor) };
-      const reading = run(params, true);
-      try {
-        await Promise.race([entered.promise, reading]);
-        expect(authorize).toHaveBeenCalledOnce();
-        const rewritten = { ...descriptor, source: { providerId: "voice", guildId: "other" } };
-        await store.writeSession(rewritten);
-        await store.writeSummary(
-          summarizeTranscripts({ session: rewritten, utterances: [{ text: "Other guild notes" }] }),
-          rewritten,
-        );
-        release.resolve();
-        const shown = await reading;
-        expect(shown.details).toMatchObject({
+      releaseSkill = applySkillEnvOverridesFromSnapshot({
+        snapshot: { prompt: "", skills: [{ name: "chronology" }] },
+        config: { skills: { entries: { chronology: { env: { TZ: "Pacific/Honolulu" } } } } },
+      });
+      expect(process.env.TZ).toBe("Pacific/Honolulu");
+      expect((await run({ action: "list", limit: 2 })).details).toMatchObject({
+        sessions: expected,
+      });
+      const pending = store.listReadEntries({ limit: 2 });
+      releaseSkill();
+      releaseSkill = () => {};
+      expect(
+        (await pending).entries.map(({ session: descriptor }) => ({
           sessionId: descriptor.sessionId,
-          selector: params.selector,
-          skipped: true,
-          retryable: true,
-          text: expect.stringContaining("Retry show"),
-        });
-        expect(JSON.stringify(shown)).not.toContain("Other guild notes");
-        await expect(run(params, true)).rejects.toThrow("session not found");
-        expect(await store.readSession(params.selector)).toEqual(rewritten);
-      } finally {
-        release.resolve();
-        await reading.catch(() => undefined);
-      }
-    },
-  );
+        })),
+      ).toEqual(expected);
+      expect((await run({ action: "list", limit: 2 })).details).toMatchObject({
+        sessions: expected,
+      });
+    } finally {
+      releaseSkill();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("rejects notes rewritten while active source authorization is pending", async () => {
+    const descriptor = session;
+    await store.writeSession(descriptor);
+    await store.writeSummary(
+      summarizeTranscripts({ session: descriptor, utterances: [{ text: "Authorized notes" }] }),
+      descriptor,
+    );
+    registerActiveCapture(descriptor);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const authorize = vi.fn<NonNullable<TranscriptSourceProvider["accessControl"]>["authorize"]>(
+      async ({ source }) => {
+        if (source.guildId !== "team") {
+          return { ok: false, error: "denied" };
+        }
+        entered.resolve();
+        await release.promise;
+        return { ok: true, value: undefined };
+      },
+    );
+    getProvider.mockReturnValue({
+      id: "voice",
+      accessControl: { channelId: "discord", authorize },
+    });
+    const params = { action: "show", selector: transcriptSessionSelector(descriptor) };
+    const reading = run(params, true);
+    try {
+      await Promise.race([entered.promise, reading]);
+      expect(authorize).toHaveBeenCalledOnce();
+      const rewritten = { ...descriptor, source: { providerId: "voice", guildId: "other" } };
+      await store.writeSession(rewritten);
+      await store.writeSummary(
+        summarizeTranscripts({ session: rewritten, utterances: [{ text: "Other guild notes" }] }),
+        rewritten,
+      );
+      release.resolve();
+      const shown = await reading;
+      expect(shown.details).toMatchObject({
+        sessionId: descriptor.sessionId,
+        selector: params.selector,
+        skipped: true,
+        retryable: true,
+        text: expect.stringContaining("Retry show"),
+      });
+      expect(JSON.stringify(shown)).not.toContain("Other guild notes");
+      await expect(run(params, true)).rejects.toThrow("session not found");
+      expect(await store.readSession(params.selector)).toEqual(rewritten);
+    } finally {
+      release.resolve();
+      await reading.catch(() => undefined);
+    }
+  });
 
   it("reads across agent ownership without widening mutation authority", async () => {
     await store.appendUtteranceForSession(session, {
@@ -143,15 +188,23 @@ describe("transcripts read actions", () => {
       summarizeTranscripts({ session, utterances: [{ text: "Ship the design" }] }),
       session,
     );
-    const listed = await run({ action: "list" });
-    expect(listed.details).toMatchObject({
-      sessions: [{ sessionId: "meeting", participants: ["Ada"], utteranceCount: 1 }],
-    });
-    expect(listed.details).not.toHaveProperty("sessions.0.overview");
-    const shown = await run({ action: "show", selector: transcriptSessionSelector(session) });
-    expect(shown.content).toEqual([
-      { type: "text", text: expect.stringContaining("Ship the design") },
-    ]);
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    const sql = observeMainThreadSql();
+    try {
+      const listed = await run({ action: "list" });
+      expect(listed.details).toMatchObject({
+        sessions: [{ sessionId: "meeting", participants: ["Ada"], utteranceCount: 1 }],
+      });
+      expect(listed.details).not.toHaveProperty("sessions.0.overview");
+      const shown = await run({ action: "show", selector: transcriptSessionSelector(session) });
+      expect(shown.content).toEqual([
+        { type: "text", text: expect.stringContaining("Ship the design") },
+      ]);
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
     await expect(
       run({ action: "stop", selector: transcriptSessionSelector(session) }),
     ).rejects.toThrow("not found");
@@ -200,12 +253,7 @@ describe("transcripts read actions", () => {
         authorize,
       },
     });
-    activeSessions.set(session.sessionId, {
-      session,
-      providerId: "voice",
-      provider: {},
-      phase: "active",
-    });
+    registerActiveCapture();
     await store.writeSession({ ...session, source: { providerId: "voice", guildId: "other" } });
     await store.writeSummary(
       summarizeTranscripts({ session, utterances: [{ text: "Other guild notes" }] }),
@@ -259,12 +307,7 @@ describe("transcripts read actions", () => {
   });
 
   it("bounds model-facing notes and reports active captures without summaries", async () => {
-    activeSessions.set(session.sessionId, {
-      session,
-      providerId: "voice",
-      provider: {},
-      phase: "active",
-    });
+    registerActiveCapture();
     await expect(
       readThroughCatalog({ action: "show", sessionId: "meeting" }),
     ).resolves.toMatchObject({
@@ -277,9 +320,7 @@ describe("transcripts read actions", () => {
     );
     const shown = await run({ action: "show", sessionId: "meeting" });
     const text = shown.content[0];
-    if (!text || text.type !== "text") {
-      throw new Error("missing notes text");
-    }
+    assert(text?.type === "text", "missing notes text");
     expect(text.text.length).toBeLessThanOrEqual(12000);
     expect(text.text).toContain(
       `[truncated; run openclaw transcripts show ${transcriptSessionSelector(session)} for the full notes]`,
@@ -301,10 +342,9 @@ describe("transcripts read actions", () => {
     expect(JSON.stringify(listed.content).length).toBeLessThan(4200);
   });
 
-  it.each([{}, { selector: "one", sessionId: "two" }])(
-    "requires exactly one show selector %j",
-    async (params) => {
-      await expect(run({ action: "show", ...params })).rejects.toThrow("exactly one");
-    },
-  );
+  it("requires exactly one show selector", async () => {
+    await expect(run({ action: "show", selector: "one", sessionId: "two" })).rejects.toThrow(
+      "exactly one",
+    );
+  });
 });

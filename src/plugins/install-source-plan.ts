@@ -1,4 +1,3 @@
-// Plugin install planning helpers for bundled, official external, and npm fallback paths.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,6 +9,7 @@ import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { looksLikeLocalInstallSpec } from "../infra/install-spec.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { findBundledPluginSource, type BundledPluginSource } from "./bundled-sources.js";
+import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
 import { parseGitPluginSpec } from "./git-install.js";
 import { resolveDefaultNpmSpec } from "./install-channel-specs.js";
 import {
@@ -101,7 +101,7 @@ export function resolvePluginInstallSourcePlan(params: {
   if (fileSpec && !fileSpec.ok) {
     return fileSpec;
   }
-  const normalized = fileSpec?.ok ? fileSpec.path : params.raw;
+  const normalized = fileSpec?.path ?? params.raw;
   const resolved = resolveUserPath(normalized);
   if (fs.existsSync(resolved)) {
     const recordSource = resolveArchiveKind(resolved) ? "archive" : "path";
@@ -187,6 +187,7 @@ export function resolvePluginInstallSourcePlan(params: {
   const npmSpec = explicitNpm ?? params.raw;
   const bundledPlan = resolveBundledInstallPlanBeforeNpm({
     rawSpec: params.raw,
+    pin: params.pin,
     findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
   });
   if (bundledPlan) {
@@ -252,10 +253,10 @@ export function resolveBundledInstallPlanForCatalogEntry(params: {
     kind: "pluginId",
     value: pluginId,
   });
-  if (bundledById?.pluginId !== pluginId) {
-    return null;
-  }
-  if (bundledById.npmSpec && bundledById.npmSpec !== npmSpec) {
+  if (
+    bundledById?.pluginId !== pluginId ||
+    (bundledById.npmSpec && bundledById.npmSpec !== npmSpec)
+  ) {
     return null;
   }
 
@@ -305,12 +306,12 @@ function resolveOfficialEntryByClawHubPackage(
   entries: readonly OfficialExternalPluginCatalogEntry[],
   packageName: string,
 ): OfficialExternalPluginCatalogEntry | undefined {
-  return entries.find((entry) => {
-    return resolveOfficialExternalPluginInstallSources(entry).some(
+  return entries.find((entry) =>
+    resolveOfficialExternalPluginInstallSources(entry).some(
       (source) =>
         source.source === "clawhub" && parseClawHubPluginSpec(source.spec)?.name === packageName,
-    );
-  });
+    ),
+  );
 }
 
 /** Public requests carry intent and constraints; catalog provenance is resolved by this owner. */
@@ -336,6 +337,16 @@ export function resolveManagedPluginInstallRequest(
           `official plugin catalog entry is not installable: ${request.pluginId}`,
         );
       }
+      const bundled =
+        !request.version && !request.pin
+          ? findBundledPluginSource({ lookup: { kind: "pluginId", value: pluginId } })
+          : undefined;
+      if (
+        bundled &&
+        isBundledPluginInsideDevSourceRoot({ rootDir: bundled.localPath, env: process.env })
+      ) {
+        return { source: "bundled", rawSpec: install.npmSpec ?? pluginId, bundledSource: bundled };
+      }
       const installSources = resolveOfficialInstallSources(entry, request.version);
       const primary = installSources[0];
       if (!primary) {
@@ -347,7 +358,6 @@ export function resolveManagedPluginInstallRequest(
         source: "official",
         spec: primary.spec,
         installSources,
-        pluginId,
         expectedPluginId: resolveDeclaredOfficialPluginId(entry),
         mode,
         ...(request.pin ? { pin: true } : {}),
@@ -372,8 +382,7 @@ export function resolveManagedPluginInstallRequest(
       const hostedClawHub = parseClawHubPluginSpec(hostedSource?.spec ?? "");
       const requestMatchesHostedCandidate =
         !request.version || request.version === hostedClawHub?.version;
-      const version =
-        request.version ?? (requestMatchesHostedCandidate ? hostedClawHub?.version : undefined);
+      const version = request.version ?? hostedClawHub?.version;
       const expectedIntegrity = requestMatchesHostedCandidate
         ? hostedSource?.expectedIntegrity
         : undefined;
@@ -403,6 +412,9 @@ export function resolveManagedPluginInstallRequest(
       return {
         source: "clawhub",
         spec: `clawhub:${packageName}${version ? `@${version}` : ""}`,
+        ...(!request.version && !request.expectedIntegrity
+          ? { recordSpec: `clawhub:${packageName}` }
+          : {}),
         mode,
         ...(official ? { trustedSourceLinkedOfficialInstall: true } : {}),
         expectedPluginId: expectedPluginId ?? request.expectedPluginId,

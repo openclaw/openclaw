@@ -395,17 +395,6 @@ describe("LINE public webhook question Gateway boundary", () => {
       );
       expect(await queue.listFailed?.()).toEqual([]);
       const calls = boundary.callGateway.mock.calls.map(([request]) => request);
-      console.info(
-        "LINE_QUESTION_GATEWAY_PROOF",
-        JSON.stringify({
-          scenario: testCase.name,
-          trace: boundary.trace,
-          writes: calls.filter((request) => request.method === "question.resolve").length,
-          replies: providerCalls.filter((request) => request.operation === "reply").length,
-          pushes: providerCalls.filter((request) => request.operation === "push").length,
-          pairings: boundary.upsertPairing.mock.calls.length,
-        }),
-      );
       expect(unexpectedProviderIo).toEqual([]);
       expect(calls.map((request) => request.method)).toEqual(
         testCase.paired

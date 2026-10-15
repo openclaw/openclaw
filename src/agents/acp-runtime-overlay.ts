@@ -1,5 +1,4 @@
-/** Applies ACP session-key metadata overrides to agent runtime classification. */
-import { isAcpSessionKey } from "../routing/session-key.js";
+/** Applies persisted ACP ownership to agent runtime classification. */
 
 /**
  * Leaf type for agent runtime classification. Defined here so that
@@ -12,31 +11,13 @@ export type AgentRuntimeMetadata = {
   source: "implicit" | "model" | "provider" | "session" | "session-key";
 };
 
-/**
- * When a session key and persisted session metadata identify an ACP
- * control-plane session, override the resolved runtime metadata to report the
- * ACP runtime id with a "session-key" source — regardless of what the
- * agent-config policy resolved to.
- *
- * Callers that already have model/provider context (resolveModelAgentRuntimeMetadata)
- * still benefit here because the model-runtime policy chain does not inspect session
- * keys for the ACP indicator.
- *
- * Key shape alone is not sufficient: ACP bridge sessions may use ACP-shaped
- * keys without persisted SessionAcpMeta and still run the configured model.
- *
- * When `acpBackend` is provided and non-empty, it is used as the runtime id so that
- * sessions backed by a configured non-default ACP backend (e.g. a custom registered
- * backend) are reported faithfully instead of always being labelled "acpx".
- * Falls back to "acpx" when no backend is known.
- */
+/** Persisted ACP ownership is authoritative even for ordinary session keys. */
 export function applyAcpRuntimeOverlay(
   meta: AgentRuntimeMetadata,
-  sessionKey: string | undefined | null,
   acpRuntime: boolean | undefined,
   acpBackend?: string,
 ): AgentRuntimeMetadata {
-  if (acpRuntime === true && isAcpSessionKey(sessionKey)) {
+  if (acpRuntime === true) {
     const id = acpBackend && acpBackend.length > 0 ? acpBackend : "acpx";
     return { id, source: "session-key" };
   }

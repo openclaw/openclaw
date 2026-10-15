@@ -1,49 +1,57 @@
-/**
- * Centralized date/time formatting utilities.
- *
- * All formatters are timezone-aware, using Intl.DateTimeFormat.
- * Consolidates duplicated formatUtcTimestamp / formatZonedTimestamp / resolveExplicitTimezone
- * that previously lived in envelope.ts and session-updates.ts.
- */
+type TimeZoneFormatter = {
+  timeZone: string;
+  dateTimeFormatConstructor: typeof Intl.DateTimeFormat;
+  formatter: Intl.DateTimeFormat;
+};
+
+function createTimeZoneFormatterCache(
+  locale: string,
+  options: Intl.DateTimeFormatOptions,
+  validate?: (formatter: Intl.DateTimeFormat) => void,
+): (timeZone: string) => Intl.DateTimeFormat {
+  let cached: TimeZoneFormatter | undefined;
+  return (timeZone) => {
+    const DateTimeFormat = Intl.DateTimeFormat;
+    const previous = cached;
+    // Default zones capture host state; only the latest explicit zone is retained.
+    const formatter =
+      typeof timeZone === "string" &&
+      previous?.timeZone === timeZone &&
+      previous.dateTimeFormatConstructor === DateTimeFormat
+        ? previous.formatter
+        : new DateTimeFormat(locale, { timeZone, ...options });
+    validate?.(formatter);
+    if (typeof timeZone === "string" && formatter !== previous?.formatter) {
+      cached = { timeZone, dateTimeFormatConstructor: DateTimeFormat, formatter };
+    }
+    return formatter;
+  };
+}
+
+const timezoneValidationFormatter = createTimeZoneFormatterCache("en-US", {}, (formatter) => {
+  formatter.format(new Date());
+});
+const timeZoneDayKeyFormatter = createTimeZoneFormatterCache("en-US-u-ca-iso8601-nu-latn", {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
 /**
  * Validate an IANA timezone string. Returns the string if valid, undefined otherwise.
  */
 export function resolveTimezone(value: string): string | undefined {
   try {
-    new Intl.DateTimeFormat("en-US", { timeZone: value }).format(new Date());
+    timezoneValidationFormatter(value);
     return value;
   } catch {
     return undefined;
   }
 }
 
-let timeZoneDayKeyFormatter:
-  | {
-      timeZone: string;
-      dateTimeFormatConstructor: typeof Intl.DateTimeFormat;
-      formatter: Intl.DateTimeFormat;
-    }
-  | undefined;
-
 /** Build a stable YYYY-MM-DD formatter for instants in one IANA timezone. */
 export function createTimeZoneDayKeyFormatter(timeZone: string): (date: Date) => string {
-  const DateTimeFormat = Intl.DateTimeFormat;
-  const cached = timeZoneDayKeyFormatter;
-  // Default zones capture host state; only the latest explicit zone is retained.
-  const formatter =
-    typeof timeZone === "string" &&
-    cached?.timeZone === timeZone &&
-    cached.dateTimeFormatConstructor === DateTimeFormat
-      ? cached.formatter
-      : new DateTimeFormat("en-US-u-ca-iso8601-nu-latn", {
-          timeZone,
-          year: "numeric",
-          month: "2-digit",
-          day: "2-digit",
-        });
-  if (typeof timeZone === "string" && formatter !== cached?.formatter) {
-    timeZoneDayKeyFormatter = { timeZone, dateTimeFormatConstructor: DateTimeFormat, formatter };
-  }
+  const formatter = timeZoneDayKeyFormatter(timeZone);
   return (date) => {
     const parts = formatter.formatToParts(date);
     const pick = (type: "year" | "month" | "day") =>
@@ -65,9 +73,6 @@ export function resolveTimeZoneDayStartMs(dayKey: string, timeZone: string): num
     return undefined;
   }
   const naiveUtcMs = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  if (!Number.isFinite(naiveUtcMs)) {
-    return undefined;
-  }
 
   const formatDayKey = createTimeZoneDayKeyFormatter(timeZone);
   const searchWindowMs = 2 * 24 * 60 * 60 * 1000;

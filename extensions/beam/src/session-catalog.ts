@@ -20,10 +20,6 @@ function cursorOffset(value: string | undefined): number {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
 }
 
-function searchableText(session: BeamStoredSession): string {
-  return `${session.title}\n${session.source}`.toLowerCase();
-}
-
 type TranscriptCursor = { revision: string; end: number };
 
 function transcriptRevision(session: BeamStoredSession): string {
@@ -70,7 +66,7 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
             !search ||
             (shareId
               ? session.beamId.startsWith(shareId)
-              : searchableText(session).includes(search)),
+              : `${session.title}\n${session.source}`.toLowerCase().includes(search)),
         )
         .toSorted(
           (left, right) =>

@@ -1,5 +1,7 @@
 // Tests subagent agent-list command output and filtering.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureSubagentListReadContext } from "../../../agents/subagents/registry/subagent-list.js";
+import { buildSubagentRunReadIndexFromRuns } from "../../../agents/subagents/registry/subagent-registry-queries.js";
 
 const THREAD_CHANNEL = "thread-chat";
 const ROOM_CHANNEL = "room-chat";
@@ -22,10 +24,10 @@ const { listBySessionMock, getChannelPluginMock, normalizeChannelIdMock } = vi.h
   normalizeChannelIdMock: vi.fn((channel: string) => channel),
 }));
 
-vi.mock("../../../infra/outbound/session-binding-service.js", () => ({
-  getSessionBindingService: () => ({
-    listBySession: listBySessionMock,
-  }),
+vi.mock("../../../infra/outbound/session-binding-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/outbound/session-binding-service.js")>()),
+  listSessionBindingsBySessionsAsync: async (keys: string[]) =>
+    new Map([...new Set(keys)].map((key) => [key, listBySessionMock(key)])),
 }));
 
 vi.mock("../../../channels/plugins/index.js", () => ({
@@ -69,7 +71,7 @@ function subagentRun(params: {
     requesterSessionKey: MAIN_SESSION_KEY,
     requesterDisplayKey: "main",
     task: params.task,
-    cleanup: "keep",
+    cleanup: "keep" as const,
     createdAt: Date.now() - startedAgoMs,
     execution:
       params.endedAgoMs === undefined
@@ -84,6 +86,7 @@ function subagentRun(params: {
 }
 
 function agentsActionInput(channel: string, runs: ReturnType<typeof subagentRun>[]) {
+  const snapshot = new Map(runs.map((run) => [run.runId, run]));
   return {
     params: {
       ctx: {
@@ -95,7 +98,14 @@ function agentsActionInput(channel: string, runs: ReturnType<typeof subagentRun>
       },
     },
     requesterKey: MAIN_SESSION_KEY,
-    runs,
+    readContext: {
+      list: captureSubagentListReadContext(
+        runs,
+        buildSubagentRunReadIndexFromRuns({ runs: snapshot }),
+        snapshot,
+        30,
+      ),
+    },
     restTokens: [],
   } as never;
 }
@@ -111,7 +121,7 @@ describe("handleSubagentsAgentsAction", () => {
     normalizeChannelIdMock.mockClear();
   });
 
-  it("dedupes stale bound rows for the same child session", () => {
+  it("dedupes stale bound rows for the same child session", async () => {
     const childSessionKey = "agent:main:subagent:worker";
     listBySessionMock.mockImplementation((sessionKey: string) =>
       sessionKey === childSessionKey
@@ -126,7 +136,7 @@ describe("handleSubagentsAgentsAction", () => {
         : [],
     );
 
-    const result = handleSubagentsAgentsAction(
+    const result = await handleSubagentsAgentsAction(
       agentsActionInput(THREAD_CHANNEL, [
         subagentRun({
           runId: "run-current",
@@ -147,7 +157,7 @@ describe("handleSubagentsAgentsAction", () => {
     expect(result.reply?.text).not.toContain("stale worker label");
   });
 
-  it("keeps /agents numbering aligned with target resolution when hidden recent rows exist", () => {
+  it("keeps /agents numbering aligned with target resolution when hidden recent rows exist", async () => {
     const hiddenSessionKey = "agent:main:subagent:hidden-recent";
     const visibleSessionKey = "agent:main:subagent:visible-bound";
     listBySessionMock.mockImplementation((sessionKey: string) =>
@@ -163,7 +173,7 @@ describe("handleSubagentsAgentsAction", () => {
         : [],
     );
 
-    const result = handleSubagentsAgentsAction(
+    const result = await handleSubagentsAgentsAction(
       agentsActionInput(THREAD_CHANNEL, [
         subagentRun({
           runId: "run-stale-unended",
@@ -193,10 +203,10 @@ describe("handleSubagentsAgentsAction", () => {
     expect(result.reply?.text).not.toContain("stale unended worker");
   });
 
-  it("shows room-channel runs as unbound when the plugin supports conversation bindings", () => {
+  it("shows room-channel runs as unbound when the plugin supports conversation bindings", async () => {
     listBySessionMock.mockReturnValue([]);
 
-    const result = handleSubagentsAgentsAction(
+    const result = await handleSubagentsAgentsAction(
       agentsActionInput(ROOM_CHANNEL, [
         subagentRun({
           runId: "run-room-worker",
@@ -210,7 +220,7 @@ describe("handleSubagentsAgentsAction", () => {
     expect(result.reply?.text).not.toContain("bindings unavailable");
   });
 
-  it("formats bindings generically", () => {
+  it("formats bindings generically", async () => {
     const childSessionKey = "agent:main:subagent:room-bound";
     listBySessionMock.mockImplementation((sessionKey: string) =>
       sessionKey === childSessionKey
@@ -225,7 +235,7 @@ describe("handleSubagentsAgentsAction", () => {
         : [],
     );
 
-    const result = handleSubagentsAgentsAction(
+    const result = await handleSubagentsAgentsAction(
       agentsActionInput(ROOM_CHANNEL, [
         subagentRun({
           runId: "run-room-bound",
@@ -238,11 +248,11 @@ describe("handleSubagentsAgentsAction", () => {
     expect(result.reply?.text).toContain("room bound worker (binding:room-thread-1)");
   });
 
-  it("shows bindings unavailable for channels without conversation binding support", () => {
+  it("shows bindings unavailable for channels without conversation binding support", async () => {
     getChannelPluginMock.mockReturnValueOnce(null);
     listBySessionMock.mockReturnValue([]);
 
-    const result = handleSubagentsAgentsAction(
+    const result = await handleSubagentsAgentsAction(
       agentsActionInput("irc", [
         subagentRun({
           runId: "run-irc-worker",
