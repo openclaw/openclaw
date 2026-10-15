@@ -183,7 +183,7 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
               humanReplies.slice(firstReply).filter((reply) => reply.sender === "bob"),
             ).toEqual([]);
           } else {
-            expect(bobResult.error).toBeUndefined();
+            expect(bobResult.error, id).toBeUndefined();
             expect(bobResult.result?.deferredToActiveRun).toBe("followup");
             expect(humanReplies.slice(firstReply)).toContainEqual({
               sender: "bob",
