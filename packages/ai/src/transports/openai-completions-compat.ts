@@ -5,7 +5,12 @@
  * behavior from endpoint attribution without scattering provider-specific flags.
  */
 import type { Model, OpenAICompletionsCompat } from "@openclaw/llm-core";
+import { normalizeOpenRouterModelFamilyId } from "@openclaw/model-catalog-core/provider-model-id-normalize";
 import type { AiProviderRequestCapabilities, AiProviderRequestPolicyInput } from "../host.js";
+import {
+  resolveOpenAIReasoningEffortMapping,
+  supportsOpenAIReasoningEffort,
+} from "../providers/openai-reasoning-effort.js";
 import { isKnownOpenAIJsonSchemaModelId } from "../providers/openai-response-format.js";
 import { resolveProviderRequestCapabilities as resolveModelProviderRequestCapabilities } from "./host-policy.js";
 
@@ -58,6 +63,7 @@ export type ResolvedOpenAICompletionsCompat = Omit<
     requiresTypedUnionBranches: boolean;
     configuredSupportsLongCacheRetention?: boolean;
     reasoningEffortForOff: "none" | null;
+    thinkingOffControlUndeclared: boolean;
   };
 
 function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) {
@@ -188,6 +194,7 @@ function resolveOpenAICompletionsCompatDefaults(
   const isMistral = knownProviderFamily === "mistral" || endpointClass === "mistral-public";
   const usesMaxTokens =
     endpointClass === "chutes-native" ||
+    endpointClass === "novita-native" ||
     isMistral ||
     isMoonshot ||
     isCloudflareAiGateway ||
@@ -231,7 +238,7 @@ function resolveOpenAICompletionsCompatDefaults(
     requiresNonEmptyUserOrAssistantMessage: isModelStudioLike,
     cacheControlFormat:
       (isModelStudioLike && endpointClass !== "custom") ||
-      (modelId?.toLowerCase().startsWith("anthropic/") === true &&
+      (normalizeOpenRouterModelFamilyId(modelId)?.startsWith("anthropic/") === true &&
         (endpointClass === "openrouter" ||
           (isDefaultRoute && provider === "openrouter") ||
           provider === "deepinfra"))
@@ -308,6 +315,13 @@ export function resolveOpenAICompletionsCompat(
   const { defaults, capabilities } = detectOpenAICompletionsCompat(model, resolveCapabilities);
   const configured = model.compat;
   const thinkingFormat = configured?.thinkingFormat ?? defaults.thinkingFormat;
+  const thinkingOffControlUndeclared =
+    capabilities.usesExplicitProxyLikeEndpoint &&
+    thinkingFormat === "zai" &&
+    configured?.thinkingFormat === undefined &&
+    !supportsOpenAIReasoningEffort({ compat: configured }, "none") &&
+    !supportsOpenAIReasoningEffort({ compat: configured }, "off") &&
+    resolveOpenAIReasoningEffortMapping("off", configured?.reasoningEffortMap) === undefined;
   return {
     supportsStore: configured?.supportsStore ?? defaults.supportsStore,
     supportsDeveloperRole: configured?.supportsDeveloperRole ?? defaults.supportsDeveloperRole,
@@ -315,13 +329,15 @@ export function resolveOpenAICompletionsCompat(
       configured?.supportsReasoningEffort ?? defaults.supportsReasoningEffort,
     supportedReasoningEfforts: configured?.supportedReasoningEfforts,
     reasoningEffortMap: configured?.reasoningEffortMap,
-    // Custom servers often accept only enabled efforts; declared off contracts still win.
+    // Custom OpenAI routes need a declared off effort; inferred Z.AI may be always-thinking.
+    // Explicit Z.AI formats and effort mappings still own their off contract.
     reasoningEffortForOff:
       capabilities.usesExplicitProxyLikeEndpoint &&
-      thinkingFormat === "openai" &&
+      (thinkingFormat === "openai" || thinkingOffControlUndeclared) &&
       !configured?.supportedReasoningEfforts?.includes("none")
         ? null
         : "none",
+    thinkingOffControlUndeclared,
     supportsUsageInStreaming:
       configured?.supportsUsageInStreaming ?? defaults.supportsUsageInStreaming,
     maxTokensField: configured?.maxTokensField ?? defaults.maxTokensField,

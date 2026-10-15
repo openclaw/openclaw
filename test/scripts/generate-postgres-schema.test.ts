@@ -151,7 +151,7 @@ describe("PostgreSQL schema generation", () => {
     const { files, report } = await generatePostgresSchemas(root);
     for (const file of [
       "state.postgres.sql",
-      "state-v22-v23.postgres.sql",
+      "state-v23-v24.postgres.sql",
       "agent.postgres.sql",
       ...report.fragments.map((item) => item.file),
     ]) {
@@ -178,7 +178,7 @@ describe("PostgreSQL schema generation", () => {
         "manifest.json",
         "portability-report.md",
         "state.postgres.sql",
-        "state-v22-v23.postgres.sql",
+        "state-v23-v24.postgres.sql",
         "runtime.ts",
       ].toSorted(),
     );

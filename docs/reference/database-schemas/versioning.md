@@ -48,10 +48,10 @@ cannot parse its catalog. A known legacy index defect must not replace that
 refusal with advice to repair the database using the older build. Doctor checks
 compatibility before stopping the Gateway service.
 
-Shared-state [schema 23](/reference/database-schemas/state-schema-history#state-schema-23)
+Shared-state [schema 24](/reference/database-schemas/state-schema-history#state-schema-24)
 replaces eleven retained task indexes with a runtime/run lookup and two ordered
 Cron history indexes. Rows and history ordering are unchanged. Builds supporting
-only schema 22 or earlier refuse it; binary rollback requires the verified
+only schema 23 or earlier refuse it; binary rollback requires the verified
 pre-upgrade backup and its matching build.
 
 Target-release checks distinguish the target's schema support from the running
@@ -657,6 +657,25 @@ Removing a skill excludes it from future selections; existing sessions retain th
 Older same-schema readers ignore the new tables but cannot provide managed-library selection or authoring. Keep the tables and bundle directory intact when changing builds; do not lower schema markers or delete revisions to disable the feature. The accepted storage and ownership decision is recorded in [the profile-owned skills design issue](https://github.com/openclaw/openclaw/issues/133602).
 
 ## Declared migration backup scopes
+
+Recent version migrations are separate from same-version repair. Agent schema
+25 and later advances leave unrelated additive indexes to the writable repair
+owner. Missing startup columns required by current session readers are still
+installed before an upgraded store is exposed; their tables belong in the
+complete migration scope. Shared-state schema 20 and 21 advances run only their pending version
+steps and install indexes for those tables when the source needs no unrelated
+schema repair. Older sources and sources requiring repair retain the historical
+runner and full backup.
+
+An agent version advance from the canonical media schema does not repeat media
+row or archive repair. The Doctor migration prelude also defers session-entry
+and transcript-directive repair for those targets until a same-version run.
+Explicit same-version Doctor repair records successful
+media-row and ACP replay accounting passes transactionally; later runs reuse
+those completion facts. Restoring missing ACP accounting columns forces their
+backfill again. Current writers maintain canonical values; unsupported direct
+SQL writes do not invalidate these historical repair markers. Planner maintenance
+uses bounded SQLite optimization, which analyzes only missing or stale statistics.
 
 Startup migrations default to a verified full-file backup. A migration owner may
 register the tables it rewrites in `src/state/schema-migration-backup-tables.ts`,

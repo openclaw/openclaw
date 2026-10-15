@@ -61,6 +61,30 @@ describe("createChatRunState", () => {
     });
   });
 
+  it("stops oversized container-only progress capture before reading later fields", () => {
+    const state = createChatRunState();
+    let laterReads = 0;
+    const metadata = { phase: "result", name: "read", toolCallId: "done" };
+    state.recordProgressEvent("run-1", {
+      runId: "run-1",
+      seq: 1,
+      stream: "tool",
+      ts: 1,
+      data: {
+        ...metadata,
+        result: {
+          rows: Array.from({ length: 32_768 }, () => ({})),
+          get later() {
+            laterReads += 1;
+            return "unused";
+          },
+        },
+      },
+    });
+    expect(laterReads).toBe(0);
+    expect(state.runs.get("run-1")?.progressSnapshot?.events[0]?.data).toEqual(metadata);
+  });
+
   it.each([
     { finalized: true, keepState: false },
     { finalized: true, keepState: true },
@@ -227,6 +251,38 @@ describe("createChatRunState", () => {
       ]);
     },
   );
+
+  it.each(["full", "summary"] as const)("retains answer finalization for %s reconnects", (mode) => {
+    const state = createChatRunState();
+    state.recordProgressEvent(
+      "run",
+      {
+        runId: "run",
+        seq: 1,
+        ts: 1,
+        stream: "lifecycle",
+        data: { phase: "finishing" },
+      },
+      mode,
+    );
+    expect(state.runs.get("run")?.progressSnapshot?.events).toMatchObject([
+      { stream: "lifecycle", data: { phase: "finishing" } },
+    ]);
+    state.recordProgressEvent(
+      "run",
+      {
+        runId: "run",
+        seq: 2,
+        ts: 2,
+        stream: "assistant",
+        data: { text: "More output" },
+      },
+      mode,
+    );
+    expect(state.runs.get("run")?.progressSnapshot?.events).toMatchObject([
+      { seq: 2, stream: "assistant" },
+    ]);
+  });
 
   it.each(["full", "summary"] as const)(
     "replays the current fallback transition until resumed %s activity",

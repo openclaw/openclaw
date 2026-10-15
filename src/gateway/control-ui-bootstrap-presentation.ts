@@ -10,6 +10,8 @@ export function resolveControlUiBootstrapPresentation(config: OpenClawConfig | u
     seamColor: config?.ui?.seamColor,
     environment: config?.gateway?.controlUi?.environment,
     chatBubblesEnabled: config?.gateway?.controlUi?.experimental?.chatBubbles === true,
+    composerPredictionsEnabled:
+      config?.gateway?.controlUi?.experimental?.composerPredictions?.enabled === true,
     communityInvite: config?.gateway?.controlUi?.communityInvite !== false,
     newSessionModelDefaults: config?.gateway?.controlUi?.newSessionModelDefaults ?? "last-used",
     uploadsEnabled: config?.gateway?.uploads?.enabled !== false,

@@ -54,6 +54,7 @@ const targets =
         "src/infra/postgres-sync",
         "src/infra/database-engine",
         "src/state/openclaw-state-db.postgres.test.ts",
+        "src/transcripts/meeting-chronology.postgres.test.ts",
       ];
 const child = spawn(
   process.execPath,

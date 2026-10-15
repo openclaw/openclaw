@@ -370,7 +370,6 @@ export async function appendSessionTurnInWorker(
               ? {
                   preparedMessage: {
                     prepared: !facts?.existing,
-                    expected: facts?.existing,
                     message,
                   },
                 }

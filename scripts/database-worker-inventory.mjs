@@ -279,6 +279,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/state/openclaw-state-db-legacy-backfills.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["backfillAcpReplayEstimatedBytes"],
+        evidence:
+          "Only ensureAdditiveStateColumns calls this accounting repair, from schema-runtime cold admission/migration and the Doctor schema-repair runner; no Gateway runtime caller.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-replacement-read.ts",
     [
       {
@@ -3039,6 +3050,7 @@ const reviewedOperations = new Map([
         operations: [
           "readLatestTranscriptEntry",
           "readTranscriptEntry",
+          "readTranscriptPage",
           "readStoredTranscriptNotes",
         ],
         evidence:

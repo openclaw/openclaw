@@ -68,6 +68,12 @@ Code Mode and Tool Search catalog preparation summaries also use `debug`.
 [Prometheus metrics](/gateway/prometheus) count egress outcomes, catalog
 preparations, and model calls independently of log levels.
 
+Plugin host cleanup failures during session reset or deletion emit one
+`plugins/cleanup` warning per failure, including the operation, plugin, hook, and
+error. Check the reported cleanup error before retrying. Successful cleanup
+stays quiet, and failures remain best effort. Console diagnostics use the shared
+secret redactor; plain-text console fields are capped at 2,048 characters.
+
 The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI does the same:
 
 ```bash

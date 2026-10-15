@@ -218,9 +218,11 @@ depending on the per-kind AST shape.
   the `jsonc-parser` edit path for ordinary leaf writes, preserving comments
   and nearby formatting.
 - JSONL leaf writes coerce like JSONC inside a line. Whole-line replacement
-  and append parse `<value>` as JSON. Rendered JSONL preserves the file's
-  dominant LF/CRLF line-ending convention (majority vote across the file's
-  newlines, so a mostly-CRLF file stays CRLF even with a few stray LFs).
+  and append parse `<value>` as JSON. Edits replace only the selected value's
+  source text, preserving untouched numbers, comments, whitespace, and each
+  existing line ending, including a missing final newline. Appends retain all
+  existing bytes and the final-newline convention; an unterminated file uses
+  its dominant LF/CRLF convention to separate the new record.
 - YAML leaf writes coerce to the existing scalar type (`string`, finite
   `number`, `true`/`false`, or `null`). YAML insertions use the bundled
   `yaml` package's document API for map/sequence updates. Malformed YAML

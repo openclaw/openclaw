@@ -70,8 +70,8 @@ function taskIndexNames(db: EngineConnection) {
     .map((row) => row.name);
 }
 
-function legacyTaskDatabase(refusePublication = false) {
-  const stateDir = directories.make("task-index-v22-");
+function legacyTaskDatabase(previousVersion: 22 | 23, refusePublication = false) {
+  const stateDir = directories.make(`task-index-v${previousVersion}-`);
   const env = { OPENCLAW_STATE_DIR: stateDir };
   const pathname = resolveOpenClawStateSqlitePath(env);
   const options = { env, path: pathname };
@@ -85,9 +85,9 @@ function legacyTaskDatabase(refusePublication = false) {
     db.exec(`CREATE INDEX IF NOT EXISTS ${name} ON task_runs(${columns})`);
   }
   db.exec(`
-    PRAGMA user_version = 22;
+    PRAGMA user_version = ${previousVersion};
     INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
-      VALUES ('primary', 'global', 22, 1, 1);
+      VALUES ('primary', 'global', ${previousVersion}, 1, 1);
     CREATE INDEX idx_task_runs_local_label ON task_runs(label);
   `);
   const insert = db.prepare(`INSERT INTO task_runs
@@ -121,10 +121,15 @@ function legacyTaskDatabase(refusePublication = false) {
   return { options, pathname, retained: retainedTaskState(db) };
 }
 
-it.each(["runtime", "doctor"] as const)(
-  "migrates task indexes through %s without losing retained tasks or subsequent cron writes",
-  async (owner) => {
-    const { options, retained } = legacyTaskDatabase();
+it.each([
+  { owner: "runtime", previousVersion: 22 },
+  { owner: "doctor", previousVersion: 22 },
+  { owner: "runtime", previousVersion: 23 },
+  { owner: "doctor", previousVersion: 23 },
+] as const)(
+  "migrates v$previousVersion task indexes through $owner without losing retained tasks or subsequent cron writes",
+  async ({ owner, previousVersion }) => {
+    const { options, retained } = legacyTaskDatabase(previousVersion);
     if (owner === "doctor") {
       expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
     }
@@ -192,14 +197,14 @@ it.each(["runtime", "doctor"] as const)(
 );
 
 it("rolls back task index replacement when schema publication fails", async () => {
-  const { options, pathname, retained } = legacyTaskDatabase(true);
+  const { options, pathname, retained } = legacyTaskDatabase(23, true);
   expect(() => openOpenClawStateDatabase(options)).toThrow("fixture publication refusal");
   await closeOpenClawStateDatabaseAsync();
   using db = new DatabaseSync(pathname, { readOnly: true });
-  expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 22 });
+  expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 23 });
   expect(
     db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
-  ).toEqual({ schema_version: 22 });
+  ).toEqual({ schema_version: 23 });
   expect(retainedTaskState(db)).toEqual(retained);
   expect(taskIndexNames(db)).toEqual(
     ["idx_task_runs_local_label", ...legacyIndexes.map(([name]) => name)].toSorted(),

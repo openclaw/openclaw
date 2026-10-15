@@ -982,6 +982,21 @@ function runControlUiI18nSourceFixture(options: {
     rmSync(root, { force: true, recursive: true });
   }
 }
+describe("channel detail presentation CI selection", () => {
+  it.each(["discord", "googlechat", "imessage", "signal", "slack", "telegram"])(
+    "selects UI proof when only %s display facts change",
+    (pluginId) => {
+      expect(
+        detectChangedScope([`extensions/${pluginId}/control-ui.channel-detail.json`]).runUiTests,
+      ).toBe(true);
+    },
+  );
+
+  it("does not classify unrelated plugin JSON as a UI input", () => {
+    expect(detectChangedScope(["extensions/telegram/unrelated.json"]).runUiTests).toBe(false);
+  });
+});
+
 describe("changed-path transport", () => {
   it("plans current PR tests from the complete manifest above the output size limit", () => {
     const changedPaths = [

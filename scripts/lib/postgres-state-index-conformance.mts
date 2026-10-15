@@ -5,7 +5,7 @@ import {
   postgresCatalogQuery,
   readPostgresCatalog,
 } from "../../src/infra/database-engine/postgres-catalog.ts";
-import { TASK_RUN_INDEX_REPLACEMENTS_V23 } from "../../src/state/openclaw-state-db-schema-v23-indexes.ts";
+import { TASK_RUN_INDEX_REPLACEMENTS_V24 } from "../../src/state/openclaw-state-db-schema-v24-indexes.ts";
 import { quote } from "./postgres-schema-catalog.mts";
 
 // Historical v22 definitions, independent of the migration's retired-index inventory.
@@ -36,7 +36,7 @@ export async function checkStateTaskIndexMigration(
       `INSERT INTO task_runs
         (task_id, runtime, owner_key, scope_kind, task, status, delivery_status,
          notify_policy, created_at, source_id, run_id, label, detail_json)
-       VALUES ('v23-retained', 'cron', 'synthetic-owner', 'system', 'synthetic task',
+       VALUES ('v24-retained', 'cron', 'synthetic-owner', 'system', 'synthetic task',
          'succeeded', 'not_applicable', 'silent', 100, 'synthetic-job', 'synthetic-run',
          'synthetic label', $1)`,
       [JSON.stringify({ synthetic: true, body: "x".repeat(32 * 1024) })],
@@ -46,7 +46,7 @@ export async function checkStateTaskIndexMigration(
     const catalogSql = postgresCatalogQuery(namespace, true);
     const fresh = readPostgresCatalog((await client.query(catalogSql)).rows[0].catalog);
 
-    for (const name of TASK_RUN_INDEX_REPLACEMENTS_V23) {
+    for (const name of TASK_RUN_INDEX_REPLACEMENTS_V24) {
       await client.query(`DROP INDEX ${quote(name)}`);
     }
     for (const [name, columns] of historicalTaskIndexes) {

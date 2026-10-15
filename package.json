@@ -5,7 +5,7 @@
     "updateAdmissionProtocol": 1,
     "databaseEngines": ["sqlite", "postgres"],
     "schemaVersions": {
-      "state": 23,
+      "state": 24,
       "agent": 27
     }
   },

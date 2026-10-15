@@ -18,9 +18,9 @@ import {
   readPostgresCatalog,
 } from "../src/infra/database-engine/postgres-catalog.ts";
 import {
-  TASK_RUN_INDEX_RETIREMENT_V23_SQL,
-  TASK_RUN_INDEX_REPLACEMENTS_V23,
-} from "../src/state/openclaw-state-db-schema-v23-indexes.ts";
+  TASK_RUN_INDEX_RETIREMENT_V24_SQL,
+  TASK_RUN_INDEX_REPLACEMENTS_V24,
+} from "../src/state/openclaw-state-db-schema-v24-indexes.ts";
 import { listOpenClawStateFeatureSchemas } from "../src/state/openclaw-state-feature-schema.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { formatGeneratedModule } from "./lib/format-generated-module.mts";
@@ -61,6 +61,43 @@ function tableStatements(data: Catalog): string[] {
   );
 }
 
+/** Shared metadata recipe; family owners supply canonical SQLite and generated PostgreSQL DDL. */
+export function generateDatabasePortMetadata(
+  db: import("node:sqlite").DatabaseSync,
+  data: Catalog,
+  source: { id: string; version: number; sqlite: string; postgres: string },
+) {
+  const postData = tableStatements(data).find((sql) =>
+    data.objects.some(
+      (object) =>
+        ["index", "foreignKey", "triggerFunction", "trigger"].includes(object.kind) &&
+        object.sql === sql,
+    ),
+  );
+  const split = postData ? source.postgres.indexOf(postData) : source.postgres.length;
+  if (split < 0) {
+    throw new Error(`Generated PostgreSQL port DDL differs from ${source.id} catalog`);
+  }
+  return {
+    id: source.id,
+    version: source.version,
+    minimumPostgresVersion: MINIMUM_POSTGRES_VERSION,
+    schema: "",
+    sqlite: source.sqlite,
+    tables: portTables(data),
+    objects: data.objects
+      .filter((item) => item.kind === "check")
+      .map(({ table, kind, sql }) => ({ table, kind, sql })),
+    triggers: db
+      .prepare(
+        "SELECT name, tbl_name AS 'table', sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name",
+      )
+      .all(),
+    preData: [0, split],
+    postData: [split, source.postgres.length],
+  };
+}
+
 export async function generateWorkboardPostgresSchema() {
   const { DatabaseSync } = await import("node:sqlite");
   const db = new DatabaseSync(":memory:");
@@ -80,22 +117,12 @@ export async function generateWorkboardPostgresSchema() {
       "-- The connection owner supplies search_path and the admission transaction.",
       ...statements,
     ].join("\n\n")}\n`;
-    // String ranges reuse the bootstrap SQL without maintaining a second DDL copy.
-    const postDataStart = statements[data.tables.length];
-    const split = postDataStart ? postgresSql.indexOf(postDataStart) : postgresSql.length;
-    const portMetadata = {
+    const portMetadata = generateDatabasePortMetadata(db, data, {
       id: "workboard",
       version: SCHEMA_VERSION,
-      minimumPostgresVersion: MINIMUM_POSTGRES_VERSION,
-      schema: "",
       sqlite: WORKBOARD_SCHEMA_SQL,
-      tables: portTables(data),
-      objects: data.objects
-        .filter((item) => item.kind === "check")
-        .map(({ table, kind, sql }) => ({ table, kind, sql })),
-      preData: [0, split],
-      postData: [split, postgresSql.length],
-    };
+      postgres: postgresSql,
+    });
     return {
       catalog: data,
       sql: postgresSql,
@@ -205,20 +232,20 @@ export async function generatePostgresSchemas(
         );
       }
       if (root === ROOT) {
-        const replacements = TASK_RUN_INDEX_REPLACEMENTS_V23.map((indexName) => {
+        const replacements = TASK_RUN_INDEX_REPLACEMENTS_V24.map((indexName) => {
           const index = data.objects.find(
             (item) =>
               item.kind === "index" && item.table === "task_runs" && item.name === indexName,
           );
           assert.ok(
             index && index.sql?.startsWith("CREATE INDEX "),
-            `Missing translated shared-state v23 index: ${indexName}`,
+            `Missing translated shared-state v24 index: ${indexName}`,
           );
           return index.sql;
         });
-        files["state-v22-v23.postgres.sql"] = `${[
-          "-- Generated v22-to-v23 forward DDL; the owner supplies search_path, transaction, and version publication.",
-          TASK_RUN_INDEX_RETIREMENT_V23_SQL.trim(),
+        files["state-v23-v24.postgres.sql"] = `${[
+          "-- Generated v23-to-v24 forward DDL; the owner supplies search_path, transaction, and version publication.",
+          TASK_RUN_INDEX_RETIREMENT_V24_SQL.trim(),
           ...replacements,
         ].join("\n\n")}\n`;
       }
@@ -395,10 +422,10 @@ export async function checkPostgresCatalog(connection: string): Promise<void> {
     await checkStateTaskIndexMigration(
       client,
       `${prefix}_state`,
-      generated.files["state-v22-v23.postgres.sql"]!,
+      generated.files["state-v23-v24.postgres.sql"]!,
     );
     console.log(
-      `${prefix}_state: verified v22-to-v23 task index migration, retained payload, and complete index definitions`,
+      `${prefix}_state: verified v23-to-v24 task index migration, retained payload, and complete index definitions`,
     );
     await client.query(`SET search_path = ${quote(`${prefix}_agent`)}`);
     await client.query("BEGIN");

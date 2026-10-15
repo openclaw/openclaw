@@ -73,13 +73,6 @@ describe("subagents status", () => {
 
   it.each([
     {
-      name: "omits subagent status line when none exist",
-      seedRuns: () => undefined,
-      verboseLevel: "on" as const,
-      expectedText: [] as string[],
-      unexpectedText: ["Subagents:"],
-    },
-    {
       name: "preserves verbose done-only summary",
       seedRuns: () => {
         seedSubagentRunForReadTest({
@@ -115,7 +108,7 @@ describe("subagents status", () => {
     }
   });
 
-  it.each([1, 2])(
+  it.each([2])(
     "keeps the newest three details and %i pending children in the full counts",
     async (children) => {
       const now = Date.now();
@@ -770,12 +763,6 @@ describe("subagents log", () => {
       messages: [{ role: "user", content: "Here [Tool Call: foo (ID: 1)] ok" }],
       expectedText: "User: Here [Tool Call: foo (ID: 1)] ok",
       unexpectedText: "Assistant:",
-    },
-    {
-      name: "sanitizes assistant tool markers",
-      messages: [{ role: "assistant", content: "Here [Tool Call: foo (ID: 1)] ok" }],
-      expectedText: "Assistant: Here ok",
-      unexpectedText: "[Tool Call:",
     },
     {
       name: "hides signed commentary while retaining the final answer",

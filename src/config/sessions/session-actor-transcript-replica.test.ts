@@ -124,6 +124,7 @@ describe("actor transcript context replica", () => {
   it("retains only the bounded window when a worker read cannot seed a complete path", () => {
     const { hot, prepared } = fixture();
     prepared.snapshot.truncated = true;
+    delete prepared.snapshot.completeActivePath;
     prepared.transcript = { anchors: [] };
     const expected = structuredClone(prepared.snapshot);
     const retained = seedSessionActorTranscriptContext(undefined, hot, prepared, limits);

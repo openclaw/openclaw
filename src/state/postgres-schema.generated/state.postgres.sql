@@ -689,6 +689,7 @@ CREATE TABLE "mcp_oauth_stores" (
 );
 
 CREATE TABLE "meeting_transcript_sessions" (
+  "started_at_ms" bigint,
   "session_id" text COLLATE "C" NOT NULL,
   "started_at" text COLLATE "C" NOT NULL,
   "selector" text COLLATE "C" NOT NULL,
@@ -1489,6 +1490,8 @@ CREATE INDEX "idx_managed_outgoing_images_session" ON "managed_outgoing_image_re
 CREATE INDEX "idx_meeting_transcript_sessions_account" ON "meeting_transcript_sessions" (("source_account_id") ASC NULLS FIRST);
 
 CREATE INDEX "idx_meeting_transcript_sessions_agent" ON "meeting_transcript_sessions" (("metadata_agent_id") ASC NULLS FIRST);
+
+CREATE INDEX "idx_meeting_transcript_sessions_chronology" ON "meeting_transcript_sessions" (("started_at_ms") DESC NULLS LAST, ("session_id") ASC NULLS FIRST, ("started_at") ASC NULLS FIRST);
 
 CREATE INDEX "idx_meeting_transcript_sessions_export_key" ON "meeting_transcript_sessions" (("export_key") ASC NULLS FIRST);
 

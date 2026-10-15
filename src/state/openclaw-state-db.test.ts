@@ -956,7 +956,7 @@ describe("openclaw state database", () => {
           `Re-anchored agent database registry path ${copiedForeignPath} to the current state directory`,
           `Removed duplicate agent database registry path ${dualForeignPath}`,
           "Qualified historical cron creator attribution as unknown (v14)",
-          "Replaced retained task indexes with ordered cron history indexes (v23)",
+          "Replaced retained task indexes with ordered cron history indexes (v24)",
         ],
         warnings: [],
       });
@@ -1171,7 +1171,7 @@ describe("openclaw state database", () => {
       changes: [
         "Folded singleton state tables into config_machine_state (v12)",
         "Qualified historical cron creator attribution as unknown (v14)",
-        "Replaced retained task indexes with ordered cron history indexes (v23)",
+        "Replaced retained task indexes with ordered cron history indexes (v24)",
       ],
       warnings: [],
     });
@@ -1437,7 +1437,7 @@ describe("openclaw state database", () => {
         "Migrated shared state session watch cursors → provenance column (0 ambient, 0 sentinels removed)",
         "Consolidated shared state tables (v13)",
         "Qualified historical cron creator attribution as unknown (v14)",
-        "Replaced retained task indexes with ordered cron history indexes (v23)",
+        "Replaced retained task indexes with ordered cron history indexes (v24)",
       ],
       warnings: [],
     });
@@ -1823,7 +1823,7 @@ describe("openclaw state database", () => {
       { kind: "conversation-binding-targets-v15", path: fixture.databasePath },
       { kind: "predicate-columns-v21", path: fixture.databasePath },
       { kind: "portable-identity-columns-v22", path: fixture.databasePath },
-      { kind: "task-run-indexes-v23", path: fixture.databasePath },
+      { kind: "task-run-indexes-v24", path: fixture.databasePath },
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);
@@ -1844,24 +1844,20 @@ describe("openclaw state database", () => {
         "Consolidated shared state tables (v13)",
         "Qualified historical cron creator attribution as unknown (v14)",
         "Removed redundant conversation binding target projections (v15)",
-        "Replaced retained task indexes with ordered cron history indexes (v23)",
+        "Replaced retained task indexes with ordered cron history indexes (v24)",
         "Migrated shared state tables to SQLite STRICT typing (48)",
       ],
       warnings: [],
     });
     const migrated = openOpenClawStateDatabase(options);
-
-    expect(readSqliteNumberPragma(requireNativeSqliteDatabase(migrated.db), "user_version")).toBe(
-      OPENCLAW_STATE_SCHEMA_VERSION,
-    );
+    const native = requireNativeSqliteDatabase(migrated.db);
+    expect(readSqliteNumberPragma(native, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(
       migrated.db
         .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
         .get(),
     ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
-    expect(migrated.db.prepare("PRAGMA integrity_check").all()).toEqual([
-      { integrity_check: "ok" },
-    ]);
+    expect(native.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     // The shipped v2026.7.1-2 database really carried these curator projections.
     for (const tableName of ["skill_lifecycle", "skill_workshop_proposal_origin_runs"]) {
@@ -1873,11 +1869,9 @@ describe("openclaw state database", () => {
     }
     // Published v1 state has no deletion history to lose; migration initializes its journal.
     const expected = createInitialStateSchemaShape();
-    expect(
-      normalizeSqliteSchemaShapeSql(
-        collectSqliteSchemaShape(requireNativeSqliteDatabase(migrated.db)),
-      ),
-    ).toEqual(normalizeSqliteSchemaShapeSql(expected));
+    expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(native))).toEqual(
+      normalizeSqliteSchemaShapeSql(expected),
+    );
     expect(readRetainedAgentDeletionsFromDatabase(migrated.db, fixture.databasePath)).toEqual({
       status: "empty",
     });
@@ -2148,7 +2142,8 @@ describe("openclaw state database", () => {
       { kind: "creator-namespace-v14", path: seeded.databasePath },
       { kind: "predicate-columns-v21", path: seeded.databasePath },
       { kind: "portable-identity-columns-v22", path: seeded.databasePath },
-      { kind: "task-run-indexes-v23", path: seeded.databasePath },
+      { kind: "meeting-transcript-start-time", path: seeded.databasePath },
+      { kind: "task-run-indexes-v24", path: seeded.databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: seeded.databasePath },
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
@@ -2156,7 +2151,7 @@ describe("openclaw state database", () => {
         "Migrated cloud worker placements to execution modes",
         "Migrated shared state session watch cursors → provenance column (2 ambient, 5 sentinels removed)",
         "Qualified historical cron creator attribution as unknown (v14)",
-        "Replaced retained task indexes with ordered cron history indexes (v23)",
+        "Replaced retained task indexes with ordered cron history indexes (v24)",
       ],
       warnings: [],
     });
@@ -2315,7 +2310,7 @@ describe("openclaw state database", () => {
     readOnly?.walMaintenance.close();
   });
 
-  it.each([22, OPENCLAW_STATE_SCHEMA_VERSION])(
+  it.each([22, 23, OPENCLAW_STATE_SCHEMA_VERSION])(
     "rejects a missing v%i table instead of recreating it empty",
     (version) => {
       const stateDir = createTempStateDir();
@@ -3145,10 +3140,7 @@ describe("openclaw state database", () => {
       path: databasePath,
     });
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-      changes: [
-        "Migrated shared state operator approvals → OpenClaw system changes",
-        expect.stringMatching(/^Rebuilt canonical shared-state SQLite indexes \(\d+\)$/u),
-      ],
+      changes: ["Migrated shared state operator approvals → OpenClaw system changes"],
       warnings: [],
     });
 
