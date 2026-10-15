@@ -40,7 +40,8 @@ import { toolingTsEntrypoints } from "./scripts/tooling-ts-runtime.test-support.
 
 const { createTempDir } = createScriptTestHarness();
 const makeInstalledPackageRoot = () => createTempDir("openclaw-postpublish-");
-const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
+const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 20_000;
+const INSTALLED_WORKER_DIST_JS_FILE_SCAN_LIMIT = 10_000;
 
 function writeInstalledFile(root: string, relativePath: string, source = "export {};\n") {
   const file = join(root, relativePath);
@@ -441,7 +442,7 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     writeInstalledFile(packageRoot, "dist/root.js");
-    for (let index = 0; index < INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT; index += 1) {
+    for (let index = 0; index < INSTALLED_WORKER_DIST_JS_FILE_SCAN_LIMIT; index += 1) {
       writeInstalledFile(packageRoot, `dist/worker/worker-chunk-${index}.mjs`);
     }
 
