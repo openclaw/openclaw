@@ -2,7 +2,7 @@ import type WaDropdownItem from "@awesome.me/webawesome/dist/components/dropdown
 import type WaDropdown from "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 
-export async function settleWebAwesome(root: ParentNode): Promise<void> {
+async function settleWebAwesome(root: ParentNode): Promise<void> {
   for (const element of root.querySelectorAll<WaDropdown | WaDropdownItem | WaPopup>(
     "wa-dropdown, wa-dropdown-item, wa-popup",
   )) {

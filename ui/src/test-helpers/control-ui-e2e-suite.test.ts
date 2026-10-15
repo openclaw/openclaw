@@ -133,10 +133,8 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
       if (${JSON.stringify(mode)} === "held-route-drain") {
         const handlers = [];
         const pending = new Set();
-        const pendingRoutes = new Set();
         const contextHandlers = [];
         const contextPending = new Set();
-        const contextPendingRoutes = new Set();
         let pageClosed = false;
         let context;
         const page = Object.assign(new EventEmitter(), {
@@ -155,14 +153,11 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
             const url = "https://fixture.invalid/" + name + ".js";
             const registrations = scope === "context" ? contextHandlers : handlers;
             const invocations = scope === "context" ? contextPending : pending;
-            const routes = scope === "context" ? contextPendingRoutes : pendingRoutes;
             const registration = registrations.find(({ pattern }) => pattern.test(url));
             if (!registration) throw new Error("missing held-module route: " + name);
-            let handled = false;
-            const consume = () => { handled = true; };
-            routes.add(consume);
             const route = {
               request: () => ({ url: () => url }),
+              fallback: async () => { state.events.push("fell through " + label); },
               fetch: async () => {
                 if (pageClosed) throw state.disposalFault;
                 if (label === "later" || scope === "context") {
@@ -180,14 +175,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
               },
               fulfill: async () => {
                 if (pageClosed) throw state.disposalFault;
-                if (handled) throw new Error("Route already handled!");
-                handled = true;
                 state.events.push("fulfilled " + label);
-              },
-              continue: async () => {
-                if (handled) throw new Error("Route already handled!");
-                handled = true;
-                state.events.push("continued " + label);
               },
             };
             // Observe rejection immediately; teardown joins outcomes without hiding unknown faults.
@@ -196,14 +184,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
               error => ({ label, status: "rejected", error }),
             );
             invocations.add(settled);
-            void settled.then(() => {
-              invocations.delete(settled);
-              routes.delete(consume);
-              // Removing interception lets a completed callback continue other pending routes.
-              if (registrations.length === 0) {
-                for (const consumePending of routes) consumePending();
-              }
-            });
+            void settled.then(() => invocations.delete(settled));
             return settled;
           },
         });
@@ -396,7 +377,9 @@ suite.define(() => {
       const callbacks = [];
       let firstHold;
       let otherHold;
+      let heldPage;
       const outcome = suite.withPage({}, async ({ context, page }) => {
+        heldPage = page;
         firstHold = await holdModuleResponse(page, /module-a/u);
         otherHold = await holdModuleResponse(page, /module-b/u);
         callbacks.push(page.dispatchModule("module-a", "first"));
@@ -417,10 +400,14 @@ suite.define(() => {
       let failure;
       let callbackOutcomes;
       try {
-        await state.laterFetchStarted.promise;
+        await state.contextFetchStarted.promise;
         await Promise.all(callbacks.slice(0, 2));
+        await nextTurn();
         state.pendingCloseCalls = state.closeCalls;
         state.fulfilledBeforeFetchRelease = state.events.filter(event => event.startsWith("fulfilled "));
+        expect(state.events).not.toContain("drain");
+        callbacks.push(heldPage.dispatchModule("module-a", "late"));
+        await callbacks.at(-1);
         record();
         state.laterFetch.resolve();
         state.firstCleanupEvent = await state.cleanupStarted.promise;
@@ -459,7 +446,6 @@ suite.define(() => {
         try {
           await held.request;
         } finally {
-          expect(await page.dispatchModule("module-unblocked", "closing")).toMatchObject({ status: "fulfilled" });
           state.events.push("held request settled"); record();
         }
       }).then(() => undefined, error => error);
@@ -818,6 +804,7 @@ it("drains held modules and cancels unrequested observations during cleanup", (c
       { label: "other", status: "fulfilled", disposed: false },
       { label: "later", status: "fulfilled", disposed: false },
       { label: "context", status: "fulfilled", disposed: false },
+      { label: "late", status: "fulfilled", disposed: false },
     ]);
     expect(result.journal.pendingCloseCalls).toBe(0);
     expect(result.journal.fulfilledBeforeFetchRelease).toEqual([
@@ -825,6 +812,8 @@ it("drains held modules and cancels unrequested observations during cleanup", (c
       "fulfilled other",
     ]);
     expect(result.journal.events).toContain("fulfilled later");
+    expect(result.journal.events).toContain("fell through late");
+    expect(result.journal.events).not.toContain("fetched late");
     expect(result.journal.events.indexOf("fulfilled later")).toBeLessThan(
       result.journal.events.indexOf("drain"),
     );
@@ -832,7 +821,6 @@ it("drains held modules and cancels unrequested observations during cleanup", (c
       result.journal.events.indexOf("close"),
     );
     expect(result.journal.events).toContain("held request settled");
-    expect(result.journal.events).toContain("continued closing");
     expect(result.journal.events.at(-1)).toBe("held callback joined");
     expect(result.journal).toMatchObject({
       closeCalls: 2,

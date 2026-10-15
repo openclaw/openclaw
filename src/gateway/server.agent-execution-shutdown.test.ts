@@ -245,28 +245,26 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
             vi.useRealTimers();
           }
         }
-        if (mode === "restart") {
-          restartMarkers.mockImplementationOnce(async (params) => {
-            abortedAtRecoveryMark = runSignal?.aborted;
-            receivedWorkAbortedAtRecoveryMark = kernel.connectionWork.signal.aborted;
-            runtimeAvailableAtRecoveryMark = kernel.gatewayInstanceRuntime.isAvailable();
-            entryFencedAtRecoveryMark = await kernel.gatewayInstanceRuntime.recovery
-              .dispatchAgent({
-                message: "must not enter during shutdown",
-                sessionKey: "main",
-                idempotencyKey: `${runId}-late`,
-              })
-              .then(
-                () => false,
-                (error: unknown) => String(error).includes("Gateway request entry is closed"),
-              );
-            const result = await markRestartAbortedMainSessions(params);
-            const { entry } = await loadSessionEntryAsync("main");
-            recoveryMarked = Boolean(entry?.mainRestartRecovery?.cycleId);
-            abortedAfterRecoveryMark = runSignal?.aborted;
-            return result;
-          });
-        }
+        restartMarkers.mockImplementationOnce(async (params) => {
+          abortedAtRecoveryMark = runSignal?.aborted;
+          receivedWorkAbortedAtRecoveryMark = kernel.connectionWork.signal.aborted;
+          runtimeAvailableAtRecoveryMark = kernel.gatewayInstanceRuntime.isAvailable();
+          entryFencedAtRecoveryMark = await kernel.gatewayInstanceRuntime.recovery
+            .dispatchAgent({
+              message: "must not enter during shutdown",
+              sessionKey: "main",
+              idempotencyKey: `${runId}-late`,
+            })
+            .then(
+              () => false,
+              (error: unknown) => String(error).includes("Gateway request entry is closed"),
+            );
+          const result = await markRestartAbortedMainSessions(params);
+          const { entry } = await loadSessionEntryAsync("main");
+          recoveryMarked = Boolean(entry?.mainRestartRecovery?.cycleId);
+          abortedAfterRecoveryMark = runSignal?.aborted;
+          return result;
+        });
         closing = harness.server.close({
           reason: mode === "restart" ? "gateway restart" : "gateway stopping",
           restartExpectedMs: mode === "restart" ? 0 : null,
@@ -290,33 +288,30 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
         expect(cleanupOutcomes, cleanupErrors.join("\n")).toEqual(["failed", "changed", "deleted"]);
         await expect(deleteSubagentSessionForCleanup(cleanupParams)).resolves.toBe("failed");
         expect(foreign.controller.signal.aborted).toBe(false);
-        if (mode === "restart") {
-          expect(restartMarkers).toHaveBeenCalledOnce();
-          // The actual server.close entry point must preserve received execution
-          // and its admission until the durable restart marker has committed.
-          expect(receivedWorkAbortedAtRecoveryMark).toBe(false);
-          expect(abortedAtRecoveryMark).toBe(false);
-          expect(abortedAfterRecoveryMark).toBe(false);
-          expect(runtimeAvailableAtRecoveryMark).toBe(true);
-          expect(entryFencedAtRecoveryMark).toBe(true);
-          expect(recoveryMarked).toBe(true);
-          expect(kernel.gatewayInstanceRuntime.isAvailable()).toBe(false);
-        } else {
-          expect(restartMarkers).not.toHaveBeenCalled();
-        }
+        expect(restartMarkers).toHaveBeenCalledOnce();
+        // The actual server.close entry point must preserve received execution
+        // and its admission until the durable restart marker has committed.
+        expect(receivedWorkAbortedAtRecoveryMark).toBe(false);
+        expect(abortedAtRecoveryMark).toBe(false);
+        expect(abortedAfterRecoveryMark).toBe(false);
+        expect(runtimeAvailableAtRecoveryMark).toBe(true);
+        expect(entryFencedAtRecoveryMark).toBe(true);
+        expect(recoveryMarked).toBe(mode !== "graceful");
+        expect(kernel.gatewayInstanceRuntime.isAvailable()).toBe(false);
         if (mode === "graceful") {
           expect(abortedAtDrain).toBe(false);
           expect(runSignal?.aborted).toBe(false);
           expect(terminalPayload).toMatchObject({ status: "ok" });
+          expect(terminalPayload).not.toHaveProperty("stopReason");
         } else {
           expect(abortedAtDrain).toBe(true);
           expect(emergencyReleaseUsed).toBe(false);
           expect(beforeEmergencyRelease).not.toContain("dependencies stopped");
           expect(beforeFinalizerRelease).not.toContain("dependencies stopped");
-          expect(isAgentRunRestartAbortReason(runSignal?.reason)).toBe(mode === "restart");
+          expect(isAgentRunRestartAbortReason(runSignal?.reason)).toBe(true);
           expect(terminalPayload).toMatchObject({
             status: "timeout",
-            stopReason: mode === "restart" ? "restart" : "rpc",
+            stopReason: "restart",
           });
         }
         expect(order).toEqual([

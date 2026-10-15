@@ -1,12 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { decodeResumeHandoff } from "../../../../src/shared/resume-handoff.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { openChatLayoutMenu } from "../../test-helpers/chat-layout-menu.ts";
+import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createPaneHeaderWorkspaceFixture,
@@ -58,7 +58,10 @@ function createTerminalPane(client: GatewayBrowserClient) {
     row: GatewaySessionRow | undefined,
     workspace = createPaneHeaderWorkspaceFixture(state),
   ) => {
-    render(pane.renderPaneHeader(workspace, row, false, undefined, false, null), container);
+    renderPaneLegacyContent(
+      pane.renderPaneHeader(workspace, row, false, undefined, false, null),
+      container,
+    );
     flush();
   };
   return { pane, state, container, paint };

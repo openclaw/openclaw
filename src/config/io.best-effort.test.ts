@@ -161,6 +161,31 @@ describe("readCurrentConfigForResolution", () => {
     resetConfigOverrides();
   });
 
+  it.each([1, null])(
+    "emits the directory-resolution warning with a malformed redaction entry %j",
+    async (entry) => {
+      await withTempHome(async (home) => {
+        const configPath = await writeOpenClawConfig(home, {
+          logging: { redactPatterns: [entry] },
+          skills: { workshop: { approvalPolicy: "pending", maxPending: 3 } },
+        });
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          const resolution = readCurrentConfigForResolution({ configPath });
+          expect(resolution.config).toEqual({});
+          const warning = warn.mock.calls.map(([line]) => String(line)).join("\n");
+          expect(warning).toContain("Config warnings:");
+          expect(warning).toContain(
+            "Config unavailable; using environment and default agent directory settings.",
+          );
+          expect(warning).toContain("logging.redactPatterns");
+        } finally {
+          warn.mockRestore();
+        }
+      });
+    },
+  );
+
   it("names the rejection when directory inspection cannot load a schema-invalid config", async () => {
     await withTempHome(async (home) => {
       const configPath = await writeOpenClawConfig(home, {

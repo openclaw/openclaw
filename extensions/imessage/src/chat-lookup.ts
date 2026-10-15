@@ -14,12 +14,13 @@ type IMessageConversationReadOrigin = NonNullable<
 >;
 
 type IMessageChatListResponse = { chats?: unknown };
+type IMessageChat = { id: number; guid: string; identifier?: string };
 type ChatListCacheEntry = {
-  list: ReadonlyArray<Record<string, unknown>>;
+  list: readonly IMessageChat[];
   expiresAt: number;
 };
 
-// Cache by the complete account transport identity so action bursts reuse one
+// Cache by the complete account transport identity so routing and actions reuse one
 // chat snapshot without leaking a same-path account across Messages Macs.
 const CHAT_LIST_CACHE_TTL_MS = 30 * 1000;
 const chatListCache = new Map<string, ChatListCacheEntry>();
@@ -28,47 +29,41 @@ function numberFromUnknown(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : parseStrictInteger(value);
 }
 
-function findChatGuid(
-  chats: readonly Record<string, unknown>[],
-  target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>,
-): string | null {
+function findChat(
+  chats: readonly IMessageChat[],
+  target: Exclude<IMessageTarget, { kind: "handle" }>,
+): IMessageChat | null {
   if (target.kind === "chat_id") {
-    for (const chat of chats) {
-      const id = numberFromUnknown(chat.id);
-      const guid = stringFromUnknown(chat.guid);
-      if (id === target.chatId && guid) {
-        return guid;
-      }
-    }
-    return null;
+    return chats.find((chat) => chat.id === target.chatId) ?? null;
+  }
+  if (target.kind === "chat_guid") {
+    return chats.find((chat) => chat.guid === target.chatGuid) ?? null;
   }
   const wanted = normalizeDirectChatIdentifier(target.chatIdentifier);
   for (const chat of chats) {
-    const identifier = stringFromUnknown(chat.identifier);
-    const guid = stringFromUnknown(chat.guid);
+    const { identifier, guid } = chat;
     if (
-      guid &&
-      (identifier === target.chatIdentifier ||
-        guid === target.chatIdentifier ||
-        (identifier && normalizeDirectChatIdentifier(identifier) === wanted) ||
-        normalizeDirectChatIdentifier(guid) === wanted)
+      identifier === target.chatIdentifier ||
+      guid === target.chatIdentifier ||
+      (identifier && normalizeDirectChatIdentifier(identifier) === wanted) ||
+      normalizeDirectChatIdentifier(guid) === wanted
     ) {
-      return guid;
+      return chat;
     }
   }
   return null;
 }
 
-export async function resolveIMessageActionChatGuid(params: {
-  target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>;
+export async function resolveIMessageChat(params: {
+  target: Exclude<IMessageTarget, { kind: "handle" }>;
   options: IMessageActionTransportOptions;
   conversationReadOrigin: IMessageConversationReadOrigin;
-}): Promise<string | null> {
+}): Promise<IMessageChat | null> {
   const { cliPath, dbPath, remoteHost } = params.options;
   const key = `${cliPath}\0${dbPath ?? ""}\0${remoteHost ?? ""}`;
   const cached = chatListCache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
-    return findChatGuid(cached.list, params.target);
+    return findChat(cached.list, params.target);
   }
   chatListCache.delete(key);
   const client = await createIMessageRpcClient(params.options);
@@ -78,10 +73,19 @@ export async function resolveIMessageActionChatGuid(params: {
       { limit: 1000 },
       { timeoutMs: params.options.timeoutMs },
     );
-    const list =
-      isRecord(result) && Array.isArray(result.chats) ? result.chats.filter(isRecord) : [];
+    const list: IMessageChat[] = [];
+    for (const chat of isRecord(result) && Array.isArray(result.chats) ? result.chats : []) {
+      if (!isRecord(chat)) {
+        continue;
+      }
+      const id = numberFromUnknown(chat.id);
+      const guid = stringFromUnknown(chat.guid);
+      if (id !== undefined && guid) {
+        list.push({ id, guid, identifier: stringFromUnknown(chat.identifier) });
+      }
+    }
     chatListCache.set(key, { list, expiresAt: Date.now() + CHAT_LIST_CACHE_TTL_MS });
-    return findChatGuid(list, params.target);
+    return findChat(list, params.target);
   } finally {
     await client.stop();
   }

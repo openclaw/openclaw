@@ -833,6 +833,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/worktrees/service.source-only-filters.test.ts",
   "src/agents/worktrees/service.sparse-isolation.test.ts",
   "src/state/openclaw-state-lease-acquisition.test.ts",
+  "src/state/openclaw-state-lease-maintenance-cleanup.test.ts",
   "src/state/openclaw-state-lease-contention.test.ts",
   "src/state/openclaw-state-lease-existing.test.ts",
   "src/state/openclaw-state-lease-heartbeat.test.ts",

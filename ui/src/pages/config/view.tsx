@@ -524,7 +524,7 @@ export function Config(props: ConfigProps) {
               <div class="settings-row settings-row--stacked">
                 <div class="config-raw-actions">
                   {props.onOpenFile && props.openFileAllowed !== false ? (
-                    <button class="btn btn--sm" onClick={props.onOpenFile}>
+                    <button class="btn btn--sm" onClick={() => props.onOpenFile?.()}>
                       <Icon name="fileText" />
                       {t("configView.open")}
                     </button>

@@ -162,11 +162,19 @@ export type UserProfilesDatabase = {
 
 export type ProfileDisplayRow = Pick<
   UserProfilesDatabase["user_profiles"],
-  "id" | "display_name" | "avatar_mime" | "avatar_sha256" | "merged_into" | "updated_at" | "role"
+  | "id"
+  | "display_name"
+  | "avatar_mime"
+  | "avatar_sha256"
+  | "merged_into"
+  | "created_at"
+  | "updated_at"
+  | "role"
 > & {
   has_avatar: SqlBool;
   githubAccountIds?: readonly number[];
   githubLogin?: string | null;
+  githubIdentity?: UserProfileListItem["githubIdentity"];
   /** Present only for the canonical row with its exact local-owner identity binding. */
   gatewayOwnerCreatedAt?: number;
 };
