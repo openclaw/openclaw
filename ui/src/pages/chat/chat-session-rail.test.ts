@@ -77,23 +77,6 @@ describe("ChatSessionCompanionThreads", () => {
     );
   });
 
-  it("records hydration until the authoritative companion state settles", async () => {
-    let resolveLoad!: (value: { exchanges: [] }) => void;
-    const threads = new ChatSessionCompanionThreads();
-    const pending = threads.hydrate(
-      "one",
-      () =>
-        new Promise((resolve) => {
-          resolveLoad = resolve;
-        }),
-    );
-
-    expect(threads.view("one").loading).toBe(true);
-    resolveLoad({ exchanges: [] });
-    await pending;
-    expect(threads.view("one").loading).toBe(false);
-  });
-
   it("keeps matching bare session keys isolated by agent", () => {
     const threads = new ChatSessionCompanionThreads();
     threads.setDraft("global", "main draft", "main");

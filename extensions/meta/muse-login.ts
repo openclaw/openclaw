@@ -111,18 +111,6 @@ async function loginAttempt(ctx: ProviderAuthContext, binaryPath: string): Promi
 export async function runMuseLogin(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   ctx.signal?.throwIfAborted();
   ctx.assertCurrent?.();
-  const remembered =
-    ctx.agentId &&
-    ctx.config.agents?.entries?.[ctx.agentId]?.nativeRuntimeConsent?.includes("muse");
-  if (!remembered) {
-    await ctx.prompter.select({
-      message:
-        "Muse Code runs on the Gateway host under its own permissions.\n\nOpenClaw’s optional native tool, sandbox, and workspace-only restrictions will not be enforced for this harness. OpenClaw-hosted tools keep their own policy checks.",
-      options: [{ value: "continue", label: "Continue" }],
-    });
-  }
-  ctx.signal?.throwIfAborted();
-  ctx.assertCurrent?.();
   const config = ctx.config.plugins?.entries?.muse?.config;
   const pluginConfig = isRecord(config) ? config : {};
   const binaryPath = typeof pluginConfig.binaryPath === "string" ? pluginConfig.binaryPath : "muse";
@@ -137,7 +125,6 @@ export async function runMuseLogin(ctx: ProviderAuthContext): Promise<ProviderAu
     profiles: [],
     defaultModel: DEFAULT_MODEL,
     agentRuntimeId: "muse",
-    nativeRuntimeConsent: ["muse"],
     configPatch: {
       plugins: {
         entries: {
