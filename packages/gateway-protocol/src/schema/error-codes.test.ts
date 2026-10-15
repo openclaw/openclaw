@@ -183,23 +183,6 @@ describe("gateway error details", () => {
     );
   });
 
-  it("builds a distinct forbidden missing-scope response", () => {
-    expect(
-      missingScopeErrorShape({
-        missingScope: "operator.approvals",
-        requiredScopes: ["operator.read", "operator.approvals"],
-      }),
-    ).toEqual({
-      code: ErrorCodes.FORBIDDEN,
-      message: "missing scope: operator.approvals",
-      details: {
-        code: GatewayErrorDetailCodes.MISSING_SCOPE,
-        missingScope: "operator.approvals",
-        requiredScopes: ["operator.read", "operator.approvals"],
-      },
-    });
-  });
-
   it("keeps requiredScopes non-empty when a caller has no method metadata", () => {
     expect(
       missingScopeErrorShape({ missingScope: "operator.admin", requiredScopes: [] }).details,
@@ -213,13 +196,11 @@ describe("gateway error details", () => {
   it("reads structured missing-scope details without parsing the message", () => {
     expect(
       readMissingScopeError({
-        code: ErrorCodes.FORBIDDEN,
-        message: "permission denied",
-        details: {
-          code: GatewayErrorDetailCodes.MISSING_SCOPE,
+        ...missingScopeErrorShape({
           missingScope: "operator.questions",
           requiredScopes: ["operator.read", "operator.questions"],
-        },
+        }),
+        message: "permission denied",
       }),
     ).toEqual({
       code: GatewayErrorDetailCodes.MISSING_SCOPE,

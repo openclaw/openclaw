@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   ConfigSchemaLookupResultSchema,
   ConfigSchemaResponseSchema,
-  UpdateAvailableSchema,
   UpdateHoldParamsSchema,
   UpdateHoldResultSchema,
   UpdateReportParamsSchema,
@@ -243,22 +242,23 @@ describe("update protocol schemas", () => {
   });
 
   it("validates the additive update.status result", () => {
+    const availability = {
+      currentVersion: "2026.8.1",
+      latestVersion: "2026.8.1",
+      channel: "dev",
+      currentSha: "1234567890",
+      upstreamRef: "origin/main",
+      upstreamSha: "abcdef1234",
+      commitsBehind: 3,
+      commits: [
+        { sha: "abc1234", subject: "First change" },
+        { sha: "def5678", subject: "Second change" },
+      ],
+    };
     expect(
       Value.Check(UpdateStatusResultSchema, {
         sentinel: null,
-        updateAvailable: {
-          currentVersion: "2026.8.1",
-          latestVersion: "2026.8.1",
-          channel: "dev",
-          currentSha: "1234567890",
-          upstreamRef: "origin/main",
-          upstreamSha: "abcdef1234",
-          commitsBehind: 3,
-          commits: [
-            { sha: "abc1234", subject: "First change" },
-            { sha: "def5678", subject: "Second change" },
-          ],
-        },
+        updateAvailable: availability,
         effectiveChannel: "dev",
         schedule: {
           channel: "dev",
@@ -282,6 +282,18 @@ describe("update protocol schemas", () => {
         },
       }),
     ).toBe(true);
+    expect(
+      Value.Check(UpdateStatusResultSchema, {
+        sentinel: null,
+        updateAvailable: {
+          ...availability,
+          commits: Array.from({ length: 6 }, (_, index) => ({
+            sha: `abc123${index}`,
+            subject: `Change ${index}`,
+          })),
+        },
+      }),
+    ).toBe(false);
     expect(
       Value.Check(UpdateStatusResultSchema, {
         sentinel: null,
@@ -321,34 +333,6 @@ describe("update protocol schemas", () => {
           autoEnabled: false,
           install: { kind: "git", git: { status: "behind", commitsBehind: 0 } },
         },
-      }),
-    ).toBe(false);
-  });
-
-  it("accepts optional bounded dev commit summaries", () => {
-    const availability = {
-      currentVersion: "2026.8.1",
-      latestVersion: "2026.8.1",
-      channel: "dev",
-      currentSha: "1234567890",
-      upstreamRef: "origin/main",
-      upstreamSha: "abcdef1234",
-      commitsBehind: 6,
-    };
-    expect(Value.Check(UpdateAvailableSchema, availability)).toBe(true);
-    expect(
-      Value.Check(UpdateAvailableSchema, {
-        ...availability,
-        commits: [{ sha: "abc1234", subject: "First change" }],
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(UpdateAvailableSchema, {
-        ...availability,
-        commits: Array.from({ length: 6 }, (_, index) => ({
-          sha: `abc123${index}`,
-          subject: `Change ${index}`,
-        })),
       }),
     ).toBe(false);
   });
