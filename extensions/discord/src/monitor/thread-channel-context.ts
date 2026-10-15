@@ -40,7 +40,6 @@ export async function resolveDiscordThreadLikeChannelContext(params: {
         id: channelId,
         name: channelName,
         parentId,
-        parent: undefined,
       },
       channelInfo,
     });

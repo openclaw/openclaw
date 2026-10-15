@@ -266,6 +266,7 @@ describe("monitorDiscordProvider", () => {
         listeners: handlers.listeners ?? [],
         plugins: pluginRegistry,
         rest: {
+          options: { timeout: 15_000 },
           get: vi.fn(async () => undefined),
           post: vi.fn(async () => undefined),
           put: vi.fn(async () => undefined),

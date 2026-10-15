@@ -10,10 +10,11 @@ import {
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
+import { markCanonicalSessionValidationPending } from "../config/sessions/session-canonical-key.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import {
   closeOpenClawAgentDatabasesAsync,
-  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -123,19 +124,19 @@ it("settles legacy liveness once before startup returns, preserving recovery cla
         before.set(fixture.sessionKey, loadSessionEntryReadOnly(scope)!);
         history.set(fixture.sessionKey, await loadTranscriptEvents(scope));
       }
-      const database = openOpenClawAgentDatabase(databaseOptions);
-      // Model a previous release's bytes; canonical writers accept outcomes only.
-      const update = database.db.prepare(
-        "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.status', ?) WHERE session_key = ?",
-      );
-      const certify = database.db.prepare(
-        "UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?",
-      );
-      for (const fixture of legacy) {
-        update.run(fixture.status, fixture.sessionKey);
-        // The previous release's canonical writer certified these rows; raw fixture edits revoke it.
-        certify.run(fixture.sessionKey);
-      }
+      runOpenClawAgentWriteTransaction((database) => {
+        const update = database.db.prepare(
+          "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.status', ?) WHERE session_key = ?",
+        );
+        for (const fixture of legacy) {
+          update.run(fixture.status, fixture.sessionKey);
+        }
+        // Older-schema upgrades revoke proof even when the previous writer certified each row.
+        markCanonicalSessionValidationPending(
+          database,
+          legacy.map((fixture) => fixture.sessionKey),
+        );
+      }, databaseOptions);
       await closeOpenClawAgentDatabasesAsync(stateDir);
 
       await prepareGatewayStartupSessions({ cfg, env, log });

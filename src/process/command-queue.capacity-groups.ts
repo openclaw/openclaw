@@ -87,7 +87,7 @@ export function getLaneGroup(lane: string): LaneGroupState | undefined {
  * here would resurrect lanes that `retireIdleScopedCommandLane` just removed.
  */
 function getMemberActiveCount(lane: string): number {
-  return getQueueState().lanes.get(lane)?.activeTaskIds.size ?? 0;
+  return getQueueState().lanes.get(lane)?.activeTasks.size ?? 0;
 }
 
 type GroupCapacity = { active: number; reserved: number };
@@ -218,7 +218,7 @@ function resolveNextGroupLane(group: LaneGroupState): string | undefined {
   for (const lane of group.members) {
     const state = getQueueState().lanes.get(lane);
     const head = state ? peekLaneQueue(state.queue) : undefined;
-    if (!state || !head || state.draining || state.activeTaskIds.size >= state.maxConcurrent) {
+    if (!state || !head || state.draining || state.activeTasks.size >= state.maxConcurrent) {
       continue;
     }
     // No callbacks run during selection. Recompute on the next selection after

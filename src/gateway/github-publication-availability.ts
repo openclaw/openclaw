@@ -44,10 +44,9 @@ import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
-// Discovery only: publication resolves Git afresh. Registry/lifecycle guards retire facts early.
+// Discovery is best effort for 15 seconds; publication resolves the current Git repository again.
 const worktreeTargets = createStaleWhileRevalidateCache<{
   supported: boolean;
-  assertCurrent: () => void;
 }>({
   maxEntries: 256,
   maxPending: Number.POSITIVE_INFINITY,
@@ -651,17 +650,9 @@ export async function hasSupportedGitHubPublicationTarget(
     });
     return {
       supported: isSupportedGitHubOrigin(repository.originUrl),
-      assertCurrent: owner.assertRegistryCurrent,
     };
   };
-  let target = await worktreeTargets.read(key, load, { allowStale: false });
-  try {
-    target.value.assertCurrent();
-  } catch {
-    // A registry revision retires facts before their discovery TTL expires.
-    worktreeTargets.deleteValue(target.value);
-    target = await worktreeTargets.read(key, load, { allowStale: false });
-  }
+  const target = await worktreeTargets.read(key, load, { allowStale: false });
   assertWorktreeCurrent();
   return target.value.supported;
 }
