@@ -42,6 +42,50 @@ function resolveLoggingConfigSelector(): string {
     .join("\0");
 }
 
+function isUsableRedactPatternSource(value: unknown): value is string {
+  // A blank source compiles to nothing, so keeping it would replace the default policy with an
+  // operator list that masks nothing but the mandatory AWS matcher.
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+/**
+ * The canonical read parses the file without schema validation, so a declared `string[]` can hold
+ * any JSON. An entry the redaction matcher loop cannot execute makes every redacted write throw instead of
+ * masking, so unusable entries are dropped here while usable ones keep their policy.
+ */
+function withValidatedRedactPatterns(logging: Record<string, unknown>): Record<string, unknown> {
+  const patterns = logging.redactPatterns;
+  if (
+    patterns === undefined ||
+    (Array.isArray(patterns) && patterns.every(isUsableRedactPatternSource))
+  ) {
+    return logging;
+  }
+  if (!Array.isArray(patterns)) {
+    // A non-list value cannot express a pattern list at all, and the resolver would read a string's
+    // own length and iterate its characters as patterns.
+    const { redactPatterns: _notAList, ...rest } = logging;
+    return rest;
+  }
+  // Drop only what the matcher loop cannot execute: the operator's valid rules must keep masking,
+  // because discarding the whole list would expose exactly the values they configured. An empty
+  // result falls back to the built-in patterns through usesBuiltInRedactPatterns.
+  return { ...logging, redactPatterns: patterns.filter(isUsableRedactPatternSource) };
+}
+
+/**
+ * Applied snapshots come from callers that may publish a config which failed validation, such as
+ * read-only status scans, so the same normalization runs for that producer instead of on every read.
+ */
+export function sanitizeAppliedLoggingConfig(
+  logging: LoggingConfig | undefined,
+): LoggingConfig | undefined {
+  if (!logging || !isObjectRecord(logging)) {
+    return logging;
+  }
+  return withValidatedRedactPatterns(logging) as LoggingConfig;
+}
+
 function resolvePartialDiagnosticLoggingConfig(logging: unknown): LoggingConfig | undefined {
   if (!isObjectRecord(logging)) {
     return undefined;
@@ -128,7 +172,9 @@ export function readLoggingConfig(): LoggingConfig | undefined {
       return resolvePartialDiagnosticLoggingConfig(includedLogging);
     }
     const logging = isObjectRecord(resolvedConfig) ? resolvedConfig.logging : undefined;
-    const resolvedLogging = isObjectRecord(logging) ? (logging as LoggingConfig) : undefined;
+    const resolvedLogging = isObjectRecord(logging)
+      ? (withValidatedRedactPatterns(logging) as LoggingConfig)
+      : undefined;
     cachedLoggingConfig = {
       selector,
       logging: resolvedLogging,

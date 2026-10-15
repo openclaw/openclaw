@@ -21,7 +21,11 @@ import {
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { DEFAULT_POSIX_TMP_ROOT } from "../infra/tmp-openclaw-dir.js";
-import { invalidateLoggingConfigCache, readLoggingConfig } from "./config.js";
+import {
+  invalidateLoggingConfigCache,
+  readLoggingConfig,
+  sanitizeAppliedLoggingConfig,
+} from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, isLogLevelEnabled, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import {
@@ -73,7 +77,7 @@ function invalidateLoggerSettings(): void {
 
 /** Publishes authoritative config-derived logging state for the active runtime. */
 export function applyLoggingConfig(config: OpenClawConfig["logging"] | undefined): void {
-  loggingState.appliedConfig = config;
+  loggingState.appliedConfig = sanitizeAppliedLoggingConfig(config);
   invalidateLoggingConfigCache();
   invalidateLoggerSettings();
 }

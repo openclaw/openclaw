@@ -202,4 +202,27 @@ describe("readCurrentConfigForResolution", () => {
       }
     });
   });
+
+  it("degrades when the rejected config also carries malformed redaction patterns", async () => {
+    await withTempHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, {
+        logging: { redactPatterns: [1] },
+        gateway: { port: "abc" },
+      } as never);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        // The rejected file is the reason this read degrades, so resolving a redaction
+        // policy from that same unvalidated file must not abort the degradation.
+        const resolution = readCurrentConfigForResolution({ configPath });
+
+        expect(resolution.config).toEqual({});
+        const warning = warn.mock.calls.map(([line]) => String(line)).join("\n");
+        expect(warning).toContain("Config unavailable");
+        expect(warning).toContain("expected number, received string");
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
 });

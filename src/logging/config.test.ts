@@ -206,4 +206,85 @@ describe("readLoggingConfig", () => {
       existsSync.mockRestore();
     }
   });
+
+  // The canonical read is not schema-validated, so an entry here can be any JSON. A non-string
+  // pattern used to reach the redaction matcher loop, where every redacted write then throws.
+  it("drops redaction patterns it cannot use and keeps the operator's valid rules", () => {
+    const configPath = writeConfig(`{
+      logging: {
+        consoleStyle: "json",
+        redactPatterns: ["customer-secret-[0-9]+", 1],
+      },
+    }`);
+
+    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
+      expect(readLoggingConfig()).toStrictEqual({
+        consoleStyle: "json",
+        redactPatterns: ["customer-secret-[0-9]+"],
+      });
+    });
+  });
+
+  // A non-list value is not a pattern list; the resolver would otherwise iterate a string's
+  // characters as patterns.
+  it("drops a redaction pattern value that is not a list", () => {
+    const configPath = writeConfig(`{
+      logging: {
+        consoleStyle: "json",
+        redactPatterns: "customer-secret-[0-9]+",
+      },
+    }`);
+
+    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
+      expect(readLoggingConfig()).toStrictEqual({ consoleStyle: "json" });
+    });
+  });
+
+  // A blank source compiles to nothing, so it cannot stand in for the default policy.
+  it("drops blank redaction pattern sources", () => {
+    const configPath = writeConfig(`{
+      logging: {
+        consoleStyle: "json",
+        redactPatterns: ["", 1],
+      },
+    }`);
+
+    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
+      expect(readLoggingConfig()).toStrictEqual({ consoleStyle: "json", redactPatterns: [] });
+    });
+  });
+
+  // Applied snapshots can come from a read-only scan that published a config which failed
+  // validation, so the producer normalizes them too.
+  it("normalizes an applied snapshot that carries unusable patterns", () => {
+    applyLoggingConfig({ level: "debug", redactPatterns: [1] } as never);
+
+    expect(readLoggingConfig()).toStrictEqual({ level: "debug", redactPatterns: [] });
+  });
+
+  // An unusable list must not become a policy; an empty one falls back to the built-in patterns.
+  it("empties a redaction pattern list with no usable entries", () => {
+    const configPath = writeConfig(`{
+      logging: {
+        consoleStyle: "json",
+        redactPatterns: [1],
+      },
+    }`);
+
+    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
+      expect(readLoggingConfig()).toStrictEqual({ consoleStyle: "json", redactPatterns: [] });
+    });
+  });
+
+  it("keeps a redaction pattern list of strings", () => {
+    const configPath = writeConfig(`{
+      logging: {
+        redactPatterns: ["custom-secret-[0-9]+"],
+      },
+    }`);
+
+    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
+      expect(readLoggingConfig()).toStrictEqual({ redactPatterns: ["custom-secret-[0-9]+"] });
+    });
+  });
 });
