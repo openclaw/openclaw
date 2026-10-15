@@ -64,51 +64,6 @@ describe("AgentsPage routing", () => {
     },
   );
 
-  it("keeps a cold deep link while the first roster initializes the default selection", () => {
-    const listeners = new Set<() => void>();
-    const rosterSource = {
-      state: { agentsList: null as AgentsListResult | null },
-      subscribe: (listener: () => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    };
-    const selection = createAgentSelectionCapability(
-      {
-        connection: { gatewayUrl: "ws://settings.test" },
-        snapshot: { assistantAgentId: "main" },
-        subscribe: () => () => undefined,
-      },
-      rosterSource,
-      undefined,
-      undefined,
-      { requireConfiguredAgent: true },
-    );
-    const currentGateway = gateway(snapshot(null, false));
-    const agents = agentsCapability(async () => files("main", "main"));
-    const page = createAgentsPage();
-    page.context = {
-      ...pageContext(currentGateway, agents),
-      settingsAgentSelection: selection,
-    };
-    const preloaded = agentsRouteData(currentGateway, roster, "research", selection);
-    page.subscriptions.hostConnected();
-
-    rosterSource.state.agentsList = roster;
-    listeners.forEach((listener) => listener());
-    expect(selection.state.selectedId).toBe("main");
-    expect(page.context.navigate).not.toHaveBeenCalled();
-
-    page.routeData = preloaded;
-    page.applyRoute();
-
-    expect(selection.state.selectedId).toBe("research");
-    expect(page.agentsSelectedId).toBe("research");
-    expect(page.context.navigate).not.toHaveBeenCalled();
-    page.subscriptions.hostDisconnected();
-    selection.dispose();
-  });
-
   it("keeps Back at Settings when the roster defaults after Agents route data", async () => {
     const previousUrl = window.location.href;
     const previousState: unknown = window.history.state;

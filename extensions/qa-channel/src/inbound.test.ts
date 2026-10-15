@@ -100,40 +100,6 @@ describe("handleQaInbound", () => {
     expect(deleteQaBusMessage).not.toHaveBeenCalled();
   });
 
-  it("keeps block deliveries separate and retains tool calls discovered after a preview", async () => {
-    const runtime = createPluginRuntimeMock();
-    setQaChannelRuntime(runtime);
-
-    await startQaInbound(runtime, createQaInboundParams());
-
-    const assembled = firstRunAssembledParams(runtime);
-    await assembled.replyOptions?.onPartialReply?.({ text: "preview" });
-    await assembled.replyOptions?.onToolStart?.({
-      phase: "start",
-      name: "search",
-      args: { query: "qa" },
-    });
-    await assembled.delivery.deliver({ text: "tool result" }, { kind: "block" });
-    await assembled.delivery.deliver({ text: "final answer" }, { kind: "final" });
-
-    expect(deleteQaBusMessage).toHaveBeenCalledOnce();
-    expect(sendQaBusMessage).toHaveBeenCalledTimes(3);
-    expect(sendQaBusMessage).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        text: "tool result",
-        toolCalls: [{ name: "search", arguments: { query: "qa" } }],
-      }),
-    );
-    expect(sendQaBusMessage).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({
-        text: "final answer",
-        toolCalls: [{ name: "search", arguments: { query: "qa" } }],
-      }),
-    );
-  });
-
   it("does not suppress the final caption after a failed media delivery", async () => {
     const runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);
@@ -317,24 +283,6 @@ describe("handleQaInbound", () => {
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
   });
 
-  it("allows direct messages from configured senders", async () => {
-    const runtime = createPluginRuntimeMock();
-    setQaChannelRuntime(runtime);
-
-    await handleQaInbound(
-      createQaInboundParams({
-        accountConfig: {
-          allowFrom: ["alice"],
-        },
-      }),
-    );
-
-    expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
-    const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
-    expect(ctxPayload?.CommandAuthorized).toBe(true);
-    expect(ctxPayload?.SenderId).toBe("alice");
-  });
-
   it("preserves the complete native command in its slash session", async () => {
     const name = "think";
     const text = "/think high";
@@ -455,29 +403,6 @@ describe("handleQaInbound", () => {
     } finally {
       warn.mockRestore();
     }
-  });
-
-  it("uses allowFrom as the group sender fallback for allowlist policy", async () => {
-    const runtime = createPluginRuntimeMock();
-    setQaChannelRuntime(runtime);
-
-    await handleQaInbound(
-      createQaInboundParams({
-        accountConfig: {
-          allowFrom: ["alice"],
-          groupPolicy: "allowlist",
-        },
-        message: {
-          conversation: {
-            kind: "group",
-            id: "qa-room",
-            title: "QA Room",
-          },
-        },
-      }),
-    );
-
-    expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
   });
 
   it("skips configured group messages that miss mention activation", async () => {

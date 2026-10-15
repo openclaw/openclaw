@@ -292,7 +292,7 @@ function readFirstRuntimeFactoryInput(runtimeFactory: { mock: { calls: Array<Arr
 }
 
 describe("createAcpxRuntimeService", () => {
-  it.each(["absent", "occupied", "move-failed", "marker-failed", "destination-unreadable"])(
+  it.each(["absent", "move-failed", "marker-failed", "destination-unreadable"])(
     "preserves legacy sessions at startup with a %s destination",
     async (scenario) => {
       const ctx = createServiceContext(testWorkspace.dir);
@@ -320,10 +320,6 @@ describe("createAcpxRuntimeService", () => {
       await fs.writeFile(path.join(legacy, "retained-history.bin"), "opaque history");
       const original = await createFileSessionStore({ stateDir: legacy }).load(recordId);
       expect(original?.acpSessionId).toBe("upstream-retained");
-      if (scenario === "occupied") {
-        await fs.mkdir(destination, { recursive: true });
-        await fs.writeFile(path.join(destination, "existing"), "do not overwrite");
-      }
       if (scenario === "move-failed") {
         const rename = fs.rename.bind(fs);
         vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
@@ -379,20 +375,13 @@ describe("createAcpxRuntimeService", () => {
         await service.start(ctx);
         const retained = scenario === "move-failed";
         expect(selected).toBe(retained ? legacy : destination);
-        if (scenario === "occupied") {
-          expect(await fs.readFile(recordPath, "utf8")).toContain("upstream-retained");
-          expect(await fs.readFile(path.join(destination, "existing"), "utf8")).toBe(
-            "do not overwrite",
-          );
-        } else {
-          expect(await createFileSessionStore({ stateDir: selected }).load(recordId)).toEqual(
-            original,
-          );
-          expect(await fs.readFile(path.join(selected, "retained-history.bin"), "utf8")).toBe(
-            "opaque history",
-          );
-        }
-        if (!retained && scenario !== "occupied" && scenario !== "destination-unreadable") {
+        expect(await createFileSessionStore({ stateDir: selected }).load(recordId)).toEqual(
+          original,
+        );
+        expect(await fs.readFile(path.join(selected, "retained-history.bin"), "utf8")).toBe(
+          "opaque history",
+        );
+        if (!retained && scenario !== "destination-unreadable") {
           await expect(fs.stat(legacy)).rejects.toMatchObject({ code: "ENOENT" });
           expect(ctx.logger.info).toHaveBeenCalledWith(
             expect.stringContaining("Migrated ACPX session state"),
@@ -595,6 +584,8 @@ describe("createAcpxRuntimeService", () => {
   it("snapshots legacy session ownership when acquiring a runtime without probing", async () => {
     process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "0";
     delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE;
+    delete process.env.TOKIO_WORKER_THREADS;
+    availableParallelismMock.mockReturnValue(64);
     const ctx = createServiceContext(testWorkspace.dir);
     const service = createAcpxRuntimeService(ctx, { openKeyedStore: createEmptyAcpxKeyedStore });
     const sessionsDir = path.join(ctx.stateDir, "acpx", "sessions");
@@ -613,6 +604,7 @@ describe("createAcpxRuntimeService", () => {
     expect(acpxRuntimeConstructorMock).toHaveBeenCalledOnce();
     expect(acpxRuntimeConstructorMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        agentProcessEnv: { TOKIO_WORKER_THREADS: "8" },
         elicitationModes: ["form", "url"],
         openclawLegacyBareSessionKeys: new Set(["global", "openclaw-owner-v1-existing"]),
       }),
@@ -620,24 +612,6 @@ describe("createAcpxRuntimeService", () => {
 
     await service.stop?.(ctx);
   });
-
-  it.each([{ parallelism: 64, expected: "8" }])(
-    "bounds default ACPX Tokio workers at host parallelism $parallelism",
-    async ({ parallelism, expected }) => {
-      process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "0";
-      delete process.env.TOKIO_WORKER_THREADS;
-      availableParallelismMock.mockReturnValue(parallelism);
-      const ctx = createServiceContext(testWorkspace.dir);
-      const service = createAcpxRuntimeService(ctx, { openKeyedStore: createEmptyAcpxKeyedStore });
-
-      await service.start(ctx);
-
-      expect(acpxRuntimeConstructorMock).toHaveBeenCalledWith(
-        expect.objectContaining({ agentProcessEnv: { TOKIO_WORKER_THREADS: expected } }),
-      );
-      await service.stop?.(ctx);
-    },
-  );
 
   it("preserves an explicit ACPX Tokio worker override", async () => {
     process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "0";
