@@ -339,14 +339,7 @@ it("keeps actor facts after usage cache writes and pruning", async () => {
       expect(await usage.acquire()).toBe(true);
       const snapshot = hydrate(fixture);
       const valueJson = new TextEncoder().encode("{}");
-      expect(
-        await usage.writeRollup({
-          rollupId: "usage-rollup",
-          valueJson,
-          blob: null,
-          updatedAt: 1,
-        }),
-      ).toBe(true);
+      await usage.writeRollup([{ rollupId: "usage-rollup", valueJson, blob: null, updatedAt: 1 }]);
       expect(replica.read()).toEqual(snapshot);
       await usage.pruneRows([{ key: "usage-rollup", valueJson, updatedAt: 1 }]);
       expect(replica.read()).toEqual(snapshot);
