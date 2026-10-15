@@ -10,6 +10,13 @@ type Props = { details: ChatDetailsProps; presented: boolean };
 
 export function ChatDetailsEnvironment(props: Props) {
   const workspace = () => props.details.detailsWorkspace;
+  const workspaceLabel = () =>
+    workspace()?.label ||
+    workspace()
+      ?.root?.replace(/[\\/]+$/, "")
+      .split(/[\\/]/)
+      .pop() ||
+    t("chat.sessionDetails.workspaceUnavailable");
   const session = () => props.details.selectedSession;
   const host = () => session()?.execNode ?? session()?.deviceFolder?.deviceId;
   const model = () => session()?.activeModel || session()?.model;
@@ -25,17 +32,10 @@ export function ChatDetailsEnvironment(props: Props) {
           <span>{host()}</span>
         </div>
       </Show>
-      <div class="chat-details__row" title={workspace()?.root ?? undefined}>
+      <div class="chat-details__row" title={workspaceLabel()}>
         <Icon name="folder" />
         <div class="chat-details__value">
-          <span>
-            {workspace()?.label ||
-              workspace()?.root ||
-              t("chat.sessionDetails.workspaceUnavailable")}
-          </span>
-          <Show when={workspace()?.root && workspace()?.label}>
-            <span class="chat-details__path">{workspace()?.root}</span>
-          </Show>
+          <span>{workspaceLabel()}</span>
         </div>
         <Show when={workspace()?.root}>
           {(root) => <CopyButton text={root()} idleLabel={t("chat.sessionHeader.copyPath")} bare />}

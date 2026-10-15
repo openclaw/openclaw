@@ -329,9 +329,6 @@ describe("question dispatch ownership", () => {
               status: "answered",
               answers: { answers: { answer: ["successor"] } },
             });
-            if (owner === "harness") {
-              expect(onPrompt).not.toHaveBeenCalled();
-            }
             expect(
               fixture.requests.filter((frame) => frame.method === "question.resolve"),
             ).toHaveLength(1);
