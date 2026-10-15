@@ -1,3 +1,4 @@
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
 import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -87,7 +88,11 @@ export function createGatewayInstanceRuntime(
 
   const assertDispatchAvailable = (method: string) => {
     if (closed || !options.isDispatchAvailable()) {
-      throw new Error(`Gateway instance dispatch unavailable for ${method}`);
+      throw new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: `Gateway instance dispatch unavailable for ${method}`,
+        retryable: !closed,
+      });
     }
   };
 
