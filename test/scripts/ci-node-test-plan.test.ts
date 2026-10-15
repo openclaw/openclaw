@@ -3234,7 +3234,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it("uses 16-class capacity without dropping selected Gateway and embedded-agent work", () => {
+  it("keeps selected Gateway and embedded-agent work within its runner capacity", () => {
     const targets = [
       "src/gateway/openai-http.test.ts",
       "src/agents/embedded-agent-runner/compact.small-context.test.ts",
@@ -3250,9 +3250,13 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
       targets.toSorted(),
     );
+    expect(plan.filter((job) => job.planConcurrency === 2)).toHaveLength(1);
     for (const job of plan) {
-      expect(job.runner).toBe("blacksmith-16vcpu-ubuntu-2404");
-      expect(job.planConcurrency).toBe(1);
+      expect(job.runner).toBe(
+        job.planConcurrency === 2
+          ? "blacksmith-32vcpu-ubuntu-2404"
+          : "blacksmith-16vcpu-ubuntu-2404",
+      );
     }
     for (const group of groups) {
       expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS ?? String(group.fallbackMaxWorkers)).toBe("2");
