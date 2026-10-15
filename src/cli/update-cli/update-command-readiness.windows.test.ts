@@ -280,6 +280,124 @@ describe("managed Windows update after the startup canary", () => {
     }
   });
 
+  it.each([
+    { json: false, reset: "generation" },
+    { json: true, reset: "unrelated error" },
+  ])("resets retired-plugin failures after $reset (json=$json)", async ({ json, reset }) => {
+    const f = fixture();
+    const retiredPluginFailure = {
+      ...unreachable,
+      probeError:
+        "PluginInstanceUnavailableError: Plugin openai was reloaded or disabled; use its current tools. password=diagnostic-secret",
+    };
+    const previousBootId = reset === "generation" ? "old-generation" : "new-generation";
+    const observations = [
+      { ...retiredPluginFailure, gatewayBootId: previousBootId },
+      { ...retiredPluginFailure, gatewayBootId: previousBootId },
+      ...(reset === "unrelated error" ? [{ ...unreachable, gatewayBootId: previousBootId }] : []),
+      { ...retiredPluginFailure, gatewayBootId: "new-generation" },
+      { ...retiredPluginFailure, gatewayBootId: "new-generation" },
+      { ...retiredPluginFailure, gatewayBootId: "new-generation" },
+    ];
+    const beforeThresholdMs = (observations.length - 2) * 500;
+    native.reachable.mockImplementation(
+      async () =>
+        observations.shift() ?? {
+          ...retiredPluginFailure,
+          gatewayBootId: "new-generation",
+        },
+    );
+    const abort = new AbortController();
+    const pending = verifyPreviousGatewayForUpdate({
+      ...f.params,
+      opts: { ...f.params.opts, json },
+      timeoutMs: 60_000,
+      signal: abort.signal,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(beforeThresholdMs);
+      expect(
+        f.read().steps.some((step) => step.step === "warning:previous gateway plugin health"),
+      ).toBe(false);
+      await vi.advanceTimersByTimeAsync(500);
+
+      const warning = f
+        .read()
+        .steps.find((step) => step.step === "warning:previous gateway plugin health");
+      expect(warning).toMatchObject({ status: "completed" });
+      expect(warning?.detail).toMatch(/health RPC repeatedly.*retired plugin/i);
+      expect(warning?.detail).toContain("openclaw gateway status --deep --require-rpc");
+      expect(warning?.detail).toMatch(/continues.*readiness budget/i);
+      expect(warning?.detail).not.toContain("diagnostic-secret");
+      expect(f.wait()).toMatchObject({ status: "in_progress" });
+      expect(f.read().status).toBe("running");
+      expect(defaultRuntime[json ? "error" : "log"]).toHaveBeenCalledWith(
+        expect.stringContaining("warning:previous gateway plugin health"),
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(
+        vi
+          .mocked(defaultRuntime[json ? "error" : "log"])
+          .mock.calls.filter(([line]) =>
+            String(line).startsWith("warning:previous gateway plugin health"),
+          ),
+      ).toHaveLength(1);
+    } finally {
+      abort.abort(new Error("fixture completed"));
+      await Promise.allSettled([pending]);
+    }
+  });
+
+  it("does not infer repeated plugin failure from an unidentified Gateway generation", async () => {
+    const f = fixture();
+    native.runtime.mockResolvedValue({ status: "running" });
+    native.reachable.mockResolvedValue({
+      ...unreachable,
+      probeError:
+        "PluginInstanceUnavailableError: Plugin openai was reloaded or disabled; use its current tools.",
+    });
+    const abort = new AbortController();
+    const pending = verifyPreviousGatewayForUpdate({
+      ...f.params,
+      timeoutMs: 60_000,
+      signal: abort.signal,
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(
+        f.read().steps.some((step) => step.step === "warning:previous gateway plugin health"),
+      ).toBe(false);
+      expect(f.read().status).toBe("running");
+    } finally {
+      abort.abort(new Error("fixture completed"));
+      await Promise.allSettled([pending]);
+    }
+  });
+
+  it("keeps a recovering previous Gateway eligible without a retired-plugin warning", async () => {
+    const f = fixture();
+    native.reachable
+      .mockResolvedValue({
+        ...unreachable,
+        reachable: true,
+        gatewayVersion: "2026.9.5",
+        gatewayBootId: "recovering-generation",
+        probeError: undefined,
+      })
+      .mockResolvedValueOnce({
+        ...unreachable,
+        gatewayBootId: "recovering-generation",
+        probeError:
+          "PluginInstanceUnavailableError: Plugin openai was reloaded or disabled; use its current tools.",
+      });
+    const pending = verifyPreviousGatewayForUpdate({ ...f.params, timeoutMs: 60_000 });
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(pending).resolves.toBe(true);
+    expect(
+      f.read().steps.some((step) => step.step === "warning:previous gateway plugin health"),
+    ).toBe(false);
+  });
+
   it("records a warning and an operator next step when its explicit readiness budget expires", async () => {
     const f = fixture();
     const pending = verifyPreviousGatewayForUpdate({ ...f.params, timeoutMs: 1_000 });

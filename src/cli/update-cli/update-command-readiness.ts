@@ -39,6 +39,10 @@ import {
 } from "./update-command-service-plan.js";
 import { hasLoadedLaunchdKeepAliveSupervisor } from "./update-command-supervisor.js";
 
+const RETIRED_PLUGIN_INSTANCE_ERROR =
+  /PluginInstanceUnavailableError:\s*Plugin ([\w.-]+) was reloaded or disabled; use its current tools\./u;
+const RETIRED_PLUGIN_DIAGNOSTIC_REPEAT_COUNT = 3;
+
 export async function verifyPreviousGatewayForUpdate(params: {
   root: string;
   config: OpenClawConfig;
@@ -67,6 +71,54 @@ export async function verifyPreviousGatewayForUpdate(params: {
     sharedDeadline ?? createGatewayRestartDeadline({ timeoutMs, signal: params.signal });
   let lastProgress = { stage: "", at: -Infinity };
   let lastReason = "resolving the previous Gateway port and installed version";
+  let previousPluginFailure: { snapshot: GatewayRestartSnapshot; error: string } | undefined;
+  let retiredPluginFailureCount = 0;
+  let retiredPluginNoticePublished = false;
+  const observeRetiredPluginFailure = (snapshot: GatewayRestartSnapshot) => {
+    assertCurrent();
+    const error = snapshot.probeError;
+    const plugin = error?.match(RETIRED_PLUGIN_INSTANCE_ERROR)?.[1];
+    const hasGeneration =
+      snapshot.runtime.pid !== undefined || snapshot.gatewayBootId !== undefined;
+    if (!plugin || snapshot.healthy || !hasGeneration) {
+      previousPluginFailure = undefined;
+      retiredPluginFailureCount = 0;
+      retiredPluginNoticePublished = false;
+      return;
+    }
+    const sameFailure =
+      previousPluginFailure &&
+      previousPluginFailure.error === error &&
+      isSameGatewayRestartGeneration(previousPluginFailure.snapshot, snapshot);
+    retiredPluginFailureCount = sameFailure ? retiredPluginFailureCount + 1 : 1;
+    if (!sameFailure) {
+      retiredPluginNoticePublished = false;
+    }
+    previousPluginFailure = { snapshot, error };
+    if (
+      retiredPluginFailureCount < RETIRED_PLUGIN_DIAGNOSTIC_REPEAT_COUNT ||
+      retiredPluginNoticePublished
+    ) {
+      return;
+    }
+    retiredPluginNoticePublished = true;
+    const detail = redactSupportDiagnosticLine(
+      `Previous Gateway health RPC repeatedly reported a retired plugin instance for ${plugin}. Inspect with openclaw gateway status --deep --require-rpc and check Gateway logs for plugin reload failures. Readiness verification continues with its existing readiness budget. This readiness check does not restart the Gateway. Last observation: ${error}`,
+      { env, stateDir: resolveStateDir(env) },
+      500,
+    );
+    const fact: UpdateRunStep = {
+      step: "warning:previous gateway plugin health",
+      status: "completed",
+      startedAtMs,
+      endedAtMs: Date.now(),
+      detail,
+    };
+    if (run) {
+      recordUpdateRunStep(run.runId, fact, { env: run.env });
+    }
+    defaultRuntime[params.opts.json ? "error" : "log"](`${fact.step}: ${detail}`);
+  };
   const progress = (stage: string, reason: string, warning = false) => {
     if (!warning) {
       deadline.signal.throwIfAborted();
@@ -122,6 +174,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
         requirePluginHealth: params.requirePluginHealth,
         assertCurrent,
         onProgress: progress,
+        onObservation: observeRetiredPluginFailure,
       });
       if (health.waitOutcome === "timeout" || health.waitOutcome === "still-starting") {
         progress(health.waitOutcome, lastReason, true);
@@ -195,6 +248,7 @@ export type UpdateGatewayReadinessParams = {
   deadlineMs?: number;
   deadline?: GatewayRestartDeadline;
   onProgress?: (stage: string, reason: string) => void;
+  onObservation?: (snapshot: GatewayRestartSnapshot) => void;
   observedStartupMs?: number;
   expectedVersion?: string;
   expectedBuildId?: string;
@@ -318,6 +372,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       onObservation: (snapshot) => {
         health = snapshot;
         retainChannelTimeouts(snapshot);
+        params.onObservation?.(snapshot);
         params.onProgress?.(
           "readiness",
           `${snapshot.startupPhase}; service=${snapshot.runtime.status} PID=${snapshot.runtime.pid ?? "unknown"}${snapshot.runtime.inspectionFailure ? `; native inspection=${snapshot.runtime.inspectionFailure.timeoutMs === undefined ? "unavailable" : `timed out (${snapshot.runtime.inspectionFailure.timeoutMs}ms)`}` : ""}; listener=${snapshot.portUsage.status}; listener PIDs=${snapshot.portUsage.listeners.map(({ pid }) => pid ?? "unknown").join(",") || "none"}; health=${snapshot.healthy ? "ready" : "unverified"}${snapshot.probeError ? `; ${snapshot.probeError}` : ""}`,
