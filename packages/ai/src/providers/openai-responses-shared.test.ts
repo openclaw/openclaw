@@ -771,7 +771,12 @@ describe("processResponsesStream", () => {
     const output = createAssistantOutput();
     const { stream, events } = createCapturedAssistantMessageEventStream();
     await expect(
-      processResponsesStream(streamResponsesEvents(input), output, stream, nativeOpenAIModel),
+      processResponsesStream(
+        streamResponsesEvents<(typeof input)[number]>(input),
+        output,
+        stream,
+        nativeOpenAIModel,
+      ),
     ).rejects.toThrow(error);
     expect(events.map((event) => event.type)).toEqual(expectedEvents);
   });

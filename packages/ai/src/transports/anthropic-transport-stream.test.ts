@@ -1287,9 +1287,9 @@ describe("anthropic transport stream", () => {
         model,
         {
           messages: [
-            { role: "user", content: "think" },
+            { role: "user", content: "think", timestamp: 0 },
             { ...firstResult, timestamp: 0 },
-            { role: "user", content: "continue" },
+            { role: "user", content: "continue", timestamp: 0 },
           ],
         },
         options,
