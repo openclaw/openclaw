@@ -139,7 +139,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
     mode: "node",
     deviceFamily: "Apple Watch",
   } satisfies ConnectParams["client"];
-  test.each([
+  test.for([
     {
       name: "embedded WebSocket",
       watchHttp: false,
