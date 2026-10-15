@@ -103,6 +103,7 @@ export async function dispatchSqliteWorkerJob(
       }
     }
     job.request.operationAdmission = prepareSqliteWorkerOperationAdmission(
+      slot,
       job,
       actor,
       databasePath,
@@ -143,6 +144,7 @@ export async function dispatchSqliteWorkerJob(
 }
 
 function prepareSqliteWorkerOperationAdmission(
+  slot: Slot,
   job: Job,
   actor: Actor | undefined,
   databasePath: string | undefined,
