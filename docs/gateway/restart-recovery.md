@@ -15,6 +15,16 @@ resume them. Recovery is always on. Exhausted infrastructure retries, or a
 missing durable message-action authority claim, may tombstone one session
 until you inspect or replace it.
 
+Every Gateway process shutdown preserves eligible unfinished turns, including a
+plain `SIGTERM`, a systemd or launchd service stop/restart, and
+`openclaw gateway stop`. A Gateway stopped today resumes that work when it starts
+tomorrow, without a new user message. Shutdown uses the same interruption and
+recovery marking as a managed restart, with the existing drain deadlines.
+Explicit session Stop/cancel remains terminal. The crash-loop breaker, recovery
+retry budgets, current-authority checks, and archived/reset exclusions still apply.
+In-flight cron occurrences keep their existing restart treatment; this does not
+add automatic continuation of an interrupted occurrence.
+
 Inter-session steering updates remain context for the executing turn. When that
 turn retains a Control UI, channel, or authenticated operator source claim,
 recovery uses the claim rather than treating the latest steering message as a new
@@ -310,7 +320,8 @@ and up to another 5 seconds before systemd's deadline. For a requested restart, 
 shutdown deadline. A shorter supervisor timeout also caps requested restart waits.
 
 An ordinary stop (including `systemctl restart` without a managed restart intent)
-gives active runs at most 20 seconds to finish before cancelling execution. Final
+gives active runs at most 20 seconds to finish before recording recovery and
+interrupting execution. Unfinished tasks remain eligible for the next startup. Final
 chat writes, worktree lease release, checkpointing, and database close retain the
 remaining native shutdown budget. Shutdown settles received work and stop hooks
 before full harness disposal, then joins worktree leases before worker retirement,

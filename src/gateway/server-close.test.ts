@@ -1234,19 +1234,19 @@ describe("createGatewayCloseHandler", () => {
         ...(restart ? { restartExpectedMs: 123 } : {}),
         drainTimeoutMs: 0,
       });
-      expect(result.warnings.includes("restart-reply-drain")).toBe(restart);
+      expect(result.warnings).toContain("restart-reply-drain");
       expect(controller.signal.aborted).toBe(!finalizing);
       expect(chatAbortControllers.has(runId)).toBe(finalizing);
       expect(chatAbortControllers.size).toBe(finalizing ? 1 : 0);
       if (!finalizing) {
-        expect(isAgentRunRestartAbortReason(controller.signal.reason)).toBe(restart);
+        expect(isAgentRunRestartAbortReason(controller.signal.reason)).toBe(true);
       }
       if (!restart) {
-        expect(getPendingReplyCount).not.toHaveBeenCalled();
-        expect(markMainSessionsAbortedForRestart).not.toHaveBeenCalled();
+        expect(getPendingReplyCount).toHaveBeenCalled();
+        expect(markMainSessionsAbortedForRestart).toHaveBeenCalledOnce();
         expect(deps.broadcast).toHaveBeenCalledWith(
           "chat",
-          expect.objectContaining({ runId, state: "aborted", stopReason: "rpc" }),
+          expect.objectContaining({ runId, state: "aborted", stopReason: "restart" }),
           { sessionKeys: ["session-1"] },
         );
       }
