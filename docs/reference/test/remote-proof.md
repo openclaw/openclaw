@@ -147,6 +147,31 @@ Unset all `CRABBOX_TAILSCALE*` overrides, force `--network public
 --tailscale=false`, clear exit-node/LAN flags, and require `crabbox inspect` to
 report public networking with no Tailscale state before uploading any script.
 
+## Focused Android proof
+
+Select the Android entry when a focused Gradle task needs a fresh Testbox:
+
+```bash
+node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox \
+  --blacksmith-workflow .github/workflows/ci-android-focused-testbox.yml \
+  --blacksmith-job check --label android-proof -- \
+  node scripts/run-android-gradle.mts --proof \
+  :app:testPlayDebugUnitTest --tests ai.openclaw.app.AndroidLicenseNoticesTest
+```
+
+The Android entry and existing shell preparation action prepare the
+same pinned Java/SDK as Android CI and the frozen native-generation dependencies.
+The Android entry uses the existing focused runner budget; ordinary focused
+Testboxes do not install Android. SDK discovery and the Gradle Java property work
+in non-login SSH shells as well as the hydration job.
+
+`--proof` verifies prerequisites before starting Gradle. Unavailable prerequisites
+produce one actionable diagnostic and a nonzero result, explicitly recording
+that no tests executed. Ordinary Gradle invocations remain unchanged. After
+Gradle starts, build/generation failures still do not count as executed tests;
+use the selected task's test XML reports to establish execution and results.
+Linux ARM cannot provide this proof with Google's x86_64 AAPT2 artifact.
+
 ## Testbox runner sizing
 
 Use the default 16-class workflow for routine remote proof, with a 60-minute

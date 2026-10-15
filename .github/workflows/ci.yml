@@ -4835,7 +4835,7 @@ jobs:
         if: hashFiles('scripts/prepare-apple-mermaid.mjs') != ''
         env:
           CI: "true"
-        run: &mermaid_renderer_install_run >-
+        run: >-
           pnpm install --frozen-lockfile --prefer-offline --optional
           --filter '@openclaw/mermaid-renderer...'
           --filter '@openclaw/gateway-protocol...'
@@ -5993,12 +5993,6 @@ jobs:
             scripts/ci-collect-checks.sh
           persist-credentials: false
 
-      - name: Setup Android toolchain
-        id: android-toolchain
-        uses: ./.ci-harness/.github/actions/setup-android-toolchain
-        with:
-          cache-mode: ${{ needs.preflight.outputs.cache_write_allowed == 'true' && 'read-write' || needs.preflight.outputs.cache_mode }}
-
       - name: Setup Node environment for native resources
         if: needs.preflight.outputs.use_compatible_android_ci != 'true'
         uses: ./.ci-harness/.github/actions/setup-node-env
@@ -6007,11 +6001,12 @@ jobs:
           install-bun: "false"
           install-deps: "false"
 
-      - name: Install native asset dependencies
-        if: needs.preflight.outputs.use_compatible_android_ci != 'true'
-        env:
-          CI: "true"
-        run: *mermaid_renderer_install_run
+      - name: Setup Android toolchain
+        id: android-toolchain
+        uses: ./.ci-harness/.github/actions/setup-android-toolchain
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_write_allowed == 'true' && 'read-write' || needs.preflight.outputs.cache_mode }}
+          install-native-deps: ${{ needs.preflight.outputs.use_compatible_android_ci != 'true' && 'true' || 'false' }}
 
       - name: Mount Gradle sticky disk
         if: &android_gradle_sticky_disk_gate vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !(contains(fromJSON('["hybrid","runson"]'), vars.OPENCLAW_CI_RUNNER_BACKEND) && github.run_attempt > 1) && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
@@ -6210,13 +6205,6 @@ jobs:
       - *android_checkout_step
       - *android_toolchain_checkout_step
 
-      - name: Setup Android screenshot toolchain
-        id: android-toolchain
-        uses: ./.ci-harness/.github/actions/setup-android-toolchain
-        with:
-          cache-mode: *cache_mode
-          install-screenshot-emulators: "true"
-
       - name: Setup Node environment for native resources
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
@@ -6224,10 +6212,13 @@ jobs:
           install-bun: "false"
           install-deps: "false"
 
-      - name: Install native asset dependencies
-        env:
-          CI: "true"
-        run: *mermaid_renderer_install_run
+      - name: Setup Android screenshot toolchain
+        id: android-toolchain
+        uses: ./.ci-harness/.github/actions/setup-android-toolchain
+        with:
+          cache-mode: *cache_mode
+          install-screenshot-emulators: "true"
+          install-native-deps: "true"
 
       - name: Prepare Linux screenshot image tools
         run: |
