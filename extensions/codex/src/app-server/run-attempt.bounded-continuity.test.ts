@@ -69,7 +69,10 @@ function appendToolPair(manager: SessionManager, index: number) {
 describe("Codex bounded assistant continuity", () => {
   it("retains an assistant-only bounded suffix on a rotated native thread", async () => {
     const { params, manager } = await createHistory();
-    manager.appendMessage(userMessage("Explain the synthetic migration plan.", 1));
+    // Tool-body omission must not make this user turn fit the history budget.
+    manager.appendMessage(
+      userMessage("Explain the synthetic migration plan." + "x".repeat(16_384), 1),
+    );
     for (let index = 0; index < 4; index++) {
       appendToolPair(manager, index);
     }

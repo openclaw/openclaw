@@ -58,13 +58,11 @@ process.on("rejectionHandled", (promise) => cell?.rejections.delete(promise));
 // Pressure belongs to the isolate, including time between checkpoints and idle GC.
 let gcStartedAt = performance.now();
 let majorCollections = 0;
-let gcDurationMs = 0;
 observeGcSamples((samples) => {
   for (const sample of samples) {
     if (sample.kind === "mark_sweep_compact") {
       majorCollections++;
     }
-    gcDurationMs += sample.durationMs;
   }
   const now = performance.now();
   const elapsedMs = now - gcStartedAt;
@@ -73,7 +71,7 @@ observeGcSamples((samples) => {
   }
   // Frequent majors can thrash even with a modest GC time share. Sample heap only
   // after sustained collection; the host deadline still interrupts synchronous loops.
-  if (majorCollections >= elapsedMs / 50 && gcDurationMs >= elapsedMs / 10) {
+  if (majorCollections >= elapsedMs / 50) {
     const heap = getHeapStatistics();
     if (heap.used_heap_size >= heap.heap_size_limit * 0.85) {
       // A fatal worker error also retires a parked or warm isolate. Never let the
@@ -90,7 +88,6 @@ observeGcSamples((samples) => {
   }
   gcStartedAt = now;
   majorCollections = 0;
-  gcDurationMs = 0;
 });
 
 const bridgeMethods = new Set<string>([

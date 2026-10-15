@@ -243,11 +243,11 @@ async function loadSessionFiles(
           const current = metadata
             ? metadata.readCurrent()
             : readRetainedSessionEntryFacts(
-                { agentId, path: storePath },
                 {
-                  sessionKeys: [canonicalKey],
-                  snapshotFields: [],
+                  agentId: loaded.readSource?.agentId ?? agentId,
+                  path: loaded.readSource?.path ?? storePath,
                 },
+                { sessionKeys: [canonicalKey], snapshotFields: [] },
               )?.entries.find((row) => row.sessionKey === canonicalKey)?.entry;
           if (
             current?.sessionId !== entry.sessionId ||
