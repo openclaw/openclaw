@@ -563,8 +563,14 @@ describe("ensureSandboxContainer config-hash recreation", () => {
 
 describe("ensureSandboxContainer managed mounts", () => {
   const harness = createSandboxContainerTestHarness();
-  const { resolveDockerSourceNamespace, spawnState, registryMocks, tempDirs, createSandboxConfig } =
-    harness;
+  const {
+    resolveDockerSourceNamespace,
+    spawnState,
+    registryMocks,
+    tempDirs,
+    createSandboxConfig,
+    ensureSandboxCreateCallForTest,
+  } = harness;
 
   it("preserves a hot container after a source change, then recreates it when stopped", async () => {
     const workspaceDir = fs.realpathSync(tempDirs.make("openclaw-dood-"));
@@ -643,5 +649,29 @@ describe("ensureSandboxContainer managed mounts", () => {
     expect(create).toBeDefined();
     expect(collectDockerFlagValues(create!.args, "--tmpfs")).not.toContain("/workspace/cache:rw");
     expect(spawnState.labelHash).not.toBe(firstHash);
+  });
+
+  it("skips user binds that conflict with protected skill overlays for Podman", async () => {
+    const workspaceDir = tempDirs.make("openclaw-docker-mounts-");
+    const customRoot = tempDirs.make("openclaw-docker-mounts-");
+    fs.mkdirSync(path.join(workspaceDir, "skills", "demo"), { recursive: true });
+    const customMount = `${customRoot}:/workspace/skills:rw`;
+    const cfg = createSandboxConfig([], [customMount]);
+    cfg.backend = "podman";
+    cfg.docker.workdir = "/workspace/.";
+    cfg.docker.dangerouslyAllowExternalBindSources = true;
+    spawnState.inspectRunning = false;
+    registryMocks.readRegistryEntry.mockResolvedValue(null);
+
+    const createCall = await ensureSandboxCreateCallForTest({
+      cfg,
+      workspaceDir,
+      engine: harness.PODMAN_SANDBOX_ENGINE,
+    });
+    const bindArgs = collectDockerFlagValues(createCall.args, "-v");
+
+    expect(createCall.command).toBe("podman");
+    expect(bindArgs).not.toContain(customMount);
+    expect(bindArgs).toContain(`${path.join(workspaceDir, "skills")}:/workspace/skills:ro,z`);
   });
 });
