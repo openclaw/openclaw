@@ -3027,6 +3027,9 @@ importers:
       markdown-it-emoji:
         specifier: 3.1.0
         version: 3.1.0
+      mediabunny:
+        specifier: 1.61.0
+        version: 1.61.0
       parse5:
         specifier: 8.0.1
         version: 8.0.1

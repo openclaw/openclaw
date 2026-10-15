@@ -127,18 +127,24 @@ export function appendChatAttachmentFiles(
     candidates.filter((file) => !unsupported.includes(file)),
     props.attachmentLimits,
     stagedBytes,
-    { resizeImages: true },
+    { resizeImages: true, compressVideos: true },
   );
   if (files.length === 0) {
     return 0;
   }
   const reads =
     props.attachmentReads ?? new ChatAttachmentReadLifecycle(() => props.onRequestUpdate?.());
-  const entries = reads.begin(files, currentAttachments(props), {
-    getAttachments: () => currentAttachments(props),
-    onAttachmentsChange: props.onAttachmentsChange,
-    onPendingReadsChange: props.onPendingReadsChange,
-  });
+  const entries = reads.begin(
+    files,
+    currentAttachments(props),
+    {
+      getAttachments: () => currentAttachments(props),
+      onAttachmentsChange: props.onAttachmentsChange,
+      onPendingReadsChange: props.onPendingReadsChange,
+    },
+    props.attachmentLimits,
+    stagedBytes,
+  );
   entries.forEach((entry, index) => {
     const file = files[index];
     if (file) {
@@ -405,7 +411,7 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
           const att = entry.attachment;
           const reading = entry.state === "reading";
           const failed = entry.state === "error";
-          const failureLabel = t("chat.attachments.readFailed", {
+          const failureLabel = t(entry.errorMessage ?? "chat.attachments.readFailed", {
             names: att.fileName ?? t("chat.attachments.attachedFile"),
             more: "",
           });
@@ -420,39 +426,63 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
                   <div
                     class=${[
                       "chat-attachment-thumb",
+                      entry.preparation || entry.errorMessage
+                        ? "chat-attachment-thumb--preparation"
+                        : "",
                       att.mimeType.startsWith("image/") ? "" : "chat-attachment-thumb--file",
                       failed ? "chat-attachment-thumb--error" : "",
                     ]
                       .filter(Boolean)
                       .join(" ")}
-                    aria-busy=${reading ? "true" : "false"}
+                    aria-busy=${reading && entry.preparation !== "offer" ? "true" : "false"}
                   >
                     ${
-                      failed
-                        ? html`<openclaw-tooltip .content=${failureLabel}>
-                            <span
-                              class="chat-attachment-error"
-                              tabindex="0"
-                              role="img"
-                              aria-label=${failureLabel}
+                      entry.preparation || entry.errorMessage
+                        ? html`<div class="chat-attachment-preparation">
+                            <span class="chat-attachment-file__name" title=${att.fileName ?? ""}
+                              >${att.fileName}</span
                             >
-                              ${renderAttachmentFileIcon({ filename: att.fileName ?? "", mimeType: att.mimeType, mode: "large-placeholder", unavailable: true })}
-                            </span>
-                          </openclaw-tooltip>`
-                        : reading
-                          ? nothing
-                          : att.mimeType.startsWith("image/") && getChatAttachmentPreviewUrl(att)
-                            ? renderAttachmentImage(
-                                att,
-                                att.fileName?.trim() || t("chat.composer.attachmentPreview"),
-                                att.fileName?.trim() || t("chat.imageLightbox.untitled"),
-                                props,
-                              )
-                            : renderCompactAttachmentFile(att)
+                            ${
+                              entry.preparation === "offer"
+                                ? html`<button
+                                    type="button"
+                                    class="chat-attachment-compress"
+                                    title=${t("chat.attachments.compressionHint")}
+                                    ?disabled=${props.disabled}
+                                    @click=${entry.compress}
+                                  >
+                                    ${t("chat.attachments.compressToFit")}
+                                  </button>`
+                                : html`<span class="chat-attachment-file__meta" role="status"
+                                    >${failed ? failureLabel : t("chat.attachments.compressing", { progress: String(Math.floor((entry.progress ?? 0) * 100)) })}</span
+                                  >`
+                            }
+                          </div>`
+                        : failed
+                          ? html`<openclaw-tooltip .content=${failureLabel}>
+                              <span
+                                class="chat-attachment-error"
+                                tabindex="0"
+                                role="img"
+                                aria-label=${failureLabel}
+                              >
+                                ${renderAttachmentFileIcon({ filename: att.fileName ?? "", mimeType: att.mimeType, mode: "large-placeholder", unavailable: true })}
+                              </span>
+                            </openclaw-tooltip>`
+                          : reading
+                            ? nothing
+                            : att.mimeType.startsWith("image/") && getChatAttachmentPreviewUrl(att)
+                              ? renderAttachmentImage(
+                                  att,
+                                  att.fileName?.trim() || t("chat.composer.attachmentPreview"),
+                                  att.fileName?.trim() || t("chat.imageLightbox.untitled"),
+                                  props,
+                                )
+                              : renderCompactAttachmentFile(att)
                     }
                     <span
                       class="chat-attachment-loading"
-                      data-state=${entry.state}
+                      data-state=${entry.preparation === "offer" ? "offer" : entry.state}
                       data-indeterminate=${reading && entry.progress === undefined ? "true" : "false"}
                       aria-hidden="true"
                       ><span
