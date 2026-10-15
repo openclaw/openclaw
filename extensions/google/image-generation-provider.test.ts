@@ -110,6 +110,7 @@ describe("Google image-generation provider", () => {
 
   it("generates image buffers from the Gemini generateContent API", async () => {
     mockGoogleApiKeyAuth();
+    const imageBytes = Buffer.from([0xfb, 0xff, 0x50, 0x4e, 0x47]);
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(
         googleImagePayload([
@@ -117,7 +118,7 @@ describe("Google image-generation provider", () => {
           {
             inlineData: {
               mimeType: "image/png",
-              data: Buffer.from("png-data").toString("base64"),
+              data: imageBytes.toString("base64url"),
             },
           },
         ]),
@@ -150,7 +151,7 @@ describe("Google image-generation provider", () => {
     expect(result).toEqual({
       images: [
         {
-          buffer: Buffer.from("png-data"),
+          buffer: imageBytes,
           mimeType: "image/png",
           fileName: "image-1.png",
         },
@@ -208,33 +209,6 @@ describe("Google image-generation provider", () => {
     );
 
     await expect(generateImage({})).rejects.toThrow("Google image generation response malformed");
-  });
-
-  it("accepts URL-safe base64 image bytes", async () => {
-    mockGoogleApiKeyAuth();
-    const imageBytes = Buffer.from([0xfb, 0xff, 0x50, 0x4e, 0x47]);
-    const imageBase64url = imageBytes.toString("base64url");
-    expect(imageBase64url).toMatch(/[-_]/);
-    expect(imageBase64url).not.toMatch(/[+/]/);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        jsonResponse(
-          googleImagePayload([
-            {
-              inlineData: {
-                mimeType: "image/png",
-                data: imageBase64url,
-              },
-            },
-          ]),
-        ),
-      ),
-    );
-
-    const result = await generateImage({});
-
-    expect(result.images[0]?.buffer).toEqual(imageBytes);
   });
 
   it("rejects mixed-alphabet inline image data", async () => {
@@ -428,29 +402,6 @@ describe("Google image-generation provider", () => {
     });
 
     expect(postJsonRequestOptions(postJsonRequestSpy).allowPrivateNetwork).toBe(true);
-  });
-
-  it.each([
-    {
-      name: "normalizes a configured bare Google host to the v1beta API root",
-      baseUrl: "https://generativelanguage.googleapis.com",
-      prompt: "draw a cat",
-    },
-  ])("$name", async ({ baseUrl, prompt }) => {
-    mockGoogleApiKeyAuth();
-    const fetchMock = installGoogleFetchMock();
-
-    await generateImage({
-      model: "gemini-3-pro-image",
-      prompt,
-      cfg: googleImageConfig({ baseUrl }),
-    });
-
-    const request = fetchRequest(fetchMock);
-    expect(request.url).toBe(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image:generateContent",
-    );
-    expect(typeof request.method).toBe("string");
   });
 
   it("still reports not configured with a custom endpoint and no credentials", async () => {

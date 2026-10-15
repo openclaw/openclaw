@@ -636,7 +636,9 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         calls.push("persist");
       };
       const schedule = vi.fn(() => calls.push("schedule"));
+      const write = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
       expect(await settleRuns(entries, { runs, beforeWrite, schedule })).toBe(true);
+      expect(write).toHaveBeenCalledOnce();
       const batchRunIds = entries.map((entry) => entry.runId).toSorted();
       for (const entry of entries) {
         expect(runs.get(entry.runId)!.requesterSettleWake).toEqual({

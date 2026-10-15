@@ -8,6 +8,7 @@ import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gat
 import type { ControlUiLinkReaderPreview } from "../../../src/shared/control-ui-link-reader.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -759,7 +760,13 @@ suite.define(() => {
     }
 
     await expect
-      .poll(() => page.getByRole("link", { name: "#99817" }).getAttribute("href"))
+      .poll(() =>
+        page
+          .getByRole("link", {
+            name: "a-very-long-organization-name/a-very-long-repository-name#99817",
+          })
+          .getAttribute("href"),
+      )
       .toBe(
         "https://github.com/a-very-long-organization-name/a-very-long-repository-name/issues/99817",
       );
@@ -768,6 +775,8 @@ suite.define(() => {
       .toBe("https://github.com/blader/humanizer/blob/main/SKILL.md");
 
     const pullLink = page.locator('a.markdown-github-link[href$="/pull/99816"]');
+
+    await expectText(pullLink, "openclaw/openclaw#99816");
 
     const decorationLine = (link: Locator) =>
       link.evaluate((element) => getComputedStyle(element).textDecorationLine);
@@ -859,6 +868,26 @@ suite.define(() => {
       .toBe(true);
 
     await expectModifiedNavigation(page, () => pullLink.click({ modifiers: ["Shift"] }), PULL_HREF);
+
+    const longReference = page.locator(
+      'a[href="https://github.com/a-very-long-organization-name/a-very-long-repository-name/issues/99817"]',
+    );
+    await page.setViewportSize({ width: 320, height: 800 });
+    await longReference.scrollIntoViewIfNeeded();
+    const bounds = await longReference.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320);
+    if (artifactDir) {
+      const frame = await takeControlUiScreenshotFrame(page, longReference, [longReference], {
+        elements: [longReference],
+        animations: "disabled",
+      });
+      await writeFile(
+        path.join(artifactDir, "github-reference-mobile.png"),
+        frame.elements[0]!.png,
+      );
+    }
   });
 
   it("keeps the card open while the pointer crosses the gap onto it, then closes once it leaves both", async () => {

@@ -18,20 +18,6 @@ import { createSessionRowProjectionFixture } from "../session-row-projection.tes
 import * as sessionSharingPreparation from "../session-sharing-preparation.js";
 
 vi.mock("../../config/config.js", () => ({ getRuntimeConfig: vi.fn(() => TEST_RUNTIME_CONFIG) }));
-vi.mock("../../config/sessions/combined-store-gateway-read.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../config/sessions/combined-store-gateway-read.js")
-  >("../../config/sessions/combined-store-gateway-read.js");
-  return {
-    ...actual,
-    loadCombinedSessionStoreForGatewayCoreAsync: vi.fn(() => ({
-      targetsBySessionKey: new Map(),
-      durableTargets: [],
-      storePath: "(multiple)",
-      store: {},
-    })),
-  };
-});
 vi.mock("../session-utils-store-worker.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils-store-worker.js")>(
     "../session-utils-store-worker.js",
@@ -73,7 +59,6 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
     loadSessionLogs: vi.fn(async () => []),
   };
 });
-import { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway-read.js";
 import {
   discoverAllSessions,
   loadSessionCostSummariesFromCache,
@@ -83,6 +68,10 @@ import {
 } from "../../infra/session-cost-usage.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import { usageHandlers } from "./usage.js";
+import {
+  createUsageSessionStoreFixture,
+  type UsageSessionStoreFixture,
+} from "./usage.test-support.js";
 
 let TEST_RUNTIME_CONFIG: OpenClawConfig = {
   session: {},
@@ -92,6 +81,7 @@ let TEST_RUNTIME_CONFIG: OpenClawConfig = {
     entries: { main: {}, opus: {} },
   },
 };
+let projectionFixture: UsageSessionStoreFixture = { store: {} };
 const BASE_USAGE_RANGE = { startDate: "2026-02-01", endDate: "2026-02-02", limit: 10 };
 async function runSessionsUsageMethod(
   method: "sessions.usage" | "sessions.usage.timeseries" | "sessions.usage.logs",
@@ -104,12 +94,21 @@ async function runSessionsUsageMethod(
 ) {
   const respond = options.respond ?? vi.fn();
   const handler = expectDefined(usageHandlers[method], "usage handler");
-  await handler({
-    respond,
-    params,
-    signal: options.signal,
-    context: options.context ?? { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
-  } as unknown as Parameters<typeof handler>[0]);
+  const projection = options.context
+    ? undefined
+    : createSessionRowProjectionFixture({ cfg: TEST_RUNTIME_CONFIG, ...projectionFixture });
+  try {
+    await handler({
+      respond,
+      params,
+      signal: options.signal,
+      context:
+        options.context ??
+        bindSessionRowProjection({ getRuntimeConfig: () => TEST_RUNTIME_CONFIG }, () => projection),
+    } as unknown as Parameters<typeof handler>[0]);
+  } finally {
+    projection?.dispose();
+  }
   return respond;
 }
 const runSessionsUsage = (params: Record<string, unknown>) =>
@@ -118,32 +117,6 @@ function readResult(respond: ReturnType<typeof vi.fn>): SessionsUsageResult {
   expect(respond).toHaveBeenCalledOnce();
   expect(respond.mock.calls[0]?.[0]).toBe(true);
   return respond.mock.calls[0]?.[1] as SessionsUsageResult;
-}
-function mockCombinedStore(
-  store: Record<string, SessionEntry>,
-  owners: ReadonlyArray<readonly [string, string]>,
-  storePath?: string,
-) {
-  vi.mocked(loadCombinedSessionStoreForGatewayCoreAsync).mockResolvedValue({
-    durableTargets: [],
-    storePath: "(multiple)",
-    store,
-    targetsBySessionKey: new Map(
-      owners.map(([key, agentId]) => [
-        key,
-        {
-          agentId,
-          entry: store[key],
-          readSourceEntry: (sourceKey: string) => store[sourceKey],
-          resolveSourceKey: (sourceKey: string) => sourceKey,
-          storeTarget: {
-            agentId,
-            storePath: storePath ?? `/tmp/agents/${agentId}/agent/openclaw-agent.sqlite`,
-          },
-        },
-      ]),
-    ),
-  });
 }
 function mockStoredSession(
   key: string,
@@ -168,6 +141,7 @@ function mockStoredSession(
 describe("sessions.usage", () => {
   beforeEach(() => {
     TEST_RUNTIME_CONFIG = { ...TEST_RUNTIME_CONFIG };
+    projectionFixture = { store: {} };
     vi.clearAllMocks();
   });
 
@@ -543,41 +517,46 @@ describe("sessions.usage", () => {
   });
 
   it("applies the usage size budget to the selected creator", async () => {
-    const unrelated = Array.from({ length: 20_001 }, (_, index) => ({
-      sessionId: `other-creator-${index}`,
-      sessionFile: `/tmp/other-creator-${index}.jsonl`,
-      mtime: index + 1,
-    }));
-    const selected = {
-      sessionId: "selected-creator",
-      sessionFile: "/tmp/selected-creator.jsonl",
-      mtime: 1,
-    };
-    const store = Object.fromEntries(
-      unrelated.map(({ sessionId, mtime }) => [
-        `agent:main:${sessionId}`,
-        { sessionId, updatedAt: mtime, createdActor: { type: "system" as const } },
-      ]),
-    );
-    mockCombinedStore(
-      store,
-      Object.keys(store).map((key) => [key, "main"] as const),
-    );
-    vi.mocked(discoverAllSessions).mockResolvedValueOnce([...unrelated, selected]);
-    vi.mocked(loadSessionCostSummariesFromCache).mockImplementationOnce(async ({ sessions }) => ({
-      summaries: sessions.map(() => ({ ...createEmptyCostUsageTotals(), totalTokens: 7 })),
-      cacheStatus: {
-        status: "fresh",
-        cachedFiles: sessions.length,
-        pendingFiles: 0,
-        staleFiles: 0,
-      },
-    }));
-    const result = readResult(
-      await runSessionsUsage({ ...BASE_USAGE_RANGE, creatorKey: '["unknown"]', limit: 1 }),
-    );
-    expect(result.sessions).toMatchObject([{ key: "agent:main:selected-creator" }]);
-    expect(result.totals.totalTokens).toBe(7);
+    await withOpenClawTestState({ label: "usage-creator-budget" }, async (state) => {
+      const unrelated = Array.from({ length: 20_001 }, (_, index) => ({
+        sessionId: `other-creator-${index}`,
+        sessionFile: `/tmp/other-creator-${index}.jsonl`,
+        mtime: index + 1,
+      }));
+      const selected = {
+        sessionId: "selected-creator",
+        sessionFile: "/tmp/selected-creator.jsonl",
+        mtime: 1,
+      };
+      const key = "agent:main:selected-creator";
+      const entry: SessionEntry = {
+        sessionId: selected.sessionId,
+        updatedAt: selected.mtime,
+        createdActor: { type: "system" },
+      };
+      const storePath = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
+      replaceSessionEntrySync({ agentId: "main", sessionKey: key, storePath }, entry);
+      projectionFixture = createUsageSessionStoreFixture(
+        { [key]: entry },
+        [[key, "main"]],
+        () => storePath,
+      );
+      vi.mocked(discoverAllSessions).mockResolvedValueOnce([...unrelated, selected]);
+      vi.mocked(loadSessionCostSummariesFromCache).mockImplementationOnce(async ({ sessions }) => ({
+        summaries: sessions.map(() => ({ ...createEmptyCostUsageTotals(), totalTokens: 7 })),
+        cacheStatus: {
+          status: "fresh",
+          cachedFiles: sessions.length,
+          pendingFiles: 0,
+          staleFiles: 0,
+        },
+      }));
+      const result = readResult(
+        await runSessionsUsage({ ...BASE_USAGE_RANGE, creatorKey: '["system",null]', limit: 1 }),
+      );
+      expect(result.sessions).toMatchObject([{ key }]);
+      expect(result.totals.totalTokens).toBe(7);
+    });
   });
 
   it.each(["available", "time budget"])(
@@ -606,10 +585,10 @@ describe("sessions.usage", () => {
             mtime: index + 1,
           };
         });
-        mockCombinedStore(
+        projectionFixture = createUsageSessionStoreFixture(
           store,
           Object.keys(store).map((key) => [key, "main"] as const),
-          storePath,
+          () => storePath,
         );
         vi.mocked(discoverAllSessions).mockResolvedValueOnce(discovered);
         const projection = createSessionRowProjectionFixture({
@@ -730,7 +709,7 @@ describe("sessions.usage", () => {
       const sessionFile = path.join(state.sessionsDir("opus"), "shared.jsonl");
       fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
       fs.writeFileSync(sessionFile, "");
-      mockCombinedStore(
+      projectionFixture = createUsageSessionStoreFixture(
         {
           "agent:main:shared": {
             sessionId: "shared",
@@ -784,13 +763,12 @@ describe("sessions.usage", () => {
       usageFamilyKey: storeKey,
       usageFamilySessionIds: ["old", "current", "oldest"],
     };
-    mockStoredSession(storeKey, entry);
     vi.mocked(discoverAllSessions).mockResolvedValueOnce([
       { sessionId: "old", sessionFile: oldSessionFile, mtime: 1_000 },
       { sessionId: "oldest", sessionFile: oldestSessionFile, mtime: 900 },
     ]);
 
-    mockCombinedStore({ [storeKey]: entry }, [[storeKey, "opus"]]);
+    projectionFixture = createUsageSessionStoreFixture({ [storeKey]: entry }, [[storeKey, "opus"]]);
     vi.mocked(loadSessionCostSummariesFromCache).mockImplementation(async ({ sessions }) => ({
       summaries: sessions.map((session) => {
         const historical = session.sessionId === "old";
@@ -956,8 +934,9 @@ describe("sessions.usage", () => {
 
     TEST_RUNTIME_CONFIG = { ...TEST_RUNTIME_CONFIG };
     const partialEntry = { ...entry, usageFamilySessionIds: ["current", "old"] };
-    mockStoredSession(storeKey, partialEntry);
-    mockCombinedStore({ [storeKey]: partialEntry }, [[storeKey, "opus"]]);
+    projectionFixture = createUsageSessionStoreFixture({ [storeKey]: partialEntry }, [
+      [storeKey, "opus"],
+    ]);
     vi.mocked(discoverAllSessions).mockResolvedValueOnce([
       { sessionId: "old", sessionFile: oldSessionFile, mtime: 1_000 },
     ]);
@@ -983,8 +962,7 @@ describe("sessions.usage", () => {
 
   it("prefers the deterministic store key when duplicate sessionIds exist", async () => {
     const preferredKey = "agent:opus:acp:run-dup";
-    mockStoredSession(preferredKey, { sessionId: "run-dup", updatedAt: 1_000 });
-    mockCombinedStore(
+    projectionFixture = createUsageSessionStoreFixture(
       {
         [preferredKey]: { sessionId: "run-dup", sessionFile: "run-dup.jsonl", updatedAt: 1_000 },
         "agent:other:main": {

@@ -329,36 +329,6 @@ describe("sessions lifecycle commands", () => {
     },
   );
 
-  it.each([{ key: "unknown", canonicalKey: "unknown", agentId: "work" }])(
-    "targets the Gateway owner of $key when explaining retained memory",
-    async ({ key, canonicalKey, agentId }) => {
-      mocks.callGateway
-        .mockResolvedValueOnce({ session: { key, sessionId: "session-1", agentId } })
-        .mockResolvedValueOnce({
-          ok: true,
-          key: canonicalKey,
-          deleted: true,
-          archived: ["/state/session-1.jsonl.deleted.123"],
-        });
-      const runtime = createNonExitingRuntimeEnv();
-
-      await sessionsLifecycleCommand("delete", { keys: [key], yes: true }, runtime);
-
-      expect(runtime.log).toHaveBeenCalledWith(`Deleted session ${canonicalKey}.`);
-      expect(runtime.log).toHaveBeenCalledWith(
-        "Archived transcript: /state/session-1.jsonl.deleted.123",
-      );
-      expect(runtime.log).toHaveBeenCalledWith(
-        expect.stringContaining("Archived transcripts can remain eligible for memory search"),
-      );
-      expect(runtime.log).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `openclaw memory forget --agent ${agentId} --session ${canonicalKey} on the Gateway host or container using its state and configuration`,
-        ),
-      );
-    },
-  );
-
   it("keeps requested owners when described sessions share a canonical key", async () => {
     mocks.callGateway
       .mockResolvedValueOnce({

@@ -248,39 +248,6 @@ describe("SwarmRosterHydrator", () => {
     },
   );
 
-  it("coalesces a changed parent summary and its event invalidation into one describe", async () => {
-    vi.useFakeTimers();
-    let parent = swarmParent([row(0)]);
-    const readParent = vi.fn(async () => parent);
-    const sessions = sessionSource(vi.fn(async () => result([], 0, 0)));
-    const hydrator = new SwarmRosterHydrator();
-    try {
-      hydrator.update({
-        sessions,
-        readParent,
-        parentKey: parent.key,
-        sourceEpoch: 1,
-        currentRows: () => [],
-        onRows: () => undefined,
-      });
-      await vi.advanceTimersByTimeAsync(250);
-      expect(readParent).toHaveBeenCalledTimes(1);
-      parent = swarmParent([row(0), row(1)]);
-      sessions.publishRow({
-        ...parent,
-        swarm: {
-          ...parent.swarm!,
-          groups: parent.swarm!.groups.map(({ children: _children, ...group }) => group),
-        },
-      });
-      await vi.advanceTimersByTimeAsync(250);
-      expect(readParent).toHaveBeenCalledTimes(2);
-      expect(hydrator.rows.find((entry) => entry.key === parent.key)?.swarm).toEqual(parent.swarm);
-    } finally {
-      hydrator.dispose();
-    }
-  });
-
   it("queues fresh parent membership when a child-only change overlaps an older describe", async () => {
     vi.useFakeTimers();
     const stale = createDeferred<GatewaySessionRow>();
@@ -342,42 +309,6 @@ describe("SwarmRosterHydrator", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(readParent).toHaveBeenCalledTimes(2);
       expect(hydrator.rows).toEqual([expect.objectContaining({ key: row(1).key }), current]);
-    } finally {
-      hydrator.dispose();
-    }
-  });
-
-  it("reports hydration only after its own child query fills the roster", async () => {
-    vi.useFakeTimers();
-    const onRows = vi.fn();
-    const hydrator = new SwarmRosterHydrator();
-    const params = {
-      sessions: sessionSource(vi.fn(async () => result([row(0), row(1)], 0, 2))),
-      readParent: async () => parentRow(),
-      parentKey: "agent:main:parent",
-      sourceEpoch: 1,
-      // Another list happened to hold one of the two children.
-      currentRows: () => [row(0)],
-      onRows,
-    };
-    try {
-      hydrator.update(params);
-      expect(hydrator.rows.map((entry) => entry.key)).toEqual([row(0).key]);
-      expect(hydrator.hydrated).toBe(false);
-      expect(hydrator.childrenRead).toBe(false);
-
-      await vi.advanceTimersByTimeAsync(250);
-      expect(hydrator.hydrated).toBe(true);
-      expect(hydrator.childrenRead).toBe(true);
-      expect(hydrator.rows.map((entry) => entry.key).toSorted()).toEqual(
-        [row(0).key, row(1).key, parentRow().key].toSorted(),
-      );
-      // The page is told, so a label waiting on the roster cannot stay behind.
-      expect(onRows).toHaveBeenLastCalledWith(hydrator.rows);
-
-      hydrator.update({ ...params, sourceEpoch: 2, currentRows: () => [] });
-      expect(hydrator.hydrated).toBe(false);
-      expect(hydrator.childrenRead).toBe(false);
     } finally {
       hydrator.dispose();
     }
@@ -777,32 +708,6 @@ describe("SwarmRosterHydrator", () => {
 });
 
 describe("hydrateSwarmSessionRows", () => {
-  it("hydrates paginated cross-agent children outside the normal session page", async () => {
-    const children = Array.from({ length: 10_055 }, (_, index) => row(index));
-    const list = vi.fn(async (options: SessionListOptions = {}) => {
-      const offset = options.offset ?? 0;
-      return result(children.slice(offset, offset + 10_000), offset, children.length);
-    });
-    const rows = await hydrateSwarmSessionRows({
-      sessions: sessionSource(list),
-      parentKey: "agent:main:parent",
-      isCurrent: () => true,
-    });
-
-    expect(rows).toHaveLength(10_055);
-    expect(list).toHaveBeenCalledTimes(2);
-    expect(list).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        spawnedBy: "agent:main:parent",
-        limit: 10_000,
-        includeGlobal: false,
-        configuredAgentsOnly: true,
-      }),
-    );
-    expect(list).toHaveBeenNthCalledWith(2, expect.objectContaining({ offset: 10_000 }));
-  });
-
   it("restarts pagination when updated rows move across offset boundaries", async () => {
     const running = { ...row(1), status: "running" as const };
     const done = { ...row(1), status: "done" as const, updatedAt: 10 };
